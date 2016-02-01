@@ -1,0 +1,18 @@
+#
+# kernel drivers for android integration.
+#
+#
+# the following drivers are part of this repo.
+#
+# fbdev - device driver for framebuffer support used in recovery mode.
+# droid_pm - device driver for power management integration (power-hal).
+# nx_ashmem - device driver for memory management (nexus memory) integration.
+#
+#
+#
+# the following drivers are imported in this tree from different repo (git-within-git)
+#
+# gator - device driver for arm-gator integration (github).
+# bcmdhd - wlan driver (broadcom).
+#
+

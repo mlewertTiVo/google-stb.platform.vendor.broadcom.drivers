@@ -1,0 +1,7 @@
+ifndef BCM_PRINT_KBUILD_ENV_ONLY
+obj-m += bcmnexusfb.o
+bcmnexusfb-y += bcmnexusfb.o_shipped
+else
+$(shell echo NEXUS_FB_DEV_KBUILD_CFLAGS:=$(KBUILD_CFLAGS) $(KBUILD_CFLAGS_MODULE) >&2 )
+$(shell echo NEXUS_FB_DEV_KBUILD_LDFLAGS:=$(LDFLAGS) $(LDFLAGS_MODULE) $(KBUILD_LDFLAGS_MODULE) >&2)
+endif

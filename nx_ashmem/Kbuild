@@ -1,0 +1,7 @@
+ifndef BCM_PRINT_KBUILD_ENV_ONLY
+obj-m += nx_ashmem.o
+nx_ashmem-y += nx_ashmem.o_shipped
+else
+$(shell echo NX_ASHMEM_KBUILD_CFLAGS:=$(KBUILD_CFLAGS) $(KBUILD_CFLAGS_MODULE) >&2 )
+$(shell echo NX_ASHMEM_KBUILD_LDFLAGS:=$(LDFLAGS) $(LDFLAGS_MODULE) $(KBUILD_LDFLAGS_MODULE) >&2)
+endif
