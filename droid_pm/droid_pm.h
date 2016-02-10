@@ -34,6 +34,7 @@
 #define DROID_PM_EVENT_RESUMED          3   /* Set if kernel resumed without receiving a wakeup event */
 #define DROID_PM_EVENT_RESUMED_WAKEUP   4   /* Set when kernel resumed due to a wakeup event */
 #define DROID_PM_EVENT_SUSPENDING       5   /* Set when kernel is about to suspend */
+#define DROID_PM_EVENT_SHUTDOWN         6   /* Set when kernel is about to shutdown */
 
 /* Each client that is interested in knowing when the kernel is
    about to suspend so it can perform some last minute actions
@@ -55,12 +56,14 @@
       as enabling wake-on-BLE.
 
    3) Once the client has performed its actions, it needs to inform
-      the droid_pm driver that it is ready for the kernel to suspend.
-      This is achieved by issuing the ioctl "BRCM_IOCTL_SET_SUSPEND_ACK".
+      the droid_pm driver that it is ready for the kernel to suspend
+      or shutdown. This is achieved by issuing the ioctl
+      "BRCM_IOCTL_SET_SUSPEND_ACK".
 
       NOTE: If more than one client has registered their interest in
       the kernel suspending, then each must issue the ioctl
-      "BRCM_IOCTL_SET_SUSPEND_ACK" before the kernel can fully suspend.
+      "BRCM_IOCTL_SET_SUSPEND_ACK" before the kernel can fully suspend
+      or shutdown.
 
    4) After issuing the "BRCM_IOCTL_SET_SUSPEND_ACK" ioctl, each client
       should check whether the kernel successfully suspended or not by

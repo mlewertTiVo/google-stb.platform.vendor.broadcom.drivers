@@ -40,6 +40,7 @@
 #include <linux/pm_wakeup.h>
 #include <linux/poll.h>
 #include <linux/printk.h>
+#include <linux/reboot.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -58,7 +59,7 @@
 #define MKVER(maj,min) mkver(maj,min)
 
 #define DRV_MAJOR               4
-#define DRV_MINOR               2
+#define DRV_MINOR               3
 #define DRV_VERSION             MKVER(DRV_MAJOR, DRV_MINOR)
 #define SUSPEND_TIMEOUT_MS      (10 * 1000)
 #define MAX_WAKEUP_IRQS         32
@@ -130,16 +131,18 @@ struct droid_pm_priv_data {
     unsigned int                pm_irqs[MAX_WAKEUP_IRQS];
     uint32_t                    pm_irq_masks[MAX_WAKEUP_IRQS];
     int                         pm_nr_irqs;
-    uint32_t                    pm_wakeups_present; // The wakeups that are owned by this module
-    uint32_t                    pm_wakeups_enabled; // The wakeups that have been enabled
-    struct miscdevice           pm_miscdev;         // Miscellaneous device info
-    struct mutex                pm_mutex;           // Protect the data of this structure
-    struct completion           pm_suspend_complete;// Used to synchronise when to suspend
-    struct notifier_block       pm_notifier;        // Standard PM notifier
-    bool                        pm_ready;           // Set when the driver has initialised and been opened
-    bool                        pm_suspending;      // Set when we are about to suspend
-    struct droid_pm_instance *  pm_local_instance;  // A local instance used for monitoring wakeups
-    struct list_head            pm_instance_list;   // HEAD of droid_pm_instance list
+    uint32_t                    pm_wakeups_present;  // The wakeups that are owned by this module
+    uint32_t                    pm_wakeups_enabled;  // The wakeups that have been enabled
+    struct miscdevice           pm_miscdev;          // Miscellaneous device info
+    struct mutex                pm_mutex;            // Protect the data of this structure
+    struct completion           pm_suspend_complete; // Used to synchronise when to suspend
+    struct notifier_block       pm_notifier;         // Standard PM notifier for power management
+    struct notifier_block       pm_reboot_notifier;  // Standard PM notifier for shutdown/reboot
+    bool                        pm_ready;            // Set when the driver has initialised and been opened
+    bool                        pm_suspending;       // Set when we are about to suspend
+    bool                        pm_shutdown;         // Set when we are about to shutdown
+    struct droid_pm_instance *  pm_local_instance;   // A local instance used for monitoring wakeups
+    struct list_head            pm_instance_list;    // HEAD of droid_pm_instance list
 };
 
 static struct platform_device *droid_pm_platform_device;
@@ -588,8 +591,9 @@ static long droid_pm_ioctl(struct file * file, unsigned int cmd, unsigned long a
         // Returns: -EAGAIN if we need to try and suspend again because the kernel has already resumed
         case BRCM_IOCTL_SET_SUSPEND_ACK: {
             mutex_lock(&priv->pm_mutex);
-            if (priv->pm_suspending) {
-                dev_dbg(dev, "%s: BRCM_IOCTL_SET_SUSPEND_ACK: signalling ready to suspend [pid=%i,comm=%s]\n", __FUNCTION__,
+            if (priv->pm_suspending || priv->pm_shutdown) {
+                dev_dbg(dev, "%s: BRCM_IOCTL_SET_SUSPEND_ACK: signalling ready to %s [pid=%i,comm=%s]\n", __FUNCTION__,
+                        priv->pm_suspending ? "suspending" : "shutdown",
                         instance->pm_pid, instance->pm_comm);
 
                 if (instance->pm_registered) {
@@ -604,7 +608,7 @@ static long droid_pm_ioctl(struct file * file, unsigned int cmd, unsigned long a
                 }
             }
             else {
-                dev_warn(dev, "%s: BRCM_IOCTL_SET_SUSPEND_ACK: ignoring as PM is not suspending [pid=%i,comm=%s]!\n", __FUNCTION__,
+                dev_warn(dev, "%s: BRCM_IOCTL_SET_SUSPEND_ACK: ignoring as PM is not suspending or shutting down [pid=%i,comm=%s]!\n", __FUNCTION__,
                          instance->pm_pid, instance->pm_comm);
                 result = -EAGAIN;
             }
@@ -703,6 +707,45 @@ static int droid_pm_close(struct inode *inode, struct file *file)
     }
     mutex_unlock(&priv->pm_mutex);
     return 0;
+}
+
+static int droid_pm_reboot_shutdown(struct notifier_block *notifier, unsigned long action, void *data)
+{
+    int ret = NOTIFY_DONE;
+    struct droid_pm_priv_data *priv = container_of(notifier, struct droid_pm_priv_data, pm_reboot_notifier);
+    struct device *dev = priv->pm_miscdev.parent;
+
+    dev_dbg(dev, "%s: action %lu\n", __FUNCTION__, action);
+
+    if (action == SYS_POWER_OFF) {
+        long timeout = msecs_to_jiffies(suspend_timeout_ms);
+
+        // Don't unlock so as to prevent further operations occuring (e.g. like poll)...
+        mutex_lock(&priv->pm_mutex);
+        priv->pm_shutdown = true;
+        reinit_completion(&priv->pm_suspend_complete);
+        droid_pm_signal_event_l(priv, DROID_PM_EVENT_SHUTDOWN);
+        mutex_unlock(&priv->pm_mutex);
+
+        dev_dbg(dev, "%s: Waiting for acknowledgement from user-space...\n", __FUNCTION__);
+        ret = wait_for_completion_interruptible_timeout(&priv->pm_suspend_complete, timeout);
+
+        mutex_lock(&priv->pm_mutex);
+        if (ret == 0) {
+            // If we timed out, then just shutdown anyway...
+            dev_warn(dev, "%s: shutdown timed out!\n", __FUNCTION__);
+        }
+        else if (ret < 0) {
+            dev_err(dev, "%s: shutdown wait for completion failed [ret=%d]!\n", __FUNCTION__, ret);
+            priv->pm_shutdown = false;
+            ret = NOTIFY_BAD;
+        }
+        else {
+            dev_dbg(dev, "%s: Finished.\n", __FUNCTION__);
+        }
+        mutex_unlock(&priv->pm_mutex);
+    }
+    return ret;
 }
 
 static int droid_pm_init_wol(struct platform_device *pdev)
@@ -826,6 +869,7 @@ static int __init droid_pm_probe(struct platform_device *pdev)
     INIT_LIST_HEAD(&priv->pm_instance_list);
     init_completion(&priv->pm_suspend_complete);
     priv->pm_suspending = false;
+    priv->pm_shutdown = false;
 
     /* Sanity check on the module parameters... */
     if (suspend_timeout_ms <= 0) {
@@ -909,6 +953,8 @@ static int __init droid_pm_probe(struct platform_device *pdev)
         }
         else {
             platform_set_drvdata(pdev, priv);
+            priv->pm_reboot_notifier.notifier_call = droid_pm_reboot_shutdown;
+            register_reboot_notifier(&priv->pm_reboot_notifier);
 
             ret = sysfs_create_group(&dev->kobj, &dev_attr_group);
             if (ret) {
@@ -961,6 +1007,7 @@ static int __exit droid_pm_remove(struct platform_device *pdev)
         droid_pm_destroy_instance_l(priv->pm_local_instance);
     }
     sysfs_remove_group(&dev->kobj, &dev_attr_group);
+    unregister_reboot_notifier(&priv->pm_reboot_notifier);
     unregister_droid_pm_notifier(priv);
     misc_deregister(&priv->pm_miscdev);
 
