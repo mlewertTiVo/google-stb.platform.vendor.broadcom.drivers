@@ -24,12 +24,6 @@
 #include "bvc5_bin_pool_alloc_priv.h"
 #endif
 
-#ifdef B_REFSW_FIRMWARE
-MODULE_LICENSE("GPL");
-#else
-MODULE_LICENSE("Proprietary");
-#endif
-
 static int gfx_alloc_dbg = 0;
 static int gfx_move_dbg = 0;
 static int gfx_refcnt_dbg = 0;
@@ -775,3 +769,8 @@ static void __exit nx_ashmem_module_exit(void)
 
 module_init(nx_ashmem_module_init);
 module_exit(nx_ashmem_module_exit);
+
+MODULE_LICENSE("Proprietary");
+MODULE_AUTHOR("Broadcom Limited");
+MODULE_DESCRIPTION("ashmem nexus integration");
+

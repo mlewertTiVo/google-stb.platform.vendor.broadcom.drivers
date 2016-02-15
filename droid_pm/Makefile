@@ -31,6 +31,9 @@ endif
 obj-m += droid_pm.o
 ccflags-y += -I$(BSEAV_TOP)/linux/driver
 
+install: all
+	cp $(PWD)/droid_pm.ko $(INSTALL_DIR)
+
 all:
 	@${MAKE} -C $(LINUX_OUT) M=$(PWD) modules
 

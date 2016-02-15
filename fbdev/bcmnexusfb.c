@@ -1,9 +1,5 @@
 #include <linux/version.h>
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,30)
 #include <linux/kconfig.h>
-#else
-#include <linux/config.h>
-#endif
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -418,3 +414,6 @@ module_init(bcmnexusfb_init);
 module_exit(bcmnexusfb_exit);
 
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Broadcom Limited");
+MODULE_DESCRIPTION("framebuffer over nexus");
+
