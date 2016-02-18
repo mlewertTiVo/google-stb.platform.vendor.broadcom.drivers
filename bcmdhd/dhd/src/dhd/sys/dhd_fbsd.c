@@ -994,7 +994,7 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan)
 			void *data;
 			memset(&event, 0, sizeof(event));
 			DHD_TRACE(("%s(): ETHER_TYPE_BRCM received. \n", __FUNCTION__));
-			wl_host_event(dhdp, &ifidx, m->m_data, &event, &data, NULL);
+			wl_host_event(dhdp, &ifidx, m->m_data, 0xFFFF, &event, &data, NULL);
 			wl_event_to_host_order(&event);
 #ifdef DHD_DONOT_FORWARD_BCMEVENT_AS_NETWORK_PKT
 			PKTFREE(dhdp->osh, pktbuf, FALSE);

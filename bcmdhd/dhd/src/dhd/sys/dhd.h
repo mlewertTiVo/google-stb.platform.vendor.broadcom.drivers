@@ -1164,7 +1164,7 @@ extern struct ifnet * dhd_idx2net(struct dhd_pub *dhd_pub, int ifidx);
 #endif /* __FreeBSD__ */
 extern bool dhd_wowl_cap(void *bus);
 
-extern int wl_host_event(dhd_pub_t *dhd_pub, int *idx, void *pktdata,
+extern int wl_host_event(dhd_pub_t *dhd_pub, int *idx, void *pktdata, uint16 pktlen,
                          wl_event_msg_t *, void **data_ptr,  void *);
 extern void wl_event_to_host_order(wl_event_msg_t * evt);
 extern int wl_host_event_get_data(void *pktdata, wl_event_msg_t *event, void **data_ptr);
