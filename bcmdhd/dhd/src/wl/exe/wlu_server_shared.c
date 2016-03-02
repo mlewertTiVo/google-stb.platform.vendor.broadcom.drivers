@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_server_shared.c 526988 2015-01-15 19:32:07Z $
+ * $Id: wlu_server_shared.c 619868 2016-02-18 17:43:48Z $
  */
 
 /*
@@ -21,14 +21,21 @@
  * This module implements all the server specific functions
  * for Win32 and Linux
  */
+#ifdef CUSTOMER_HW_31_2
+#include <wluc_horizon.h>
+#else
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
 #include <malloc.h>
+#endif /* CUSTOMER_HW_31_2 */
+
 #include <assert.h>
 
 #include <errno.h>
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -664,9 +671,11 @@ remote_server_exec(int argc, char **argv, void *wl)
 #ifdef RWL_WIFI
 	remote_wifi_ser_init_cmds(wl);
 #endif
+#if !defined(CUSTOMER_HW_31_2)
 	/* Create a directory /tmp/RWL for the shell response files */
 	if (rwl_create_dir() < 0)
 		return BCME_ERROR;
+#endif
 
 
 #ifdef RWLASD
@@ -726,6 +735,8 @@ remote_server_exec(int argc, char **argv, void *wl)
 			}
 		}
 
+		DPRINT_INFO(OUTPUT, "buf_ptr %p msglen %d\n", buf_ptr, g_rem_ptr->msg.len);
+
 		/* Receive the data */
 		if ((err = remote_rx_data(buf_ptr)) == BCME_ERROR) {
 			if (buf_ptr)
@@ -761,6 +772,13 @@ remote_server_exec(int argc, char **argv, void *wl)
 			 * will be get updated by the remote_shell_execute function.
 			 */
 			need_speedy_response = 1;
+#if defined(CUSTOMER_HW_31_2)
+			DPRINT_ERR(ERR, "Error: shell command not supported\n");
+#ifdef RWL_SOCKET
+			close_sock_handle(g_rwl_hndle);
+#endif
+			continue;
+#else
 			if (buf_ptr) {
 				async_cmd_flag = strstr((char*)buf_ptr, "%");
 			}
@@ -778,6 +796,7 @@ remote_server_exec(int argc, char **argv, void *wl)
 #endif /* RWL_SOCKET */
 				continue;
 			}
+#endif	
 		} /* REMOTE_SHELL_CMD */
 
 #ifdef RWLASD
@@ -897,6 +916,7 @@ remote_server_exec(int argc, char **argv, void *wl)
 
 		if (g_rem_ptr->msg.flags & REMOTE_GET_IOCTL ||
 			g_rem_ptr->msg.flags & RDHD_GET_IOCTL) {
+
 			if (g_rem_ptr->msg.cmd == WLC_GET_VAR && buf_ptr &&
 				strncmp((const char *)buf_ptr, "exit", g_rem_ptr->msg.len) == 0) {
 					/* exit command from remote client terminates server */
@@ -920,6 +940,7 @@ remote_server_exec(int argc, char **argv, void *wl)
 			if (g_rem_ptr->msg.flags & RDHD_GET_IOCTL)
 				err = dhd_ioctl(wl, g_rem_ptr->msg.cmd, (void *)buf_ptr,
 					g_rem_ptr->msg.len, FALSE);
+/* defined(TARGETOS_nucleus)  || defined(CUSTOMER_HW_31_2) */
 			g_rem_ptr->msg.flags = REMOTE_GET_IOCTL;
 		} /* REMOTE_GET_IOCTL */
 		DPRINT_INFO(OUTPUT, "RESP : cmd %d\t msg len %d\n",

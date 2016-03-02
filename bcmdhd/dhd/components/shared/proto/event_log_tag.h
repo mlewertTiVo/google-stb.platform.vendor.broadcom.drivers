@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: event_log_tag.h 611454 2016-01-11 08:21:48Z $
+ * $Id: event_log_tag.h 618715 2016-02-12 05:34:13Z $
  */
 
 #ifndef _EVENT_LOG_TAG_H_
@@ -143,8 +143,9 @@
 #define EVENT_LOG_TAG_NAT_WARN                  119
 #define EVENT_LOG_TAG_NAT_INFO                  120
 #define EVENT_LOG_TAG_NAT_DEBUG                 121
+#define EVENT_LOG_TAG_STA_INFO			122
 /* EVENT_LOG_TAG_MAX	= Set to the same value of last tag, not last tag + 1 */
-#define EVENT_LOG_TAG_MAX			121
+#define EVENT_LOG_TAG_MAX			122
 /* Note: New event should be added/reserved in trunk before adding it to branches */
 
 

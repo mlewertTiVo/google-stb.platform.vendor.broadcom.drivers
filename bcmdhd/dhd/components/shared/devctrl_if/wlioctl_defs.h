@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl_defs.h 618467 2016-02-11 03:31:31Z $
+ * $Id: wlioctl_defs.h 619854 2016-02-18 14:02:49Z $
  */
 
 
@@ -430,12 +430,24 @@
 #define SES_OW_ENABLED		0x0040	/* to go into transition mode without setting wep */
 
 /* wsec macros for operating on the above definitions */
+#ifdef WLWSEC
 #define WSEC_WEP_ENABLED(wsec)	((wsec) & WEP_ENABLED)
 #define WSEC_TKIP_ENABLED(wsec)	((wsec) & TKIP_ENABLED)
 #define WSEC_AES_ENABLED(wsec)	((wsec) & AES_ENABLED)
+#else
+#define WSEC_WEP_ENABLED(wsec) NULL
+#define WSEC_TKIP_ENABLED(wsec) NULL
+#define WSEC_AES_ENABLED(wsec) NULL
+#endif /* WLWSEC */
 
+#ifdef WLWSEC
 #define WSEC_ENABLED(wsec)	((wsec) & (WEP_ENABLED | TKIP_ENABLED | AES_ENABLED))
+#else
+#define WSEC_ENABLED(wsec) 0
+#endif /* WLWSEC */
+
 #define WSEC_SES_OW_ENABLED(wsec)	((wsec) & SES_OW_ENABLED)
+
 
 /* Following macros are not used any more. Just kept here to
  * avoid build issue in BISON/CARIBOU branch

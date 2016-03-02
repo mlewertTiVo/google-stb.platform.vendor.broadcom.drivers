@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 602441 2015-11-26 02:06:54Z $
+# $Id: Makefile 620207 2016-02-22 05:17:31Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -1038,15 +1038,19 @@ TARGETS := \
 	msgbuf-pciefd \
 	msgbuf-pciefd-reqfw \
 	msgbuf-pciefd-mfp-secdma \
+	msgbuf-pciefd-media-mfp-secdma \
 	msgbuf-pciefd-reqfw-mfp \
 	msgbuf-pciefd-reqfw-mfp-media \
 	msgbuf-pciefd-reqfw-mfp-secdma \
 	msgbuf-pciefd-reqfw-mfp-secdma-media \
 	msgbuf-pciefd-mfp-secdma-stbap \
+	msgbuf-pciefd-media-mfp-secdma-stbap \
 	msgbuf-pciefd-mfp-secdma-media \
 	msgbuf-pciefd-mfp-secdma-war4365b0 \
 	msgbuf-pciefd-mfp \
+	msgbuf-pciefd-media-mfp \
 	msgbuf-pciefd-mfp-stbap \
+	msgbuf-pciefd-media-mfp-stbap \
 	msgbuf-pciefd-mfp-media \
 	msgbuf-pciefd-mfp-war4365b0 \
 	msgbuf-pciefd-pcieoob \
@@ -1078,6 +1082,7 @@ TARGETS := \
 	msgbuf-pciefd-android-media-cfg80211-mfp-secdma \
 	msgbuf-pciefd-android-media-cfg80211-mfp-secdma-wet \
 	msgbuf-pciefd-mfp-wet \
+	msgbuf-pciefd-media-mfp-wet \
 	cdc-usb \
 	cdc-usb-fdaggr \
 	cdc-usb-notxthread \

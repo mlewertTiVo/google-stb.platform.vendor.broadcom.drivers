@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_pipe.c 528375 2015-01-22 04:45:16Z $
+ * $Id: wlu_pipe.c 619868 2016-02-18 17:43:48Z $
  */
 
 #include <sys/types.h>
@@ -25,13 +25,20 @@
 #include <wlioctl.h>
 #include <net/if.h>
 
+#ifdef CUSTOMER_HW_31_2
+#include <wluc_horizon.h>
+#else
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#endif /* CUSTOMER_HW_31_2 */
+
 #if !defined(__FreeBSD__)
 #include <malloc.h>
 #endif
+
+
 #include <typedefs.h>
 #include <wlioctl.h>
 

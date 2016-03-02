@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_remote.h 528375 2015-01-22 04:45:16Z $
+ * $Id: wlu_remote.h 619868 2016-02-18 17:43:48Z $
  */
 #ifndef _wlu_remote_h
 #define _wlu_remote_h
@@ -22,6 +22,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #endif /* defined(__FreeBSD__) && defined(RWL_SOCKET) */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 /* Remote wl declararions */
 #define NO_REMOTE       0
@@ -48,7 +53,8 @@
 #define BACKLOG 	4
 #define WINVISTA_OS	5
 #define INDONGLE	6
-#define INVALID_OS	7	/* Should be last */
+#define HORIZON_OS	7
+#define INVALID_OS	8	/* Should be last */
 
 /* Used in cdc_ioctl_t.flags field */
 #define REMOTE_SET_IOCTL			1
@@ -229,5 +235,10 @@ extern volatile sig_atomic_t g_sig_chld;
 #define SHELL_RESP_PATH  "/tmp/RWL/" /* Default path for storing files for shell response */
 #define	TEMPLATE         "/tmp/RWL/SyncXXXXXX"
 #define SH_PATH "/bin/sh"
+
+#ifdef __cplusplus
+}
 #endif
+
+#endif /* TARGETENV_android */
 #endif /* _wlu_remote_h */
