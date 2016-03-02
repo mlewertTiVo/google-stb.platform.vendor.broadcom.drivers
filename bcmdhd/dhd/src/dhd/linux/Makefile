@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 620207 2016-02-22 05:17:31Z $
+# $Id: Makefile 620666 2016-02-23 19:37:04Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -1131,15 +1131,18 @@ TARGETS := \
 	cdc-sdmmc-gpl \
 	cdc-sdmmc-cfg80211-gpl \
 	cdc-usb-gpl \
+	cdc-usb-wet-gpl \
 	cdc-usb-gpl-media \
 	cdc-usb-notxthread-gpl \
 	cdc-usb-cfg80211-gpl \
 	cdc-usb-notxthread-cfg80211-gpl \
 	cdc-usb-reqfw-gpl \
 	cdc-usb-reqfw-comp-gpl \
+	cdc-usb-reqfw-comp-gpl-wet \
 	cdc-usb-reqfw-comp-gpl-media \
 	cdc-usb-reqfw-comp-cfg80211 \
 	cdc-usb-reqfw-comp-mfp-gpl \
+	cdc-usb-reqfw-comp-mfp-gpl-wet \
 	cdc-usb-notxthread-reqfw-gpl \
 	cdc-usb-reqfw-android-cfg80211 \
 	cdc-usb-notxthread-reqfw-android-cfg80211 \
@@ -1177,9 +1180,11 @@ TARGETS := \
 	cdc-usb-comp-mfp \
 	cdc-usb-notxthread-comp \
 	cdc-usb-comp-gpl \
+	cdc-usb-comp-gpl-wet \
 	cdc-usb-comp-gpl-media \
 	cdc-usb-comp-gpl-arm \
 	cdc-usb-comp-mfp-gpl \
+	cdc-usb-comp-mfp-gpl-wet \
 	cdc-usb-urblim-comp-gpl \
 	cdc-usb-notxthread-comp-gpl \
 	cdc-sdstd-apsta \

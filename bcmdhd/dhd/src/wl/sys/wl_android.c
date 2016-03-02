@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_android.c 588508 2015-09-24 09:53:35Z $
+ * $Id: wl_android.c 620523 2016-02-23 08:51:41Z $
  */
 
 #include <linux/module.h>
@@ -2791,14 +2791,18 @@ wl_handle_private_cmd(struct net_device *net, char *command, u32 cmd_len)
 					"but roam_band iovar unsupported in the firmware\n"));
 			} else {
 				bytes_written = -1;
-				goto exit;
 			}
 		}
-		if ((band == WLC_BAND_AUTO) || (ret == BCME_UNSUPPORTED))
-			bytes_written = wldev_set_band(net, band);
+		if (bytes_written != -1) {
+			if ((band == WLC_BAND_AUTO) || (ret == BCME_UNSUPPORTED))
+				bytes_written = wldev_set_band(net, band);
 #else
 		bytes_written = wldev_set_band(net, band);
 #endif /* WL_HOST_BAND_MGMT */
+#ifdef WL_HOST_BAND_MGMT
+		}
+#endif /* WL_HOST_BAND_MGMT */
+
 	}
 	else if (strnicmp(command, CMD_GETBAND, strlen(CMD_GETBAND)) == 0) {
 		bytes_written = wl_android_get_band(net, command, priv_cmd.total_len);
