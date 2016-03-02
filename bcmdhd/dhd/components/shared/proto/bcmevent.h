@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmevent.h 613228 2016-01-18 07:29:43Z $
+ * $Id: bcmevent.h 617498 2016-02-05 13:32:21Z $
  *
  */
 
@@ -294,6 +294,24 @@ void wl_event_to_network_order(wl_event_msg_t * evt);
 #define WLC_E_REASON_INFRA_DISASSOC	3
 #define WLC_E_REASON_NO_MODE_CHANGE_NEEDED	4
 
+/* WLC_E_SDB_TRANSITION event data */
+#define WL_MAX_BSSCFG     4
+#define WL_EVENT_SDB_TRANSITION_VER     1
+typedef struct wl_event_sdb_data {
+	uint8 wlunit;           /* Core index */
+	uint8 is_iftype;        /* Interface Type(Station, SoftAP, P2P_GO, P2P_GC */
+	uint16 chanspec;        /* Interface Channel/Chanspec */
+	char ssidbuf[(4 * 32) + 1];	/* SSID_FMT_BUF_LEN: ((4 * DOT11_MAX_SSID_LEN) + 1) */
+} wl_event_sdb_data_t;
+
+typedef struct wl_event_sdb_trans {
+	uint8 version;          /* Event Data Version */
+	uint8 rsdb_mode;
+	uint8 enable_bsscfg;
+	uint8 reserved;
+	struct wl_event_sdb_data values[WL_MAX_BSSCFG];
+} wl_event_sdb_trans_t;
+
 /* roam reason codes */
 #define WLC_E_REASON_INITIAL_ASSOC	0	/* initial assoc */
 #define WLC_E_REASON_LOW_RSSI		1	/* roamed due to low RSSI */
@@ -311,6 +329,7 @@ void wl_event_to_network_order(wl_event_msg_t * evt);
 #define WLC_E_REASON_REQUESTED_ROAM	11
 #define WLC_E_REASON_BSSTRANS_REQ	11	/* roamed due to BSS Transition request by AP */
 #define WLC_E_REASON_LOW_RSSI_CU		12 /* roamed due to low RSSI and Channel Usage */
+#define WLC_E_REASON_RADAR_DETECTED	13	/* roamed due to radar detection by STA */
 
 /* prune reason codes */
 #define WLC_E_PRUNE_ENCR_MISMATCH	1	/* encryption mismatch */
@@ -622,6 +641,7 @@ typedef enum nan_app_events {
 /* WLC_E_ULP event data */
 #define WL_ULP_EVENT_VERSION		1
 #define WL_ULP_DISABLE_CONSOLE		1	/* Disable console message on ULP entry */
+#define WL_ULP_UCODE_DOWNLOAD		2       /* Download ULP ucode file */
 
 typedef struct wl_ulp_event {
 	uint16 version;

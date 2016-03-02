@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu.c 602012 2015-11-24 22:48:01Z $
+ * $Id: wlu.c 618398 2016-02-11 00:07:53Z $
  */
 
 
@@ -12460,6 +12460,32 @@ exit:
 #define CURPOWER_OUTPUT_FORMAT_VERSION "8"
 
 #define RATE_STR_LEN 64
+#define CURPOWER_VER_STR "cptlv-"
+#define WL_CAP_CMD	"cap"
+
+static int
+wl_get_curpower_tlv_ver(void *wl)
+{
+	int error;
+	int ret = 0;
+
+	/* Get the CAP variable; search for curpower ver */
+	strncpy(buf, WL_CAP_CMD, WLC_IOCTL_MAXLEN);
+	if ((error = wlu_get(wl, WLC_GET_VAR, buf, WLC_IOCTL_MEDLEN)) >= 0) {
+		char seps[] = " ";
+		char *token;
+		buf[WLC_IOCTL_MEDLEN] = '\0';
+		token = strtok(buf, seps);
+		while (token != NULL) {
+			if (!memcmp(token, CURPOWER_VER_STR, strlen(CURPOWER_VER_STR))) {
+				char *ver = &token[strlen(CURPOWER_VER_STR)];
+				ret = atoi(ver);
+			}
+			token = strtok(NULL, seps);
+		}
+	}
+	return ret;
+}
 
 static int
 wl_get_current_power(void *wl, cmd_t *cmd, char **argv)
@@ -12467,44 +12493,80 @@ wl_get_current_power(void *wl, cmd_t *cmd, char **argv)
 	int err;
 	int mimo;
 	int i;
-	chanspec_t chanspec;
 	char chanspec_str[CHANSPEC_STR_LEN];
 	bool verbose = FALSE;
 	bool brief = FALSE;
 	int16 power_target;
 	char rate_str[RATE_STR_LEN];
 	int clk;
+	int val;
+	chanspec_t  chanspec;
 	uint8 *ppr_ser;
-	size_t pprsize = ppr_ser_size_by_bw(ppr_get_max_bw());
-	/* curpower rpt size is  the struct size + 3 ppr blocks(reg, board and target) */
-	size_t ppr_rpt_size = sizeof(tx_pwr_rpt_t) + pprsize*WL_TXPPR_SER_BUF_NUM;
+	uint32 pprsize;
+	uint32 txchain_bitmap = 0;
+	size_t ppr_rpt_size;
 	tx_pwr_rpt_t *ppr_wl = NULL;
+	ppr_t* ppr_board = NULL;
+	ppr_t* ppr_target = NULL;
+	ppr_t* ppr_reg = NULL;
 
+	int tlv_ver = wl_get_curpower_tlv_ver(wl);
 	/* firmware will crash if clk = 0 while using curpower */
 	if ((err = wlu_get(wl, WLC_GET_CLK, &clk, sizeof(int))) < 0)
-		return err;
+		goto exit;
 
 	if (!clk) {
 		fprintf(stderr, "Error: clock not active, do wl up (if not done already) "
 				"and force mpc 0 to active clock\n");
-		return BCME_ERROR;
+		err = BCME_ERROR;
+		goto exit;
 	}
+
+	if ((err = wlu_iovar_getint(wl, "chanspec", (int *)&val)) < 0) {
+		goto exit;
+	}
+	chanspec = wl_chspec32_from_driver(val);
+
+	if ((err = wlu_iovar_get(wl, "hw_txchain", &txchain_bitmap, sizeof(txchain_bitmap))) < 0)
+		goto exit;
+
+	if (tlv_ver) {
+		if ((ppr_board = ppr_create(NULL, ppr_chanspec_bw(chanspec))) == NULL) {
+			err = BCME_NOMEM;
+			goto exit;
+		}
+		if ((ppr_target = ppr_create(NULL, ppr_chanspec_bw(chanspec))) == NULL) {
+			err = BCME_NOMEM;
+			goto exit;
+		}
+		if ((ppr_reg = ppr_create(NULL, ppr_chanspec_bw(chanspec))) == NULL) {
+			err = BCME_NOMEM;
+			goto exit;
+		}
+		pprsize = ppr_get_tlv_size(ppr_target, ppr_chanspec_bw(chanspec),
+			bcm_bitcount((uint8 *)&txchain_bitmap, sizeof(uint8)));
+	} else {
+		pprsize = ppr_ser_size_by_bw(ppr_get_max_bw());
+	}
+	ppr_rpt_size = sizeof(tx_pwr_rpt_t) + pprsize*WL_TXPPR_SER_BUF_NUM;
 	ppr_wl = (tx_pwr_rpt_t *)malloc(ppr_rpt_size);
+
+	if (!tlv_ver) {
+		for (i = 0; i < WL_TXPPR_SER_BUF_NUM; i++) {
+			ppr_ser  = ppr_wl->pprdata + i*pprsize;
+			ppr_init_ser_mem_by_bw(ppr_ser, ppr_get_max_bw(), pprsize);
+		}
+	}
 
 	if (ppr_wl == NULL) {
 		fprintf(stderr, "Allocating mem failed for curpower\n");
-		return BCME_NOMEM;
+		err = BCME_NOMEM;
+		goto exit;
 	}
 
 	memset(ppr_wl, 0, ppr_rpt_size);
 	ppr_wl->ppr_len  = pprsize;
 	ppr_wl->version  = TX_POWER_T_VERSION;
-	/* init allocated mem for serialisation */
-	for (i = 0; i < WL_TXPPR_SER_BUF_NUM; i++) {
-		ppr_ser  = ppr_wl->pprdata + i*ppr_wl->ppr_len;
-		ppr_init_ser_mem_by_bw(ppr_ser, ppr_get_max_bw(), ppr_wl->ppr_len);
-	}
-
 
 	if (argv[1] && (!strcmp(argv[1], "--verbose") || !strcmp(argv[1], "-v"))) {
 		verbose = TRUE;
@@ -12521,8 +12583,7 @@ wl_get_current_power(void *wl, cmd_t *cmd, char **argv)
 	if ((err = wlu_get(wl, cmd->get, ppr_wl, ppr_rpt_size)) < 0) {
 		fprintf(stderr, "Error: Curpower failed. ");
 		fprintf(stderr, "Bring up interface and disable mpc if necessary (wl mpc 0)\n");
-		free(ppr_wl);
-		return err;
+		goto exit;
 	}
 
 	/* parse */
@@ -12531,41 +12592,46 @@ wl_get_current_power(void *wl, cmd_t *cmd, char **argv)
 			ppr_wl->version, TX_POWER_T_VERSION);
 		err = BCME_ERROR;
 	} else {
-		ppr_t* ppr_board = NULL;
-		ppr_t* ppr_target = NULL;
 		int8 temp_val;
 		int divquo, divrem;
 		bool neg;
-		ppr_t* ppr_reg = NULL;
 
 		ppr_wl->flags = dtoh32(ppr_wl->flags);
 		ppr_wl->chanspec = wl_chspec_from_driver(ppr_wl->chanspec);
 		ppr_wl->local_chanspec = wl_chspec_from_driver(ppr_wl->local_chanspec);
 
-		chanspec = ppr_wl->chanspec;
 		mimo = (ppr_wl->flags & WL_TX_POWER_F_HT) |
 		       (ppr_wl->flags & WL_TX_POWER_F_MIMO) |
 		       (ppr_wl->flags & WL_TX_POWER_F_SISO);
 		ppr_ser  = ppr_wl->pprdata;
-		if ((err = ppr_deserialize_create(NULL, ppr_wl->pprdata, ppr_wl->ppr_len,
-			&ppr_board)) != BCME_OK) {
-			fprintf(stderr, "Error: read ppr board limit failed\n");
-			goto exit;
+
+		if (tlv_ver) {
+			(void)ppr_convert_from_tlv(ppr_board, ppr_wl->pprdata, ppr_wl->ppr_len);
+			ppr_ser += ppr_wl->ppr_len;
+			(void)ppr_convert_from_tlv(ppr_target, ppr_ser, ppr_wl->ppr_len);
+			ppr_ser += ppr_wl->ppr_len;
+			(void)ppr_convert_from_tlv(ppr_reg, ppr_ser, ppr_wl->ppr_len);
+		} else {
+			/* Try non TLV decode */
+			if ((err = ppr_deserialize_create(NULL, ppr_wl->pprdata, ppr_wl->ppr_len,
+					&ppr_board)) != BCME_OK) {
+				fprintf(stderr, "Error: read ppr board limit failed\n");
+				goto exit;
+			}
+			ppr_ser += ppr_wl->ppr_len;
+			if ((err = ppr_deserialize_create(NULL, ppr_ser, ppr_wl->ppr_len,
+					&ppr_target)) != BCME_OK) {
+				fprintf(stderr, "Error: read ppr target power failed\n");
+				goto exit;
+			}
+			ppr_ser += ppr_wl->ppr_len;
+			if ((err = ppr_deserialize_create(NULL, ppr_ser, ppr_wl->ppr_len, &ppr_reg))
+				!= BCME_OK) {
+				fprintf(stderr, "Error: read ppr regulatory limits failed\n");
+				goto exit;
+			}
 		}
 
-		ppr_ser  += ppr_wl->ppr_len;
-		if ((err = ppr_deserialize_create(NULL, ppr_ser, ppr_wl->ppr_len, &ppr_target))
-			!= BCME_OK) {
-			fprintf(stderr, "Error: read ppr target power failed\n");
-			goto exit;
-		}
-
-		ppr_ser += ppr_wl->ppr_len;
-		if ((err = ppr_deserialize_create(NULL, ppr_ser, ppr_wl->ppr_len, &ppr_reg))
-			!= BCME_OK) {
-			fprintf(stderr, "Error: read ppr regulatory limits failed\n");
-			goto exit;
-		}
 		/* dump */
 		if (verbose)
 			printf("%-23s%s\n", "Output Format Version:",

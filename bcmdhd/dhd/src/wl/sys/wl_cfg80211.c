@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.c 602441 2015-11-26 02:06:54Z $
+ * $Id: wl_cfg80211.c 614166 2016-01-21 07:45:02Z $
  */
 /* */
 #include <typedefs.h>

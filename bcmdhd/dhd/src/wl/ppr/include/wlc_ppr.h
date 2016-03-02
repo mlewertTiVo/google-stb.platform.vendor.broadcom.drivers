@@ -307,6 +307,21 @@ void ppr_multiply_percentage(ppr_t* pprptr, uint8 val);
 /* Get transmit channel bandwidths from chanspec */
 wl_tx_bw_t ppr_chanspec_bw(chanspec_t chspec);
 
+#if defined(WL_EXPORT_CURPOWER) || !defined(BCMDRIVER)
+/* Convert ppr structure to TLV data */
+void ppr_convert_to_tlv(ppr_t* pprptr, wl_tx_bw_t bw, uint8 *to_tlv_buf, uint32 tlv_buf_len,
+	wl_tx_chains_t max_chain);
+
+/* Convert TLV data to ppr structure */
+int ppr_convert_from_tlv(ppr_t* pprptr, uint8 *from_tlv_buf, uint32 tlv_buf_len);
+
+/* Get the total ppr TLV buffer size for given bandwidth and chain number */
+uint32 ppr_get_tlv_size(ppr_t* pprptr, wl_tx_bw_t bw, uint32 max_chain);
+
+/* Get current PPR TLV version */
+uint32 ppr_get_tlv_ver(void);
+#endif /* WL_EXPORT_CURPOWER || !BCMDRIVER */
+
 /* Forward declaration */
 typedef struct tx_pwr_cache_entry tx_pwr_cache_entry_t;
 

@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl_defs.h 613313 2016-01-18 15:40:19Z $
+ * $Id: wlioctl_defs.h 618467 2016-02-11 03:31:31Z $
  */
 
 
@@ -369,6 +369,10 @@
 #define WL_BSS_FLAGS_RSSI_INACCURATE	0x20	/* BSS contains inaccurate RSSI */
 #define WL_BSS_FLAGS_SNR_INVALID	0x40	/* BSS contains invalid SNR */
 #define WL_BSS_FLAGS_NF_INVALID		0x80	/* BSS contains invalid noise floor */
+
+/* bit definitions for bcnflags in wl_bss_info */
+#define WL_BSS_BCNFLAGS_INTERWORK_PRESENT	0x01 /* beacon had IE, accessnet valid */
+#define WL_BSS_BCNFLAGS_INTERWORK_PRESENT_VALID 0x02 /* on indicates support for this API */
 
 /* bssinfo flag for nbss_cap */
 #define VHT_BI_SGI_80MHZ			0x00000100
@@ -1216,6 +1220,8 @@
  */
 #define WL_DPT_VAL		0x00000001
 /* re-using WL_DPT_VAL */
+/* re-using WL_MESH_VAL */
+#define WL_NATOE_VAL		0x00000001
 #define WL_MESH_VAL		0x00000001
 #define WL_SCAN_VAL		0x00000002
 #define WL_WOWL_VAL		0x00000004
@@ -1245,6 +1251,8 @@
 
 /* This level is currently used in Phoenix2 only */
 #define WL_SRSCAN_VAL		0x02000000
+/* Reusing it for CXO in trunk */
+#define WL_CXO_VAL		0x02000000
 
 #define WL_WNM_VAL		0x04000000
 #define WL_PWRSEL_VAL		0x10000000

@@ -41,6 +41,7 @@
 #include <bcmendian.h>
 #include <bcmwifi_channels.h>
 #include <wlc_ppr.h>
+#include <bcmutils.h>
 
 #ifndef BCMDRIVER
 
@@ -74,10 +75,17 @@
 #define PPR_TXBF_ENAB()	(0)
 #endif /* WL_BEAMFORMING */
 
+typedef enum ppr_tlv_id {
+	PPR_RGRP_DSSS_ID = 1,
+	PPR_RGRP_OFDM_ID,
+	PPR_RGRP_MCS_ID
+} ppr_tlv_id_t;
+
 /* This marks the start of a packed structure section. */
 #include <packed_section_start.h>
 
 #define PPR_SERIALIZATION_VER 3
+#define PPR_TLV_VER (PPR_SERIALIZATION_VER + 1)
 
 /** ppr deserialization header */
 typedef BWL_PRE_PACKED_STRUCT struct ppr_deser_header {
@@ -285,9 +293,29 @@ BWL_PRE_PACKED_STRUCT struct ppr {
 	} ppr_bw;
 } BWL_POST_PACKED_STRUCT;
 
+typedef BWL_PRE_PACKED_STRUCT struct ppr_dsss_tlv {
+	uint8 bw;
+	uint8 chains;
+	uint8 pwr[];
+} BWL_POST_PACKED_STRUCT ppr_dsss_tlv_t;
+
+typedef BWL_PRE_PACKED_STRUCT struct ppr_ofdm_tlv {
+	uint8 bw;
+	uint8 chains;
+	uint8 mode;
+	uint8 pwr[];
+} BWL_POST_PACKED_STRUCT ppr_ofdm_tlv_t;
+
+typedef BWL_PRE_PACKED_STRUCT struct ppr_mcs_tlv {
+	uint8 bw;
+	uint8 chains;
+	uint8 mode;
+	uint8 nss;
+	uint8 pwr[];
+} BWL_POST_PACKED_STRUCT ppr_mcs_tlv_t;
+
 /* This marks the end of a packed structure section. */
 #include <packed_section_end.h>
-
 
 /** Returns a flag of ppr conditions (chains, txbf etc.) */
 static uint32 ppr_get_flag(void)
@@ -2462,6 +2490,344 @@ wl_tx_bw_t ppr_chanspec_bw(chanspec_t chspec)
 	}
 	return ret;
 }
+
+#if defined(WL_EXPORT_CURPOWER) || !defined(BCMDRIVER)
+
+#define DSSS_TLV_LEN (sizeof(ppr_dsss_tlv_t) + sizeof(ppr_dsss_rateset_t))
+#define OFDM_TLV_LEN (sizeof(ppr_ofdm_tlv_t) + sizeof(ppr_ofdm_rateset_t))
+#define MCS_TLV_LEN (sizeof(ppr_mcs_tlv_t) + sizeof(ppr_vht_mcs_rateset_t))
+#define PPR_TLV_VER_SIZE (sizeof(int8))
+
+/* Fill DSSS TLV data into the given buffer */
+static uint32
+ppr_to_dssstlv_per_band(ppr_t* pprptr, wl_tx_bw_t bw, uint8 **to_tlv_buf, uint32 tlv_buf_len,
+	wl_tx_chains_t max_chain)
+{
+	uint32 len = 0;
+	wl_tx_chains_t chain;
+
+	pprpbw_t* bw_pwrs;
+	bw_pwrs = ppr_get_bw_powers(pprptr, bw);
+	for (chain = WL_TX_CHAINS_1; chain <= max_chain; chain++) {
+		bcm_tlv_t *tlv_hdr = (bcm_tlv_t *)(*to_tlv_buf);
+		ppr_dsss_tlv_t *dsss_tlv = (ppr_dsss_tlv_t *)tlv_hdr->data;
+		if (len + DSSS_TLV_LEN + BCM_TLV_HDR_SIZE <= tlv_buf_len) {
+			const int8* powers;
+			bool found = FALSE;
+
+			if (bw_pwrs != NULL) {
+				powers = ppr_get_dsss_group(bw_pwrs, chain);
+				if (powers) {
+					memcpy(dsss_tlv->pwr, powers, sizeof(ppr_dsss_rateset_t));
+					found = TRUE;
+				}
+			}
+
+			if (found) {
+				tlv_hdr->id = PPR_RGRP_DSSS_ID;
+				tlv_hdr->len = DSSS_TLV_LEN;
+				dsss_tlv->bw = bw;
+				dsss_tlv->chains = (uint8)chain;
+				len += (DSSS_TLV_LEN + BCM_TLV_HDR_SIZE);
+				*to_tlv_buf += (DSSS_TLV_LEN + BCM_TLV_HDR_SIZE);
+			}
+		} else {
+			break;
+		}
+	}
+	return len;
+}
+
+/* Fill OFDM TLV data into the given buffer */
+static uint32
+ppr_to_ofdmtlv_per_band(ppr_t* pprptr, wl_tx_bw_t bw, uint8 **to_tlv_buf, uint32 tlv_buf_len,
+	wl_tx_chains_t max_chain)
+{
+	uint32 len = 0;
+	wl_tx_chains_t chain;
+	wl_tx_mode_t mode;
+	pprpbw_t* bw_pwrs = ppr_get_bw_powers(pprptr, bw);
+	for (chain = WL_TX_CHAINS_1; chain <= max_chain; chain++) {
+		for (mode = WL_TX_MODE_NONE; mode < WL_NUM_TX_MODES; mode ++) {
+			bcm_tlv_t *tlv_hdr = (bcm_tlv_t *)(*to_tlv_buf);
+			ppr_ofdm_tlv_t *ofdm_tlv = (ppr_ofdm_tlv_t *)tlv_hdr->data;
+			const int8* powers;
+			bool found = FALSE;
+			if (len + OFDM_TLV_LEN + BCM_TLV_HDR_SIZE <= tlv_buf_len) {
+				if (bw_pwrs != NULL) {
+					powers = ppr_get_ofdm_group(bw_pwrs, mode, chain);
+					if (powers != NULL) {
+						memcpy(ofdm_tlv->pwr, powers,
+							sizeof(ppr_ofdm_rateset_t));
+						found = TRUE;
+					}
+				}
+				if (found) {
+					tlv_hdr->id = PPR_RGRP_OFDM_ID;
+					tlv_hdr->len = OFDM_TLV_LEN;
+					ofdm_tlv->bw = bw;
+					ofdm_tlv->chains = (uint8)chain;
+					ofdm_tlv->mode = mode;
+
+					len += (OFDM_TLV_LEN + BCM_TLV_HDR_SIZE);
+					*to_tlv_buf += (OFDM_TLV_LEN + BCM_TLV_HDR_SIZE);
+				}
+			} else {
+				return len;
+			}
+		}
+
+	}
+	return len;
+}
+
+/* Fill MCS TLV data into the given buffer */
+static uint32
+ppr_to_mcstlv_per_band(ppr_t* pprptr, wl_tx_bw_t bw, uint8 **to_tlv_buf, uint32 tlv_buf_len,
+	wl_tx_chains_t max_chain)
+{
+	uint32 len = 0;
+	wl_tx_chains_t chain;
+	wl_tx_mode_t mode;
+	uint8 nss;
+	pprpbw_t* bw_pwrs = ppr_get_bw_powers(pprptr, bw);
+	for (chain = WL_TX_CHAINS_1; chain <= max_chain; chain++) {
+		for (nss = WL_TX_NSS_1; nss <= chain; nss++) {
+			for (mode = WL_TX_MODE_NONE; mode < WL_NUM_TX_MODES; mode ++) {
+				bcm_tlv_t *tlv_hdr = (bcm_tlv_t *)(*to_tlv_buf);
+				ppr_mcs_tlv_t *mcs_tlv = (ppr_mcs_tlv_t *)tlv_hdr->data;
+				if (len + MCS_TLV_LEN + BCM_TLV_HDR_SIZE <= tlv_buf_len) {
+					const int8* powers;
+					bool found = FALSE;
+					if (bw_pwrs != NULL) {
+						powers = ppr_get_mcs_group(bw_pwrs, nss, mode,
+							chain);
+						if (powers != NULL) {
+							memcpy(mcs_tlv->pwr, powers,
+								sizeof(ppr_vht_mcs_rateset_t));
+							found = TRUE;
+						}
+					}
+
+					if (found) {
+						tlv_hdr->id = PPR_RGRP_MCS_ID;
+						tlv_hdr->len = MCS_TLV_LEN;
+						mcs_tlv->bw = bw;
+						mcs_tlv->chains = (uint8)chain;
+						mcs_tlv->mode = mode;
+						mcs_tlv->nss = nss;
+						len += (MCS_TLV_LEN + BCM_TLV_HDR_SIZE);
+						*to_tlv_buf += (MCS_TLV_LEN + BCM_TLV_HDR_SIZE);
+					}
+				} else {
+					return len;
+				}
+			}
+		}
+	}
+	return len;
+}
+
+/* Convert ppr structure to TLV data */
+void ppr_convert_to_tlv(ppr_t* pprptr, wl_tx_bw_t bw, uint8 *to_tlv_buf, uint32 tlv_buf_len,
+	wl_tx_chains_t max_chain)
+{
+	uint32 len = tlv_buf_len;
+	wl_tx_bw_t check_bw;
+	ASSERT(pprptr && to_tlv_buf);
+	to_tlv_buf[0] = PPR_TLV_VER;
+	to_tlv_buf++;
+	switch (bw) {
+	case WL_TX_BW_2P5:
+	case WL_TX_BW_5:
+	case WL_TX_BW_10:
+	case WL_TX_BW_20:
+		len -= ppr_to_dssstlv_per_band(pprptr, bw, &to_tlv_buf, len, max_chain);
+		len -= ppr_to_ofdmtlv_per_band(pprptr, bw, &to_tlv_buf, len, max_chain);
+		ppr_to_mcstlv_per_band(pprptr, bw, &to_tlv_buf, len, max_chain);
+		break;
+	case WL_TX_BW_40:
+		len -= ppr_to_dssstlv_per_band(pprptr, WL_TX_BW_20IN40, &to_tlv_buf, len,
+			max_chain);
+		len -= ppr_to_ofdmtlv_per_band(pprptr, WL_TX_BW_20IN40, &to_tlv_buf, len,
+			max_chain);
+		len -= ppr_to_mcstlv_per_band(pprptr, WL_TX_BW_20IN40, &to_tlv_buf, len,
+			max_chain);
+		len -= ppr_to_ofdmtlv_per_band(pprptr, WL_TX_BW_40, &to_tlv_buf, len, max_chain);
+		len -= ppr_to_mcstlv_per_band(pprptr, WL_TX_BW_40, &to_tlv_buf, len, max_chain);
+		break;
+	case WL_TX_BW_80:
+		for (check_bw = WL_TX_BW_80; check_bw <= WL_TX_BW_40IN80; check_bw++) {
+			if (check_bw == WL_TX_BW_20IN40)
+				continue;
+			if (check_bw == WL_TX_BW_20IN80) {
+				len -= ppr_to_dssstlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+					max_chain);
+			}
+			len -= ppr_to_ofdmtlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+				max_chain);
+			len -= ppr_to_mcstlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+				max_chain);
+		}
+		break;
+	case WL_TX_BW_160:
+		for (check_bw = WL_TX_BW_160; check_bw <= WL_TX_BW_80IN160; check_bw++) {
+			if (check_bw == WL_TX_BW_20IN160) {
+				len -= ppr_to_dssstlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+					max_chain);
+			}
+			len -= ppr_to_ofdmtlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+				max_chain);
+			len -= ppr_to_mcstlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+				max_chain);
+		}
+		break;
+	case WL_TX_BW_8080:
+		for (check_bw = WL_TX_BW_8080; check_bw <= WL_TX_BW_80IN8080; check_bw++) {
+			if (check_bw == WL_TX_BW_20IN8080) {
+				len -= ppr_to_dssstlv_per_band(pprptr, WL_TX_BW_8080, &to_tlv_buf,
+					len, max_chain);
+			}
+			len -= ppr_to_ofdmtlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+				max_chain);
+			len -= ppr_to_mcstlv_per_band(pprptr, check_bw, &to_tlv_buf, len,
+				max_chain);
+		}
+		break;
+	default:
+		break;
+	};
+}
+
+/* Convert TLV data to ppr structure */
+int ppr_convert_from_tlv(ppr_t* pprptr, uint8 *from_tlv_buf, uint32 tlv_buf_len)
+{
+	uint8 ser_ver = from_tlv_buf[0];
+	bcm_tlv_t *elt = (bcm_tlv_t *)(&from_tlv_buf[1]);
+	int ret = BCME_OK;
+	if (ser_ver != PPR_TLV_VER) {
+		ret = BCME_VERSION;
+	} else {
+		do {
+			switch (elt->id) {
+			case PPR_RGRP_DSSS_ID:
+				{
+					ppr_dsss_tlv_t *dsss_tlv = (ppr_dsss_tlv_t *)elt->data;
+					ppr_set_dsss(pprptr, dsss_tlv->bw, dsss_tlv->chains,
+						(ppr_dsss_rateset_t*)dsss_tlv->pwr);
+				}
+				break;
+			case PPR_RGRP_OFDM_ID:
+				{
+					ppr_ofdm_tlv_t *ofdm_tlv = (ppr_ofdm_tlv_t *)elt->data;
+					ppr_set_ofdm(pprptr, ofdm_tlv->bw, ofdm_tlv->mode,
+						ofdm_tlv->chains,
+						(ppr_ofdm_rateset_t*)(ofdm_tlv->pwr));
+				}
+				break;
+			case PPR_RGRP_MCS_ID:
+				{
+					ppr_mcs_tlv_t *mcs_tlv = (ppr_mcs_tlv_t *)elt->data;
+					ppr_set_vht_mcs(pprptr, mcs_tlv->bw, mcs_tlv->nss,
+						mcs_tlv->mode, mcs_tlv->chains,
+						(ppr_vht_mcs_rateset_t*)mcs_tlv->pwr);
+				}
+				break;
+			default:
+				ASSERT(0);
+				break;
+			}
+
+		} while ((elt = bcm_next_tlv(elt, (int *)&tlv_buf_len)) != NULL);
+	}
+	return ret;
+}
+
+/* Get the required buffer size for DSSS TLV data */
+static uint32 ppr_get_tlv_size_dsss(uint32 max_chain)
+{
+	uint32 size = 0;
+	uint32 chain;
+	for (chain = 1; chain <= max_chain; chain++) {
+		size += (DSSS_TLV_LEN + BCM_TLV_HDR_SIZE);
+	}
+	return size;
+}
+
+/* Get the required buffer size for MCS/OFDM TLV data */
+static uint32 ppr_get_ofdmmcs_size(ppr_t* pprptr, uint32 max_chain, wl_tx_bw_t bw)
+{
+	uint32 size = 0;
+	uint32 chain;
+	wl_tx_mode_t mode;
+	uint32 nss;
+	const int8* powers;
+	pprpbw_t* bw_pwrs = ppr_get_bw_powers(pprptr, bw);
+	for (chain = 1; chain <= max_chain; chain++) {
+		for (mode = WL_TX_MODE_NONE; mode < WL_NUM_TX_MODES; mode ++) {
+			if (bw_pwrs != NULL) {
+				powers = ppr_get_ofdm_group(bw_pwrs, mode, chain);
+				if (powers != NULL) {
+					size += (OFDM_TLV_LEN + BCM_TLV_HDR_SIZE);
+				}
+				for (nss = WL_TX_NSS_1; nss <= chain; nss++) {
+					powers = ppr_get_mcs_group(bw_pwrs, nss, mode,
+						chain);
+					if (powers != NULL) {
+						size += (MCS_TLV_LEN + BCM_TLV_HDR_SIZE);
+					}
+				}
+			}
+		}
+	}
+	return size;
+}
+
+/* Get the total TLV buffer size for the given ppr data of bandwidth and chain number */
+uint32 ppr_get_tlv_size(ppr_t* pprptr, wl_tx_bw_t bw, uint32 max_chain)
+{
+	uint32 dsss_size = ppr_get_tlv_size_dsss(max_chain);
+	uint32 mcs_ofdm_size = ppr_get_ofdmmcs_size(pprptr, max_chain, bw);
+	uint32 ret = PPR_TLV_VER_SIZE;
+	switch (bw) {
+	case WL_TX_BW_2P5:
+	case WL_TX_BW_5:
+	case WL_TX_BW_10:
+	case WL_TX_BW_20:
+		ret += (dsss_size + mcs_ofdm_size);
+		break;
+	case WL_TX_BW_40:
+		/* 20IN40 and 40 */
+		ret += (dsss_size + 2*mcs_ofdm_size);
+		break;
+	case WL_TX_BW_80:
+		/* 20IN80, 40IN80,80 */
+		ret += (dsss_size + 3*mcs_ofdm_size);
+		break;
+	case WL_TX_BW_160:
+		/* 20IN160, 40IN160, 80IN160, 160 */
+		ret += (dsss_size + 4*mcs_ofdm_size);
+		break;
+	case WL_TX_BW_8080:
+		/* 20IN8080, 40IN8080, 80IN8080, 8080, 8080CHAN2 */
+		ret += (dsss_size + 5*mcs_ofdm_size);
+		break;
+	default:
+		ret = 0;
+		ASSERT(0);
+		break;
+	};
+
+	return ret;
+}
+
+/* Get current PPR TLV version */
+uint32 ppr_get_tlv_ver(void)
+{
+	return PPR_TLV_VER;
+}
+
+#endif /* WL_EXPORT_CURPOWER || !BCMDRIVER */
 
 #ifdef WLTXPWR_CACHE
 

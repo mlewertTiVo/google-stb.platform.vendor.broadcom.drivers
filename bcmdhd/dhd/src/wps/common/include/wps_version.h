@@ -23,16 +23,16 @@
 
 #define	MOD_RC_NUMBER		110
 
-#define	MOD_INCREMENTAL_NUMBER	12
+#define	MOD_INCREMENTAL_NUMBER	13
 
 #define	MOD_BUILD_NUMBER	0
 
-#define	MOD_VERSION		1, 363, 110, 12
+#define	MOD_VERSION		1, 363, 110, 13
 
-#define	MOD_VERSION_NUM		0x0116b6e0c
+#define	MOD_VERSION_NUM		0x0116b6e0d
 
 /* Driver Version String, ASCII, 32 chars max */
-#define	MOD_VERSION_STR		"1.363.110.12"
+#define	MOD_VERSION_STR		"1.363.110.13"
 #define	MOD_ROUTER_VERSION_STR	"@MOD_ROUTER_VERSION_STR@"
 
 #endif /* _version_h_ */

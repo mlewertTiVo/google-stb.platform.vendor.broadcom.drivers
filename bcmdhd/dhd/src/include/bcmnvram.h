@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmnvram.h 514727 2014-11-12 03:02:48Z $
+ * $Id: bcmnvram.h 617909 2016-02-09 02:06:11Z $
  */
 
 #ifndef _bcmnvram_h_
@@ -122,7 +122,7 @@ static INLINE char *
 nvram_safe_get(const char *name)
 {
 	char *p = nvram_get(name);
-	return p ? p : "";
+	return p ? p : (char *)"";
 }
 
 /*
