@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsrom.c 575563 2015-07-30 08:19:59Z $
+ * $Id: bcmsrom.c 620402 2016-02-23 01:33:41Z $
  */
 
 /*

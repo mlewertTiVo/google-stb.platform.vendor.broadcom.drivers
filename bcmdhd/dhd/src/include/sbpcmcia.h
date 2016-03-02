@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: sbpcmcia.h 597933 2015-11-06 18:52:06Z $
+ * $Id: sbpcmcia.h 620402 2016-02-23 01:33:41Z $
  */
 
 #ifndef	_SBPCMCIA_H
@@ -378,6 +378,23 @@
 #define HNBU_MCS5Gx1PO		0x8c
 #define HNBU_ACPPR_SB8080_PO		0x8d
 #define HNBU_TXBFRPCALS			0x8f	/* phy txbf rpcalvars */
+
+#define HNBU_ACPA_4X4C0	0x91
+#define HNBU_ACPA_4X4C1	0x92
+#define HNBU_ACPA_4X4C2	0x93
+#define HNBU_ACPA_4X4C3	0x94
+#define HNBU_ACPA_BW20_4X4C0	0x95
+#define HNBU_ACPA_BW40_4X4C0	0x96
+#define HNBU_ACPA_BW80_4X4C0	0x97
+#define HNBU_ACPA_BW20_4X4C1	0x98
+#define HNBU_ACPA_BW40_4X4C1	0x99
+#define HNBU_ACPA_BW80_4X4C1	0x9a
+#define HNBU_ACPA_BW20_4X4C2	0x9b
+#define HNBU_ACPA_BW40_4X4C2	0x9c
+#define HNBU_ACPA_BW80_4X4C2	0x9d
+#define HNBU_ACPA_BW20_4X4C3	0x9e
+#define HNBU_ACPA_BW40_4X4C3	0x9f
+#define HNBU_ACPA_BW80_4X4C3	0xa0
 
 
 #endif /* !defined(LINUX_POSTMOGRIFY_REMOVAL) */

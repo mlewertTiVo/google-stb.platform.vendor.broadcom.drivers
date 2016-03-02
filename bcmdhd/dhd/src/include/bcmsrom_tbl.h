@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsrom_tbl.h 553564 2015-04-30 06:19:30Z $
+ * $Id: bcmsrom_tbl.h 620402 2016-02-23 01:33:41Z $
  */
 
 #ifndef	_bcmsrom_tbl_h_
@@ -1334,10 +1334,10 @@ static const cis_tuple_t cis_hnbuvars[] = {
 	{HNBU_FEM_CFG,		0xfffff800, 5,	"0femctrl 0papdcap2g 0tworangetssi2g 0pdgain2g "
 	"0epagain2g 0tssiposslope2g 0gainctrlsph 0papdcap5g 0tworangetssi5g 0pdgain5g 0epagain5g "
 	"0tssiposslope5g"}, /* special case */
-	{HNBU_ACPA_C0,		0xfffff800, 39,	"2subband5gver 2maxp2ga0 2*3pa2ga0 "
+	{HNBU_ACPA_C0,		0x00001800, 39,	"2subband5gver 2maxp2ga0 2*3pa2ga0 "
 	"1*4maxp5ga0 2*12pa5ga0"},
-	{HNBU_ACPA_C1,		0xfffff800, 37,	"2maxp2ga1 2*3pa2ga1 1*4maxp5ga1 2*12pa5ga1"},
-	{HNBU_ACPA_C2,		0xfffff800, 37,	"2maxp2ga2 2*3pa2ga2 1*4maxp5ga2 2*12pa5ga2"},
+	{HNBU_ACPA_C1,		0x00001800, 37,	"2maxp2ga1 2*3pa2ga1 1*4maxp5ga1 2*12pa5ga1"},
+	{HNBU_ACPA_C2,		0x00001800, 37,	"2maxp2ga2 2*3pa2ga2 1*4maxp5ga2 2*12pa5ga2"},
 	{HNBU_MEAS_PWR,		0xfffff800, 5,	"1measpower 1measpower1 1measpower2 2rawtempsense"},
 	{HNBU_PDOFF,		0xfffff800, 13,	"2pdoffset40ma0 2pdoffset40ma1 2pdoffset40ma2 "
 	"2pdoffset80ma0 2pdoffset80ma1 2pdoffset80ma2"},
@@ -1389,6 +1389,26 @@ static const cis_tuple_t cis_hnbuvars[] = {
 	{HNBU_ACPA_40,		0xfffff800, 25,	"2*12pa5gbw40a0"},
 	{HNBU_ACPA_80,		0xfffff800, 25,	"2*12pa5gbw80a0"},
 	{HNBU_ACPA_4080,	0xfffff800, 49,	"2*12pa5gbw4080a0 2*12pa5gbw4080a1"},
+	{HNBU_ACPA_4X4C0,	0xffffe000, 23, "1maxp2ga0 2*4pa2ga0 2*4pa2g40a0 "
+	"1maxp5gb0a0 1maxp5gb1a0 1maxp5gb2a0 1maxp5gb3a0 1maxp5gb4a0"},
+	{HNBU_ACPA_4X4C1,	0xffffe000, 23, "1maxp2ga1 2*4pa2ga1 2*4pa2g40a1 "
+	"1maxp5gb0a1 1maxp5gb1a1 1maxp5gb2a1 1maxp5gb3a1 1maxp5gb4a1"},
+	{HNBU_ACPA_4X4C2,	0xffffe000, 23, "1maxp2ga2 2*4pa2ga2 2*4pa2g40a2 "
+	"1maxp5gb0a2 1maxp5gb1a2 1maxp5gb2a2 1maxp5gb3a2 1maxp5gb4a2"},
+	{HNBU_ACPA_4X4C3,	0xffffe000, 23, "1maxp2ga3 2*4pa2ga3 2*4pa2g40a3 "
+	"1maxp5gb0a3 1maxp5gb1a3 1maxp5gb2a3 1maxp5gb3a3 1maxp5gb4a3"},
+	{HNBU_ACPA_BW20_4X4C0,	0xffffe000, 41, "2*20pa5ga0"},
+	{HNBU_ACPA_BW40_4X4C0,	0xffffe000, 41, "2*20pa5g40a0"},
+	{HNBU_ACPA_BW80_4X4C0,	0xffffe000, 41, "2*20pa5g80a0"},
+	{HNBU_ACPA_BW20_4X4C1,	0xffffe000, 41, "2*20pa5ga1"},
+	{HNBU_ACPA_BW40_4X4C1,	0xffffe000, 41, "2*20pa5g40a1"},
+	{HNBU_ACPA_BW80_4X4C1,	0xffffe000, 41, "2*20pa5g80a1"},
+	{HNBU_ACPA_BW20_4X4C2,	0xffffe000, 41, "2*20pa5ga2"},
+	{HNBU_ACPA_BW40_4X4C2,	0xffffe000, 41, "2*20pa5g40a2"},
+	{HNBU_ACPA_BW80_4X4C2,	0xffffe000, 41, "2*20pa5g80a2"},
+	{HNBU_ACPA_BW20_4X4C3,	0xffffe000, 41, "2*20pa5ga3"},
+	{HNBU_ACPA_BW40_4X4C3,	0xffffe000, 41, "2*20pa5g40a3"},
+	{HNBU_ACPA_BW80_4X4C3,	0xffffe000, 41, "2*20pa5g80a3"},
 	{HNBU_SUBBAND5GVER,	0xfffff800, 3,	"2subband5gver"},
 	{HNBU_PAPARAMBWVER,	0xfffff800, 2,	"1paparambwver"},
 	{HNBU_TXBFRPCALS,  0xfffff800, 11,

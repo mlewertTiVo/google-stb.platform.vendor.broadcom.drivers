@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11.h 612861 2016-01-15 07:57:02Z $
+ * $Id: 802.11.h 620484 2016-02-23 06:43:26Z $
  */
 
 #ifndef _802_11_H_
@@ -1396,7 +1396,7 @@ typedef struct ti_ie ti_ie_t;
 #define DOT11_MNG_WAKEUP_SCHEDULE_ID		102	/* 11z TDLS Wakeup Schedule IE */
 #define DOT11_MNG_CHANNEL_SWITCH_TIMING_ID	104	/* 11z TDLS Channel Switch Timing IE */
 #define DOT11_MNG_PTI_CONTROL_ID		105	/* 11z TDLS PTI Control IE */
-#define DOT11_MNG_PU_BUFFER_STATUS_ID	106	/* 11z TDLS PU Buffer Status IE */
+#define DOT11_MNG_PU_BUFFER_STATUS_ID		106	/* 11z TDLS PU Buffer Status IE */
 #define DOT11_MNG_INTERWORKING_ID		107	/* 11u interworking */
 #define DOT11_MNG_ADVERTISEMENT_ID		108	/* 11u advertisement protocol */
 #define DOT11_MNG_EXP_BW_REQ_ID			109	/* 11u expedited bandwith request */
@@ -1406,7 +1406,6 @@ typedef struct ti_ie ti_ie_t;
 #define DOT11_MNG_MESH_CONFIG			113	/* Mesh Configuration */
 #define DOT11_MNG_MESH_ID			114	/* Mesh ID */
 #define DOT11_MNG_MESH_PEER_MGMT_ID		117	/* Mesh PEER MGMT IE */
-
 #define DOT11_MNG_EXT_CAP_ID			127	/* d11 mgmt ext capability */
 #define DOT11_MNG_EXT_PREQ_ID			130	/* Mesh PREQ IE */
 #define DOT11_MNG_EXT_PREP_ID			131	/* Mesh PREP IE */
@@ -1414,19 +1413,22 @@ typedef struct ti_ie ti_ie_t;
 #define	DOT11_MNG_VHT_CAP_ID			191	/* d11 mgmt VHT cap id */
 #define	DOT11_MNG_VHT_OPERATION_ID		192	/* d11 mgmt VHT op id */
 #define	DOT11_MNG_EXT_BSSLOAD_ID		193	/* d11 mgmt VHT extended bss load id */
-#define DOT11_MNG_WIDE_BW_CHANNEL_SWITCH_ID		194	/* Wide BW Channel Switch IE */
-#define DOT11_MNG_VHT_TRANSMIT_POWER_ENVELOPE_ID	195	/* VHT transmit Power Envelope IE */
-#define DOT11_MNG_CHANNEL_SWITCH_WRAPPER_ID		196	/* Channel Switch Wrapper IE */
-#define DOT11_MNG_AID_ID					197	/* Association ID  IE */
-#define	DOT11_MNG_OPER_MODE_NOTIF_ID	199	/* d11 mgmt VHT oper mode notif */
+#define DOT11_MNG_WIDE_BW_CHANNEL_SWITCH_ID	194	/* Wide BW Channel Switch IE */
+#define DOT11_MNG_VHT_TRANSMIT_POWER_ENVELOPE_ID 195	/* VHT transmit Power Envelope IE */
+#define DOT11_MNG_CHANNEL_SWITCH_WRAPPER_ID	196	/* Channel Switch Wrapper IE */
+#define DOT11_MNG_AID_ID			197	/* Association ID  IE */
+#define	DOT11_MNG_OPER_MODE_NOTIF_ID		199	/* d11 mgmt VHT oper mode notif */
+#define DOT11_MNG_HE_CAP_ID			201
+#define DOT11_MNG_HE_OP_ID			202
 #define DOT11_MNG_FTM_PARAMS_ID			206
-
+#define DOT11_MNG_TWT_ID			216	/* 11ah D5.0 */
 #define DOT11_MNG_WPA_ID			221	/* d11 management WPA id */
 #define DOT11_MNG_PROPR_ID			221
 /* should start using this one instead of above two */
 #define DOT11_MNG_VS_ID				221	/* d11 management Vendor Specific IE */
 
 #define DOT11_MNG_ID_EXT_ID			255 /* Element ID Extension 11mc D4.3 */
+
 #define DOT11_MNG_FTM_SYNC_INFO_ID		9	/* 11mc D4.3 */
 
 #define DOT11_MNG_IE_ID_EXT_MATCH(_ie, _id) (\
