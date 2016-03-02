@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -22,7 +22,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: typedefs.h 576514 2015-08-04 00:45:03Z $
+ * $Id: typedefs.h 613162 2016-01-18 02:14:00Z $
  */
 
 #ifndef _TYPEDEFS_H_
@@ -161,6 +161,11 @@ typedef		int	bool;
 
 #endif 
 
+
+#if defined(CUSTOMER_HW_31_2)
+#include <stdbool.h>
+#define TYPEDEF_BOOL
+#endif /* defined(CUSTOMER_HW_31_2) */
 
 /* use the default typedefs in the next section of this file */
 #define USE_TYPEDEF_DEFAULTS

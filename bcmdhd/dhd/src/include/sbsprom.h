@@ -2,7 +2,7 @@
  * SPROM format definitions for the Broadcom 47xx and 43xx chip family.
  *
  * $Id: sbsprom.h 523133 2014-12-27 05:50:30Z $
- * Copyright (C) 2015, Broadcom Corporation
+ * Copyright (C) 2016, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

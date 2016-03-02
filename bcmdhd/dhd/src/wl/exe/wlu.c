@@ -1,7 +1,7 @@
 /*
  * Common code for wl command-line swiss-army-knife utility
  *
- * Copyright (C) 2015, Broadcom Corporation
+ * Copyright (C) 2016, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

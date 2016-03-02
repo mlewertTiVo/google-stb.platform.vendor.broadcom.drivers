@@ -1,7 +1,7 @@
 /*
  * EVENT_LOG system definitions
  *
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: event_log_tag.h 585396 2015-09-10 09:04:56Z $
+ * $Id: event_log_tag.h 611454 2016-01-11 08:21:48Z $
  */
 
 #ifndef _EVENT_LOG_TAG_H_
@@ -134,8 +134,17 @@
 #define EVENT_LOG_TAG_STF_ARBITRATOR_ERROR	110
 #define EVENT_LOG_TAG_STF_ARBITRATOR_TRACE	111
 #define EVENT_LOG_TAG_STF_ARBITRATOR_WARN	112
+#define EVENT_LOG_TAG_SCAN_SUMMARY		113
+#define EVENT_LOG_TAG_PROXD_SAMPLE_COLLECT	114
+#define EVENT_LOG_TAG_OCL_INFO			115
+#define EVENT_LOG_TAG_RSDB_PMGR_DEBUG		116
+#define EVENT_LOG_TAG_RSDB_PMGR_ERR		117
+#define EVENT_LOG_TAG_NAT_ERR                   118
+#define EVENT_LOG_TAG_NAT_WARN                  119
+#define EVENT_LOG_TAG_NAT_INFO                  120
+#define EVENT_LOG_TAG_NAT_DEBUG                 121
 /* EVENT_LOG_TAG_MAX	= Set to the same value of last tag, not last tag + 1 */
-#define EVENT_LOG_TAG_MAX		112
+#define EVENT_LOG_TAG_MAX			121
 /* Note: New event should be added/reserved in trunk before adding it to branches */
 
 

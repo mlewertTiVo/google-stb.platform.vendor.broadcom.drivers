@@ -1,7 +1,7 @@
 /*
  * Fundamental types and constants relating to 802.11 ccx
  *
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11_ccx.h 518342 2014-12-01 23:21:41Z $
+ * $Id: 802.11_ccx.h 608847 2015-12-29 14:09:09Z $
  */
 
 #ifndef _802_11_CCX_H_
@@ -170,6 +170,7 @@ typedef struct ccx_radio_mgmt ccx_radio_mgmt_t;
 #define CCX_VERSION_IE_TYPE	3	/* CCX version IE type */
 #define CCX_VERSION_IE_LEN	5	/* CCX version IE length */
 #define CCX_RM_CAP_IE_TYPE	1	/* CCX RM cap IE type */
+#define CCX_EXT_CAP_IE_TYPE	11	/* CCX Extended Cap IE type */
 
 /* CCXv2 QOS Parameter set IE */
 BWL_PRE_PACKED_STRUCT struct ccx_qos_params {
@@ -203,6 +204,17 @@ BWL_PRE_PACKED_STRUCT struct ccx_version_ie {
 	uint8 version;
 } BWL_POST_PACKED_STRUCT;
 typedef struct ccx_version_ie ccx_version_ie_t;
+
+/* CCX Extended Capability IE */
+BWL_PRE_PACKED_STRUCT struct ccx_ext_cap_ie {
+	uint8 id;		/* 221, DOT11_MNG_PROPR_ID */
+	uint8 len;
+	uint8 oui[DOT11_OUI_LEN];	/* 00:40:96, CISCO_AIRONET_OUI */
+	uint8 type;		/* 11 */
+	uint8 cap;
+} BWL_POST_PACKED_STRUCT;
+typedef struct ccx_ext_cap_ie ccx_ext_cap_ie_t;
+#define CCX_CAP_FBT		0x40	/* 802.11r support */
 
 /* CCX Adjacent AP Report IE in roam IAPP packet */
 BWL_PRE_PACKED_STRUCT struct ccx_roam_ap_ie_s {

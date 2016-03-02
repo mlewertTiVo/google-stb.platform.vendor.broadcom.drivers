@@ -6,7 +6,7 @@
  *
  * Definitions subject to change without notice.
  *
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -29,7 +29,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl.h 599894 2015-11-17 06:03:47Z $
+ * $Id: wlioctl.h 613162 2016-01-18 02:14:00Z $
  */
 
 #ifndef _wlioctl_h_
@@ -8052,6 +8052,7 @@ typedef BWL_PRE_PACKED_STRUCT struct  dynctl_sim {
 /* no default structure packing */
 #include <packed_section_end.h>
 
+#ifndef CUSTOMER_HW_31_2
 /* PTK key maintained per SCB */
 #define RSN_TEMP_ENCR_KEY_LEN 16
 typedef struct wpa_ptk {
@@ -8083,6 +8084,7 @@ typedef struct wlc_fbt_auth_resp {
 					FBTIE (ANonce, SNonce,R0KH-ID, R1KH-ID)
 					*/
 } wlc_fbt_auth_resp_t;
+#endif
 
 /* FBT Action Response frame */
 typedef struct wlc_fbt_action_resp {

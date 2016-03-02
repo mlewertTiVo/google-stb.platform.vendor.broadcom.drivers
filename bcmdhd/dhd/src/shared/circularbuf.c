@@ -11,7 +11,7 @@
  * pio or DMA transfers. It also leaves the format of the data that is written and read to a higher
  * layer. Typically the data is in the form of so-called 'message buffers'.
  *
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you

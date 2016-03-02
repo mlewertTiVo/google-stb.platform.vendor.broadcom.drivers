@@ -3,7 +3,7 @@
  *
  * Dependencies: proto/bcmeth.h
  *
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmevent.h 598812 2015-11-11 03:12:18Z $
+ * $Id: bcmevent.h 613228 2016-01-18 07:29:43Z $
  *
  */
 
@@ -214,10 +214,10 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #define WLC_E_PROXD			109	/* Proximity Detection event */
 #define WLC_E_IBSS_COALESCE		110	/* IBSS Coalescing */
 #define WLC_E_AIBSS_TXFAIL		110	/* TXFAIL event for AIBSS, re using event 110 */
-#define WLC_E_SCAN_SUMMARY		111	/* Parallel scan statistics event */
 #define WLC_E_BSS_LOAD			114	/* Inform host of beacon bss load */
 #define WLC_E_MIMO_PWR_SAVE		115	/* Inform host MIMO PWR SAVE learning events */
 #define WLC_E_LEAKY_AP_STATS	116 /* Inform host leaky Ap stats events */
+#define WLC_E_ALLOW_CREDIT_BORROW 117	/* Allow or disallow wlfc credit borrowing in DHD */
 #define WLC_E_MSCH			120	/* Multiple channel scheduler event */
 #define WLC_E_CSA_START_IND		121
 #define WLC_E_CSA_DONE_IND		122
@@ -245,9 +245,13 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #define WLC_E_MACDBG			147	/* Ucode debugging event */
 #define WLC_E_RESERVED			148	/* reserved */
 #define WLC_E_PRE_ASSOC_RSEP_IND	149	/* assoc resp received */
-#define WLC_E_LAST			150	/* highest val + 1 for range checking */
-#if (WLC_E_LAST > 150)
-#error "WLC_E_LAST: Invalid value for last event; must be <= 150."
+#define WLC_E_ID_AUTH			150	/* ID AUTH WPA2-PSK 4 WAY Handshake failure */
+#define WLC_E_TKO			151     /* TCP keepalive offload */
+#define WLC_E_SDB_TRANSITION            152     /* SDB mode-switch event */
+#define WLC_E_NATOE_NFCT		153     /* natoe event */
+#define WLC_E_LAST			154	/* highest val + 1 for range checking */
+#if (WLC_E_LAST > 154)
+#error "WLC_E_LAST: Invalid value for last event; must be <= 153."
 #endif /* WLC_E_LAST */
 
 /* define an API for getting the string name of an event */
@@ -278,6 +282,17 @@ void wl_event_to_network_order(wl_event_msg_t * evt);
 #define WLC_E_STATUS_CS_ABORT		15	/* abort channel select */
 #define WLC_E_STATUS_ERROR		16	/* request failed due to error */
 #define WLC_E_STATUS_INVALID 0xff  /* Invalid status code to init variables. */
+
+/* SDB transition status code */
+#define WLC_E_STATUS_SDB_START          1
+#define WLC_E_STATUS_SDB_COMPLETE       2
+
+/* SDB transition reason code */
+#define WLC_E_REASON_HOST_DIRECT	0
+#define WLC_E_REASON_INFRA_ASSOC	1
+#define WLC_E_REASON_INFRA_ROAM		2
+#define WLC_E_REASON_INFRA_DISASSOC	3
+#define WLC_E_REASON_NO_MODE_CHANGE_NEEDED	4
 
 /* roam reason codes */
 #define WLC_E_REASON_INITIAL_ASSOC	0	/* initial assoc */
@@ -361,6 +376,14 @@ typedef struct wl_event_data_if {
 	uint8 bssidx;		/* bsscfg index */
 	uint8 role;		/* see I/F role */
 } wl_event_data_if_t;
+
+/* WLC_E_NATOE event data */
+typedef struct wl_event_data_natoe {
+	uint32 natoe_active;
+	uint32 sta_ip;
+	uint16 start_port;
+	uint16 end_port;
+} wl_event_data_natoe_t;
 
 /* opcode in WLC_E_IF event */
 #define WLC_E_IF_ADD		1	/* bsscfg add */
@@ -605,6 +628,11 @@ typedef struct wl_ulp_event {
 	uint16 ulp_dongle_action;
 } wl_ulp_event_t;
 
+/* TCP keepalive event data */
+typedef BWL_PRE_PACKED_STRUCT struct wl_event_tko {
+	uint8 index;		/* TCP connection index, 0 to max-1 */
+	uint8 pad[3];		/* 4-byte struct alignment */
+} BWL_POST_PACKED_STRUCT wl_event_tko_t;
 
 /* This marks the end of a packed structure section. */
 #include <packed_section_end.h>

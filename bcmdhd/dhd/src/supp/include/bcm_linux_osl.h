@@ -1,7 +1,7 @@
 /*
  * bdm_linux_osl.h -- linux osl for external supplicant
  *
- * Copyright (C) 2015, Broadcom Corporation
+ * Copyright (C) 2016, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

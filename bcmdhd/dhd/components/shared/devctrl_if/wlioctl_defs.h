@@ -4,7 +4,7 @@
  *
  * Definitions subject to change without notice.
  *
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl_defs.h 597933 2015-11-06 18:52:06Z $
+ * $Id: wlioctl_defs.h 613313 2016-01-18 15:40:19Z $
  */
 
 
@@ -467,17 +467,12 @@
 
 #define	WLC_IOCTL_SMLEN			256	/* "small" length ioctl buffer required */
 #define WLC_IOCTL_MEDLEN		1536    /* "med" length ioctl buffer required */
-#ifdef WLC_HIGH_ONLY
-#define WLC_SAMPLECOLLECT_MAXLEN	1024	/* limit sample size for bmac  */
-#define WLC_SAMPLECOLLECT_MAXLEN_LCN40  1024
-#else
 #if defined(LCNCONF) || defined(LCN40CONF) || defined(LCN20CONF)
 #define WLC_SAMPLECOLLECT_MAXLEN	8192	/* Max Sample Collect buffer */
 #else
 #define WLC_SAMPLECOLLECT_MAXLEN	10240	/* Max Sample Collect buffer for two cores */
 #endif
 #define WLC_SAMPLECOLLECT_MAXLEN_LCN40  8192
-#endif /* WLC_HIGH_ONLY */
 
 /* common ioctl definitions */
 #define WLC_GET_MAGIC				0
@@ -1080,7 +1075,8 @@
 #define ACPHY_ACI_PREEMPTION 8            /* bit 3 */
 #define ACPHY_HWACI_MITIGATION 16         /* bit 4 */
 #define ACPHY_LPD_PREEMPTION 32           /* bit 5 */
-#define ACPHY_ACI_MAX_MODE 63
+#define ACPHY_HWOBSS_MITIGATION 64        /* bit 6 */
+#define ACPHY_ACI_MAX_MODE 127
 
 /* AP environment */
 #define AP_ENV_DETECT_NOT_USED		0 /* We aren't using AP environment detection */
@@ -1173,6 +1169,7 @@
 #ifndef LINUX_POSTMOGRIFY_REMOVAL
 #define WL_TX_POWER_F_PROP11NRATES	0x80
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
+#define WL_TX_POWER_F_UNIT_QDBM		0x100
 /* Message levels */
 #define WL_ERROR_VAL		0x00000001
 #define WL_TRACE_VAL		0x00000002
@@ -1303,6 +1300,8 @@
 #define BCMIO_NBBY		8
 #define WL_EVENTING_MASK_LEN	16
 
+#define WL_EVENTING_MASK_EXT_LEN \
+    MAX(WL_EVENTING_MASK_LEN, (ROUNDUP(WLC_E_LAST, NBBY)/NBBY))
 
 /* join preference types */
 #define WL_JOIN_PREF_RSSI	1	/* by RSSI */
@@ -1476,8 +1475,7 @@
 #define WL_WOWL_PME_GPIO        (1 << 8)    /* Wakeind via PME(0) or GPIO(1) */
 #ifndef LINUX_POSTMOGRIFY_REMOVAL
 #define WL_WOWL_ULP_BAILOUT     (1 << 8)    /* wakeind via unknown pkt by basic ULP-offloads -
- * WL_WOWL_ULP_BAILOUT - same as WL_WOWL_PME_GPIO used only for DONGLE BUILDS and
- * not WLC_HIGH_ONLY case
+ * WL_WOWL_ULP_BAILOUT - same as WL_WOWL_PME_GPIO used only for DONGLE BUILDS
  */
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 #define WL_WOWL_NEEDTKIP1       (1 << 9)    /* need tkip phase 1 key to be updated by the driver */
@@ -1583,6 +1581,7 @@
 #define VNDR_IE_PRBREQ_FLAG	0x10
 #define VNDR_IE_ASSOCREQ_FLAG	0x20
 #define VNDR_IE_IWAPID_FLAG	0x40 /* vendor IE in IW advertisement protocol ID field */
+#define VNDR_IE_AUTHREQ_FLAG	0x80
 #define VNDR_IE_CUSTOM_FLAG	0x100 /* allow custom IE id */
 
 #if defined(WLP2P)
@@ -2180,5 +2179,16 @@
 #define AP_ISOLATE_DISABLED		0x0
 #define AP_ISOLATE_SENDUP_ALL		0x01
 #define AP_ISOLATE_SENDUP_MCAST		0x02
+
+/* Type values for the wl_pwrstats_t data field */
+#define WL_PWRSTATS_TYPE_PHY		0 /**< struct wl_pwr_phy_stats */
+#define WL_PWRSTATS_TYPE_SCAN		1 /**< struct wl_pwr_scan_stats */
+#define WL_PWRSTATS_TYPE_USB_HSIC	2 /**< struct wl_pwr_usb_hsic_stats */
+#define WL_PWRSTATS_TYPE_PM_AWAKE1	3 /**< struct wl_pwr_pm_awake_stats_v1 */
+#define WL_PWRSTATS_TYPE_CONNECTION	4 /* struct wl_pwr_connect_stats; assoc and key-exch time */
+#define WL_PWRSTATS_TYPE_PCIE		6 /**< struct wl_pwr_pcie_stats */
+#define WL_PWRSTATS_TYPE_PM_AWAKE2	7 /**< struct wl_pwr_pm_awake_stats_v2 */
+#define WL_PWRSTATS_TYPE_SDIO		8 /* struct wl_pwr_sdio_stats */
+#define WL_PWRSTATS_TYPE_MIMO_PS_METRICS 9 /* struct wl_mimo_meas_metrics_t */
 
 #endif /* wlioctl_defs_h */

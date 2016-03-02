@@ -1,7 +1,7 @@
 /*
  * Fundamental types and constants relating to 802.11
  *
- * Copyright (C) 1999-2015, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11.h 602075 2015-11-25 02:22:41Z $
+ * $Id: 802.11.h 612861 2016-01-15 07:57:02Z $
  */
 
 #ifndef _802_11_H_
@@ -3660,6 +3660,11 @@ typedef struct ht_prop_cap_ie ht_prop_cap_ie_t;
 #define HT_CAP_TX_BF_CAP_EXPLICIT_COMPRESSED_FB_MASK 0x18000
 #define HT_CAP_TX_BF_CAP_EXPLICIT_COMPRESSED_FB_SHIFT 15
 
+#define HT_CAP_MCS_FLAGS_SUPP_BYTE 12 /* byte offset in HT Cap Supported MCS for various flags */
+#define HT_CAP_MCS_RX_8TO15_BYTE_OFFSET                1
+#define HT_CAP_MCS_FLAGS_TX_RX_UNEQUAL              0x02
+#define HT_CAP_MCS_FLAGS_MAX_SPATIAL_STREAM_MASK    0x0C
+
 #define VHT_MAX_MPDU		11454	/* max mpdu size for now (bytes) */
 #define VHT_MPDU_MSDU_DELTA	56		/* Difference in spec - vht mpdu, amsdu len */
 /* Max AMSDU len - per spec */
@@ -3776,6 +3781,13 @@ typedef struct ht_prop_add_ie ht_prop_add_ie_t;
 					== DOT11N_TXBURST)	/* Tx Burst present */
 #define DOT11N_OBSS_NONHT_PRESENT(add_ie)	((ltoh16_ua(&add_ie->opmode) & DOT11N_OBSS_NONHT) \
 					== DOT11N_OBSS_NONHT)	/* OBSS Non-HT present */
+/* Macros for HT MCS filed access */
+#define HT_CAP_MCS_BITMASK(supp_mcs)                 \
+	((supp_mcs)[HT_CAP_MCS_RX_8TO15_BYTE_OFFSET])
+#define HT_CAP_MCS_TX_RX_UNEQUAL(supp_mcs)          \
+	((supp_mcs)[HT_CAP_MCS_FLAGS_SUPP_BYTE] & HT_CAP_MCS_FLAGS_TX_RX_UNEQUAL)
+#define HT_CAP_MCS_TX_STREAM_SUPPORT(supp_mcs)          \
+		((supp_mcs)[HT_CAP_MCS_FLAGS_SUPP_BYTE] & HT_CAP_MCS_FLAGS_MAX_SPATIAL_STREAM_MASK)
 
 BWL_PRE_PACKED_STRUCT struct obss_params {
 	uint16	passive_dwell;
@@ -4298,6 +4310,42 @@ BWL_PRE_PACKED_STRUCT struct dot11_ftm {
 } BWL_POST_PACKED_STRUCT;
 typedef struct dot11_ftm dot11_ftm_t;
 
+
+#define DOT11_FTM_ERR_NOT_CONT_OFFSET 1
+#define DOT11_FTM_ERR_NOT_CONT_MASK 0x80
+#define DOT11_FTM_ERR_NOT_CONT_SHIFT 7
+#define DOT11_FTM_ERR_NOT_CONT(_err) (((_err)[DOT11_FTM_ERR_NOT_CONT_OFFSET] & \
+	DOT11_FTM_ERR_NOT_CONT_MASK) >> DOT11_FTM_ERR_NOT_CONT_SHIFT)
+#define DOT11_FTM_ERR_SET_NOT_CONT(_err, _val) do {\
+	uint8 _err2 = (_err)[DOT11_FTM_ERR_NOT_CONT_OFFSET]; \
+	_err2 &= ~DOT11_FTM_ERR_NOT_CONT_MASK; \
+	_err2 |= ((_val) << DOT11_FTM_ERR_NOT_CONT_SHIFT) & DOT11_FTM_ERR_NOT_CONT_MASK; \
+	(_err)[DOT11_FTM_ERR_NOT_CONT_OFFSET] = _err2; \
+} while (0)
+
+#define DOT11_FTM_ERR_MAX_ERR_OFFSET 0
+#define DOT11_FTM_ERR_MAX_ERR_MASK 0x7fff
+#define DOT11_FTM_ERR_MAX_ERR_SHIFT 0
+#define DOT11_FTM_ERR_MAX_ERR(_err) (((((_err)[1] & 0x7f) << 8) | (_err)[0]))
+#define DOT11_FTM_ERR_SET_MAX_ERR(_err, _val) do {\
+	uint16 _val2; \
+	uint16 _not_cont; \
+	_val2 =  (((_val) & DOT11_FTM_ERR_MAX_ERR_MASK) << DOT11_FTM_ERR_MAX_ERR_SHIFT); \
+	_val2 = (_val2 > 0x3fff) ? 0 : _val2; /* not expecting > 16ns error */ \
+	_not_cont = DOT11_FTM_ERR_NOT_CONT(_err); \
+	(_err)[0] = _val2 & 0xff; \
+	(_err)[1] = (_val2 >> 8) & 0xff; \
+	DOT11_FTM_ERR_SET_NOT_CONT(_err, _not_cont); \
+} while (0)
+
+#if defined(DOT11_FTM_ERR_ROM_COMPAT)
+/* incorrect defs - here for ROM compatibiity */
+#undef DOT11_FTM_ERR_NOT_CONT_OFFSET
+#undef DOT11_FTM_ERR_NOT_CONT_MASK
+#undef DOT11_FTM_ERR_NOT_CONT_SHIFT
+#undef DOT11_FTM_ERR_NOT_CONT
+#undef DOT11_FTM_ERR_SET_NOT_CONT
+
 #define DOT11_FTM_ERR_NOT_CONT_OFFSET 0
 #define DOT11_FTM_ERR_NOT_CONT_MASK 0x0001
 #define DOT11_FTM_ERR_NOT_CONT_SHIFT 0
@@ -4310,6 +4358,12 @@ typedef struct dot11_ftm dot11_ftm_t;
 	(_err)[DOT11_FTM_ERR_NOT_CONT_OFFSET] = _err2; \
 } while (0)
 
+#undef DOT11_FTM_ERR_MAX_ERR_OFFSET
+#undef DOT11_FTM_ERR_MAX_ERR_MASK
+#undef DOT11_FTM_ERR_MAX_ERR_SHIFT
+#undef DOT11_FTM_ERR_MAX_ERR
+#undef DOT11_FTM_ERR_SET_MAX_ERR
+
 #define DOT11_FTM_ERR_MAX_ERR_OFFSET 0
 #define DOT11_FTM_ERR_MAX_ERR_MASK 0xfff7
 #define DOT11_FTM_ERR_MAX_ERR_SHIFT 1
@@ -4321,6 +4375,7 @@ typedef struct dot11_ftm dot11_ftm_t;
 	(_err)[0] = _val2 & 0xff; \
 	(_err)[1] = _val2 >> 8 & 0xff; \
 } while (0)
+#endif /* DOT11_FTM_ERR_ROM_COMPAT */
 
 BWL_PRE_PACKED_STRUCT struct dot11_ftm_params {
 	uint8 id;		/* DOT11_MNG_FTM_PARAM_ID 8.4.2.166 11mcd2.6/2014 - revisit */
@@ -4511,6 +4566,34 @@ enum {
 	/* Reserved from 32 - 63 */
 	FTM_PARAMS_CHAN_INFO_MAX		= 63
 };
+
+/* tag_ID/length/value_buffer tuple */
+typedef BWL_PRE_PACKED_STRUCT struct {
+	uint8	id;
+	uint8	len;
+	uint8	data[1];
+} BWL_POST_PACKED_STRUCT ftm_vs_tlv_t;
+
+#define FTM_TPK_LEN		16
+#define FTM_RI_RR_BUF_LEN	32
+#define FTM_TPK_RI_RR_LEN	13
+#define FTM_TPK_DIGEST_LEN	32
+#define FTM_TPK_BUFFER_LEN	128
+#define FTM_TPK_RI_PHY_LEN	7
+#define FTM_TPK_RR_PHY_LEN	7
+#define FTM_TPK_DATA_BUFFER_LEN 88
+
+
+BWL_PRE_PACKED_STRUCT struct dot11_ftm_vs_params {
+	uint8 id;						/* DOT11_MNG_VS_ID */
+	uint8 len;
+	uint8 oui[3];					/* Proprietary OUI, BRCM_PROP_OUI */
+	uint8 bcm_vs_id;
+	ftm_vs_tlv_t ftm_tpk_ri_rr[1];			/* ftm_TPK_ri_rr place holder */
+} BWL_POST_PACKED_STRUCT;
+typedef struct dot11_ftm_vs_params dot11_ftm_vs_tpk_ri_rr_params_t;
+
+#define DOT11_FTM_VS_LEN  (sizeof(dot11_ftm_vs_tpk_ri_rr_params_t) - TLV_HDR_LEN)
 
 BWL_PRE_PACKED_STRUCT struct dot11_ftm_sync_info {
 	uint8 id;		/* Extended - 255 11mc D4.3  */

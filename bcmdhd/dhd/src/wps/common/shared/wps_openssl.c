@@ -1,7 +1,7 @@
 /*
  * Wrap functions for WPS to adapt to OpenSSL crypto library
  *
- * Copyright (C) 2015, Broadcom Corporation
+ * Copyright (C) 2016, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
