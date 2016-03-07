@@ -89,7 +89,7 @@ cd -
 fi
 
 
-make -C ./dhd/src/dhd/linux ${BUILDCFG} WLTEST=${WLTEST} WLLXIW=${WLLXIW} LINUXVER=${LINUXVER} ${BUILDARG} CC=${CC} STRIP=${STRIP} V=1
+make -C ./dhd/src/dhd/linux ${BUILDCFG} WLTEST=${WLTEST} WLLXIW=${WLLXIW} LINUXVER=${LINUXVER} ${BUILDARG} CC=${CC} STRIP=${STRIP} V=${VERBOSE}
 
 if [ "$?" -eq 0 ]; then
 	if [ -f ./dhd/src/dhd/linux/${BUILDCFG}-${LINUXVER}/dhd.ko ]; then
