@@ -58,8 +58,8 @@
 #define mkver(maj,min) #maj "." #min
 #define MKVER(maj,min) mkver(maj,min)
 
-#define DRV_MAJOR               4
-#define DRV_MINOR               3
+#define DRV_MAJOR               5
+#define DRV_MINOR               0
 #define DRV_VERSION             MKVER(DRV_MAJOR, DRV_MINOR)
 #define SUSPEND_TIMEOUT_MS      (10 * 1000)
 #define MAX_WAKEUP_IRQS         32
@@ -224,7 +224,7 @@ static uint32_t droid_pm_wakeup_ack_status(struct droid_pm_instance *instance)
     struct droid_pm_priv_data *priv = instance->pm_parent;
     struct device *dev = priv->pm_miscdev.parent;
 
-    dev_dbg(dev, "%s: wakeup status=0x%08x [pid=%i,comm=%s]", __FUNCTION__, instance->pm_wakeups_status, instance->pm_pid, instance->pm_comm);
+    dev_dbg_ratelimited(dev, "%s: wakeup status=0x%08x [pid=%i,comm=%s]", __FUNCTION__, instance->pm_wakeups_status, instance->pm_pid, instance->pm_comm);
     spin_lock(&priv->pm_lock);
     ret = instance->pm_wakeups_status;
     instance->pm_wakeups_status = 0;
@@ -305,10 +305,12 @@ static void droid_pm_signal_event_l(struct droid_pm_priv_data *priv, uint64_t ev
             eventfd_signal(entry->pm_eventfd_ctx, event);
         }
     }
-    if (priv->pm_wol && event == DROID_PM_EVENT_RESUMED_WAKEUP && priv->pm_full_wol_wakeup_en) {
-        droid_pm_send_power_key_event(priv);
+    if (priv->pm_wol) {
+        if (event == DROID_PM_EVENT_RESUMED_WAKEUP && priv->pm_full_wol_wakeup_en) {
+            droid_pm_send_power_key_event(priv);
+            dev_info(dev, "%s POWER event sent\n", __FUNCTION__);
+        }
         priv->pm_wol = false;
-        dev_info(dev, "%s POWER event sent\n", __FUNCTION__);
     }
 }
 
@@ -396,23 +398,25 @@ static bool droid_pm_check_wol_l(struct droid_pm_priv_data *priv)
     struct list_head *ptr;
     struct droid_pm_instance *entry;
 
-    if (priv->pm_ether_dn != NULL && priv->pm_full_wol_wakeup_en) {
+    if (priv->pm_ether_dn != NULL) {
         etherpdev = of_find_device_by_node(priv->pm_ether_dn);
         if (etherpdev != NULL) {
             etherdev = &etherpdev->dev;
             if ((etherdev != NULL) && (etherdev->power.wakeup != NULL) && (etherdev->power.wakeup->event_count != priv->pm_wol_event_count)) {
                 priv->pm_wol_event_count = etherdev->power.wakeup->event_count;
                 if (device_can_wakeup(etherdev)) {
-                    spin_lock(&priv->pm_lock);
-                    list_for_each(ptr, &priv->pm_instance_list) {
-                        entry = list_entry(ptr, struct droid_pm_instance, pm_list);
-                        /*Consider adding WOL to wakeup sources in wakeup_driver.h and DT*/
-                        /*for now, mimic WOL event as one of the wakeup sources */
-                        entry->pm_wakeups_status |= WAKEUP_KPD;
-                        dev_dbg(dev, "%s entry [pid=%i,comm=%s], status: 0x%x", __FUNCTION__,
-                            entry->pm_pid, entry->pm_comm, entry->pm_wakeups_status);
+                    if (priv->pm_full_wol_wakeup_en) {
+                        spin_lock(&priv->pm_lock);
+                        list_for_each(ptr, &priv->pm_instance_list) {
+                            entry = list_entry(ptr, struct droid_pm_instance, pm_list);
+                            /*Consider adding WOL to wakeup sources in wakeup_driver.h and DT*/
+                            /*for now, mimic WOL event as one of the wakeup sources */
+                            entry->pm_wakeups_status |= WAKEUP_KPD;
+                            dev_dbg(dev, "%s entry [pid=%i,comm=%s], status: 0x%x", __FUNCTION__,
+                                entry->pm_pid, entry->pm_comm, entry->pm_wakeups_status);
+                        }
+                        spin_unlock(&priv->pm_lock);
                     }
-                    spin_unlock(&priv->pm_lock);
                     priv->pm_wol = true;
                 }
             }
@@ -431,8 +435,16 @@ static void droid_pm_complete_resume(struct droid_pm_priv_data *priv)
     priv->pm_suspending = false;
 
     // If we woke up due to a valid wakeup source, then set this event...
-    if (droid_pm_wakeup_ack_status(priv->pm_local_instance) || droid_pm_check_wol_l(priv)) {
+    if (droid_pm_wakeup_ack_status(priv->pm_local_instance)) {
         event = DROID_PM_EVENT_RESUMED_WAKEUP;
+    }
+    else if (droid_pm_check_wol_l(priv)) {
+        if (priv->pm_full_wol_wakeup_en) {
+            event = DROID_PM_EVENT_RESUMED_WAKEUP;
+        }
+        else {
+            event = DROID_PM_EVENT_RESUMED_PARTIAL;
+        }
     }
     droid_pm_signal_event_l(priv, event);
     mutex_unlock(&priv->pm_mutex);
@@ -828,9 +840,11 @@ static ssize_t full_wol_wakeup_store(struct device *dev,
 {
     struct droid_pm_priv_data *priv = &droid_pm_priv_data;
     int value;
+    int ret;
 
     if (sscanf(buf, "0x%x", &value) != 1 && sscanf(buf, "%u", &value) != 1) {
         dev_err(dev, "%s: invalid data\n", __FUNCTION__);
+        ret = -EINVAL;
     }
     else {
         if (value) {
@@ -839,7 +853,9 @@ static ssize_t full_wol_wakeup_store(struct device *dev,
         else {
             priv->pm_full_wol_wakeup_en = false;
         }
+        ret = n;
     }
+    return ret;
 }
 
 static DEVICE_ATTR_RW(full_wol_wakeup);

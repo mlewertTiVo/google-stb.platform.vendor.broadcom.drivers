@@ -33,8 +33,9 @@
 #define DROID_PM_EVENT_INTERACTIVE_ON   2   /* Set when kernel received an interactive ON event */
 #define DROID_PM_EVENT_RESUMED          3   /* Set if kernel resumed without receiving a wakeup event */
 #define DROID_PM_EVENT_RESUMED_WAKEUP   4   /* Set when kernel resumed due to a wakeup event */
-#define DROID_PM_EVENT_SUSPENDING       5   /* Set when kernel is about to suspend */
-#define DROID_PM_EVENT_SHUTDOWN         6   /* Set when kernel is about to shutdown */
+#define DROID_PM_EVENT_RESUMED_PARTIAL  5   /* Set when kernel resumed due to a partial wakeup event (e.g. WoL) */
+#define DROID_PM_EVENT_SUSPENDING       6   /* Set when kernel is about to suspend */
+#define DROID_PM_EVENT_SHUTDOWN         7   /* Set when kernel is about to shutdown */
 
 /* Each client that is interested in knowing when the kernel is
    about to suspend so it can perform some last minute actions
@@ -53,7 +54,7 @@
 
       If a "DROID_PM_EVENT_SUSPENDING" event is set, then the client
       can use this as a trigger to perform the necessary actions such
-      as enabling wake-on-BLE.
+      as placing the Nexus drivers in to standby.
 
    3) Once the client has performed its actions, it needs to inform
       the droid_pm driver that it is ready for the kernel to suspend
@@ -67,16 +68,23 @@
 
    4) After issuing the "BRCM_IOCTL_SET_SUSPEND_ACK" ioctl, each client
       should check whether the kernel successfully suspended or not by
-      waiting for the "DROID_PM_EVENT_RESUMED" or
+      waiting for the "DROID_PM_EVENT_RESUMED",
+      "DROID_PM_EVENT_RESUMED_PARTIAL" or
       "DROID_PM_EVENT_RESUMED_WAKEUP" event to be set by droid_pm.
       The client can simply poll and/or call "eventfd_read()" to obtain
       the event.
 
       If the client received the "DROID_PM_EVENT_RESUMED_WAKEUP" event,
-      then it means that the kernel received a valid wake-up event and
+      then it meant that the kernel received a valid wake-up event and
       the client can then take appropriate action such as disabling WoBLE.
 
-      If the "DROID_PM_EVENT_RESUMED" event was received instead, it means
+      If the client received the "DROID_PM_EVENT_RESUMED_PARTIAL" event,
+      then it meant that the kernel received a valid wake-up event but
+      only part of the system should be woken up.  For example, when the
+      Wake-On-Lan (WoL) event is received, it is possible for only the
+      kernel to be woken and not all of Android.
+
+      If the "DROID_PM_EVENT_RESUMED" event was received instead, it meant
       that the kernel did not fully suspend and this may be due to an
       active wake-lock preventing the kernel from suspending.
 
