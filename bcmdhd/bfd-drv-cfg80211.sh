@@ -104,4 +104,5 @@ if [ "$?" -eq 0 ]; then
 else
 	echo "failed to build bcmdhd"
 	rm -f ${TARGETDIR}/*.ko
+	exit -1
 fi
