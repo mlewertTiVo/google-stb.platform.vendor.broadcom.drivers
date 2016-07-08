@@ -85,12 +85,13 @@ struct nx_ashmem_area {
    size_t size;                        /* size of the mapping, in bytes */
    size_t align;                       /* alignment of the mapping, in bytes */
    int pid_alloc;
-   int movable;
+   size_t movable;
    NEXUS_HeapHandle heap_alloc;
-   int marker;
+   size_t marker;
    int ext_refcnt;
    int defer_free;
    int heap_wanted;
+   int refcnt;
 };
 
 #if !defined(V3D_VARIANT_v3d)
@@ -206,7 +207,7 @@ move_alt1:
 }
 static DECLARE_WORK(nx_move_block_work, nx_ashmem_move_block_worker);
 
-static void nx_ashmem_process_marker(int marker, bool add)
+static void nx_ashmem_process_marker(size_t marker, bool add)
 {
    bool heap_move = false;
 
@@ -310,6 +311,7 @@ static int nx_ashmem_open(struct inode *inode, struct file *file)
    asma->pid_alloc = current->tgid;
    asma->ext_refcnt = 0;
    asma->defer_free = 0;
+   asma->refcnt = 0;
    file->private_data = asma;
 
    mutex_lock(&(nx_ashmem_global->block_lock));
@@ -371,10 +373,9 @@ static int nx_ashmem_release(struct inode *ignored, struct file *file)
    return 0;
 }
 
-static long nx_ashmem_mmap(struct file *file)
+static long nx_ashmem_mmap(struct file *file, struct nx_ashmem_getmem *getmem)
 {
    struct nx_ashmem_area *asma = file->private_data;
-   int ret = 0;
    NEXUS_MemoryBlockHandle block = NULL;
    NEXUS_Addr addr = 0;
    NEXUS_MemoryStatus memStatus;
@@ -383,13 +384,11 @@ static long nx_ashmem_mmap(struct file *file)
    bool alt_index[2] = {false, false};
    NEXUS_HeapHandle heap_allocator = nx_ashmem_global->gfx_heap;
 
-   if (unlikely(!asma->size)) {
+   getmem->hdl = 0;
+   if (unlikely(!asma->size))
       goto out;
-   }
-
-   if (asma->block) {
+   if (asma->block)
       goto asma_block_allocated;
-   }
 
    if (asma->movable) {
       allocation = (asma->size + (PAGE_SIZE-1)) & ~(PAGE_SIZE-1);
@@ -435,7 +434,6 @@ static long nx_ashmem_mmap(struct file *file)
    }
 
    if (unlikely(block == NULL)) {
-      ret = 0;
       pr_err("nx::alloc-failure::%p::sz:%u::al:%u\n", heap_allocator, asma->size, asma->align);
       goto out;
    }
@@ -454,16 +452,16 @@ block_allocated:
 asma_block_allocated:
    if (nx_ashmem_global->gfx_heap_dyn) {
       NEXUS_Platform_SetSharedHandle(asma->block, true);
-      ret = (long)asma->block;
+      getmem->hdl = asma->block;
    } else {
-      ret = (long)asma->p_address;
+      getmem->hdl = asma->p_address;
    }
 
 out:
    if (gfx_alloc_dbg) pr_info("nx::alloc:%s::%lx::%lx::%lx::sz:%u::al:%u\n",
                               nx_ashmem_global->gfx_heap_dyn ? "block-handle" : "address",
                               (long)asma, (long)asma->block, (long)asma->p_address, asma->size, asma->align);
-   return ret;
+   return 0;
 }
 
 static int nx_ashmem_process_ext_refcnt(NEXUS_MemoryBlockHandle hdl, int cnt)
@@ -525,6 +523,37 @@ out:
    return ret;
 }
 
+static int nx_ashmem_process_refcnt(NEXUS_MemoryBlockHandle hdl, int cnt, int *rel)
+{
+   struct nx_ashmem_area *block = NULL, *free_block = NULL;
+   int ret = 0;
+
+   mutex_lock(&(nx_ashmem_global->block_lock));
+   if (!list_empty(&nx_ashmem_global->block_list)) {
+      list_for_each_entry(block, &nx_ashmem_global->block_list, block_list) {
+         if (block->block && (block->block == hdl)) {
+            if (cnt == NX_ASHMEM_REFCNT_ADD) {
+               block->refcnt++;
+            } else if (cnt == NX_ASHMEM_REFCNT_REM) {
+               block->refcnt--;
+            } else {
+               ret = -EINVAL;
+               mutex_unlock(&(nx_ashmem_global->block_lock));
+               goto out;
+            }
+            if (block->refcnt == 0) {
+               *rel = 1;
+            }
+            break;
+         }
+      }
+   }
+   mutex_unlock(&(nx_ashmem_global->block_lock));
+
+out:
+   return ret;
+}
+
 static void nx_ashmem_dump_all(void)
 {
    struct nx_ashmem_area *block = NULL;
@@ -555,12 +584,14 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
 {
    struct nx_ashmem_area *asma = file->private_data;
    struct nx_ashmem_alloc alloc;
+   struct nx_ashmem_getmem getmem;
    NEXUS_Error rc;
    int alt_mem_index = -1;
    long ret = -ENOTTY;
    NEXUS_ClientConfiguration clientConfig;
    NEXUS_MemoryStatus memStatus;
    struct nx_ashmem_ext_refcnt ext_refcnt;
+   struct nx_ashmem_refcnt refcnt;
 
    switch (cmd) {
    case NX_ASHMEM_SET_SIZE:
@@ -576,7 +607,6 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
          asma->movable = alloc.movable;
          asma->marker = alloc.marker;
          asma->heap_wanted = alloc.heap;
-
          mutex_unlock(&nx_ashmem_mutex);
          nx_ashmem_process_marker(alloc.marker, true);
       } else {
@@ -586,12 +616,31 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
       break;
    case NX_ASHMEM_GET_SIZE:
       mutex_lock(&nx_ashmem_mutex);
-      ret = asma->size;
+      if (copy_from_user(&alloc, (void *)arg, sizeof(struct nx_ashmem_alloc)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      alloc.size = asma->size;
+      alloc.align = asma->align;
+      ret = 0;
+      if (copy_to_user((void *)arg, &alloc, sizeof(struct nx_ashmem_alloc)) != 0) {
+         mutex_unlock(&(nx_ashmem_mutex));
+         return -EFAULT;
+      }
       mutex_unlock(&nx_ashmem_mutex);
       break;
    case NX_ASHMEM_GETMEM:
       mutex_lock(&nx_ashmem_mutex);
-      ret = (long)nx_ashmem_mmap(file);
+      if (copy_from_user(&getmem, (void *)arg, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      nx_ashmem_mmap(file, &getmem);
+      ret = 0;
+      if (copy_to_user((void *)arg, &getmem, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&(nx_ashmem_mutex));
+         return -EFAULT;
+      }
       mutex_unlock(&nx_ashmem_mutex);
       break;
    case NX_ASHMEM_DUMP_ALL:
@@ -604,7 +653,7 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
          mutex_unlock(&nx_ashmem_mutex);
          return -EFAULT;
       }
-      ret = nx_ashmem_process_ext_refcnt((NEXUS_MemoryBlockHandle)ext_refcnt.hdl, ext_refcnt.cnt);
+      ret = nx_ashmem_process_ext_refcnt(ext_refcnt.hdl, ext_refcnt.cnt);
       mutex_unlock(&nx_ashmem_mutex);
       break;
    case NX_ASHMEM_MGR_CFG:
@@ -662,16 +711,44 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
          mutex_unlock(&(nx_ashmem_global->video_lock));
       }
       break;
+   case NX_ASHMEM_GET_BLK:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&getmem, (void *)arg, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      getmem.hdl = asma->block;
+      ret = 0;
+      if (copy_to_user((void *)arg, &getmem, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&(nx_ashmem_mutex));
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   case NX_ASHMEM_REFCNT:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&refcnt, (void *)arg, sizeof(struct nx_ashmem_refcnt)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      ret = nx_ashmem_process_refcnt(refcnt.hdl, refcnt.cnt, &refcnt.rel);
+      if (copy_to_user((void *)arg, &refcnt, sizeof(struct nx_ashmem_refcnt)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
    }
 
    return ret;
 }
 
 static const struct file_operations nx_ashmem_fops = {
-   .owner = THIS_MODULE,
-   .open = nx_ashmem_open,
-   .release = nx_ashmem_release,
+   .owner          = THIS_MODULE,
+   .open           = nx_ashmem_open,
+   .release        = nx_ashmem_release,
    .unlocked_ioctl = nx_ashmem_ioctl,
+   .compat_ioctl   = nx_ashmem_ioctl,
 };
 
 static struct miscdevice nx_ashmem_misc = {
@@ -683,6 +760,8 @@ static struct miscdevice nx_ashmem_misc = {
 static int __init nx_ashmem_module_init(void)
 {
    NEXUS_ClientConfiguration clientConfig;
+   NEXUS_MemoryStatus memStatus;
+   int i;
    int ret;
    BERR_Code err;
 
@@ -710,11 +789,21 @@ static int __init nx_ashmem_module_init(void)
    INIT_LIST_HEAD(&nx_ashmem_global->block_list);
 
    NEXUS_Platform_GetClientConfiguration(&clientConfig);
-   nx_ashmem_global->gfx_heap = clientConfig.heap[NEXUS_MAX_HEAPS-2];
+   nx_ashmem_global->gfx_heap = NULL;
+   for (i = 0; i < NEXUS_MAX_HEAPS; i++) {
+      NEXUS_Heap_GetStatus(clientConfig.heap[i], &memStatus);
+      if ((memStatus.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED|NEXUS_MEMORY_TYPE_DYNAMIC)) &&
+          (memStatus.heapType & NX_ASHMEM_NEXUS_DCMA_MARKER)) {
+         nx_ashmem_global->gfx_heap = clientConfig.heap[i];
+         pr_info("selected d-cma heap %d (%p)\n", i, nx_ashmem_global->gfx_heap);
+         break;
+      }
+   }
    nx_ashmem_global->gfx_alt_heap[0] = NULL;
    nx_ashmem_global->gfx_alt_heap[1] = NULL;
    if (nx_ashmem_global->gfx_heap == NULL) {
       /* no dynamic heap, fallback to default platform graphics one. */
+      pr_info("fallback on failure to associate d-cma heap!\n");
       nx_ashmem_global->gfx_heap = NEXUS_Platform_GetFramebufferHeap(NEXUS_OFFSCREEN_SURFACE);
    } else {
       nx_ashmem_global->gfx_heap_dyn = 1;
@@ -773,4 +862,3 @@ module_exit(nx_ashmem_module_exit);
 MODULE_LICENSE("Proprietary");
 MODULE_AUTHOR("Broadcom Limited");
 MODULE_DESCRIPTION("ashmem nexus integration");
-

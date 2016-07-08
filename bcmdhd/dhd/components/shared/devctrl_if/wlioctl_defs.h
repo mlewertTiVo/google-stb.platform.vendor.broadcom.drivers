@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl_defs.h 619854 2016-02-18 14:02:49Z $
+ * $Id: wlioctl_defs.h 638230 2016-05-17 04:20:52Z $
  */
 
 
@@ -409,6 +409,21 @@
 
 #define CRYPTO_ALGO_NONE        CRYPTO_ALGO_OFF
 
+/* algo bit vector */
+#define KEY_ALGO_MASK(_algo)	(1 << _algo)
+
+
+#define KEY_ALGO_MASK_WEP		(KEY_ALGO_MASK(CRYPTO_ALGO_WEP1) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_WEP128) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_NALG))
+
+#define KEY_ALGO_MASK_AES		(KEY_ALGO_MASK(CRYPTO_ALGO_AES_CCM) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_AES_CCM256) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_AES_GCM) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_AES_GCM256))
+#define KEY_ALGO_MASK_TKIP		(KEY_ALGO_MASK(CRYPTO_ALGO_TKIP))
+#define KEY_ALGO_MASK_WAPI		(KEY_ALGO_MASK(CRYPTO_ALGO_SMS4))
+
 #define WSEC_GEN_MIC_ERROR	0x0001
 #define WSEC_GEN_REPLAY		0x0002
 #define WSEC_GEN_ICV_ERROR	0x0004
@@ -429,22 +444,11 @@
 #define WSEC_SWFLAG		0x0008
 #define SES_OW_ENABLED		0x0040	/* to go into transition mode without setting wep */
 
-/* wsec macros for operating on the above definitions */
-#ifdef WLWSEC
 #define WSEC_WEP_ENABLED(wsec)	((wsec) & WEP_ENABLED)
 #define WSEC_TKIP_ENABLED(wsec)	((wsec) & TKIP_ENABLED)
 #define WSEC_AES_ENABLED(wsec)	((wsec) & AES_ENABLED)
-#else
-#define WSEC_WEP_ENABLED(wsec) NULL
-#define WSEC_TKIP_ENABLED(wsec) NULL
-#define WSEC_AES_ENABLED(wsec) NULL
-#endif /* WLWSEC */
 
-#ifdef WLWSEC
 #define WSEC_ENABLED(wsec)	((wsec) & (WEP_ENABLED | TKIP_ENABLED | AES_ENABLED))
-#else
-#define WSEC_ENABLED(wsec) 0
-#endif /* WLWSEC */
 
 #define WSEC_SES_OW_ENABLED(wsec)	((wsec) & SES_OW_ENABLED)
 
@@ -1210,6 +1214,7 @@
 #define WL_LOFT_VAL		0x00000000	/* retired in TOT on 6/10/2009 */
 #define WL_PFN_VAL		0x00040000 /* Using retired LOFT_VAL */
 #define WL_REGULATORY_VAL	0x00080000
+#define WL_CSA_VAL		0x00080000  /* Reusing REGULATORY_VAL due to lackof bits */
 #define WL_TAF_VAL		0x00100000
 #define WL_RADAR_VAL		0x00000000	/* retired in TOT on 6/10/2009 */
 #define WL_WDI_VAL		0x00200000	/* Using retired WL_RADAR_VAL VAL */
@@ -1267,6 +1272,8 @@
 #define WL_CXO_VAL		0x02000000
 
 #define WL_WNM_VAL		0x04000000
+/* re-using WL_WNM_VAL for MBO */
+#define WL_MBO_VAL		0x04000000
 #define WL_PWRSEL_VAL		0x10000000
 #define WL_NET_DETECT_VAL	0x20000000
 #define WL_PCIE_VAL		0x40000000
@@ -1653,7 +1660,13 @@
 #define CCASTATS_TXOP	6
 #define CCASTATS_GDTXDUR        7
 #define CCASTATS_BDTXDUR        8
+
+#ifndef WLCHANIM_V2
 #define CCASTATS_MAX    9
+#else /* WLCHANIM_V2 */
+#define CCASTATS_MYRX      9
+#define CCASTATS_MAX    10
+#endif /* WLCHANIM_V2 */
 
 #define WL_CHANIM_COUNT_ALL	0xff
 #define WL_CHANIM_COUNT_ONE	0x1
@@ -1931,8 +1944,14 @@
 #define BESTN_BSSID_ONLY_MASK		0x1000
 
 #define PFN_VERSION			2
+#ifndef PFN_SCANRESULT_2
 #define PFN_SCANRESULT_VERSION		1
+#else
+#define PFN_SCANRESULT_VERSION		2
+#endif /* PFN_SCANRESULT_2 */
+#ifndef MAX_PFN_LIST_COUNT
 #define MAX_PFN_LIST_COUNT		16
+#endif /* MAX_PFN_LIST_COUNT */
 
 #define PFN_COMPLETE			1
 #define PFN_INCOMPLETE			0

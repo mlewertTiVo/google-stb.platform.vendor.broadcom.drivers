@@ -51,15 +51,12 @@
 
 #include "droid_pm.h"
 
-#ifndef CONFIG_PM
-#error CONFIG_PM option is not enabled in the kernel config - please enable!
-#endif
 
 #define mkver(maj,min) #maj "." #min
 #define MKVER(maj,min) mkver(maj,min)
 
 #define DRV_MAJOR               5
-#define DRV_MINOR               0
+#define DRV_MINOR               1
 #define DRV_VERSION             MKVER(DRV_MAJOR, DRV_MINOR)
 #define SUSPEND_TIMEOUT_MS      (10 * 1000)
 #define MAX_WAKEUP_IRQS         32
@@ -102,7 +99,6 @@ static struct droid_pm_wakeup_source sources[] = {
     { WAKEUP_CEC,        "CEC" },
     { WAKEUP_IRR,        "IRR" },
     { WAKEUP_KPD,        "KPD" },
-    { WAKEUP_GPIO,       "GPIO" },
     { WAKEUP_UHFR,       "UHFR" },
     { WAKEUP_XPT_PMU,    "XPT_PMU" },
 };
@@ -263,7 +259,6 @@ static uint32_t droid_pm_struct_to_mask(wakeup_devices *wakeups)
     if (wakeups->ir)        mask |= WAKEUP_IRR;
     if (wakeups->uhf)       mask |= WAKEUP_UHFR;
     if (wakeups->keypad)    mask |= WAKEUP_KPD;
-    if (wakeups->gpio)      mask |= WAKEUP_GPIO;
     if (wakeups->cec)       mask |= WAKEUP_CEC;
     if (wakeups->transport) mask |= WAKEUP_XPT_PMU;
 
@@ -275,7 +270,6 @@ static int droid_pm_mask_to_struct(uint32_t mask, wakeup_devices *wakeups)
     if (mask & WAKEUP_IRR)     wakeups->ir = 1;
     if (mask & WAKEUP_UHFR)    wakeups->uhf = 1;
     if (mask & WAKEUP_KPD)     wakeups->keypad = 1;
-    if (mask & WAKEUP_GPIO)    wakeups->gpio = 1;
     if (mask & WAKEUP_CEC)     wakeups->cec = 1;
     if (mask & WAKEUP_XPT_PMU) wakeups->transport = 1;
 
@@ -402,6 +396,7 @@ static bool droid_pm_check_wol_l(struct droid_pm_priv_data *priv)
         etherpdev = of_find_device_by_node(priv->pm_ether_dn);
         if (etherpdev != NULL) {
             etherdev = &etherpdev->dev;
+#ifdef CONFIG_PM_SLEEP
             if ((etherdev != NULL) && (etherdev->power.wakeup != NULL) && (etherdev->power.wakeup->event_count != priv->pm_wol_event_count)) {
                 priv->pm_wol_event_count = etherdev->power.wakeup->event_count;
                 if (device_can_wakeup(etherdev)) {
@@ -420,6 +415,9 @@ static bool droid_pm_check_wol_l(struct droid_pm_priv_data *priv)
                     priv->pm_wol = true;
                 }
             }
+#else
+            priv->pm_wol = false;
+#endif
         }
     }
     return priv->pm_wol;
@@ -730,6 +728,7 @@ static int droid_pm_reboot_shutdown(struct notifier_block *notifier, unsigned lo
     dev_dbg(dev, "%s: action %lu\n", __FUNCTION__, action);
 
     if (action == SYS_POWER_OFF) {
+        int rc;
         long timeout = msecs_to_jiffies(suspend_timeout_ms);
 
         // Don't unlock so as to prevent further operations occuring (e.g. like poll)...
@@ -740,14 +739,14 @@ static int droid_pm_reboot_shutdown(struct notifier_block *notifier, unsigned lo
         mutex_unlock(&priv->pm_mutex);
 
         dev_dbg(dev, "%s: Waiting for acknowledgement from user-space...\n", __FUNCTION__);
-        ret = wait_for_completion_interruptible_timeout(&priv->pm_suspend_complete, timeout);
+        rc = wait_for_completion_interruptible_timeout(&priv->pm_suspend_complete, timeout);
 
         mutex_lock(&priv->pm_mutex);
-        if (ret == 0) {
+        if (rc == 0) {
             // If we timed out, then just shutdown anyway...
             dev_warn(dev, "%s: shutdown timed out!\n", __FUNCTION__);
         }
-        else if (ret < 0) {
+        else if (rc < 0) {
             dev_err(dev, "%s: shutdown wait for completion failed [ret=%d]!\n", __FUNCTION__, ret);
             priv->pm_shutdown = false;
             ret = NOTIFY_BAD;
@@ -944,9 +943,9 @@ static int __init droid_pm_probe(struct platform_device *pdev)
         ret = request_irq(priv->pm_irqs[i], droid_pm_wakeup_irq, 0, DROID_PM_DRV_NAME, priv);
 
         if (ret) {
+            dev_err(dev, "request_irq failed for '%s'\n", resources[i].name);
             priv->pm_irq_masks[i] = 0;
             priv->pm_wakeups_present &= ~mask;
-            goto out_free;
         }
     }
 

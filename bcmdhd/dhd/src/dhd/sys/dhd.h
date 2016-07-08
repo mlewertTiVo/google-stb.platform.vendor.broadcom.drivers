@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd.h 614475 2016-01-22 10:04:11Z $
+ * $Id: dhd.h 626588 2016-03-22 06:54:57Z $
  */
 
 /****************
@@ -1164,7 +1164,7 @@ extern struct ifnet * dhd_idx2net(struct dhd_pub *dhd_pub, int ifidx);
 #endif /* __FreeBSD__ */
 extern bool dhd_wowl_cap(void *bus);
 extern int wl_host_event(dhd_pub_t *dhd_pub, int *idx, void *pktdata, uint16 pktlen,
-                         wl_event_msg_t *, void **data_ptr,  void *);
+	wl_event_msg_t *, void **data_ptr,  void *);
 
 extern void wl_event_to_host_order(wl_event_msg_t * evt);
 extern int wl_host_event_get_data(void *pktdata, wl_event_msg_t *event, void **data_ptr);
@@ -1462,8 +1462,10 @@ void dhd_arp_offload_add_ip(dhd_pub_t *dhd, uint32 ipaddr, int idx);
 #ifdef WLTDLS
 int dhd_tdls_enable(struct net_device *dev, bool tdls_on, bool auto_on, struct ether_addr *mac);
 int dhd_tdls_set_mode(dhd_pub_t *dhd, bool wfd_mode);
-#ifdef PCIE_FULL_DONGLE
-void dhd_tdls_update_peer_info(struct net_device *dev, bool connect_disconnect, uint8 *addr);
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+int dhd_tdls_update_peer_info(dhd_pub_t *dhdp, wl_event_msg_t *event);
+int dhd_tdls_event_handler(dhd_pub_t *dhd_pub, wl_event_msg_t *event);
+int dhd_free_tdls_peer_list(dhd_pub_t *dhd_pub);
 #endif /* PCIE_FULL_DONGLE */
 #endif /* WLTDLS */
 /* Neighbor Discovery Offload Support */
@@ -1657,5 +1659,4 @@ extern void dhd_lb_stats_rxc_percpu_cnt_incr(dhd_pub_t *dhdp);
 #define DHD_LB_STATS_TXC_PERCPU_CNT_INCR(dhdp) DHD_LB_STATS_NOOP
 #define DHD_LB_STATS_RXC_PERCPU_CNT_INCR(dhdp) DHD_LB_STATS_NOOP
 #endif /* !DHD_LB_STATS */
-
 #endif /* _dhd_h_ */

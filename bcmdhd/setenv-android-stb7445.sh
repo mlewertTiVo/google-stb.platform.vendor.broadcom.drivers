@@ -6,11 +6,11 @@
 # setting the path for cross compiler
 ###################################################################
 export KERNELDIR=${ANDROID_TOP}/kernel/private/bcm-97xxx
-export LINUXDIR=${KERNELDIR}/linux
+export LINUXDIR=${KERNELDIR}/linux-${LOCAL_LINUX_VERSION}
 export ROOTDIR=${KERNELDIR}/rootfs
 
 KVER=`make --no-print-directory -C ${LINUXDIR} kernelversion`
-KCC=`grep "CONFIG_CROSS_COMPILE" ${LINUX_OUT}/.config | cut -d"\"" -f2`
+KCC=`grep "CONFIG_CROSS_COMPILE" ${LINUX_OUT_1ST_ARCH}/.config | cut -d"\"" -f2`
 export LINUXVER=${KVER}
 
 #export EXTERNAL_OPENSSL=0

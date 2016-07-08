@@ -24,7 +24,7 @@ ifeq ($(BSEAV_TOP),)
 $(error BSEAV_TOP PATH needs to be defined)
 endif
 
-ifeq ($(LINUX_OUT),)
+ifeq ($(LINUX_OUT_1ST_ARCH),)
 $(error LINUX_OUT path needs to be defined)
 endif
 
@@ -35,8 +35,8 @@ install: all
 	cp $(PWD)/droid_pm.ko $(INSTALL_DIR)
 
 all:
-	@${MAKE} -C $(LINUX_OUT) M=$(PWD) modules
+	@${MAKE} -C $(LINUX_OUT_1ST_ARCH) M=$(PWD) modules
 
 clean:
-	@${MAKE} -C $(LINUX_OUT) M=$(PWD) clean
+	@${MAKE} -C $(LINUX_OUT_1ST_ARCH) M=$(PWD) clean
 

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu.c 618398 2016-02-11 00:07:53Z $
+ * $Id: wlu.c 639774 2016-05-24 22:52:54Z $
  */
 
 
@@ -71,7 +71,10 @@
 #include <sys/time.h>
 #endif   
 
+#if defined(TARGETENV_android)
 #include <sys/select.h>
+#endif
+
 #include <inttypes.h>
 #include <miniopt.h>
 #include <errno.h>
@@ -173,6 +176,7 @@ static cmd_func_t wme_tx_params;
 static cmd_func_t wme_maxbw_params;
 
 static cmd_func_t wl_actframe;
+static cmd_func_t wl_dyn_bw;
 static cmd_func_t wl_antsel;
 static cmd_func_t wl_txfifo_sz;
 
@@ -1628,7 +1632,10 @@ cmd_t wl_cmds[] = {
 		"Enable/Disable TSF event\n"
 		"\t0 - Disable\n"
 		"\t1 - Enable\n" },
-
+	{ "dyn_bw_mode", wl_dyn_bw, WLC_GET_VAR, WLC_SET_VAR,
+	"Disable/Enable dynamic bandwidth flag to associate as HT STA(20MHZ) with VHT AP(80MHZ)\n"
+	"\t0 - disable\n"
+	"\t1 - enable" },
 	{ NULL, NULL, 0, 0, NULL }
 };
 
@@ -8463,6 +8470,64 @@ wl_power_sel_params(void *wl, cmd_t *cmd, char **argv)
 	return err;
 }
 
+static int wl_dyn_bw(void *wl, cmd_t *cmd, char **argv)
+{
+        int err = 0;
+        struct {
+                uint32 band;
+                uint32 flag;
+        } param = { 0, 0 };
+        char *s = NULL;
+	void *ptr = NULL;
+
+        /* Skip the command name */
+        argv++;
+
+        if (*argv) {
+                if (!strcmp(*argv, "a") || !strcmp(*argv, "5") || !strcmp(*argv, "5g")) {
+                        param.band = WLC_BAND_5G;
+                } else if (!strcmp(*argv, "b") || !strcmp(*argv, "2") || !strcmp(*argv, "2g")) {
+                        param.band = WLC_BAND_2G;
+                } else {
+                        fprintf(stderr,
+                                "%s: invalid band %s\n",
+                                cmd->name, *argv);
+                        err = BCME_USAGE_ERROR;
+                        goto exit;
+                }
+
+                argv++;
+
+                if (*argv) {
+                        /* Optional 2nd arg is used to set the bandwidth cap */
+                        s = NULL;
+
+                        param.flag = (uint32) strtoul(*argv, &s, 0);
+                        if (s && *s != '\0') {
+                                fprintf(stderr, "%s: invalid bandwidth '%s'\n",
+                                        cmd->name, *argv);
+                                err = BCME_USAGE_ERROR;
+                                goto exit;
+                        }
+                }
+        } else {
+                fprintf(stderr, "%s: band unspecified\n", cmd->name);
+                err = BCME_USAGE_ERROR;
+                goto exit;
+        }
+
+        if ((param.flag == 0) || (param.flag == 1)) {
+                err = wlu_var_setbuf(wl, cmd->name, &param, sizeof(param));
+
+        } else {
+		err = wlu_var_getbuf(wl, cmd->name, &param, sizeof(param), &ptr);
+                return err;
+        }
+
+exit:
+        return err;
+
+}
 static int
 wl_channel(void *wl, cmd_t *cmd, char **argv)
 {

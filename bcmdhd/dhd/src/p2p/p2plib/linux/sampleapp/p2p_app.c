@@ -93,10 +93,14 @@ const char *P2PAPP_VERSION_STR = "R21-0";
 /* STATIC IP INTERFACE */
 #ifdef TARGETENV_android
 #define GO_IP_ADDRESS 0xc0a82B01
+#define GO_NETMASK    0xffffff00
+#elif defined(STBLINUX) && !defined(IL_BIGENDIAN)
+#define GO_IP_ADDRESS 0x0110a8c0
+#define GO_NETMASK    0x00ffffff
 #else
 #define GO_IP_ADDRESS 0xc0a81001
-#endif /* TARGETENV_android */
 #define GO_NETMASK    0xffffff00
+#endif /* TARGETENV_android */
 
 /* Forward declarations */
 BCMP2P_BOOL p2papp_process_cmd(uint8 key);

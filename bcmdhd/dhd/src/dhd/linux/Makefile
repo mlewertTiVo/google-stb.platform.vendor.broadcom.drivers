@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 620666 2016-02-23 19:37:04Z $
+# $Id: Makefile 634301 2016-04-27 10:57:42Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -1061,6 +1061,7 @@ TARGETS := \
 	msgbuf-pciefd-router-tacksup \
 	msgbuf-pciefd-indxtcm \
 	msgbuf-pciefd-indxdma \
+	msgbuf-pciefd-mfp-cfg80211 \
 	msgbuf-pciefd-cfg80211 \
 	msgbuf-pciefd-cfg80211-wapi \
 	msgbuf-pciefd-cfg80211-wapi-ccx-fbt \
@@ -1082,6 +1083,8 @@ TARGETS := \
 	msgbuf-pciefd-android-media-cfg80211-mfp-secdma \
 	msgbuf-pciefd-android-media-cfg80211-mfp-secdma-wet \
 	msgbuf-pciefd-mfp-wet \
+	msgbuf-pciefd-mfp-secdma-wet \
+	msgbuf-pciefd-media-mfp-secdma-wet \
 	msgbuf-pciefd-media-mfp-wet \
 	cdc-usb \
 	cdc-usb-fdaggr \
@@ -1182,6 +1185,7 @@ TARGETS := \
 	cdc-usb-comp-gpl \
 	cdc-usb-comp-gpl-wet \
 	cdc-usb-comp-gpl-media \
+	cdc-usb-comp-gpl-media-wet \
 	cdc-usb-comp-gpl-arm \
 	cdc-usb-comp-mfp-gpl \
 	cdc-usb-comp-mfp-gpl-wet \

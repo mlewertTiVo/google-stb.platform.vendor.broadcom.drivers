@@ -38,7 +38,7 @@
 
 PWD := $(shell pwd)
 
-ifeq ($(LINUX_OUT),)
+ifeq ($(LINUX_OUT_1ST_ARCH),)
 $(error LINUX_OUT path needs to be defined)
 endif
 
@@ -50,7 +50,7 @@ PWD_BEFORE_PLATFORM_APP := $(PWD)
 include $(NEXUS_TOP)/platforms/$(NEXUS_PLATFORM)/build/platform_app.inc
 PWD := $(PWD_BEFORE_PLATFORM_APP)
 
-NEXUS_KO_SYMVERS := ${B_REFSW_OBJ_ROOT}/nexus/core/linuxkernel.arm-linux.driver/Module.symvers
+NEXUS_KO_SYMVERS := ${B_REFSW_OBJ_ROOT_1ST_ARCH}/nexus/core/linuxkernel.${B_REFSW_ARCH_1ST_ARCH}.driver/Module.symvers
 
 ccflags-y += -I$(BSEAV_TOP)/linux/driver
 
@@ -74,24 +74,23 @@ ccflags-y += -I$(NEXUS_TOP)/../magnum/basemodules/int/
 endif
 ccflags-y += -DV3D_VARIANT_$(V3D_VARIANT)
 
-ccflags-y += -I$(LINUX_OUT)/arch/arm/include
-ccflags-y += -I$(LINUX_OUT)/arch/arm/include/generated
-ccflags-y += -I$(LINUX_OUT)/arch/arm/include/uapi
-ccflags-y += -I$(LINUX_OUT)/arch/arm/include/generated/uapi
-ccflags-y += -I$(LINUX_OUT)/include/uapi
-ccflags-y += -I$(LINUX_OUT)/include/generated/uapi
-ccflags-y += -I$(LINUX)/arch/arm/include
-ccflags-y += -I$(LINUX)/arch/arm/include/uapi
+ccflags-y += -I$(LINUX_OUT_1ST_ARCH)/arch/$(P_REFSW_DRV_ARCH)/include
+ccflags-y += -I$(LINUX_OUT_1ST_ARCH)/arch/$(P_REFSW_DRV_ARCH)/include/generated
+ccflags-y += -I$(LINUX_OUT_1ST_ARCH)/arch/$(P_REFSW_DRV_ARCH)/include/uapi
+ccflags-y += -I$(LINUX_OUT_1ST_ARCH)/arch/$(P_REFSW_DRV_ARCH)/include/generated/uapi
+ccflags-y += -I$(LINUX_OUT_1ST_ARCH)/include/uapi
+ccflags-y += -I$(LINUX_OUT_1ST_ARCH)/include/generated/uapi
+ccflags-y += -I$(LINUX)/arch/$(P_REFSW_DRV_ARCH)/include
+ccflags-y += -I$(LINUX)/arch/$(P_REFSW_DRV_ARCH)/include/uapi
 ccflags-y += -I$(LINUX)/include/uapi
-
 
 
 install: all
 	cp $(PWD)/nx_ashmem.ko $(INSTALL_DIR)
 
 all:
-	@${MAKE} -C $(LINUX_OUT) M=$(PWD) KBUILD_EXTRA_SYMBOLS=${NEXUS_KO_SYMVERS} modules
+	@${MAKE} -C $(LINUX_OUT_1ST_ARCH) M=$(PWD) KBUILD_EXTRA_SYMBOLS=${NEXUS_KO_SYMVERS} modules
 
 clean:
-	@${MAKE} -C $(LINUX_OUT) M=$(PWD) clean
+	@${MAKE} -C $(LINUX_OUT_1ST_ARCH) M=$(PWD) clean
 

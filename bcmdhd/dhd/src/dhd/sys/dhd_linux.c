@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux.c 614475 2016-01-22 10:04:11Z $
+ * $Id: dhd_linux.c 629487 2016-04-05 17:53:48Z $
  */
 
 #include <typedefs.h>
@@ -2475,7 +2475,8 @@ int dhd_process_cid_mac(dhd_pub_t *dhdp, bool prepost)
 }
 #endif /* OEM_ANDROID */
 
-#if defined(PKT_FILTER_SUPPORT) && !defined(GAN_LITE_NAT_KEEPALIVE_FILTER) && !defined(OEM_ANDROID)
+#if defined(PKT_FILTER_SUPPORT) && !defined(GAN_LITE_NAT_KEEPALIVE_FILTER) && \
+	!defined(OEM_ANDROID)
 static bool
 _turn_on_arp_filter(dhd_pub_t *dhd, int op_mode)
 {
@@ -4195,6 +4196,15 @@ dhd_sendpkt(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
 			pktsetprio(pktbuf, FALSE);
 #endif /* QOS_MAP_SET */
 		}
+#ifndef PKTPRIO_OVERRIDE
+		else {
+			/* Some protocols like OZMO use priority values from 256..263.
+			 * these are magic values to indicate a specific 802.1d priority.
+			 * make sure that priority field is in range of 0..7
+			 */
+			PKTSETPRIO(pktbuf, PKTPRIO(pktbuf) & 0x7);
+		}
+#endif /* !PKTPRIO_OVERRIDE */
 	}
 
 
@@ -7423,13 +7433,12 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 		dhd->pub.dhd_cspec.country_abbrev, &dhd->pub.dhd_cspec,
 		dhd->pub.dhd_cflags);
 #endif /* CUSTOM_COUNTRY_CODE */
-#ifndef BCMDBUS
-	dhd->thr_dpc_ctl.thr_pid = DHD_PID_KT_TL_INVALID;
-	dhd->thr_wdt_ctl.thr_pid = DHD_PID_KT_INVALID;
-
 #ifdef DHD_WET
 	dhd->pub.wet_info = dhd_get_wet_info(&dhd->pub);
 #endif
+#ifndef BCMDBUS
+	dhd->thr_dpc_ctl.thr_pid = DHD_PID_KT_TL_INVALID;
+	dhd->thr_wdt_ctl.thr_pid = DHD_PID_KT_INVALID;
 
 	/* Initialize thread based operation and lock */
 	sema_init(&dhd->sdsem, 1);
@@ -8120,59 +8129,65 @@ dhd_tdls_set_mode(dhd_pub_t *dhd, bool wfd_mode)
 	return ret;
 }
 #ifdef PCIE_FULL_DONGLE
-void dhd_tdls_update_peer_info(struct net_device *dev, bool connect, uint8 *da)
+int dhd_tdls_update_peer_info(dhd_pub_t *dhdp, wl_event_msg_t *event)
 {
-	dhd_info_t *dhd = DHD_DEV_INFO(dev);
-	dhd_pub_t *dhdp =  (dhd_pub_t *)&dhd->pub;
-	tdls_peer_node_t *cur = dhdp->peer_tbl.node;
+	dhd_pub_t *dhd_pub = dhdp;
+	tdls_peer_node_t *cur = dhd_pub->peer_tbl.node;
 	tdls_peer_node_t *new = NULL, *prev = NULL;
-	dhd_if_t *dhdif;
-	uint8 sa[ETHER_ADDR_LEN];
-	int ifidx = dhd_net2idx(dhd, dev);
-
-	if (ifidx == DHD_BAD_IF)
-		return;
-
-	dhdif = dhd->iflist[ifidx];
-	memcpy(sa, dhdif->mac_addr, ETHER_ADDR_LEN);
+	uint8 ifindex = (uint8)dhd_ifname2idx(dhd_pub->info, event->ifname);
+	uint8 *da = (uint8 *)&event->addr.octet[0];
+	bool connect = FALSE;
+	uint32 reason = ntoh32(event->reason);
+	if (reason == WLC_E_TDLS_PEER_CONNECTED)
+		connect = TRUE;
+	else if (reason == WLC_E_TDLS_PEER_DISCONNECTED)
+		connect = FALSE;
+	else
+	{
+		DHD_ERROR(("%s: TDLS Event reason is unknown\n", __FUNCTION__));
+		return BCME_ERROR;
+	}
+	if (ifindex == DHD_BAD_IF)
+		return BCME_ERROR;
 
 	if (connect) {
 		while (cur != NULL) {
 			if (!memcmp(da, cur->addr, ETHER_ADDR_LEN)) {
 				DHD_ERROR(("%s: TDLS Peer exist already %d\n",
 					__FUNCTION__, __LINE__));
-				return;
+				return BCME_ERROR;
 			}
 			cur = cur->next;
 		}
 
-		new = MALLOC(dhdp->osh, sizeof(tdls_peer_node_t));
+		new = MALLOC(dhd_pub->osh, sizeof(tdls_peer_node_t));
 		if (new == NULL) {
 			DHD_ERROR(("%s: Failed to allocate memory\n", __FUNCTION__));
-			return;
+			return BCME_ERROR;
 		}
 		memcpy(new->addr, da, ETHER_ADDR_LEN);
-		new->next = dhdp->peer_tbl.node;
-		dhdp->peer_tbl.node = new;
-		dhdp->peer_tbl.tdls_peer_count++;
+		new->next = dhd_pub->peer_tbl.node;
+		dhd_pub->peer_tbl.node = new;
+		dhd_pub->peer_tbl.tdls_peer_count++;
 
 	} else {
 		while (cur != NULL) {
 			if (!memcmp(da, cur->addr, ETHER_ADDR_LEN)) {
-				dhd_flow_rings_delete_for_peer(dhdp, ifidx, da);
+				dhd_flow_rings_delete_for_peer(dhd_pub, ifindex, da);
 				if (prev)
 					prev->next = cur->next;
 				else
-					dhdp->peer_tbl.node = cur->next;
-				MFREE(dhdp->osh, cur, sizeof(tdls_peer_node_t));
-				dhdp->peer_tbl.tdls_peer_count--;
-				return;
+					dhd_pub->peer_tbl.node = cur->next;
+				MFREE(dhd_pub->osh, cur, sizeof(tdls_peer_node_t));
+				dhd_pub->peer_tbl.tdls_peer_count--;
+				return BCME_OK;
 			}
 			prev = cur;
 			cur = cur->next;
 		}
 		DHD_ERROR(("%s: TDLS Peer Entry Not found\n", __FUNCTION__));
 	}
+	return BCME_OK;
 }
 #endif /* PCIE_FULL_DONGLE */
 #endif /* BCMDBUS */
@@ -10350,6 +10365,10 @@ void dhd_detach(dhd_pub_t *dhdp)
 			dhd_prot_detach(dhdp);
 #endif
 
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+		dhd_free_tdls_peer_list(dhdp);
+#endif
+
 }
 
 
@@ -11059,10 +11078,10 @@ dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, uint16 pktlen,
 
 #ifdef SHOW_LOGTRACE
 		bcmerror = wl_host_event(&dhd->pub, ifidx, pktdata, pktlen, event, data,
-		    &dhd->event_data);
+			&dhd->event_data);
 #else
 		bcmerror = wl_host_event(&dhd->pub, ifidx, pktdata, pktlen, event, data,
-		    NULL);
+			NULL);
 #endif /* SHOW_LOGTRACE */
 
 	if (bcmerror != BCME_OK)

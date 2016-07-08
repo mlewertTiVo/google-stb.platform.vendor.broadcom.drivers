@@ -1,0 +1,26 @@
+$Id: README 375165 2012-12-17 21:40:50Z pmoutarl $
+
+Broadcom BCM43XX 802.11 wireless device driver PHY MODULE source directory.
+This is created in May 2009 from top of tree. These files used to under wl/sys directory
+
+- "dot11" core hardware definitions are in d11.h
+- 802.11 protocol definitions are in proto/802.11.h
+- driver internal definitions shared between common code and PHY modules
+ are in wlc_bmac.h wlc_phy_shim.h
+
+Naming conventions:
+The PHY driver prefix is "wlc_phy" .
+The common PHY module file is wlc_phy_cmn.c
+The specific PHYTYPE dependent files are wlc_phy_xx.c
+Registers are wlc_phyreg_xx.h
+Tables are wlc_phytbl_xx.[ch]
+	many new files are resulted from file split or being moved from other directory like phy/radio register definitions
+
+Interface:
+wlc_phy_hal.h is the external interface.
+wlc_phy_int.h is the internal shared interface.
+
+--- Ignore following line ---
+testing auto-merge
+testing auto-merge2
+

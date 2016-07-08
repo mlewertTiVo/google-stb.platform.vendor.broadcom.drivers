@@ -28,15 +28,6 @@
 #include "nexus_hdmi_output.h"
 #endif
 #include <linux/brcmstb/brcmstb.h>
-#include "bchp_memc_clients.h"
-#include "bchp_memc_arb_0.h"
-#if BCHP_P_MEMC_COUNT == 2
-#include "bchp_memc_arb_1.h"
-#endif
-#if BCHP_P_MEMC_COUNT == 3
-#include "bchp_memc_arb_1.h"
-#include "bchp_memc_arb_2.h"
-#endif
 
 struct bcmnexusfb_par {
 	  NEXUS_DisplayHandle display;

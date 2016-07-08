@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_pcie.c 599346 2015-11-13 10:24:31Z $
+ * $Id: dhd_pcie.c 630532 2016-04-11 03:14:40Z $
  */
 
 
@@ -1129,8 +1129,12 @@ dhd_bus_download_firmware(struct dhd_bus *bus, osl_t *osh,
 /* Define alternate fw/nvram paths used in Android */
 #ifdef OEM_ANDROID
 #define CONFIG_ANDROID_BCMDHD_FW_PATH "/vendor/firmware/broadcom/dhd/firmware/fw.bin.trx"
+#ifdef STBLINUX
 #define CONFIG_ANDROID_BCMDHD_NVRAM_PATH "/mnt/hwcfg/nvm.txt"
-#endif
+#else
+#define CONFIG_ANDROID_BCMDHD_NVRAM_PATH "/vendor/firmware/broadcom/dhd/nvrams/nvm.txt"
+#endif /* STBLINUX */
+#endif /* OEM_ANDROID */
 
 static int
 dhdpcie_download_firmware(struct dhd_bus *bus, osl_t *osh)
@@ -2325,9 +2329,7 @@ dhd_bus_txdata(struct dhd_bus *bus, void *txp, uint8 ifidx)
 
 toss:
 	DHD_INFO(("%s: Toss %d\n", __FUNCTION__, ret));
-#ifdef CUSTOMER_HW_31_2
-	dhd_txcomplete(bus->dhd->osh, txp, TRUE);
-#else
+#ifndef CUSTOMER_HW_31_2
 	PKTCFREE(bus->dhd->osh, txp, TRUE);
 #endif
 	return ret;

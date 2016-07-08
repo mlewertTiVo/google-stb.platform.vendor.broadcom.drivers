@@ -6,7 +6,9 @@ elif [ "${CHIPVER}" == 43242a1 ] ; then
 	export BUILDCFG_COMMON=dhd-cdc-usb-reqfw-android-media-cfg80211-comp
 elif [ "${CHIPVER}" == 43569a0 ] || [ "${CHIPVER}" == 43569a2 ] ; then
 	export BUILDCFG_COMMON=dhd-cdc-usb-reqfw-android-media-cfg80211-comp-mfp
-elif [ "${CHIPVER}" == 43570a2 ] || [ "${CHIPVER}" == 43570a0 ] || [ "${CHIPVER}" == 43602a1 ] || [ "${CHIPVER}" == 4365b1 ] ; then
+elif [ "${CHIPVER}" == 43570a2 ] || [ "${CHIPVER}" == 43570a0 ] || \
+     [ "${CHIPVER}" == 43602a1 ] || [ "${CHIPVER}" == 4365b1 ] || \
+     [ "${CHIPVER}" == 4366c0 ] ; then
 	if [ "${ANDROID_ENABLE_DHD_SECDMA}" == y ] ; then
 		export BUILDCFG_COMMON=dhd-msgbuf-pciefd-reqfw-android-media-cfg80211-mfp-secdma
 	else

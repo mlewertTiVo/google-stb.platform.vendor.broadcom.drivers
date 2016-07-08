@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_common.c 614475 2016-01-22 10:04:11Z $
+ * $Id: dhd_common.c 639820 2016-05-25 01:29:47Z $
  */
 #include <typedefs.h>
 #include <osl.h>
@@ -109,11 +109,7 @@
 #ifdef WLMEDIA_HTSF
 extern void htsf_update(struct dhd_info *dhd, void *data);
 #endif
-#ifndef OEM_ANDROID
 int dhd_msg_level = DHD_ERROR_VAL;
-#else
-int dhd_msg_level = DHD_ERROR_VAL | DHD_MSGTRACE_VAL | DHD_EVENT_VAL;
-#endif /* OEM_ANDROID */
 
 
 #if defined(WL_WLC_SHIM)
@@ -152,7 +148,6 @@ extern int dhd_change_mtu(dhd_pub_t *dhd, int new_mtu, int ifidx);
 #if defined(OEM_ANDROID) && !defined(AP) && defined(WLP2P)
 extern int dhd_get_concurrent_capabilites(dhd_pub_t *dhd);
 #endif
-
 #ifdef BCMDHDUSB
 int dhd_socram_dump(struct dhd_bus *bus) { return -1; }
 #else
@@ -2440,7 +2435,13 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 	}
 #endif /* DHD_ULP */
 		break;
-
+	case WLC_E_TDLS_PEER_EVENT:
+		{
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+		dhd_tdls_event_handler(dhd_pub, event);
+		break;
+#endif
+		}
 	case WLC_E_IF:
 		{
 		struct wl_event_data_if *ifevent = (struct wl_event_data_if *)event_data;
@@ -3855,3 +3856,35 @@ void dhd_free_download_buffer(dhd_pub_t	*dhd, void *buffer, int length)
 #endif
 	MFREE(dhd->osh, buffer, length);
 }
+
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+
+/* To handle the TDLS event in the dhd_common.c
+ */
+int dhd_tdls_event_handler(dhd_pub_t *dhd_pub, wl_event_msg_t *event)
+{
+	int ret = BCME_OK;
+	ret = dhd_tdls_update_peer_info(dhd_pub, event);
+	return ret;
+}
+
+int dhd_free_tdls_peer_list(dhd_pub_t *dhd_pub)
+{
+	tdls_peer_node_t *cur = NULL, *prev = NULL;
+	if (!dhd_pub)
+		return BCME_ERROR;
+	cur = dhd_pub->peer_tbl.node;
+
+	if ((dhd_pub->peer_tbl.node == NULL) && !dhd_pub->peer_tbl.tdls_peer_count)
+		return BCME_ERROR;
+
+	while (cur != NULL) {
+		prev = cur;
+		cur = cur->next;
+		MFREE(dhd_pub->osh, prev, sizeof(tdls_peer_node_t));
+	}
+	dhd_pub->peer_tbl.tdls_peer_count = 0;
+	dhd_pub->peer_tbl.node = NULL;
+	return BCME_OK;
+}
+#endif	/* #if defined(WLTDLS) && defined(PCIE_FULL_DONGLE) */

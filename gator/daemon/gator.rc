@@ -1,0 +1,6 @@
+service gatord /system/bin/gatord
+   class late_start
+   user root
+   oneshot
+   disabled
+

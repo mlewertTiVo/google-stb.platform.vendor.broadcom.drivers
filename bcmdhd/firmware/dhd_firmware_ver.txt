@@ -1,47 +1,51 @@
-EAGLE_REL_10_10_69_63_EXT
-4366c0-roml/pcie-ag-pktctx-splitrx-amsdutx-idauth-idsup-tdls-txbf-p2p-mchan-mfp-proptxstatus-wowlpf-pktfilter-ampduhostreorder-keepalive-chkd2hdma-ringer-dmaindex16 Version: 10.10.69.63 CRC: fcf93fac Date: Thu 2016-02-25 13:00:45 PST Ucode Ver: 1073.555 FWID: 01-918919d4
-4366c0-roml/pcie-ag-pktctx-splitrx-amsdutx-idauth-idsup-tdls-txbf-p2p-mchan-mfp-sr-proptxstatus-wowlpf-pktfilter-ampduhostreorder-keepalive-chkd2hdma-ringer-dmaindex16 Version: 10.10.69.63 CRC: 164fe180 Date: Thu 2016-02-25 13:00:19 PST Ucode Ver: 1073.555 FWID: 01-71458a77
 
-EAGLE_REL_10_10_69_63_MFG
-4366c0-roml/pcie-ag-pktctx-splitrx-amsdutx-idauth-idsup-tdls-p2p-mchan-sr-txbf-mfp-proptxstatus-wowlpf-pktfilter-ampduhostreorder-keepalive-chkd2hdma-ringer-dmaindex16-mfgtest Version: 10.10.69.63 CRC: 9f3919c4 Date: Thu 2016-02-25 12:59:29 PST Ucode Ver: 1073.555 FWID: 01-b6a49a3b
-EAGLE_REL_10_10_69_63_EXT
-4366b1-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-wowlpf-pktfilter-ampduhostreorder-chkd2hdma-ringer-dmaindex16-keepalive Version: 10.10.69.63 CRC: bea85285 Date: Thu 2016-02-25 13:01:13 PST Ucode Ver: 1073.555 FWID: 01-a93df8a2
-4366b1-roml/pcie-ag-splitrx-fdap-mbss-mfp-wnm-osen-wl11k-wl11u-txbf-pktctx-amsdutx-ampduretry-chkd2hdma-proptxstatus-11nprop-obss-dbwsw-ringer-dmaindex16-bgdfs Version: 10.10.69.63 CRC: 89513be4 Date: Thu 2016-02-25 13:01:11 PST Ucode Ver: 1073.555 FWID: 01-a1c085a8
+EAGLE_REL_10_10_69_77_EXT
+4366c0-roml/pcie-ag-pktctx-splitrx-amsdutx-idauth-idsup-tdls-txbf-p2p-mchan-mfp-sr-proptxstatus-wowlpf-pktfilter-ampduhostreorder-keepalive-chkd2hdma-ringer-dmaindex16 Version: 10.10.69.77 CRC: df1f9f57 Date: Sun 2016-04-24 21:29:17 PDT Ucode Ver: 1073.572 FWID: 01-71023bf0
 
-EAGLE_REL_10_10_69_63_MFG
-4366b1-roml/pcie-ag-pktctx-splitrx-amsdutx-idauth-idsup-tdls-txbf-mfp-proptxstatus-wowlpf-pktfilter-ampduhostreorder-keepalive-chkd2hdma-ringer-dmaindex16-mfgtest Version: 10.10.69.63 CRC: 6bb5a439 Date: Thu 2016-02-25 12:59:24 PST Ucode Ver: 1073.555 FWID: 01-a587a71b
+EAGLE_REL_10_10_69_77_MFG
+4366c0-roml/pcie-ag-pktctx-splitrx-amsdutx-idauth-idsup-tdls-p2p-mchan-sr-txbf-mfp-proptxstatus-wowlpf-pktfilter-ampduhostreorder-keepalive-chkd2hdma-ringer-dmaindex16-mfgtest Version: 10.10.69.77 CRC: be5da05d Date: Sun 2016-04-24 21:23:08 PDT Ucode Ver: 1073.572 FWID: 01-bd2fb04e
 
-BISON05T_REL_7_35_177_66_EXT
-43602a1-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive Version: 7.35.177.66 CRC: 7956fd18 Date: Fri 2016-02-26 12:26:32 PST Ucode Ver: 986.135 FWID: 01-16054517
-43602a1-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-btcxgci48bits Version: 7.35.177.66 CRC: e3ea1a21 Date: Fri 2016-02-26 12:26:34 PST Ucode Ver: 986.135 FWID: 01-237d5186
+EAGLE_REL_10_10_69_77_EXT
+4366b1-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-wowlpf-pktfilter-ampduhostreorder-chkd2hdma-ringer-dmaindex16-keepalive Version: 10.10.69.77 CRC: 71ab16f3 Date: Sun 2016-04-24 21:29:00 PDT Ucode Ver: 1073.572 FWID: 01-255b5519
 
-BISON05T_REL_7_35_177_66_MFG
-43602a1-roml/pcie-ag-mfgtest-pktctx-splitrx-amsdutx-txbf-p2p-mchan-sr-proptxstatus Version: 7.35.177.66 CRC: 5f078bf7 Date: Fri 2016-02-26 12:19:58 PST Ucode Ver: 986.135 FWID: 01-e613c68e
-43602a1-roml/pcie-ag-mfgtest-pktctx-splitrx-amsdutx-txbf-p2p-mchan-sr-proptxstatus-btcxgci48bits Version: 7.35.177.66 CRC: 7463c6e7 Date: Fri 2016-02-26 12:20:06 PST Ucode Ver: 986.135 FWID: 01-97638042
+EAGLE_REL_10_10_69_77_MFG
+4366b1-roml/pcie-ag-pktctx-splitrx-amsdutx-idauth-idsup-tdls-txbf-mfp-proptxstatus-wowlpf-pktfilter-ampduhostreorder-keepalive-chkd2hdma-ringer-dmaindex16-mfgtest Version: 10.10.69.77 CRC: 8c9bd9a Date: Sun 2016-04-24 21:22:42 PDT Ucode Ver: 1073.572 FWID: 01-c4860a5e
 
-BISON05T_REL_7_35_143_115_EXT
-43570a2-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-wfds Version: 7.35.143.115 CRC: 2d1d35d2 Date: Wed 2016-02-17 12:57:31 PST Ucode Ver: 974.118 FWID: 01-1988ce4f
+BISON05T_REL_7_35_177_67_EXT
+43602a1-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive Version: 7.35.177.67 CRC: 3ea46a60 Date: Mon 2016-03-21 10:00:02 PDT Ucode Ver: 986.135 FWID: 01-4f8b4c48
+43602a1-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-btcxgci48bits Version: 7.35.177.67 CRC: eb52562f Date: Mon 2016-03-21 10:09:34 PDT Ucode Ver: 986.135 FWID: 01-6f9dc47c
 
-BISON05T_REL_7_35_143_115_MFG
-43570a2-roml/pcie-ag-splitrx-txbf-p2p-mfgtest-seqcmds-phydbg Version: 7.35.143.115 CRC: d47bad7 Date: Wed 2016-02-17 12:10:45 PST Ucode Ver: 974.118 FWID: 01-9c87dc9d
+BISON05T_REL_7_35_177_67_MFG
+43602a1-roml/pcie-ag-mfgtest-pktctx-splitrx-amsdutx-txbf-p2p-mchan-sr-proptxstatus Version: 7.35.177.67 CRC: b67d2b0f Date: Mon 2016-03-21 09:59:57 PDT Ucode Ver: 986.135 FWID: 01-a604b5ac
+43602a1-roml/pcie-ag-mfgtest-pktctx-splitrx-amsdutx-txbf-p2p-mchan-sr-proptxstatus-btcxgci48bits Version: 7.35.177.67 CRC: 3b439074 Date: Mon 2016-03-21 10:00:01 PDT Ucode Ver: 986.135 FWID: 01-5f9abfef
 
-BISON05T_REL_7_35_143_115_EXT
-43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr Version: 7.35.143.115 CRC: b6634619 Date: Wed 2016-02-17 12:33:56 PST Ucode Ver: 974.118 FWID: 01-fcaa69bc
-43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr-nodis Version: 7.35.143.115 CRC: 30f59086 Date: Wed 2016-02-17 12:45:58 PST Ucode Ver: 974.118 FWID: 01-3a0168e8
+BISON05T_REL_7_35_143_128_EXT
+43570a2-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-wfds Version: 7.35.143.128 CRC: a7528985 Date: Wed 2016-05-25 17:43:55 PDT Ucode Ver: 974.121 FWID: 01-5ad3a037
+43570a2-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-wfds-bdo-wog-ak Version: 7.35.143.128 CRC: d49d78ad Date: Wed 2016-05-25 17:44:01 PDT Ucode Ver: 974.121 FWID: 01-82e9eb5d
 
-BISON05T_REL_7_35_143_115_MFG
-43569a2-roml/usb-ag-mfgtest-pktctx-dmatxrc-txbf-vusb Version: 7.35.143.115 CRC: 7b4d7f4f Date: Wed 2016-02-17 12:10:38 PST Ucode Ver: 974.118 FWID: 01-5a84d4a3
+BISON05T_REL_7_35_143_128_MFG
+43570a2-roml/pcie-ag-splitrx-txbf-p2p-mfgtest-seqcmds-phydbg Version: 7.35.143.128 CRC: 799e9bf3 Date: Wed 2016-05-25 17:17:13 PDT Ucode Ver: 974.121 FWID: 01-d2c53746
+
+BISON05T_REL_7_35_143_128_EXT
+43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr Version: 7.35.143.128 CRC: f425cbc4 Date: Wed 2016-05-25 17:23:03 PDT Ucode Ver: 974.121 FWID: 01-9b9655e9
+43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr-nodis Version: 7.35.143.128 CRC: 956ac51a Date: Wed 2016-05-25 17:37:26 PDT Ucode Ver: 974.121 FWID: 01-8fa05535
+43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr-epaonly Version: 7.35.143.128 CRC: 70098ac5 Date: Wed 2016-05-25 17:24:48 PDT Ucode Ver: 974.121 FWID: 01-d88f4cd2
+
+BISON05T_REL_7_35_143_128_MFG
+43569a2-roml/usb-ag-mfgtest-pktctx-dmatxrc-txbf-vusb Version: 7.35.143.128 CRC: eb093ca2 Date: Wed 2016-05-25 17:18:08 PDT Ucode Ver: 974.121 FWID: 01-a728f1ec
+43569a2-roml/usb-ag-mfgtest-pktctx-dmatxrc-txbf-vusb-epaonly Version: 7.35.143.128 CRC: d4b382c7 Date: Wed 2016-05-25 17:17:27 PDT Ucode Ver: 974.121 FWID: 01-65739af9
+
+BISON05T_REL_7_35_143_128_EXT
+43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr Version: 7.35.143.128 CRC: f425cbc4 Date: Wed 2016-05-25 17:23:03 PDT Ucode Ver: 974.121 FWID: 01-9b9655e9
+43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr-nodis Version: 7.35.143.128 CRC: 956ac51a Date: Wed 2016-05-25 17:37:26 PDT Ucode Ver: 974.121 FWID: 01-8fa05535
+43569a2-roml/usb-ag-pool-pktctx-dmatxrc-idsup-idauth-keepalive-txbf-p2p-mchan-mfp-pktfilter-wowlpf-tdls-proptxstatus-vusb-wfds-sr-epaonly Version: 7.35.143.128 CRC: 70098ac5 Date: Wed 2016-05-25 17:24:48 PDT Ucode Ver: 974.121 FWID: 01-d88f4cd2
+
+BISON05T_REL_7_35_143_128_MFG
+43569a2-roml/usb-ag-mfgtest-pktctx-dmatxrc-txbf-vusb Version: 7.35.143.128 CRC: eb093ca2 Date: Wed 2016-05-25 17:18:08 PDT Ucode Ver: 974.121 FWID: 01-a728f1ec
+43569a2-roml/usb-ag-mfgtest-pktctx-dmatxrc-txbf-vusb-epaonly Version: 7.35.143.128 CRC: d4b382c7 Date: Wed 2016-05-25 17:17:27 PDT Ucode Ver: 974.121 FWID: 01-65739af9
 
 PHOENIX2_REL_6_10_224_27_EXT
-43242a1-roml/usb-ag-p2p-mchan-idauth-idsup-keepalive-pktfilter-wowlpf-tdls-srvsdb-pclose-proptxstatus-vusb Version: 6.10.224.27 CRC: ffff5227 Date: Wed 2015-10-21 17:54:54 PDT Ucode Ver: 764.1133 FWID: 01-41f826c7
-43242a1-roml/usb-ag-p2p-mchan-idauth-idsup-keepalive-pktfilter-wowlpf-tdls-srvsdb-pclose-proptxstatus-vusb-nodis Version: 6.10.224.27 CRC: ffff5227 Date: Wed 2015-10-21 17:55:18 PDT Ucode Ver: 764.1133 FWID: 01-8220740e
+43242a1-roml/usb-ag-p2p-mchan-idauth-idsup-keepalive-pktfilter-wowlpf-tdls-srvsdb-pclose-proptxstatus-vusb Version: 6.10.224.27 CRC: ffff5227 Date: Thu 2016-04-14 16:08:17 PDT Ucode Ver: 764.1133 FWID: 01-67354822
+43242a1-roml/usb-ag-p2p-mchan-idauth-idsup-keepalive-pktfilter-wowlpf-tdls-srvsdb-pclose-proptxstatus-vusb-nodis Version: 6.10.224.27 CRC: ffff5227 Date: Thu 2016-04-14 16:08:36 PDT Ucode Ver: 764.1133 FWID: 01-65c1cd5d
 
 PHOENIX2_REL_6_10_224_27_MFG
-43242a1-roml/usb-ag-mfgtest-seqcmds Version: 6.10.224.27 CRC: ffffffff Date: Wed 2016-01-13 19:20:13 PST Ucode Ver: 764.1133 FWID: 01-83239db9
-43242a1-roml/usb-ag-mfgtest-seqcmds-nodis Version: 6.10.224.27 CRC: ffffffff Date: Wed 2016-01-13 19:20:34 PST Ucode Ver: 764.1133 FWID: 01-63fb85a7
-DINGO07T_REL_9_35_48_68_EXT
-4359b1-roml/pcie-ag-msgbuf-p2p-mchan-splitrx-ampduhostreorder-proptxstatus-sr-idsup-assert-err-die3-pktctx-slna-fcpagb-idauth Version: 9.35.48.68 CRC: fe1ecdfd Date: Tue 2015-12-22 05:38:40 PST Ucode Ver: 1043.2044 FWID: 01-985143c2
-4359b1-roml/pcie-wl11u-ve-mfp-okc-idsup-idauth-sr-die3-betdls-pwrofs-gscan-wepso-sarctrl-linkstat-wnm-pfn-hs20sta-ulb-pwrstats-lpc-olpc-mobfd-txbf-mimopscan-apcs-pspretend-rcc-slna-ccx-noccxaka-clm_ss_mimo-tbow-wapi Version: 9.35.48.68 CRC: 318c2fec Date: Tue 2015-12-22 05:54:55 PST Ucode Ver: 1043.2044 FWID: 01-5fbe2b73
-
-BISON05T_REL_7_35_2_3_EXT
-
