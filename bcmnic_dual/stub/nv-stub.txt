@@ -1,0 +1,2 @@
+# stub.  using built in nvram for now.
+

@@ -6,7 +6,7 @@
 # setting the path for cross compiler
 ###################################################################
 export KERNELDIR=${ANDROID_TOP}/kernel/private/bcm-97xxx
-export LINUXDIR=${KERNELDIR}/linux-${LOCAL_LINUX_VERSION}
+export LINUXDIR=${KERNELDIR}/linux${LOCAL_LINUX_VERSION}
 export ROOTDIR=${KERNELDIR}/rootfs
 
 KVER=`make --no-print-directory -C ${LINUXDIR} kernelversion`

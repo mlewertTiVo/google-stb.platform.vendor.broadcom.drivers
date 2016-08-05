@@ -1,0 +1,92 @@
+#
+# Makefile fragment for Linux 2.6
+# Broadcom 802.11abg Networking Device Driver
+#
+# Copyright (C) 2016, Broadcom Corporation
+# All Rights Reserved.
+# 
+# This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
+# the contents of this file may not be disclosed to third parties, copied
+# or duplicated in any form, in whole or in part, without the prior
+# written permission of Broadcom Corporation.
+#
+# $Id: makefile.26,v 1.7 2010-05-26 20:56:24 $
+
+ifeq ($(APICHOICE),FORCE_CFG80211)
+   ifneq ($(CONFIG_CFG80211),)
+     APIFINAL := CFG80211
+   else
+     $(error CFG80211 is specified but it is not enabled in kernel)
+   endif
+endif
+
+ifeq ($(APICHOICE),FORCE_NONE)
+   APIFINAL := NONE
+endif
+
+ifeq ($(APICHOICE),FORCE_WEXT)
+   APIFINAL := WEXT
+endif
+
+ifeq ($(APICHOICE),PREFER_CFG80211)
+   ifneq ($(CONFIG_CFG80211),)
+     APIFINAL := CFG80211
+   else
+     ifneq ($(CONFIG_WIRELESS_EXT),)
+       APIFINAL := WEXT
+     else
+       $(error Neither CFG80211 nor Wireless Extension is enabled in kernel)
+     endif
+   endif
+endif
+
+ifeq ($(APICHOICE),PREFER_WEXT)
+   ifneq ($(CONFIG_WIRELESS_EXT),)
+     APIFINAL := WEXT
+   else
+     ifneq ($(CONFIG_CFG80211),)
+       APIFINAL := CFG80211
+     else
+       $(error Neither CFG80211 nor Wireless Extension is enabled in kernel)
+     endif
+   endif
+endif
+
+ifeq ($(APIFINAL),NONE)
+   $(info Using NO kernel Wireless API)
+endif
+
+ifeq ($(APIFINAL),CFG80211)
+   EXTRA_CFLAGS := -DUSE_CFG80211
+   $(info Using CFG80211 API)
+endif
+
+ifeq ($(APIFINAL),WEXT)
+   EXTRA_CFLAGS := -DUSE_IW
+   $(info Using Wireless Extension API)
+endif
+
+ifneq ($(findstring nintendo,$(TARGET)),)
+    # default module prefix for all nintendo targets
+    MODULEPFX := wlpci
+    ifneq ($(findstring nintendo-sdio,$(TARGET)),)
+      # default module prefix for sdio nintendo targets
+      MODULEPFX := wlsdio
+    endif
+    ifneq ($(findstring high,$(TARGET)),)
+      MODULEPFX := wl
+    endif
+else
+    # default module prefix for all targets
+    MODULEPFX := wl
+endif
+
+obj-m             += $(MODULEPFX).o
+$(MODULEPFX)-objs  = $(WLOFILES)
+EXTRA_CFLAGS       += $(WLCFLAGS)
+
+
+ifeq ($(USBSHIM),1)
+	# wl.ko built process replaces this KBUILD_EXTRA_SYMBOLS_FILE
+	KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS_FILE)
+endif
