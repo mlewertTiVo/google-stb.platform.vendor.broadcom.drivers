@@ -2072,7 +2072,7 @@ wl_mpf_state(void *wl, cmd_t *cmd, char **argv)
 			}
 			printf("Type %d: state %d, name %s (%s)\n",
 			       dtoh16(mpstatep->type), dtoh16(mpstatep->state),
-			       (mpstatep->name ? mpstatep->name : "(unknown)"),
+			       (strlen(mpstatep->name) ? mpstatep->name : "(unknown)"),
 			       ((mpstatep->force) ? "forced" : "auto"));
 		}
 	} else {

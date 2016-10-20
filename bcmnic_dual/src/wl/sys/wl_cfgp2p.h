@@ -15,7 +15,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_cfgp2p.h 651483 2016-07-27 06:30:17Z $
+ * $Id: wl_cfgp2p.h 655991 2016-08-24 18:34:07Z $
  */
 #ifndef _wl_cfgp2p_h_
 #define _wl_cfgp2p_h_
@@ -353,11 +353,6 @@ wl_cfgp2p_stop_p2p_device(struct wiphy *wiphy, struct wireless_dev *wdev);
 extern int
 wl_cfgp2p_del_p2p_disc_if(struct wireless_dev *wdev, struct bcm_cfg80211 *cfg);
 #endif /* WL_CFG80211_P2P_DEV_IF */
-
-#if defined(WLC_HIGH)
-extern int
-wl_cfgp2p_priv_ioctl(struct net_device *net, struct ifreq *ifr, int cmd);
-#endif
 
 /* WiFi Direct */
 #define SOCIAL_CHAN_1 1

@@ -15,79 +15,65 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_android.h 403651 2013-05-21 22:59:57Z $
+ * $Id: wl_android.h 655991 2016-08-24 18:34:07Z $
  */
 
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <wldev_common.h>
 
-/* If any feature uses the Generic Netlink Interface, put it here to enable WL_GENL
- * automatically
- */
-#ifdef WL_SDO
-#define WL_GENL
-#endif
+typedef struct _android_wifi_priv_cmd {
+    char *buf;
+    int used_len;
+    int total_len;
+} android_wifi_priv_cmd;
 
-
-#ifdef WL_GENL
-#include <net/genetlink.h>
-#endif
+#ifdef CONFIG_COMPAT
+typedef struct _compat_android_wifi_priv_cmd {
+    compat_caddr_t buf;
+    int used_len;
+    int total_len;
+} compat_android_wifi_priv_cmd;
+#endif /* CONFIG_COMPAT */
 
 /**
  * Android platform dependent functions, feel free to add Android specific functions here
- * (save the macros in dhd). Please do NOT declare functions that are NOT exposed to dhd
+ * (save the macros in wl). Please do NOT declare functions that are NOT exposed to wl
  * or cfg, define them as static in wl_android.c
  */
 
-/**
- * wl_android_init will be called from module init function (dhd_module_init now), similarly
- * wl_android_exit will be called from module exit function (dhd_module_cleanup now)
- */
-int wl_android_init(void);
-int wl_android_exit(void);
-void wl_android_post_init(void);
-int wl_android_wifi_on(struct net_device *dev);
-int wl_android_wifi_off(struct net_device *dev);
 int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd);
+int wl_handle_private_cmd(struct net_device *net, char *command, u32 cmd_len);
+int wl_android_get_80211_mode(struct net_device *dev, char *command, int total_len);
+int wl_android_get_chanspec(struct net_device *dev, char *command, int total_len);
+int wl_android_get_datarate(struct net_device *dev, char *command, int total_len);
+int wl_android_get_assoclist(struct net_device *dev, char *command, int total_len);
+int wl_android_set_roam_mode(struct net_device *dev, char *command, int total_len);
+int wl_android_set_ibss_beacon_ouidata(struct net_device *dev, char *command, int total_len);
+int wl_keep_alive_set(struct net_device *dev, char* extra, int total_len);
+int wl_android_set_roam_offload_bssid_list(struct net_device *dev, const char *cmd);
 
-#ifdef WL_GENL
-typedef struct bcm_event_hdr {
-	u16 event_type;
-	u16 len;
-} bcm_event_hdr_t;
+s32 wl_netlink_send_msg(int pid, int type, int seq, void *data, size_t size);
 
-/* attributes (variables): the index in this enum is used as a reference for the type,
- *             userspace application has to indicate the corresponding type
- *             the policy is used for security considerations
+/* hostap mac mode */
+#define MACLIST_MODE_DISABLED   0
+#define MACLIST_MODE_DENY       1
+#define MACLIST_MODE_ALLOW      2
+
+/* max number of assoc list */
+#define MAX_NUM_OF_ASSOCLIST    64
+
+#define WL_SCAN_ASSOC_ACTIVE_TIME  40 /* ms: Embedded default Active setting from WL driver */
+#define WL_SCAN_UNASSOC_ACTIVE_TIME 80 /* ms: Embedded def. Unassoc Active setting from WL driver */
+#define WL_SCAN_PASSIVE_TIME       130 /* ms: Embedded default Passive setting from WL driver */
+
+/* Bandwidth */
+#define WL_CH_BANDWIDTH_20MHZ 20
+#define WL_CH_BANDWIDTH_40MHZ 40
+#define WL_CH_BANDWIDTH_80MHZ 80
+/* max number of mac filter list
+ * restrict max number to 10 as maximum cmd string size is 255
  */
-enum {
-	BCM_GENL_ATTR_UNSPEC,
-	BCM_GENL_ATTR_STRING,
-	BCM_GENL_ATTR_MSG,
-	__BCM_GENL_ATTR_MAX
-};
-#define BCM_GENL_ATTR_MAX (__BCM_GENL_ATTR_MAX - 1)
+#define MAX_NUM_MAC_FILT        10
 
-/* commands: enumeration of all commands (functions),
- * used by userspace application to identify command to be ececuted
- */
-enum {
-	BCM_GENL_CMD_UNSPEC,
-	BCM_GENL_CMD_MSG,
-	__BCM_GENL_CMD_MAX
-};
-#define BCM_GENL_CMD_MAX (__BCM_GENL_CMD_MAX - 1)
-
-/* Enum values used by the BCM supplicant to identify the events */
-enum {
-	BCM_E_UNSPEC,
-	BCM_E_SVC_FOUND,
-	BCM_E_DEV_FOUND,
-	BCM_E_DEV_LOST,
-	BCM_E_MAX
-};
-
-s32 wl_genl_send_msg(struct net_device *ndev, u32 event_type,
-	u8 *string, u16 len, u8 *hdr, u16 hdrlen);
-#endif /* WL_GENL */
+int wl_android_set_ap_mac_list(struct net_device *dev, int macmode, struct maclist *maclist);

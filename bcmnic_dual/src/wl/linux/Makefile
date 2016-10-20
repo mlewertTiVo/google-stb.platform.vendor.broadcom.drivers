@@ -71,7 +71,7 @@
 #  4) Now $(INOBJDIR): read config and wl.mk for most flags/files settings,
 #     may still use $(TARGET) for architecture and such.  Do dep, modules.
 #
-# $Id: Makefile 651483 2016-07-27 06:30:17Z $
+# $Id: Makefile 655991 2016-08-24 18:34:07Z $
 #
 
 # Some unix systems have /bin/sh linked to some incompatible shells
@@ -257,6 +257,7 @@ ifneq ($(findstring cfg80211,$(TARGET)),)
 	$(error -cfg80211 must be built against kernel 2.6.38 or after)
     endif # KERNEL >= 2.6.38
     BCM_STA_CFG80211=1
+    DFLAGS += -DBCM_STA_ANDROID
     export API=CFG80211
 endif # TARGET
 
@@ -334,9 +335,11 @@ else
 endif
 IFLAGS += -I$(LINUXDIR_INC_BASE)/include
 IFLAGS += -I$(LINUXOUT_INC_BASE)/include/generated
+IFLAGS += -I$(LINUXDIR_INC_BASE)/include/generated
 ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),3.7.0),TRUE)
   IFLAGS += -I$(LINUXDIR_INC_BASE)/include/uapi
   IFLAGS += -I$(LINUXOUT_INC_BASE)/include/generated/uapi
+  IFLAGS += -I$(LINUXDIR_INC_BASE)/include/generated/uapi
 endif
 ifeq ($(STBLINUX),1)
   IFLAGS += -I$(LINUXDIR_INC_BASE)/include/asm/mach-brcmstb

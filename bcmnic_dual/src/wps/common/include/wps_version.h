@@ -20,16 +20,16 @@
 
 #define	MOD_RC_NUMBER		124
 
-#define	MOD_INCREMENTAL_NUMBER	75
+#define	MOD_INCREMENTAL_NUMBER	80
 
 #define	MOD_BUILD_NUMBER	0
 
-#define	MOD_VERSION		7, 14, 124, 75
+#define	MOD_VERSION		7, 14, 124, 80
 
-#define	MOD_VERSION_NUM		0x070e7c4b
+#define	MOD_VERSION_NUM		0x070e7c50
 
 /* Driver Version String, ASCII, 32 chars max */
-#define	MOD_VERSION_STR		"7.14.124.75"
+#define	MOD_VERSION_STR		"7.14.124.80"
 #define	MOD_ROUTER_VERSION_STR	"@MOD_ROUTER_VERSION_STR@"
 
 #endif /* _version_h_ */

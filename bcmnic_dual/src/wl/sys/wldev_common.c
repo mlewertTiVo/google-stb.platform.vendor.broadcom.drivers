@@ -311,20 +311,17 @@ int wldev_get_link_speed(
 }
 
 int wldev_get_rssi(
-	struct net_device *dev, int *prssi)
+	struct net_device *dev, scb_val_t *scb_val)
 {
-	scb_val_t scb_val;
 	int error;
 
-	if (!prssi)
+	if (!scb_val)
 		return -ENOMEM;
-	bzero(&scb_val, sizeof(scb_val_t));
 
-	error = wldev_ioctl(dev, WLC_GET_RSSI, &scb_val, sizeof(scb_val_t), 0);
+	error = wldev_ioctl(dev, WLC_GET_RSSI, scb_val, sizeof(scb_val_t), 0);
 	if (unlikely(error))
 		return error;
 
-	*prssi = dtoh32(scb_val.val);
 	return error;
 }
 
@@ -366,55 +363,70 @@ int wldev_set_band(
 	return error;
 }
 
-int wldev_set_country(
-	struct net_device *dev, char *country_code, bool notify, bool user_enforced)
+int wldev_get_datarate(struct net_device *dev, int *datarate)
 {
-#if defined(BCMDONGLEHOST)
-	int error = -1;
-	wl_country_t cspec = {{0}, 0, {0}};
-	scb_val_t scbval;
-	char smbuf[WLC_IOCTL_SMLEN];
+	int error = 0;
 
-	if (!country_code)
-		return error;
-
-	bzero(&scbval, sizeof(scb_val_t));
-	error = wldev_iovar_getbuf(dev, "country", NULL, 0, &cspec, sizeof(cspec), NULL);
-	if (error < 0) {
-		WLDEV_ERROR(("%s: get country failed = %d\n", __FUNCTION__, error));
-		return error;
+	error = wldev_ioctl(dev, WLC_GET_RATE, datarate, sizeof(int), false);
+	if (error) {
+		return -1;
+	} else {
+		*datarate = dtoh32(*datarate);
 	}
 
-	if ((error < 0) ||
-	    (strncmp(country_code, cspec.ccode, WLC_CNTRY_BUF_SZ) != 0)) {
+	return error;
+}
 
-		if (user_enforced) {
-			bzero(&scbval, sizeof(scb_val_t));
-			error = wldev_ioctl(dev, WLC_DISASSOC, &scbval, sizeof(scb_val_t), true);
-			if (error < 0) {
-				WLDEV_ERROR(("%s: set country failed due to Disassoc error %d\n",
-					__FUNCTION__, error));
-				return error;
-			}
-		}
-
-		cspec.rev = -1;
-		memcpy(cspec.country_abbrev, country_code, WLC_CNTRY_BUF_SZ);
-		memcpy(cspec.ccode, country_code, WLC_CNTRY_BUF_SZ);
-		dhd_get_customized_country_code(dev, (char *)&cspec.country_abbrev, &cspec);
-		error = wldev_iovar_setbuf(dev, "country", &cspec, sizeof(cspec),
-			smbuf, sizeof(smbuf), NULL);
-		if (error < 0) {
-			WLDEV_ERROR(("%s: set country for %s as %s rev %d failed\n",
-				__FUNCTION__, country_code, cspec.ccode, cspec.rev));
-			return error;
-		}
-		dhd_bus_country_set(dev, &cspec, notify);
-		WLDEV_ERROR(("%s: set country for %s as %s rev %d\n",
-			__FUNCTION__, country_code, cspec.ccode, cspec.rev));
+extern chanspec_t
+wl_chspec_driver_to_host(chanspec_t chanspec);
+#define WL_EXTRA_BUF_MAX 2048
+int wldev_get_mode(
+	struct net_device *dev, uint8 *cap)
+{
+	int error = 0;
+	int chanspec = 0;
+	uint16 band = 0;
+	uint16 bandwidth = 0;
+	wl_bss_info_t *bss = NULL;
+	char* buf = kmalloc(WL_EXTRA_BUF_MAX, GFP_KERNEL);
+	if (!buf)
+		return -1;
+	*(u32*) buf = htod32(WL_EXTRA_BUF_MAX);
+	error = wldev_ioctl(dev, WLC_GET_BSS_INFO, (void*)buf, WL_EXTRA_BUF_MAX, false);
+	if (error) {
+		WLDEV_ERROR(("%s:failed:%d\n", __FUNCTION__, error));
+		return -1;
 	}
-#endif /* defined(BCMDONGLEHOST) */
-	return 0;
+	bss = (struct  wl_bss_info *)(buf + 4);
+	chanspec = wl_chspec_driver_to_host(bss->chanspec);
+
+	band = chanspec & WL_CHANSPEC_BAND_MASK;
+	bandwidth = chanspec & WL_CHANSPEC_BW_MASK;
+
+	if (band == WL_CHANSPEC_BAND_2G) {
+		if (bss->n_cap)
+			strcpy(cap, "n");
+		else
+			strcpy(cap, "bg");
+	} else if (band == WL_CHANSPEC_BAND_5G) {
+		if (bandwidth == WL_CHANSPEC_BW_80)
+			strcpy(cap, "ac");
+		else if ((bandwidth == WL_CHANSPEC_BW_40) || (bandwidth == WL_CHANSPEC_BW_20)) {
+			if ((bss->nbss_cap & 0xf00) && (bss->n_cap))
+				strcpy(cap, "n|ac");
+			else if (bss->n_cap)
+				strcpy(cap, "n");
+			else if (bss->vht_cap)
+				strcpy(cap, "ac");
+			else
+				strcpy(cap, "a");
+		} else {
+			WLDEV_ERROR(("%s:Mode get failed\n", __FUNCTION__));
+			return -1;
+		}
+
+	}
+	return error;
 }
 
 #if defined(WLC_HIGH_ONLY)

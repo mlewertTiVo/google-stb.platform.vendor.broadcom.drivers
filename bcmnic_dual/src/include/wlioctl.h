@@ -19,7 +19,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wlioctl.h 636417 2016-05-09 12:03:55Z $
+ * $Id: wlioctl.h 655991 2016-08-24 18:34:07Z $
  */
 
 #ifndef _wlioctl_h_
@@ -111,13 +111,20 @@ typedef struct {
 #endif
 	wl_dc_info_t	dc_info;
 } assoc_decision_t;
+#define DFS_SCAN_S_IDLE		-1
+#define DFS_SCAN_S_RADAR_FREE 0
+#define DFS_SCAN_S_RADAR_FOUND 1
+#define DFS_SCAN_S_INPROGESS 2
+#define DFS_SCAN_S_SCAN_ABORTED 3
+#define DFS_SCAN_S_SCAN_MODESW_INPROGRESS 4
+#define DFS_SCAN_S_MAX 5
 
 #define ACTION_FRAME_SIZE 1800
 
 typedef struct wl_action_frame {
-	struct ether_addr 	da;
-	uint16 			len;
-	uint32 			packetId;
+	struct ether_addr	da;
+	uint16			len;
+	uint32			packetId;
 	uint8			data[ACTION_FRAME_SIZE];
 } wl_action_frame_t;
 
@@ -409,6 +416,13 @@ typedef struct wlc_ssid {
 	uchar		SSID[DOT11_MAX_SSID_LEN];
 } wlc_ssid_t;
 
+typedef struct wlc_ssid_ext {
+	bool       hidden;
+	uint16     flags;
+	uint8	   SSID_len;
+	int8	   rssi_thresh;
+	uchar		SSID[DOT11_MAX_SSID_LEN];
+} wlc_ssid_ext_t;
 #ifndef LINUX_POSTMOGRIFY_REMOVAL
 /* USB speed values */
 enum {
@@ -1581,6 +1595,31 @@ typedef struct {
 	/* chanspec cleared used to be a uint, add another to uint16 to maintain size */
 	uint16 pad;
 } wl_dfs_status_t;
+
+typedef struct {
+	uint state;		/* noted by WL_DFS_CACSTATE_XX */
+	uint duration;		/* time spent in ms in state */
+	chanspec_t chanspec;	/* chanspec of this core */
+	chanspec_t chanspec_last_cleared; /* chanspec last cleared for operation by scanning */
+	uint16 sub_type;	/* currently just the index of the core or the respective PLL */
+	uint16 pad;
+} wl_dfs_sub_status_t;
+
+#define WL_DFS_STATUS_ALL_VERSION	(1)
+typedef struct {
+	uint16 version;		/* version field; current max version 1 */
+	uint16 num_sub_status;
+	wl_dfs_sub_status_t  dfs_sub_status[1]; /* struct array of length num_sub_status */
+} wl_dfs_status_all_t;
+
+#define WL_DFS_AP_MOVE_VERSION	(1)
+typedef struct wl_dfs_ap_move_status {
+	int8 version;            /* version field; current max version 1 */
+	int8 move_status;        /* DFS move status */
+	chanspec_t chanspec;     /* New AP Chanspec */
+	wl_dfs_status_all_t scan_status; /* status; see dfs_status_all for wl_dfs_status_all_t */
+} wl_dfs_ap_move_status_t;
+
 
 /* data structure used in 'radar_status' wl interface, which is use to query radar det status */
 typedef struct {
@@ -4833,6 +4872,13 @@ typedef struct nbr_element {
 } nbr_element_t;
 #define NBR_ADD_STATIC 0
 #define NBR_ADD_DYNAMIC 1
+
+#define MAX_ROAMOFFL_BSSID_NUM	100
+
+typedef BWL_PRE_PACKED_STRUCT struct roamoffl_bssid_list {
+	int32 cnt;
+	struct ether_addr bssid[1];
+} BWL_POST_PACKED_STRUCT roamoffl_bssid_list_t;
 
 /* no default structure packing */
 #include <packed_section_end.h>

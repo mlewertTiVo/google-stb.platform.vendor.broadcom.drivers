@@ -1130,7 +1130,11 @@ dhd_bus_download_firmware(struct dhd_bus *bus, osl_t *osh,
 #ifdef OEM_ANDROID
 #define CONFIG_ANDROID_BCMDHD_FW_PATH "/vendor/firmware/broadcom/dhd/firmware/fw.bin.trx"
 #ifdef STBLINUX
+#ifdef CUSTOM_NVRAM_PATH
+#define CONFIG_ANDROID_BCMDHD_NVRAM_PATH CUSTOM_NVRAM_PATH
+#else
 #define CONFIG_ANDROID_BCMDHD_NVRAM_PATH "/mnt/hwcfg/nvm.txt"
+#endif
 #else
 #define CONFIG_ANDROID_BCMDHD_NVRAM_PATH "/vendor/firmware/broadcom/dhd/nvrams/nvm.txt"
 #endif /* STBLINUX */

@@ -15,7 +15,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_cfg80211.c 651483 2016-07-27 06:30:17Z $
+ * $Id: wl_cfg80211.c 655991 2016-08-24 18:34:07Z $
  */
 /* */
 #include <typedefs.h>
@@ -370,6 +370,8 @@ static s32 wl_notify_escan_complete(struct bcm_cfg80211 *cfg,
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(3, 2, 0)) || defined(WL_COMPAT_WIRELESS)
 static s32 wl_cfg80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev,
 	u8 *peer, enum nl80211_tdls_operation oper);
+chanspec_t wl_chspec_driver_to_host(chanspec_t chanspec);
+chanspec_t wl_chspec_host_to_driver(chanspec_t chanspec);
 #endif /* LINUX_VERSION > KERNEL_VERSION(3,2,0) || WL_COMPAT_WIRELESS */
 
 /*
@@ -488,10 +490,6 @@ wl_cfg80211_add_iw_ie(struct bcm_cfg80211 *cfg, struct net_device *ndev, s32 bss
 
 static s32 wl_setup_wiphy(struct wireless_dev *wdev, struct device *dev, void *data);
 static void wl_free_wdev(struct bcm_cfg80211 *cfg);
-#ifdef CONFIG_CFG80211_INTERNAL_REGDB
-static int
-wl_cfg80211_reg_notifier(struct wiphy *wiphy, struct regulatory_request *request);
-#endif /* CONFIG_CFG80211_INTERNAL_REGDB */
 
 static s32 wl_inform_bss(struct bcm_cfg80211 *cfg);
 static s32 wl_inform_single_bss(struct bcm_cfg80211 *cfg, struct wl_bss_info *bi, u8 is_roam_done);
@@ -499,6 +497,10 @@ static s32 wl_update_bss_info(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 static chanspec_t wl_cfg80211_get_shared_freq(struct wiphy *wiphy);
 s32 wl_cfg80211_channel_to_freq(u32 channel);
 
+#if defined(BCM_STA_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
+static void wl_cfg80211_work_handler(struct work_struct *work);
+static void wl_cfg80211_scan_supp_timerfunc(ulong data);
+#endif /* DHCP_SCAN_SUPPRESS */
 
 static void wl_cfg80211_work_handler(struct work_struct *work);
 static s32 wl_add_keyext(struct wiphy *wiphy, struct net_device *dev,
@@ -890,7 +892,7 @@ wl_chspec_to_legacy(chanspec_t chspec)
  * a chanspec_t value
  * Returns INVCHANSPEC on error
  */
-static chanspec_t
+chanspec_t
 wl_chspec_host_to_driver(chanspec_t chanspec)
 {
 	if (ioctl_version == 1) {
@@ -931,7 +933,7 @@ wl_ch_host_to_driver(u16 channel)
  * a chanspec_t value
  * Returns INVCHANSPEC on error
  */
-static chanspec_t
+chanspec_t
 wl_chspec_driver_to_host(chanspec_t chanspec)
 {
 	chanspec = dtohchanspec(chanspec);
@@ -1572,9 +1574,9 @@ wl_cfg80211_del_virtual_iface(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev)
 
 				WL_ERR(("p2p_ifdel failed, error %d, sent HANG event to %s\n",
 					ret, ndev->name));
-				#if defined(BCMDONGLEHOST) && defined(OEM_ANDROID)
+				#if defined(BCMDONGLEHOST) && defined(BCM_STA_ANDROID)
 				net_os_send_hang_message(ndev);
-				#endif 
+				#endif /* defined(BCMDONGLEHOST) && defined(BCM_STA_ANDROID) */
 			}
 			else
 #endif /* #if defined(BCMDONGLEHOST) */
@@ -2856,6 +2858,180 @@ exit:
 	return ret_c;
 }
 
+void
+wl_cfg80211_ibss_vsie_set_buffer(vndr_ie_setbuf_t *ibss_vsie, int ibss_vsie_len)
+{
+	struct bcm_cfg80211 *cfg = g_bcm_cfg;
+
+	if (cfg != NULL && ibss_vsie != NULL) {
+		if (cfg->ibss_vsie != NULL) {
+			kfree(cfg->ibss_vsie);
+		}
+		cfg->ibss_vsie = ibss_vsie;
+		cfg->ibss_vsie_len = ibss_vsie_len;
+	}
+}
+
+s32
+wl_cfg80211_ibss_vsie_delete(struct net_device *dev)
+{
+	struct bcm_cfg80211 *cfg = g_bcm_cfg;
+	char *ioctl_buf = NULL;
+	s32 ret = BCME_OK;
+
+	if (cfg != NULL && cfg->ibss_vsie != NULL) {
+		ioctl_buf = kmalloc(WLC_IOCTL_MEDLEN, GFP_KERNEL);
+		if (!ioctl_buf) {
+			WL_ERR(("ioctl memory alloc failed\n"));
+			return -ENOMEM;
+		}
+
+		/* change the command from "add" to "del" */
+		strncpy(cfg->ibss_vsie->cmd, "del", VNDR_IE_CMD_LEN - 1);
+		cfg->ibss_vsie->cmd[VNDR_IE_CMD_LEN - 1] = '\0';
+
+		ret = wldev_iovar_setbuf(dev, "ie",
+			cfg->ibss_vsie, cfg->ibss_vsie_len,
+			ioctl_buf, WLC_IOCTL_MEDLEN, NULL);
+		WL_ERR(("ret=%d\n", ret));
+
+		if (ret == BCME_OK) {
+			/* free & initiralize VSIE */
+			kfree(cfg->ibss_vsie);
+			cfg->ibss_vsie = NULL;
+			cfg->ibss_vsie_len = 0;
+		}
+
+		if (ioctl_buf) {
+			kfree(ioctl_buf);
+		}
+	}
+
+	return ret;
+}
+
+#ifdef WLAIBSS_MCHAN
+static bcm_struct_cfgdev*
+bcm_cfg80211_add_ibss_if(struct wiphy *wiphy, char *name)
+{
+	int err = 0;
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	struct wireless_dev* wdev = NULL;
+	struct net_device *new_ndev = NULL;
+	struct net_device *primary_ndev = NULL;
+	s32 timeout;
+	wl_aibss_if_t aibss_if;
+	wl_if_event_info *event = NULL;
+
+	if (cfg->ibss_cfgdev != NULL) {
+		WL_ERR(("IBSS interface %s already exists\n", name));
+		return NULL;
+	}
+
+	WL_ERR(("Try to create IBSS interface %s\n", name));
+	primary_ndev = bcmcfg_to_prmry_ndev(cfg);
+	/* generate a new MAC address for the IBSS interface */
+	get_primary_mac(cfg, &cfg->ibss_if_addr);
+	cfg->ibss_if_addr.octet[4] ^= 0x40;
+	memset(&aibss_if, sizeof(aibss_if), 0);
+	memcpy(&aibss_if.addr, &cfg->ibss_if_addr, sizeof(aibss_if.addr));
+	aibss_if.chspec = 0;
+	aibss_if.len = sizeof(aibss_if);
+
+	cfg->bss_pending_op = TRUE;
+	memset(&cfg->if_event_info, 0, sizeof(cfg->if_event_info));
+	err = wldev_iovar_setbuf(primary_ndev, "aibss_ifadd", &aibss_if,
+		sizeof(aibss_if), cfg->ioctl_buf, WLC_IOCTL_MAXLEN, NULL);
+	if (err) {
+		WL_ERR(("IOVAR aibss_ifadd failed with error %d\n", err));
+		goto fail;
+	}
+	timeout = wait_event_interruptible_timeout(cfg->netif_change_event,
+		!cfg->bss_pending_op, msecs_to_jiffies(MAX_WAIT_TIME));
+	if (timeout <= 0 || cfg->bss_pending_op)
+		goto fail;
+
+	event = &cfg->if_event_info;
+	/* By calling wl_cfg80211_allocate_if (dhd_allocate_if eventually) we give the control
+	 * over this net_device interface to dhd_linux, hence the interface is managed by dhd_liux
+	 * and will be freed by dhd_detach unless it gets unregistered before that. The
+	 * wireless_dev instance new_ndev->ieee80211_ptr associated with this net_device will
+	 * be freed by wl_dealloc_netinfo
+	 */
+	new_ndev = wl_cfg80211_allocate_if(cfg, event->ifidx, event->name,
+		event->mac, event->bssidx, event->name);
+	if (new_ndev == NULL)
+		goto fail;
+	wdev = kzalloc(sizeof(*wdev), GFP_KERNEL);
+	if (wdev == NULL)
+		goto fail;
+	wdev->wiphy = wiphy;
+	wdev->iftype = NL80211_IFTYPE_ADHOC;
+	wdev->netdev = new_ndev;
+	new_ndev->ieee80211_ptr = wdev;
+	SET_NETDEV_DEV(new_ndev, wiphy_dev(wdev->wiphy));
+
+	/* rtnl lock must have been acquired, if this is not the case, wl_cfg80211_register_if
+	* needs to be modified to take one parameter (bool need_rtnl_lock)
+	 */
+	ASSERT_RTNL();
+	if (wl_cfg80211_register_if(cfg, event->ifidx, new_ndev) != BCME_OK)
+		goto fail;
+
+	wl_alloc_netinfo(cfg, new_ndev, wdev, WL_MODE_IBSS, PM_ENABLE, event->bssidx);
+	cfg->ibss_cfgdev = ndev_to_cfgdev(new_ndev);
+	WL_ERR(("IBSS interface %s created\n", new_ndev->name));
+	return cfg->ibss_cfgdev;
+
+fail:
+	WL_ERR(("failed to create IBSS interface %s \n", name));
+	cfg->bss_pending_op = FALSE;
+	if (new_ndev)
+		wl_cfg80211_remove_if(cfg, event->ifidx, new_ndev);
+	if (wdev)
+		kfree(wdev);
+	return NULL;
+}
+
+static s32
+bcm_cfg80211_del_ibss_if(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev)
+{
+	int err = 0;
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	struct net_device *ndev = NULL;
+	struct net_device *primary_ndev = NULL;
+	s32 timeout;
+
+	if (!cfgdev || cfg->ibss_cfgdev != cfgdev || ETHER_ISNULLADDR(&cfg->ibss_if_addr.octet))
+		return -EINVAL;
+	ndev = (struct net_device *)cfgdev_to_ndev(cfg->ibss_cfgdev);
+	primary_ndev = bcmcfg_to_prmry_ndev(cfg);
+
+	cfg->bss_pending_op = TRUE;
+	memset(&cfg->if_event_info, 0, sizeof(cfg->if_event_info));
+	err = wldev_iovar_setbuf(primary_ndev, "aibss_ifdel", &cfg->ibss_if_addr,
+		sizeof(cfg->ibss_if_addr), cfg->ioctl_buf, WLC_IOCTL_MAXLEN, NULL);
+	if (err) {
+		WL_ERR(("IOVAR aibss_ifdel failed with error %d\n", err));
+		goto fail;
+	}
+	timeout = wait_event_interruptible_timeout(cfg->netif_change_event,
+		!cfg->bss_pending_op, msecs_to_jiffies(MAX_WAIT_TIME));
+	if (timeout <= 0 || cfg->bss_pending_op) {
+		WL_ERR(("timeout in waiting IF_DEL event\n"));
+		goto fail;
+	}
+
+	wl_cfg80211_remove_if(cfg, cfg->if_event_info.ifidx, ndev);
+	cfg->ibss_cfgdev = NULL;
+	return 0;
+
+fail:
+	cfg->bss_pending_op = FALSE;
+	return -1;
+}
+#endif /* WLAIBSS_MCHAN */
+
 static s32
 wl_cfg80211_join_ibss(struct wiphy *wiphy, struct net_device *dev,
 	struct cfg80211_ibss_params *params)
@@ -4045,6 +4221,34 @@ wl_add_keyext(struct wiphy *wiphy, struct net_device *dev,
 	return err;
 }
 
+int
+wl_cfg80211_enable_roam_offload(struct net_device *dev, int enable)
+{
+	int err;
+	wl_eventmsg_buf_t ev_buf;
+
+	if (dev != bcmcfg_to_prmry_ndev(g_bcm_cfg)) {
+		/* roam offload is only for the primary device */
+		return -1;
+	}
+	err = wldev_iovar_setint(dev, "roam_offload", enable);
+	if (err)
+		return err;
+
+	bzero(&ev_buf, sizeof(wl_eventmsg_buf_t));
+	wl_cfg80211_add_to_eventbuffer(&ev_buf, WLC_E_PSK_SUP, !enable);
+	wl_cfg80211_add_to_eventbuffer(&ev_buf, WLC_E_ASSOC_REQ_IE, !enable);
+	wl_cfg80211_add_to_eventbuffer(&ev_buf, WLC_E_ASSOC_RESP_IE, !enable);
+	wl_cfg80211_add_to_eventbuffer(&ev_buf, WLC_E_REASSOC, !enable);
+	wl_cfg80211_add_to_eventbuffer(&ev_buf, WLC_E_JOIN, !enable);
+	wl_cfg80211_add_to_eventbuffer(&ev_buf, WLC_E_ROAM, !enable);
+	err = wl_cfg80211_apply_eventbuffer(dev, g_bcm_cfg, &ev_buf);
+	if (!err) {
+		g_bcm_cfg->roam_offload = enable;
+	}
+	return err;
+}
+
 static s32
 wl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *dev,
 	u8 key_idx, bool pairwise, const u8 *mac_addr,
@@ -4468,6 +4672,18 @@ void wl_cfg80211_update_power_mode(struct net_device *dev)
 		WL_ERR(("%s:error (%d)\n", __FUNCTION__, err));
 	else if (pm != -1 && dev->ieee80211_ptr)
 		dev->ieee80211_ptr->ps = (pm == PM_OFF) ? false : true;
+}
+
+void wl_cfg80211_set_passive_scan(struct net_device *dev, char *command)
+{
+	struct bcm_cfg80211 *cfg = g_bcm_cfg;
+
+	if (strcmp(command, "SCAN-ACTIVE") == 0) {
+		cfg->active_scan = 1;
+	} else if (strcmp(command, "SCAN-PASSIVE") == 0) {
+		cfg->active_scan = 0;
+	} else
+		WL_ERR(("Unknown command \n"));
 }
 
 static __used u32 wl_find_msb(u16 bit16)
@@ -7067,46 +7283,6 @@ s32 wl_mode_to_nl80211_iftype(s32 mode)
 	return err;
 }
 
-#ifdef CONFIG_CFG80211_INTERNAL_REGDB
-static int
-wl_cfg80211_reg_notifier(
-	struct wiphy *wiphy,
-	struct regulatory_request *request)
-{
-	struct bcm_cfg80211 *cfg = (struct bcm_cfg80211 *)wiphy_priv(wiphy);
-	int ret = 0;
-
-	if (!request || !cfg) {
-		WL_ERR(("Invalid arg\n"));
-		return -EINVAL;
-	}
-
-	WL_DBG(("ccode: %c%c Initiator: %d\n",
-		request->alpha2[0], request->alpha2[1], request->initiator));
-
-	/* We support only REGDOM_SET_BY_USER as of now */
-	if ((request->initiator != NL80211_REGDOM_SET_BY_USER) &&
-		(request->initiator != NL80211_REGDOM_SET_BY_COUNTRY_IE)) {
-		WL_ERR(("reg_notifier for intiator:%d not supported : set default\n",
-			request->initiator));
-		/* in case of no supported country by regdb
-		     lets driver setup platform default Locale
-		*/
-	}
-
-	WL_ERR(("Set country code %c%c from %s\n",
-		request->alpha2[0], request->alpha2[1],
-		((request->initiator == NL80211_REGDOM_SET_BY_COUNTRY_IE) ? " 11d AP" : "User")));
-
-	if ((ret = wldev_set_country(bcmcfg_to_prmry_ndev(cfg), request->alpha2,
-		false, (request->initiator == NL80211_REGDOM_SET_BY_USER ? true : false))) < 0) {
-		WL_ERR(("set country Failed :%d\n", ret));
-	}
-
-	return ret;
-}
-#endif /* CONFIG_CFG80211_INTERNAL_REGDB */
-
 static s32 wl_setup_wiphy(struct wireless_dev *wdev, struct device *sdiofunc_dev, void *context)
 {
 	s32 err = 0;
@@ -7221,10 +7397,6 @@ static s32 wl_setup_wiphy(struct wireless_dev *wdev, struct device *sdiofunc_dev
 	}
 #endif /* defined(BCMDONGLEHOST) && KERNEL >= 3, 4, 0 || defined(WL_COMPAT_WIRELESS)) */
 #endif /* WL_SUPPORT_BACKPORTED_KPATCHES) || (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)) */
-
-#ifdef CONFIG_CFG80211_INTERNAL_REGDB
-	wdev->wiphy->reg_notifier = wl_cfg80211_reg_notifier;
-#endif /* CONFIG_CFG80211_INTERNAL_REGDB */
 
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(3, 2, 0)) || defined(WL_COMPAT_WIRELESS)
 	wdev->wiphy->flags |= WIPHY_FLAG_SUPPORTS_TDLS;
@@ -8531,6 +8703,12 @@ bool wl_cfg80211_is_wes(void *frame, u32 frame_len)
 }
 #endif /* WES_SUPPORT */
 
+#if defined(WL_CFG80211) && defined(BCM_STA_ANDROID)
+int wl_cfg80211_get_ioctl_version(void)
+{
+	return ioctl_version;
+}
+#endif /* WL_CFG80211 */
 
 static s32
 wl_notify_rx_mgmt_frame(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
@@ -9125,7 +9303,9 @@ wl_cfg80211_netdev_notifier_call(struct notifier_block * nb,
 	struct net_device *dev = ndev;
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
 	struct bcm_cfg80211 *cfg = g_bcm_cfg;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0)
 	int refcnt = 0;
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0) */
 
 	if (!dev) {
 		WL_ERR(("%s : wdev= dev is NULL \n", __FUNCTION__));
@@ -10081,6 +10261,11 @@ s32 wl_cfg80211_attach(struct net_device *ndev, void *context)
 			goto cfg80211_attach_out;
 		}
 	}
+#if defined(BCM_STA_ANDROID) && defined(COEX_DHCP)
+	cfg->btcoex_info = wl_cfg80211_btcoex_init(cfg->wdev->netdev);
+	if (!cfg->btcoex_info)
+		goto cfg80211_attach_out;
+#endif /* defined(BCM_STA_ANDROID) && defined(COEX_DHCP) */
 
 	g_bcm_cfg = cfg;
 
@@ -10112,6 +10297,10 @@ void wl_cfg80211_detach(void *para)
 		return;
 	}
 
+#if defined(BCM_STA_ANDROID) && defined(COEX_DHCP)
+	wl_cfg80211_btcoex_deinit();
+	cfg->btcoex_info = NULL;
+#endif /* defined(BCM_STA_ANDROID) && defined(COEX_DHCP) */
 
 	wl_setup_rfkill(cfg, FALSE);
 #ifdef DEBUGFS_CFG80211
@@ -10880,6 +11069,13 @@ static s32 __wl_cfg80211_up(struct bcm_cfg80211 *cfg)
 	}
 #endif /* WL_HOST_BAND_MGMT */
 
+#if defined(BCM_STA_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
+	/* wlan scan_supp timer and work thread info */
+	init_timer(&cfg->scan_supp_timer);
+	cfg->scan_supp_timer.data = (ulong)cfg;
+	cfg->scan_supp_timer.function = wl_cfg80211_scan_supp_timerfunc;
+	INIT_WORK(&cfg->wlan_work, wl_cfg80211_work_handler);
+#endif /* DHCP_SCAN_SUPPRESS */
 	INIT_DELAYED_WORK(&cfg->pm_enable_work, wl_cfg80211_work_handler);
 	wl_set_drv_status(cfg, READY, ndev);
 	return err;
@@ -10901,6 +11097,14 @@ static s32 __wl_cfg80211_down(struct bcm_cfg80211 *cfg)
 		cfg->pm_enable_work_on = false;
 	}
 
+#if defined(BCM_STA_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
+	/* Force clear of scan_suppress */
+	if (cfg->scan_suppressed)
+		wl_cfg80211_scan_suppress(ndev, 0);
+	if (timer_pending(&cfg->scan_supp_timer))
+		del_timer_sync(&cfg->scan_supp_timer);
+	cancel_work_sync(&cfg->wlan_work);
+#endif /* DHCP_SCAN_SUPPRESS */
 
 	/* If primary BSS is operational (for e.g SoftAP), bring it down */
 	if (!(wl_cfgp2p_find_idx(cfg, ndev, &bssidx)) &&
@@ -12971,6 +13175,148 @@ wl_cfg80211_set_band(struct net_device *ndev, int band)
 }
 #endif /* WL_HOST_BAND_MGMT */
 
+s32
+wl_cfg80211_dfs_ap_move(struct net_device *ndev, char *data, char *command, int total_len)
+{
+	struct bcm_cfg80211 *cfg = g_bcm_cfg;
+	char ioctl_buf[50];
+	int err = 0;
+	uint32 val = 0;
+	chanspec_t chanspec = 0;
+	int abort;
+	int bytes_written = 0;
+	wl_dfs_ap_move_status_t *status;
+	char chanbuf[CHANSPEC_STR_LEN];
+	const char *dfs_state_str[DFS_SCAN_S_MAX] = {
+		"Radar Free On Channel",
+		"Radar Found On Channel",
+		"Radar Scan In Progress",
+		"Radar Scan Aborted",
+		"RSDB Mode switch in Progress For Scan"
+	};
+	if (ndev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP) {
+		bytes_written = snprintf(command, total_len, "AP is not UP\n");
+		return bytes_written;
+	}
+	if (!*data) {
+		if ((err = wldev_iovar_getbuf(ndev, "dfs_ap_move", NULL, 0,
+				cfg->ioctl_buf, WLC_IOCTL_MAXLEN,  &cfg->ioctl_buf_sync))) {
+			WL_ERR(("setting dfs_ap_move failed with err=%d \n", err));
+			return err;
+		}
+		status = (wl_dfs_ap_move_status_t *)cfg->ioctl_buf;
+
+		if (status->version != WL_DFS_AP_MOVE_VERSION) {
+			err = BCME_UNSUPPORTED;
+			WL_ERR(("err=%d version=%d\n", err, status->version));
+			return err;
+		}
+
+		if (status->move_status != (int8) DFS_SCAN_S_IDLE) {
+			chanspec = wl_chspec_driver_to_host(status->chanspec);
+			if (chanspec != 0 && chanspec != INVCHANSPEC) {
+				wf_chspec_ntoa(chanspec, chanbuf);
+				bytes_written = snprintf(command, total_len,
+					"AP Target Chanspec %s (0x%x)\n", chanbuf, chanspec);
+			}
+			bytes_written += snprintf(command + bytes_written, total_len,
+					 "%s\n", dfs_state_str[status->move_status]);
+			return bytes_written;
+		} else {
+			bytes_written = snprintf(command, total_len, "dfs AP move in IDLE state\n");
+			return bytes_written;
+		}
+
+	}
+
+	abort = bcm_atoi(data);
+	if (abort == -1) {
+		if ((err = wldev_iovar_setbuf(ndev, "dfs_ap_move", &abort,
+				sizeof(int), ioctl_buf, sizeof(ioctl_buf), NULL)) < 0) {
+			WL_ERR(("seting dfs_ap_move failed with err %d\n", err));
+			return err;
+		}
+	} else {
+		chanspec = wf_chspec_aton(data);
+		if (chanspec != 0) {
+			val = wl_chspec_host_to_driver(chanspec);
+			if (val != INVCHANSPEC) {
+				if ((err = wldev_iovar_setbuf(ndev, "dfs_ap_move", &val,
+					sizeof(int), ioctl_buf, sizeof(ioctl_buf), NULL)) < 0) {
+					WL_ERR(("seting dfs_ap_move failed with err %d\n", err));
+					return err;
+				}
+				WL_DBG((" set dfs_ap_move successfull"));
+			} else {
+				err = BCME_USAGE_ERROR;
+			}
+		}
+	}
+	return err;
+}
+
+
+#if defined(BCM_STA_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
+static void wl_cfg80211_scan_supp_timerfunc(ulong data)
+{
+	struct bcm_cfg80211 *cfg = (struct bcm_cfg80211 *)data;
+
+	WL_DBG(("Enter \n"));
+	schedule_work(&cfg->wlan_work);
+}
+
+int wl_cfg80211_scan_suppress(struct net_device *dev, int suppress)
+{
+	int ret = 0;
+	struct wireless_dev *wdev;
+	struct bcm_cfg80211 *cfg;
+	if (!dev || ((suppress != 0) && (suppress != 1))) {
+		ret = -EINVAL;
+		goto exit;
+	}
+	wdev = ndev_to_wdev(dev);
+	if (!wdev) {
+		ret = -EINVAL;
+		goto exit;
+	}
+	cfg = (struct bcm_cfg80211 *)wiphy_priv(wdev->wiphy);
+	if (!cfg) {
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	if (suppress == cfg->scan_suppressed) {
+		WL_DBG(("No change in scan_suppress state. Ignoring cmd..\n"));
+		return 0;
+	}
+
+	if (timer_pending(&cfg->scan_supp_timer))
+		del_timer_sync(&cfg->scan_supp_timer);
+
+	if ((ret = wldev_ioctl(dev, WLC_SET_SCANSUPPRESS,
+		&suppress, sizeof(int), true)) < 0) {
+		WL_ERR(("Scan suppress setting failed ret:%d \n", ret));
+	} else {
+		WL_DBG(("Scan suppress %s \n", suppress ? "Enabled" : "Disabled"));
+		cfg->scan_suppressed = suppress;
+	}
+
+	/* If scan_suppress is set, Start a timer to monitor it (just incase) */
+	if (cfg->scan_suppressed) {
+		if (ret) {
+			WL_ERR(("Retry scan_suppress reset at a later time \n"));
+			mod_timer(&cfg->scan_supp_timer,
+				jiffies + msecs_to_jiffies(WL_SCAN_SUPPRESS_RETRY));
+		} else {
+			WL_DBG(("Start wlan_timer to clear of scan_suppress \n"));
+			mod_timer(&cfg->scan_supp_timer,
+				jiffies + msecs_to_jiffies(WL_SCAN_SUPPRESS_TIMEOUT));
+		}
+	}
+exit:
+	return ret;
+}
+#endif /* DHCP_SCAN_SUPPRESS */
 
 int wl_cfg80211_scan_stop(bcm_struct_cfgdev *cfgdev)
 {
@@ -13046,4 +13392,11 @@ static void wl_cfg80211_work_handler(struct work_struct * work)
 		}
 
 	}
+#if defined(BCM_STA_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
+	else if (cfg->scan_suppressed) {
+		/* There is pending scan_suppress. Clean it */
+		WL_ERR(("Clean up from timer after %d msec\n", WL_SCAN_SUPPRESS_TIMEOUT));
+		wl_cfg80211_scan_suppress(bcmcfg_to_prmry_ndev(cfg), 0);
+	}
+#endif /* DHCP_SCAN_SUPPRESS */
 }

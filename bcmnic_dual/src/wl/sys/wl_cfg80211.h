@@ -15,7 +15,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_cfg80211.h 651483 2016-07-27 06:30:17Z $
+ * $Id: wl_cfg80211.h 655991 2016-08-24 18:34:07Z $
  */
 
 /**
@@ -649,12 +649,19 @@ struct bcm_cfg80211 {
 	u8 curr_band;
 #endif /* WL_HOST_BAND_MGMT */
 	bool scan_suppressed;
+#ifdef BCM_STA_ANDROID
+	struct timer_list scan_supp_timer;
+	struct work_struct wlan_work;
+#endif /* BCM_STA_ANDROID */
 	struct mutex event_sync;	/* maily for up/down synchronization */
 	bool disable_roam_event;
 	bool pm_enable_work_on;
 	struct delayed_work pm_enable_work;
+	vndr_ie_setbuf_t *ibss_vsie;	/* keep the VSIE for IBSS */
+	int ibss_vsie_len;
 #if defined(WLC_HIGH)
 	enum nl80211_iftype iftype;
+	int roam_offload;
 	bool nl80211_locked;
 #endif
 };
@@ -1010,11 +1017,16 @@ extern void wl_stop_wait_next_action_frame(struct bcm_cfg80211 *cfg, struct net_
 #ifdef WL_HOST_BAND_MGMT
 extern s32 wl_cfg80211_set_band(struct net_device *ndev, int band);
 #endif /* WL_HOST_BAND_MGMT */
+#if defined(BCM_STA_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
+extern int wl_cfg80211_scan_suppress(struct net_device *dev, int suppress);
+#endif /* BCM_STA_ANDROID */
 extern void wl_cfg80211_add_to_eventbuffer(wl_eventmsg_buf_t *ev, u16 event, bool set);
 extern s32 wl_cfg80211_apply_eventbuffer(struct net_device *ndev,
 	struct bcm_cfg80211 *cfg, wl_eventmsg_buf_t *ev);
 extern void get_primary_mac(struct bcm_cfg80211 *cfg, struct ether_addr *mac);
 extern void wl_cfg80211_update_power_mode(struct net_device *dev);
+extern void wl_cfg80211_set_passive_scan(struct net_device *dev, char *command);
+extern void wl_terminate_event_handler(void);
 #define SCAN_BUF_CNT	2
 #define SCAN_BUF_NEXT	1
 #if defined(DUAL_ESCAN_RESULT_BUFFER)
@@ -1050,4 +1062,13 @@ static inline void wl_escan_print_sync_id(s32 status, u16 result_id, u16 wl_id)
 #define wl_escan_increment_sync_id(a, b)
 #define wl_escan_init_sync_id(a)
 #endif /* DUAL_ESCAN_RESULT_BUFFER */
-#endif				/* _wl_cfg80211_h_ */
+extern void wl_cfg80211_ibss_vsie_set_buffer(vndr_ie_setbuf_t *ibss_vsie, int ibss_vsie_len);
+extern s32 wl_cfg80211_ibss_vsie_delete(struct net_device *dev);
+#ifdef WLAIBSS
+extern void wl_cfg80211_set_txfail_pid(int pid);
+#endif /* WLAIBSS */
+
+extern int wl_cfg80211_enable_roam_offload(struct net_device *dev, int enable);
+extern s32 wl_cfg80211_dfs_ap_move(struct net_device *ndev, char *data,
+		char *command, int total_len);
+#endif /* _wl_cfg80211_h_ */

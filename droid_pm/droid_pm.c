@@ -40,6 +40,7 @@
 #include <linux/pm_wakeup.h>
 #include <linux/poll.h>
 #include <linux/printk.h>
+#include <linux/proc_fs.h>
 #include <linux/reboot.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -55,8 +56,8 @@
 #define mkver(maj,min) #maj "." #min
 #define MKVER(maj,min) mkver(maj,min)
 
-#define DRV_MAJOR               5
-#define DRV_MINOR               1
+#define DRV_MAJOR               6
+#define DRV_MINOR               0
 #define DRV_VERSION             MKVER(DRV_MAJOR, DRV_MINOR)
 #define SUSPEND_TIMEOUT_MS      (10 * 1000)
 #define MAX_WAKEUP_IRQS         32
@@ -103,6 +104,21 @@ static struct droid_pm_wakeup_source sources[] = {
     { WAKEUP_XPT_PMU,    "XPT_PMU" },
 };
 
+struct droid_pm_priv_data;
+
+/* Definition of the bt proc interface */
+struct droid_pm_bt_proc_file
+{
+    const char *name;
+    umode_t mode;
+    const struct file_operations *fops;
+    ssize_t (*read_action_op)(struct file *file, char __user *buf, size_t size, loff_t *ppos);
+    ssize_t (*write_action_op)(struct file *file, const char __user * buf, size_t count, loff_t *ppos);
+};
+
+static const char *droid_pm_bt_proc_parent_name = "bluetooth";
+static const char *droid_pm_bt_proc_subdir_name = "sleep";
+
 struct droid_pm_instance {
     struct list_head            pm_list;
     struct droid_pm_priv_data * pm_parent;
@@ -120,7 +136,10 @@ struct droid_pm_priv_data {
     spinlock_t                  pm_lock;
     struct device_node *        pm_dn;
     struct device_node *        pm_ether_dn;
+    struct proc_dir_entry *     pm_bt_proc_parent_dir;
+    struct proc_dir_entry *     pm_bt_proc_subdir_dir;
     struct input_dev *          pm_input_dev;
+    bool                        pm_sw_lid;
     bool                        pm_wol;
     bool                        pm_full_wol_wakeup_en;
     unsigned long               pm_wol_event_count;
@@ -220,7 +239,7 @@ static uint32_t droid_pm_wakeup_ack_status(struct droid_pm_instance *instance)
     struct droid_pm_priv_data *priv = instance->pm_parent;
     struct device *dev = priv->pm_miscdev.parent;
 
-    dev_dbg_ratelimited(dev, "%s: wakeup status=0x%08x [pid=%i,comm=%s]", __FUNCTION__, instance->pm_wakeups_status, instance->pm_pid, instance->pm_comm);
+    dev_dbg_ratelimited(dev, "%s: wakeup status=0x%08x [pid=%i,comm=%s]\n", __FUNCTION__, instance->pm_wakeups_status, instance->pm_pid, instance->pm_comm);
     spin_lock(&priv->pm_lock);
     ret = instance->pm_wakeups_status;
     instance->pm_wakeups_status = 0;
@@ -239,7 +258,7 @@ static irqreturn_t droid_pm_wakeup_irq(int irq, void *data)
 
     for (i = 0; i < priv->pm_nr_irqs; i++) {
         if (priv->pm_irqs[i] == irq) {
-            dev_dbg(dev, "%s: wakeup source=0x%08x", __FUNCTION__, priv->pm_irq_masks[i]);
+            dev_dbg(dev, "%s: wakeup source=0x%08x\n", __FUNCTION__, priv->pm_irq_masks[i]);
             spin_lock(&priv->pm_lock);
             list_for_each(ptr, &priv->pm_instance_list) {
                 entry = list_entry(ptr, struct droid_pm_instance, pm_list);
@@ -280,6 +299,13 @@ static void droid_pm_send_power_key_event(struct droid_pm_priv_data *priv)
 {
     input_event(priv->pm_input_dev, EV_KEY, KEY_POWER, 1);
     input_event(priv->pm_input_dev, EV_KEY, KEY_POWER, 0);
+    input_sync(priv->pm_input_dev);
+}
+
+static void droid_pm_send_lid_switch_event(struct droid_pm_priv_data *priv, bool down)
+{
+    priv->pm_sw_lid = down;
+    input_report_switch(priv->pm_input_dev, SW_LID, down);
     input_sync(priv->pm_input_dev);
 }
 
@@ -407,7 +433,7 @@ static bool droid_pm_check_wol_l(struct droid_pm_priv_data *priv)
                             /*Consider adding WOL to wakeup sources in wakeup_driver.h and DT*/
                             /*for now, mimic WOL event as one of the wakeup sources */
                             entry->pm_wakeups_status |= WAKEUP_KPD;
-                            dev_dbg(dev, "%s entry [pid=%i,comm=%s], status: 0x%x", __FUNCTION__,
+                            dev_dbg(dev, "%s entry [pid=%i,comm=%s], status: 0x%x\n", __FUNCTION__,
                                 entry->pm_pid, entry->pm_comm, entry->pm_wakeups_status);
                         }
                         spin_unlock(&priv->pm_lock);
@@ -435,10 +461,12 @@ static void droid_pm_complete_resume(struct droid_pm_priv_data *priv)
     // If we woke up due to a valid wakeup source, then set this event...
     if (droid_pm_wakeup_ack_status(priv->pm_local_instance)) {
         event = DROID_PM_EVENT_RESUMED_WAKEUP;
+        droid_pm_send_lid_switch_event(priv, false);
     }
     else if (droid_pm_check_wol_l(priv)) {
         if (priv->pm_full_wol_wakeup_en) {
             event = DROID_PM_EVENT_RESUMED_WAKEUP;
+            droid_pm_send_lid_switch_event(priv, false);
         }
         else {
             event = DROID_PM_EVENT_RESUMED_PARTIAL;
@@ -688,6 +716,7 @@ static int droid_pm_open(struct inode *inode, struct file *file)
         ret = -ENOMEM;
     }
     else {
+        instance->pm_wakeups_status = priv->pm_local_instance->pm_wakeups_status;
         priv->pm_ready = true;
         file->private_data = instance;
         ret = 0;
@@ -747,7 +776,7 @@ static int droid_pm_reboot_shutdown(struct notifier_block *notifier, unsigned lo
             dev_warn(dev, "%s: shutdown timed out!\n", __FUNCTION__);
         }
         else if (rc < 0) {
-            dev_err(dev, "%s: shutdown wait for completion failed [ret=%d]!\n", __FUNCTION__, ret);
+            dev_err(dev, "%s: shutdown wait for completion failed [rc=%d]!\n", __FUNCTION__, rc);
             priv->pm_shutdown = false;
             ret = NOTIFY_BAD;
         }
@@ -784,7 +813,10 @@ static int droid_pm_init_wol(struct platform_device *pdev)
             ret = -ENODEV;
         }
         else {
-            input_set_capability(priv->pm_input_dev, EV_KEY, KEY_POWER);
+            set_bit(EV_KEY, priv->pm_input_dev->evbit);
+            set_bit(EV_SW, priv->pm_input_dev->evbit);
+            set_bit(KEY_POWER, priv->pm_input_dev->keybit);
+            set_bit(SW_LID, priv->pm_input_dev->swbit);
 
             priv->pm_input_dev->name = pdev->name;
             priv->pm_input_dev->id.bustype = BUS_VIRTUAL;
@@ -809,6 +841,176 @@ static void droid_pm_deinit_wol(struct droid_pm_priv_data *priv)
     }
     if (priv->pm_ether_dn != NULL) {
         of_node_put(priv->pm_ether_dn);
+    }
+}
+
+
+/* BT /proc entries to allow the BT user-space code to signal to the PM driver
+   when it is entering low-power mode and when BT_WAKE is asserted/deasserted. */
+static ssize_t droid_pm_bt_read_action(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+{
+    static const char in_message[] = "Usage:\n"
+        "\"echo '0' > %s\" : Deassert BT_WAKE signal\n"
+        "\"echo '1' > %s\" : Assert BT_WAKE signal\n"
+        "NOTE: This is used internally by libbt and the droid_pm kernel driver.\n";
+    static char out_message[sizeof(in_message) + 32];
+    struct droid_pm_bt_proc_file *pfile = PDE_DATA(file_inode(file));
+
+    snprintf(out_message, sizeof(out_message)-1, in_message, pfile->name, pfile->name);
+    return simple_read_from_buffer(buf, size, ppos, out_message, sizeof(out_message));
+}
+
+static ssize_t
+droid_pm_bt_proc_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+{
+    int ret = 0;
+    struct droid_pm_priv_data *priv = proc_get_parent_data(file_inode(file));
+    struct device *dev = priv->pm_miscdev.parent;
+    struct droid_pm_bt_proc_file *pfile = PDE_DATA(file_inode(file));
+
+    if (pfile->read_action_op) {
+        ret = (*pfile->read_action_op)(file, buf, size, ppos);
+        if (ret < 0) {
+            dev_err(dev, "%s: Failed to read from proc file %s [ret=%d]!\n", __FUNCTION__, pfile->name, ret);
+        }
+    }
+    return ret;
+}
+
+static ssize_t droid_pm_bt_write_action(struct file *file, const char __user * buf, size_t count, loff_t *ppos)
+{
+    struct droid_pm_priv_data *priv = proc_get_parent_data(file_inode(file));
+    struct device *dev = priv->pm_miscdev.parent;
+    struct droid_pm_bt_proc_file *pfile = PDE_DATA(file_inode(file));
+    uint64_t event;
+    char action;
+
+    /* The first byte holds the action */
+    if (copy_from_user(&action, buf, 1)) {
+        return -EFAULT;
+    }
+
+    switch (action) {
+        case '0': // Deassert BT_WAKE signal
+            event = DROID_PM_EVENT_BT_WAKE_OFF;
+            break;
+        case '1': // Assert BT_WAKE signal
+            event = DROID_PM_EVENT_BT_WAKE_ON;
+            break;
+        default:
+            dev_err(dev, "%s: Invalid %s action=%c!\n", __FUNCTION__, pfile->name, action);
+            return -EINVAL;
+    }
+    dev_dbg(dev, "%s: %s action=%c\n", __FUNCTION__, pfile->name, action);
+    mutex_lock(&priv->pm_mutex);
+    droid_pm_signal_event_l(priv, event);
+    mutex_unlock(&priv->pm_mutex);
+    return 0;
+}
+
+static ssize_t
+droid_pm_bt_proc_write(struct file *file, const char __user * buf, size_t count, loff_t *ppos)
+{
+    struct droid_pm_bt_proc_file *pfile = PDE_DATA(file_inode(file));
+    struct droid_pm_priv_data *priv = proc_get_parent_data(file_inode(file));
+    struct device *dev = priv->pm_miscdev.parent;
+    ssize_t ret = count;
+
+    if (pfile->write_action_op) {
+        ret = (*pfile->write_action_op)(file, buf, count, ppos);
+        if (ret < 0) {
+            dev_err(dev, "%s: Failed to write to proc file %s [ret=%d]!\n", __FUNCTION__, pfile->name, ret);
+        }
+        else {
+            ret = count;
+        }
+    }
+    return ret;
+}
+
+static const struct file_operations droid_pm_bt_proc_fops = {
+    .owner          = THIS_MODULE,
+    .read           = droid_pm_bt_proc_read,
+    .write          = droid_pm_bt_proc_write,
+    .llseek         = default_llseek,
+};
+
+static const struct droid_pm_bt_proc_file droid_pm_bt_proc_files[] = {
+    {
+        "lpm",
+        S_IRUGO | S_IWUGO,
+        &droid_pm_bt_proc_fops,
+        NULL,
+        NULL,
+    },
+    {
+        "btwrite",
+        S_IRUGO | S_IWUGO,
+        &droid_pm_bt_proc_fops,
+        &droid_pm_bt_read_action,
+        &droid_pm_bt_write_action
+    },
+    {
+        NULL,
+        0,
+        NULL,
+        NULL
+    }
+};
+
+static int droid_pm_init_proc(struct platform_device *pdev)
+{
+    struct proc_dir_entry *pdentry;
+    struct droid_pm_bt_proc_file const *pfile;
+    struct droid_pm_priv_data *priv = platform_get_drvdata(pdev);
+    struct device *dev = priv->pm_miscdev.parent;
+    int ret = 0;
+
+    priv->pm_bt_proc_parent_dir = proc_mkdir_data(droid_pm_bt_proc_parent_name, S_IRUGO | S_IWUGO | S_IXUGO, NULL, priv);
+
+    if (priv->pm_bt_proc_parent_dir) {
+        priv->pm_bt_proc_subdir_dir = proc_mkdir_data(droid_pm_bt_proc_subdir_name, S_IRUGO | S_IWUGO | S_IXUGO, priv->pm_bt_proc_parent_dir, priv);
+        if (priv->pm_bt_proc_subdir_dir) {
+            for (pfile = droid_pm_bt_proc_files; pfile->name; pfile++) {
+                pdentry = proc_create_data(pfile->name, pfile->mode, priv->pm_bt_proc_subdir_dir, pfile->fops, (void *)pfile);
+                if (pdentry) {
+                    dev_dbg(dev, "%s: Successfully created \"/proc/%s/%s/%s\"\n", __FUNCTION__,
+                            droid_pm_bt_proc_parent_name, droid_pm_bt_proc_subdir_name, pfile->name);
+                }
+                else {
+                    dev_err(dev, "%s: Could not create \"/proc/%s/%s/%s\"\n!", __FUNCTION__,
+                            droid_pm_bt_proc_parent_name, droid_pm_bt_proc_subdir_name, pfile->name);
+                    ret = -EINVAL;
+                }
+            }
+        }
+        else {
+            dev_err(dev, "%s: Could not create \"/proc/%s/%s\" dir entry!\n", __FUNCTION__,
+                    droid_pm_bt_proc_parent_name, droid_pm_bt_proc_subdir_name);
+            ret = -EINVAL;
+        }
+    }
+    else {
+        dev_err(dev, "%s: Could not create \"/proc/%s\" dir entry!\n", __FUNCTION__, droid_pm_bt_proc_parent_name);
+        ret = -EINVAL;
+    }
+    return ret;
+}
+
+void droid_pm_deinit_proc(struct droid_pm_priv_data *priv)
+{
+    struct droid_pm_bt_proc_file const *pfile;
+
+    if (priv->pm_bt_proc_subdir_dir) {
+        for (pfile = droid_pm_bt_proc_files; pfile->name; pfile++) {
+            remove_proc_entry(pfile->name, priv->pm_bt_proc_subdir_dir);
+        }
+        remove_proc_entry(droid_pm_bt_proc_subdir_name, NULL);
+        priv->pm_bt_proc_subdir_dir = NULL;
+    }
+    if (priv->pm_bt_proc_parent_dir) {
+        remove_proc_entry(droid_pm_bt_proc_parent_name, NULL);
+        priv->pm_bt_proc_parent_dir = NULL;
     }
 }
 
@@ -859,9 +1061,37 @@ static ssize_t full_wol_wakeup_store(struct device *dev,
 
 static DEVICE_ATTR_RW(full_wol_wakeup);
 
+static ssize_t sw_lid_show(struct device *dev,
+                  struct device_attribute *attr, char *buf)
+{
+    struct droid_pm_priv_data *priv = &droid_pm_priv_data;
+    return sprintf(buf, "%d [%s]\n", priv->pm_sw_lid, priv->pm_sw_lid ? "down" : "up");
+}
+
+static ssize_t sw_lid_store(struct device *dev,
+                  struct device_attribute *attr, const char *buf, size_t n)
+{
+    struct droid_pm_priv_data *priv = &droid_pm_priv_data;
+    int value;
+    int ret;
+
+    if (sscanf(buf, "0x%x", &value) != 1 && sscanf(buf, "%u", &value) != 1) {
+        dev_err(dev, "%s: invalid data\n", __FUNCTION__);
+        ret = -EINVAL;
+    }
+    else {
+        droid_pm_send_lid_switch_event(priv, !!value);
+        ret = n;
+    }
+    return ret;
+}
+
+static DEVICE_ATTR_RW(sw_lid);
+
 static struct attribute *dev_attrs[] = {
     &dev_attr_map_mem_to_s2.attr,
     &dev_attr_full_wol_wakeup.attr,
+    &dev_attr_sw_lid.attr,
     NULL,
 };
 
@@ -917,38 +1147,6 @@ static int __init droid_pm_probe(struct platform_device *pdev)
 
     priv->pm_nr_irqs = ret;
 
-    for (i = 0; i < priv->pm_nr_irqs; i++) {
-        int j;
-        uint32_t mask = 0;
-
-        /* Match interrupt name with local definitions */
-        for (j = 0; j < ARRAY_SIZE(sources); j++) {
-            if (!strcasecmp(sources[j].name, resources[i].name)) {
-                mask = sources[j].wakeup_bit;
-                break;
-            }
-        }
-        if (!mask) {
-            dev_err(dev, "no match for IRQ '%s'\n", resources[i].name);
-            continue;
-        }
-
-        priv->pm_irqs[i] = resources[i].start;
-        /* Save IRQ info . Save this first so we
-           can get correct wakeup status in S5.
-         */
-        priv->pm_irq_masks[i] = mask;
-        priv->pm_wakeups_present |= mask;
-
-        ret = request_irq(priv->pm_irqs[i], droid_pm_wakeup_irq, 0, DROID_PM_DRV_NAME, priv);
-
-        if (ret) {
-            dev_err(dev, "request_irq failed for '%s'\n", resources[i].name);
-            priv->pm_irq_masks[i] = 0;
-            priv->pm_wakeups_present &= ~mask;
-        }
-    }
-
     ret = register_droid_pm_notifier(priv);
     if (ret) {
         dev_err(dev, "register_droid_pm_notifier failed [ret=%d]!\n", ret);
@@ -977,9 +1175,51 @@ static int __init droid_pm_probe(struct platform_device *pdev)
                 goto out_free;
             }
             priv->pm_local_instance = droid_pm_create_instance_l(priv);
+            if (priv->pm_local_instance == NULL) {
+                dev_err(dev, "%s: cannot allocate memory for local instance!\n", __FUNCTION__);
+                ret = -ENOMEM;
+                goto out_free;
+            }
+            priv->pm_local_instance->pm_wakeups_status = 0;
+
+            for (i = 0; i < priv->pm_nr_irqs; i++) {
+                int j;
+                uint32_t mask = 0;
+
+                /* Match interrupt name with local definitions */
+                for (j = 0; j < ARRAY_SIZE(sources); j++) {
+                    if (!strcasecmp(sources[j].name, resources[i].name)) {
+                        mask = sources[j].wakeup_bit;
+                        break;
+                    }
+                }
+                if (!mask) {
+                    dev_err(dev, "no match for IRQ '%s'\n", resources[i].name);
+                    continue;
+                }
+
+                priv->pm_irqs[i] = resources[i].start;
+                /* Save IRQ info . Save this first so we
+                   can get correct wakeup status in S5.
+                 */
+                priv->pm_irq_masks[i] = mask;
+                priv->pm_wakeups_present |= mask;
+
+                ret = request_irq(priv->pm_irqs[i], droid_pm_wakeup_irq, 0, DROID_PM_DRV_NAME, priv);
+
+                if (ret) {
+                    dev_err(dev, "request_irq failed for '%s'\n", resources[i].name);
+                    priv->pm_irq_masks[i] = 0;
+                    priv->pm_wakeups_present &= ~mask;
+                }
+            }
 
             if (droid_pm_init_wol(pdev)) {
-                dev_info(dev, "WoLAN is not available due to init failure\n");
+                dev_warn(dev, "WoLAN is not available due to init failure!\n");
+            }
+
+            if (droid_pm_init_proc(pdev)) {
+                dev_warn(dev, "Cannot initialise /proc interface!\n");
             }
         }
     }
@@ -1005,6 +1245,7 @@ out_free:
     }
 
     droid_pm_deinit_wol(priv);
+    droid_pm_deinit_proc(priv);
     of_node_put(dn);
 
     return ret;

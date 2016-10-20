@@ -438,7 +438,8 @@ p2papi_send_at_common_channel(p2papi_instance_t* hdl, BCMP2P_CHANNEL *search_cha
 	uint32 time_used_ms = 0;
 	uint32 tmo_ms = P2PAPI_CHANNEL_SYNC_TMO_MS;
 	uint32 beacon_interval_ms = 100;
-	uint32 search_ms = P2PAPI_SCAN_DWELL_TIME_MS;
+	/*search dwell time If the scan is for findout common channel for AF*/
+	uint32 search_ms = P2PAPI_AF_SCAN_DWELL_TIME_MS;
 	uint32 max_listen_interval = 2;
 	uint32 listen_ms = 0;
 	uint32 ms;
@@ -2310,6 +2311,7 @@ p2papi_fsm_start_go_neg(p2papi_instance_t* hdl, struct ether_addr *peer_mac,
 	int i;
 	int gon_wait_ms;
 	BCMP2P_CHANNEL peer_channel;
+	bool confirmBeforeRetry = FALSE;
 
 	memcpy(&peer_channel, peer_listen_channel, sizeof(peer_channel));
 	memcpy(&hdl->peer_dev_addr, peer_mac, sizeof(hdl->peer_dev_addr));
@@ -2399,6 +2401,7 @@ p2papi_fsm_start_go_neg(p2papi_instance_t* hdl, struct ether_addr *peer_mac,
 		hdl->conn_state = P2PAPI_ST_START_NEG;
 		(void) p2papi_osl_signal_go_negotiation(hdl, P2PAPI_OSL_GO_STATE_START);
 
+		confirmBeforeRetry = FALSE;
 
 		err = p2papi_fsm_tx_go_neg_req(hdl, &hdl->peer_dev_addr,
 			!sync_channels, &peer_channel);
@@ -2412,8 +2415,8 @@ p2papi_fsm_start_go_neg(p2papi_instance_t* hdl, struct ether_addr *peer_mac,
 		}
 		else {
 			/* Wait for the GO Negotiation to complete
-			  The timeout should be nearly 2 * mac retry count * hdl->af_tx_retry_ms;
-		        */
+			   The timeout should be nearly 2 * AF retry count(P2PAPI_AF_TX_RETRIES) * hdl->af_tx_retry_ms;
+			   */
 			gon_wait_ms = P2PAPI_GROUP_OWNER_NEG_TMO_MS;
 			BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
 				"fsm_start_go_neg: wait for GON to complete(i=%d,wait=%d ms)\n",
@@ -2440,15 +2443,30 @@ p2papi_fsm_start_go_neg(p2papi_instance_t* hdl, struct ether_addr *peer_mac,
 					hdl->conn_state, err));
 				break;
 			}
+			confirmBeforeRetry = TRUE;
+
+			/* Delay before retrying the GON request with a new dialog token */
+			BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
+				"fsm_start_go_neg: sleep %d ms before retry tx GONREQ\n",
+						P2PAPI_GONREQ_RETRY_TMO_MS));
+			p2papi_osl_sleep_ms(P2PAPI_OSL_SLEEP_GO_NEGOTIATION_RETRY,
+					P2PAPI_GONREQ_RETRY_TMO_MS);
+
+			/* check if GON completed during the 'delay' time */
+			if (confirmBeforeRetry &&
+					(p2papi_osl_wait_for_go_negotiation(hdl, 0) == BCMP2P_SUCCESS))
+			{
+				if (hdl->conn_state == P2PAPI_ST_NEG_CONFIRMED ||
+						hdl->conn_state == P2PAPI_ST_IDLE)
+				{
+					BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
+								"fsm_start_go_neg: GON done/rej,st=%u notif=0x%x\n",
+								hdl->conn_state, hdl->gon_notif));
+					err = BCMP2P_SUCCESS;
+					break;
+				}
+			}
 		}
-
-		/* Delay before retrying the GON request with a new dialog token */
-		BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
-			"fsm_start_go_neg: sleep %d ms before retry tx GONREQ\n",
-			P2PAPI_GONREQ_RETRY_TMO_MS));
-		p2papi_osl_sleep_ms(P2PAPI_OSL_SLEEP_GO_NEGOTIATION_RETRY,
-			P2PAPI_GONREQ_RETRY_TMO_MS);
-
 	}
 	do_social_scan_count = 0;
 	return err;

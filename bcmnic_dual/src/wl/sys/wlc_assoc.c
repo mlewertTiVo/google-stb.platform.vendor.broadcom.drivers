@@ -9,7 +9,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc_assoc.c 648743 2016-07-13 13:46:57Z $
+ * $Id: wlc_assoc.c 654087 2016-08-11 04:20:45Z $
  */
 
 #include <wlc_cfg.h>
@@ -2636,6 +2636,15 @@ wlc_join_chkdfs_cac_ism(wlc_bsscfg_t *cfg)
 	}
 	else
 	{
+		bool from_radar = (wlc_radar_chanspec(wlc->cmi, cfg->current_bss->chanspec) == TRUE);
+		bool to_radar = wlc_radar_chanspec(wlc->cmi, bi->chanspec);
+
+		if (wlc_dfs_get_radar(wlc->dfs) && (from_radar && !to_radar)) {
+			cfg->pm->PMmodeChangeDisabled = FALSE;
+			wlc_set_pm_mode(wlc, cfg->pm->PM_oldvalue, cfg);
+			wlc->mpc = TRUE;
+			wlc_radio_mpc_upd(wlc);
+		}
 		wlc_assoc_change_state(cfg, AS_JOIN_START);
 		wlc_join_bss_start(cfg);
 	}
@@ -4277,12 +4286,15 @@ wlc_assoc_change_state(wlc_bsscfg_t *cfg, uint newstate)
 	}
 #ifdef SLAVE_RADAR
 	if (WL11H_STA_ENAB(wlc)) {
-		if ((cfg->roam->reason == WLC_E_REASON_INITIAL_ASSOC) &&
-			wlc_dfs_get_radar(wlc->dfs))
-			cfg->pm->PM_oldvalue = cfg->pm->PM;
+		bool from_radar = FALSE;
+		bool to_radar = FALSE;
+		wlc_bss_info_t *bi = wlc->join_targets->ptrs[wlc->join_targets_last];
 		/* Slave CAC begins */
 		if (newstate == AS_DFS_CAC_START) {
-			if (wlc_dfs_get_radar(wlc->dfs)) {
+			from_radar = (wlc_radar_chanspec(wlc->cmi, cfg->current_bss->chanspec) == TRUE);
+			to_radar = wlc_radar_chanspec(wlc->cmi, bi->chanspec);
+			if (wlc_dfs_get_radar(wlc->dfs) && (!from_radar && to_radar)) {
+				cfg->pm->PM_oldvalue = cfg->pm->PM;
 				wlc_set_pm_mode(wlc, PM_OFF, cfg);
 				cfg->pm->PMmodeChangeDisabled = TRUE;
 				wlc->mpc = FALSE;
@@ -4299,7 +4311,10 @@ wlc_assoc_change_state(wlc_bsscfg_t *cfg, uint newstate)
 
 		/* Notify DFS state machine to begin ISM */
 		if (newstate == AS_DFS_ISM_INIT) {
-			if (wlc_dfs_get_radar(wlc->dfs)) {
+			from_radar = (wlc_radar_chanspec(wlc->cmi, cfg->current_bss->chanspec) == TRUE);
+			to_radar = wlc_radar_chanspec(wlc->cmi, bi->chanspec);
+			if (wlc_dfs_get_radar(wlc->dfs) && ((!from_radar && to_radar))) {
+				cfg->pm->PM_oldvalue = cfg->pm->PM;
 				wlc_set_pm_mode(wlc, PM_OFF, cfg);
 				cfg->pm->PMmodeChangeDisabled = TRUE;
 				wlc->mpc = FALSE;

@@ -16,7 +16,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_linux.c 651483 2016-07-27 06:30:17Z $
+ * $Id: wl_linux.c 655991 2016-08-24 18:34:07Z $
  */
 
 #define LINUX_PORT
@@ -672,6 +672,7 @@ typedef struct wl_radiotap_vht wl_radiotap_vht_t;
 struct net_device *wl_net_find(void *wl, const char* ifname);
 int wl_net_attach(void *netdev, int bssidx);
 extern s32 wldev_ioctl(struct net_device *dev, u32 cmd, void *arg, u32 len, u32 set);
+extern int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr, int cmd);
 #endif /* (USE_CFG80211) && (WLC_HIGH) */
 
 #if WIRELESS_EXT >= 19 || LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
@@ -3284,10 +3285,10 @@ wl_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	if (cmd == SIOCETHTOOL)
 		return (wl_ethtool(wl, (void*)ifr->ifr_data, wlif));
 
-#if defined(USE_CFG80211) && defined(BCMDONGLEHOST)
+#if defined(USE_CFG80211) && defined(WLC_HIGH)
 	if (cmd == SIOCDEVPRIVATE+1) {
-		WL_TRACE(("%s: wl%d: Call wl_cfgp2p_priv_ioctl() \n", __FUNCTION__, wl->pub->unit));
-		bcmerror = wl_cfgp2p_priv_ioctl(dev, ifr, cmd);
+		WL_TRACE(("%s: wl%d: Call wl_android_priv_cmd() \n", __FUNCTION__, wl->pub->unit));
+		bcmerror = wl_android_priv_cmd(dev, ifr, cmd);
 		WL_TRACE(("wl%d: wl_ioctl: ret %d \n", wl->pub->unit, bcmerror));
 		return bcmerror;
 	}
@@ -3323,9 +3324,12 @@ wl_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	}
 
 	WL_LOCK(wl);
+#ifndef USE_CFG80211
 	if (!capable(CAP_NET_ADMIN)) {
 		bcmerror = BCME_EPERM;
-	} else {
+	} else
+#endif /* USE_CFG80211 */
+	{
 		bcmerror = wlc_ioctl(wl->wlc, ioc.cmd, buf, ioc.len, wlif->wlcif);
 	}
 	WL_UNLOCK(wl);

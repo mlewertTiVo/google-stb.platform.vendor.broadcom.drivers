@@ -972,7 +972,11 @@ static void initialize_channel_list(p2papi_instance_t* hdl)
 	for (i = 0; i < num_chanspecs; i++) {
 		c = (chanspec_t)dtoh32(list->element[i]);
 		c = P2PWL_CHSPEC_IOTYPE_DTOH(c);
-		p2papi_chspec_to_channel(c,	&ch[i]);
+		/*If channel is not under any class ignore it*/
+		if (p2papi_chspec_to_channel(c,	&ch[i]) == BCMP2P_FALSE) {
+			num_chanspecs--;
+			i--;
+		}
 	}
 
 	memset(channel_list, 0, sizeof(*channel_list));
@@ -1277,7 +1281,7 @@ p2papi_open(char *if_name, char *primary_if_name,
 
 	/* Initialize the Action Frame Transmitter */
 	(void) p2papi_aftx_api_init(hdl);
-	hdl->af_tx_max_retries = P2PAPI_MAX_AF_TX_RETRIES;
+	hdl->af_tx_max_retries = P2PAPI_AF_TX_RETRIES;
 	hdl->af_tx_retry_ms = P2PAPI_AF_TX_RETRY_DELAY_MS;
 
 	return BCMP2P_SUCCESS;

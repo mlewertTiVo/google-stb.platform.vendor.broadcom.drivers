@@ -11,7 +11,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc_auth.c 585093 2015-09-09 14:42:39Z $
+ * $Id: wlc_auth.c 653142 2016-08-05 05:39:09Z $
  */
 
 #include <wlc_cfg.h>
@@ -1205,7 +1205,9 @@ wlc_wpa_auth_sendeapol(authenticator_t *auth, uint16 flags, wpa_msg_t msg, struc
 		bcopy(auth->gnonce, wpa_key->nonce, EAPOL_WPA_KEY_NONCE_LEN);
 		bcopy(&auth->global_key_counter[KEY_COUNTER_LEN-16], wpa_key->iv, 16);
 		bcopy(auth->gtk_rsc, wpa_key->rsc, sizeof(wpa_key->rsc));
+
 		data_len = auth->gtk_len;
+		bcopy(auth->gtk, wpa_key->data, data_len);
 		wpa_key->data_len = hton16(data_len);
 
 		if (wlc_auth_encr_key_data(auth, wpa, wpa_key,

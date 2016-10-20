@@ -36,6 +36,8 @@
 #define DROID_PM_EVENT_RESUMED_PARTIAL  5   /* Set when kernel resumed due to a partial wakeup event (e.g. WoL) */
 #define DROID_PM_EVENT_SUSPENDING       6   /* Set when kernel is about to suspend */
 #define DROID_PM_EVENT_SHUTDOWN         7   /* Set when kernel is about to shutdown */
+#define DROID_PM_EVENT_BT_WAKE_OFF      8   /* Set when the Bluetooth device sleeps */
+#define DROID_PM_EVENT_BT_WAKE_ON       9   /* Set when the Bluetooth device awakens */
 
 /* Each client that is interested in knowing when the kernel is
    about to suspend so it can perform some last minute actions
