@@ -16,7 +16,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_linux.c 655991 2016-08-24 18:34:07Z $
+ * $Id: wl_linux.c 671000 2016-11-18 12:06:12Z $
  */
 
 #define LINUX_PORT
@@ -740,6 +740,24 @@ static const struct net_device_ops wl_netdev_ops =
 #endif
 	.ndo_do_ioctl = wl_ioctl
 };
+#ifdef MULTI_CHIP
+static const struct net_device_ops wl_netdev_ops_virtual =
+{
+#ifdef WL_THREAD
+        .ndo_start_xmit = wl_start_wlthread,
+#else
+        .ndo_start_xmit = wl_start,
+#endif
+        .ndo_get_stats = wl_get_stats,
+        .ndo_set_mac_address = wl_set_mac_address,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 2, 0)
+        .ndo_set_rx_mode = wl_set_multicast_list,
+#else
+        .ndo_set_multicast_list = wl_set_multicast_list,
+#endif
+        .ndo_do_ioctl = wl_ioctl
+};
+#endif /* MULTI_CHIP */
 
 #if defined(USE_CFG80211) && defined(WLC_HIGH)
 static int wl_preinit_ioctls(struct net_device *ndev)
@@ -1965,7 +1983,9 @@ wl_free(wl_info_t *wl)
 {
 	wl_timer_t *t, *next;
 	osl_t *osh;
-
+#ifdef MULTI_CHIP
+	struct bcm_cfg80211 *cfg;
+#endif
 	WL_TRACE(("wl: wl_free\n"));
 #ifdef SAVERESTORE
 	/* need to disable SR before unload the driver
@@ -1991,7 +2011,9 @@ wl_free(wl_info_t *wl)
 	netif_poll_disable(wl->dev);
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 30) */
 #endif /* NAPI_POLL */
-
+#if defined(USE_CFG80211) && defined(WLC_HIGH) && defined(MULTI_CHIP)
+	cfg = BCMCFG_GET_PRIV(wl->dev);
+#endif
 	if (wl->dev) {
 		wl_free_if(wl, WL_DEV_IF(wl->dev));
 		wl->dev = NULL;
@@ -2058,7 +2080,11 @@ wl_free(wl_info_t *wl)
 
 #if defined(USE_CFG80211) && defined(WLC_HIGH)
 		WL_TRACE(("%s: Calling wl_cfg80211_detach() \n", __FUNCTION__));
+#ifdef MULTI_CHIP
+		wl_cfg80211_detach(cfg);
+#else
 		wl_cfg80211_detach(NULL);
+#endif
 #endif
 
 	/* free timers */
@@ -2500,7 +2526,9 @@ wl_free_if(wl_info_t *wl, wl_if_t *wlif)
 #if defined(USE_CFG80211) && defined(WLC_HIGH)
 	s32 pre_locked = -1;
 #endif
-
+#ifdef MULTI_CHIP
+	struct bcm_cfg80211 *cfg;
+#endif
 	WL_TRACE(("%s: Started \n", __FUNCTION__));
 
 	ASSERT(wlif);
@@ -2541,7 +2569,12 @@ wl_free_if(wl_info_t *wl, wl_if_t *wlif)
 #if defined(WLC_HIGH)
 		wl_cfg80211_notify_ifdel(wlif->dev);
 #else
+#ifdef MULTI_CHIP
+		cfg = BCMCFG_GET_PRIV(wlif->dev);
+		wl_cfg80211_detach(cfg);
+#else
 		wl_cfg80211_detach(wlif->dev);
+#endif
 #endif
 #endif /* #if defined(USE_CFG80211) */
 	}
@@ -2706,7 +2739,11 @@ _wl_add_if(wl_task_t *task)
 	wlif->dev->name[strlen(wlif->name)] = '\0';
 
 #if defined(WL_USE_NETDEV_OPS)
+#ifdef MULTI_CHIP
+	dev->netdev_ops = &wl_netdev_ops_virtual;
+#else
 	dev->netdev_ops = &wl_netdev_ops;
+#endif
 #else /* WL_USE_NETDEV_OPS */
 #ifdef WL_THREAD
 	dev->hard_start_xmit = wl_start_wlthread;
@@ -2735,7 +2772,7 @@ _wl_add_if(wl_task_t *task)
 
 #if defined(USE_CFG80211) && defined(WLC_HIGH)
 	WL_TRACE(("%s: Start register_netdev() %s\n", __FUNCTION__, wlif->name));
-	pre_locked = wl_cfg80211_setup_vwdev(dev, 0, P2PAPI_BSSCFG_CONNECTION);
+	pre_locked = wl_cfg80211_setup_vwdev(wl->dev, dev, 0, P2PAPI_BSSCFG_CONNECTION);
 	if (pre_locked == -1)
 	{
 		WL_ERROR(("%s: Setup cfg80211 netdev failed. name=%s\n", __FUNCTION__, wlif->name));
@@ -2810,7 +2847,11 @@ wl_add_if(wl_info_t *wl, struct wlc_if *wlcif, uint unit, struct ether_addr *rem
 	   copy into netdev when it becomes ready
 	 */
 #if defined(USE_CFG80211) && defined(WLC_HIGH)
+#ifdef MULTI_CHIP
+	if (wl_cfg80211_query_if_name(wl->dev, wlif->name) == -1)
+#else
 	if (wl_cfg80211_query_if_name(wlif->name) == -1)
+#endif
 	{
 		WL_TRACE(("wpa virtual interface name does not exist. Change to %s\n", wlif->name));
 		sprintf(wlif->name, "%s%d.%d", devname, wl->pub->unit, wlif->subunit);

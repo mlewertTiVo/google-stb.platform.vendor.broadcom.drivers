@@ -11,7 +11,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc.c 648743 2016-07-13 13:46:57Z $
+ * $Id: wlc.c 668446 2016-11-03 09:00:38Z $
  */
 
 #include <wlc_cfg.h>
@@ -6877,6 +6877,14 @@ BCMATTACHFN(wlc_attach_module)(wlc_info_t *wlc)
 	/* Register the 1st txmod */
 	wlc_txmod_fn_register(wlc, TXMOD_TRANSMIT, wlc, txq_txmod_fns);
 
+	if ((wlc->delq = MALLOC(wlc->osh, sizeof(*(wlc->delq)))) == NULL) {
+		WL_ERROR(("wl%d: %s: MALLOC failed, malloced %d bytes\n",
+		          wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->pub->osh)));
+		err = BCME_ERROR;
+		goto fail;
+	}
+	pktqinit(wlc->delq, PKTQ_LEN_MAX);
+
 #ifdef WLBMON
 	MODULE_ATTACH(bmon, wlc_bmon_attach, 34);
 #endif
@@ -8156,6 +8164,57 @@ const struct {
 #endif /* WL_ANTGAIN */
 
 
+/* enqueue the packet to delete queue */
+static void
+wlc_txq_delq_enq(void *ctx, void *pkt)
+{
+	wlc_info_t *wlc = ctx;
+	pktenq(wlc->delq, pkt);
+}
+
+/* flush the delete queue/free all the packet */
+static void
+wlc_txq_delq_flush(void *ctx)
+{
+	wlc_info_t *wlc = ctx;
+	pktqflush(wlc->osh, wlc->delq);
+}
+
+/** * pktq filter function to delete pkts associated with an SCB */
+static pktq_filter_result_t
+wlc_txq_scb_free_filter(void* ctx, void* pkt)
+{
+	struct scb *scb = (struct scb *)ctx;
+	return (WLPKTTAGSCBGET(pkt) == scb) ? PKT_FILTER_DELETE: PKT_FILTER_NOACTION;
+}
+
+/** free all pkts asscoated with the given scb on a pktq for a prec */
+void
+wlc_txq_pktq_scb_pfilter(wlc_info_t *wlc, int prec, struct pktq *pq, struct scb *scb)
+{
+	pktq_pfilter(pq, prec, wlc_txq_scb_free_filter, scb,
+		wlc_txq_delq_enq, wlc, wlc_txq_delq_flush, wlc);
+}
+
+/** free all pkts asscoated with the given scb on a pktq for given precedences */
+void
+wlc_txq_pktq_scb_filter(wlc_info_t *wlc, uint prec_bmp, struct pktq *pq, struct scb *scb)
+{
+	uint prec;
+	int prec_cnt = PKTQ_MAX_PREC-1; // PKTQ_MAX_PREC is 16.
+
+	/* Loop over all precedences set in the bitmap */
+	while (prec_cnt >= 0) {
+		prec = (prec_bmp & (1 << prec_cnt));
+		if ((prec) && (!pktq_pempty(pq, prec_cnt))) {
+			WL_PRINT(("wl%d: filter %d packets of prec=%d for scb:0x%p\n",
+				wlc->pub->unit, pktq_plen(pq, prec_cnt), prec_cnt, scb));
+			wlc_txq_pktq_scb_pfilter(wlc, prec_cnt, pq, scb);
+		}
+		prec_cnt--;
+	}
+}
+
 static int8
 wlc_antgain_calc(int8 ag)
 {
@@ -8904,6 +8963,10 @@ BCMATTACHFN(wlc_detach)(wlc_info_t *wlc)
 #endif /* WLC_HIGH_ONLY */
 	while (wlc->tx_queues != NULL) {
 		wlc_txq_free(wlc, wlc->osh, wlc->tx_queues);
+	}
+
+	if (wlc->delq != NULL) {
+		MFREE(wlc->osh, wlc->delq, sizeof(*(wlc->delq)));
 	}
 
 #if defined(INTERNAL) || defined(MCHAN_MINIDUMP)
@@ -16851,12 +16914,12 @@ wlc_doiovar(void *hdl, const bcm_iovar_t *vi, uint32 actionid, const char *name,
 			cnt->d11cnt_rxcrc_off += cnt->rxcrc;
 			cnt->d11cnt_txnocts_off += cnt->txnocts;
 
-			cnt->txframe = cnt->txfrag = cnt->txmulti = cnt->txfail =
+			cnt->txframe = cnt->txfrag = cnt->txmulti = cnt->txbcast = cnt->txfail =
 			cnt->txerror = cnt->txserr = cnt->txretry = cnt->txretrie = cnt->rxdup =
 			cnt->rxrtry = cnt->txbcnfrm =  cnt->txrts = cnt->txnocts =
 			cnt->txnoack = cnt->rxframe = cnt->rxerror = cnt->rxfrag = cnt->rxmulti =
 			cnt->rxbeaconmbss = cnt->rxcrc = cnt->txfrmsnt = cnt->rxundec =
-			cnt->rxundec_mcst = 0;
+			cnt->rxundec_mcst = cnt->rxbcast = cnt->rxdropped = cnt->txdropped = 0;
 			bzero(&(wlcif->_cnt), sizeof(wlc_if_stats_t));
 		}
 		break;
@@ -21090,6 +21153,10 @@ wlc_statsupd(wlc_info_t *wlc)
 	WLCNTSET(wlc->pub->_cnt->rxerror, wlc->pub->_cnt->rxoflo + wlc->pub->_cnt->rxnobuf +
 	       wlc->pub->_cnt->rxfragerr + wlc->pub->_cnt->rxrunt + wlc->pub->_cnt->rxgiant +
 	       wlc->pub->_cnt->rxnoscb + wlc->pub->_cnt->rxbadsrcmac);
+
+	WLCNTSET(wlc->pub->_cnt->rxdropped, wlc->pub->_cnt->rxerror - wlc->pub->_cnt->rxoflo);
+	WLCNTSET(wlc->pub->_cnt->txdropped, wlc->pub->_cnt->txnobuf + wlc->pub->_cnt->txrunt);
+
 	for (i = 0; i < NFIFO; i++)
 		WLCNTADD(wlc->pub->_cnt->rxerror, wlc->pub->_cnt->rxuflo[i]);
 }
@@ -22557,7 +22624,9 @@ wlc_sendpkt(wlc_info_t *wlc, void *sdu, struct wlc_if *wlcif)
 	uint prec, next_fid;
 #endif
 	uint bandunit;
-
+#ifdef	WLCAC
+	uint8 ret_cac = 0;
+#endif /* WLCAC */
 	WL_TRACE(("wlc%d: wlc_sendpkt\n", wlc->pub->unit));
 
 	/* sanity */
@@ -22969,11 +23038,13 @@ wlc_sendpkt(wlc_info_t *wlc, void *sdu, struct wlc_if *wlcif)
 #ifdef	WLCAC
 	if (CAC_ENAB(wlc->pub)) {
 
-		if (!wlc_cac_is_traffic_admitted(wlc->cac, WME_PRIO2AC(PKTPRIO(sdu)), scb)) {
+		ret_cac = wlc_cac_is_traffic_admitted(wlc->cac, WME_PRIO2AC(PKTPRIO(sdu)), scb);
+		if ((ret_cac == WLC_CAC_NOT_ADMITTED) || (ret_cac == WLC_CAC_ALLOWED_TXOP_ISOVER)) {
 			WL_CAC(("%s: Pkt dropped. Admission not granted for ac %d pktprio %d\n",
 				__FUNCTION__, WME_PRIO2AC(PKTPRIO(sdu)), PKTPRIO(sdu)));
 			goto toss;
 		}
+
 
 		if (BSSCFG_AP(bsscfg) && !SCB_ISMULTI(scb)) {
 			wlc_cac_reset_inactivity_interval(wlc->cac, WME_PRIO2AC(PKTPRIO(sdu)), scb);
@@ -23850,6 +23921,7 @@ wlc_txfast(wlc_info_t *wlc, struct scb *scb, void *sdu, uint pktlen)
 	uint flags = 0;
 	uint16 txc_hwseq, TxFrameID_off;
 	uint d11TxdLen;
+	uint caclen = 0;
 
 	ASSERT(scb != NULL);
 
@@ -23985,6 +24057,7 @@ wlc_txfast(wlc_info_t *wlc, struct scb *scb, void *sdu, uint pktlen)
 #endif /* WLTDLS */
 
 	if (WLCISACPHY(wlc->band)) {
+		uint tsoHdrSize = 0;
 		/* Update timestamp */
 		if ((pkttag->flags & WLF_EXPTIME)) {
 			((d11actxh_t *)txh)->PktInfo.Tstamp =
@@ -23995,6 +24068,11 @@ wlc_txfast(wlc_info_t *wlc, struct scb *scb, void *sdu, uint pktlen)
 
 		/* Get the packet length after adding d11 header. */
 		pktlen = pkttotlen(osh, sdu);
+#ifdef WLTOEHW
+		tsoHdrSize = (wlc->toe_bypass ?
+			0 : wlc_tso_hdr_length((d11ac_tso_t*)PKTDATA(wlc->osh, sdu)));
+#endif
+		caclen = pktlen +  DOT11_FCS_LEN - d11TxdLen - tsoHdrSize;
 		/* Update frame len (fc to fcs) */
 		((d11actxh_t *)txh)->PktInfo.FrameLen = htol16((uint16)(pktlen +
 		DOT11_FCS_LEN - ETHER_HDR_LEN + wlc_txc_get_d11hdr_len(wlc->txc, scb) - d11TxdLen));
@@ -24008,8 +24086,11 @@ wlc_txfast(wlc_info_t *wlc, struct scb *scb, void *sdu, uint pktlen)
 	}
 
 	if (CAC_ENAB(wlc->pub) && fifo <= TX_AC_VO_FIFO) {
-		/* update cac used time with cached value */
-		if (wlc_cac_update_used_time(wlc->cac, wme_fifo2ac[fifo], -1, scb))
+		/* Request the usage of cached value for duration in CAC
+		 * update cac used time with cached value.
+		 */
+		if (wlc_cac_use_dur_cache(wlc->cac, WME_PRIO2AC(PKTPRIO(sdu)), PKTPRIO(sdu), scb,
+				caclen))
 			WL_ERROR(("wl%d: ac %d: txop exceeded allocated TS time\n",
 			          wlc->pub->unit, wme_fifo2ac[fifo]));
 	}
@@ -25142,6 +25223,8 @@ wlc_dofrag(wlc_info_t *wlc, void *p, uint frag, uint nfrags, uint next_payload_l
 		if (TXC_CACHE_ENAB(txc) && (nfrags == 1) &&
 		    !(WLPKTTAG(p)->flags2 & WLF2_BYPASS_TXC) &&
 		    !BSSCFG_SAFEMODE(cfg)) {
+			wlc_cac_update_dur_cache(wlc->cac, WME_PRIO2AC(PKTPRIO(p)), PKTPRIO(p),
+					scb, 0, 0, WLC_CAC_DUR_CACHE_REFRESH);
 			wlc_txc_add(txc, scb, p, txc_hdr_len, fifo, prio, txh_off, d11hdr_len);
 		}
 	}
@@ -26313,6 +26396,7 @@ wlc_d11n_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, ui
 #ifdef WL_LPC
 	uint8 lpc_offset = 0;
 #endif
+	uint keyinfo_len = 0;
 	ASSERT(scb != NULL);
 	ASSERT(queue < NFIFO);
 
@@ -26347,7 +26431,7 @@ wlc_d11n_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, ui
 	 */
 	if (key) {
 		{
-			phylen += key->icv_len;
+			keyinfo_len = key->icv_len;
 		}
 	}
 
@@ -26358,16 +26442,17 @@ wlc_d11n_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, ui
 		hwtkmic = TRUE;
 
 		/* add MIC size as it will be appended by hardware */
-		phylen += TKIP_MIC_SIZE;
+		keyinfo_len += TKIP_MIC_SIZE;
 	}
 #else
 	/* Software TKIP module adds the extiv at the front */
 	if (key && (key->algo == CRYPTO_ALGO_TKIP)) {
 		PKTPUSH(osh, p, 8);
-		phylen += 8;
+		keyinfo_len += 8;
 	}
 #endif /* LINUX_CRYPTO */
 
+	phylen += keyinfo_len;
 	/* add PLCP */
 	plcp = PKTPUSH(osh, p, D11_PHY_HDR_LEN);
 
@@ -27291,6 +27376,8 @@ wlc_d11n_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, ui
 
 			if (CAC_ENAB(wlc->pub) &&
 				queue <= TX_AC_VO_FIFO) {
+				wlc_cac_update_dur_cache(wlc->cac, ac, PKTPRIO(p), scb, dur,
+					(phylen - keyinfo_len), WLC_CAC_DUR_CACHE_PREP);
 				/* update cac used time */
 				if (wlc_cac_update_used_time(wlc->cac, ac, dur, scb))
 					WL_ERROR(("wl%d: ac %d: txop exceeded allocated TS time\n",
@@ -27317,6 +27404,8 @@ wlc_d11n_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, ui
 		}
 
 		/* update cac used time */
+		wlc_cac_update_dur_cache(wlc->cac, ac, PKTPRIO(p), scb, dur,
+			(phylen - keyinfo_len), WLC_CAC_DUR_CACHE_PREP);
 		if (wlc_cac_update_used_time(wlc->cac, ac, dur, scb))
 			WL_ERROR(("wl%d: ac %d: txop exceeded allocated TS time\n",
 				wlc->pub->unit, ac));
@@ -27577,6 +27666,7 @@ wlc_d11ac_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, u
 	int txpwr_bfsel;
 	uint8 txpwr;
 	int k;
+	uint keyinfo_len = 0;
 #if defined(WL_PROT_OBSS) && !defined(WL_PROT_OBSS_DISABLED)
 	ratespec_t phybw = CHSPEC_IS80(wlc->chanspec) ? RSPEC_BW_80MHZ :
 	        (CHSPEC_IS40(wlc->chanspec) ? RSPEC_BW_40MHZ : RSPEC_BW_20MHZ);
@@ -27617,7 +27707,7 @@ wlc_d11ac_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, u
 	 */
 	if (key) {
 		{
-			phylen += key->icv_len;
+			keyinfo_len = key->icv_len;
 		}
 	}
 #ifndef LINUX_CRYPTO
@@ -27627,15 +27717,17 @@ wlc_d11ac_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, u
 		hwtkmic = TRUE;
 
 		/* add MIC size as it will be appended by hardware */
-		phylen += TKIP_MIC_SIZE;
+		keyinfo_len += TKIP_MIC_SIZE;
 	}
 #else
 	/* Software TKIP module adds the extiv at the front */
 	if (key && (key->algo == CRYPTO_ALGO_TKIP)) {
 		PKTPUSH(osh, p, 8);
-		phylen += 8;
+		keyinfo_len += 8;
 	}
 #endif /* LINUX_CRYPTO */
+	phylen += keyinfo_len;
+
 	/* add Broadcom tx descriptor header */
 	txh = (d11actxh_t*)PKTPUSH(osh, p, D11AC_TXH_LEN);
 	bzero((char*)txh, D11AC_TXH_LEN);
@@ -28385,6 +28477,8 @@ wlc_d11ac_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, u
 
 				if (CAC_ENAB(wlc->pub) &&
 					queue <= TX_AC_VO_FIFO) {
+					wlc_cac_update_dur_cache(wlc->cac, ac, PKTPRIO(p), scb, dur,
+						(phylen - keyinfo_len), WLC_CAC_DUR_CACHE_PREP);
 					/* update cac used time */
 					if (wlc_cac_update_used_time(wlc->cac, ac, dur, scb))
 						WL_ERROR(("wl%d: ac %d: txop exceeded allocated TS"
@@ -28409,6 +28503,8 @@ wlc_d11ac_hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags, u
 				dur = wlc_calc_frame_time(wlc, rspec, preamble_type, phylen);
 				dur += wlc_compute_frame_dur(wlc, rspec, preamble_type, 0);
 			}
+			wlc_cac_update_dur_cache(wlc->cac, ac, PKTPRIO(p), scb, dur,
+				(phylen - keyinfo_len), WLC_CAC_DUR_CACHE_PREP);
 			/* update cac used time */
 			if (wlc_cac_update_used_time(wlc->cac, ac, dur, scb))
 				WL_ERROR(("wl%d: ac %d: txop exceeded allocated TS time\n",
@@ -29897,8 +29993,12 @@ wlc_recvdata_ordered(wlc_info_t *wlc, struct scb *scb, struct wlc_frminfo *f)
 		PKTSETPRIO(f->p, f->prio);
 
 		if (ETHER_ISMULTI(f->da)) {
-			WLCNTINCR(wlc->pub->_cnt->rxmulti);
-			WLCNTINCR(bsscfg->wlcif->_cnt.rxmulti);
+			if (ETHER_ISBCAST(f->da)) {
+				WLCNTINCR(wlc->pub->_cnt->rxbcast);
+			} else {
+				WLCNTINCR(wlc->pub->_cnt->rxmulti);
+				WLCNTINCR(bsscfg->wlcif->_cnt.rxmulti);
+			}
 		}
 
 
@@ -32510,6 +32610,16 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 			aibss_scb_tx_stats->tx_noack_count = 0;
 		}
 #endif /* WLAIBSS */
+#ifdef WLCNT
+		if (bsscfg && bsscfg->BSS && BSSCFG_STA(bsscfg) && ETHER_ISMULTI(&h->a3)) {
+			if (ETHER_ISBCAST(&h->a3)) {
+				WLCNTINCR(wlc->pub->_cnt->txbcast);
+			} else {
+				WLCNTINCR(wlc->pub->_cnt->txmulti);
+				WLCIFCNTINCR(scb, txmulti);
+			}
+		}
+#endif
 		/* update counters */
 		WLCNTINCR(wlc->pub->_cnt->txfrag);
 #ifdef WL11K
@@ -32740,8 +32850,12 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 			wlc_rrm_tscm_upd(scb, prio, OFFSETOF(rrm_tscm_t, msdu_tx), 1);
 #endif
 			if (tx_frame_count) {
-				WLCNTINCR(wlc->pub->_cnt->txmulti);
-				WLCIFCNTINCR(scb, txmulti);
+				if (ETHER_ISBCAST(txh_info.TxFrameRA)) {
+					WLCNTINCR(wlc->pub->_cnt->txbcast);
+				} else {
+					WLCNTINCR(wlc->pub->_cnt->txmulti);
+					WLCIFCNTINCR(scb, txmulti);
+				}
 			}
 		}
 		pkt_sent = TRUE;
@@ -32762,9 +32876,13 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 			wlc_rrm_tscm_upd(scb, prio, OFFSETOF(rrm_tscm_t, msdu_tx), 1);
 #endif
 			if (tx_frame_count) {
-				WLCNTINCR(wlc->pub->_cnt->txmulti);
-				WLCIFCNTINCR(scb, txmulti);
-				WLCNTSCB_COND_INCR(scb, scb->scb_stats.tx_mcast_pkts);
+				if (ETHER_ISBCAST(&h->a3)) {
+					WLCNTINCR(wlc->pub->_cnt->txbcast);
+				} else {
+					WLCNTINCR(wlc->pub->_cnt->txmulti);
+					WLCIFCNTINCR(scb, txmulti);
+					WLCNTSCB_COND_INCR(scb, scb->scb_stats.tx_mcast_pkts);
+				}
 #ifdef WL11K
 				wlc_rrm_stat_bw_counter(wlc, scb, TRUE);
 #endif
@@ -47961,9 +48079,17 @@ wlc_wme_downgrade_fifo(wlc_info_t *wlc, uint* p_fifo, struct scb *scb)
 
 	ASSERT(scb != NULL);
 
+#ifdef WLCAC
 	/* Downgrade the fifo if admission is not yet gained */
-	if (CAC_ENAB(wlc->pub) && wlc_cac_is_traffic_admitted(wlc->cac, wme_fifo2ac[*p_fifo], scb))
+	if (CAC_ENAB(wlc->pub)) {
+		uint ret = 0;
+		ret = wlc_cac_is_traffic_admitted(wlc->cac, wme_fifo2ac[*p_fifo], scb);
+		/* Dont downgrade if admission control is not mandatory in WME IE
+		 * Dont downgrade if this AC has exhaused its allowed air time */
+		if((ret == WLC_CAC_NO_ADM_CTRL) || (ret == WLC_CAC_ALLOWED_TXOP_ISOVER))
 		return 0;
+	}
+#endif /* WLCAC */
 
 	cfg = SCB_BSSCFG(scb);
 	ASSERT(cfg != NULL);

@@ -15,7 +15,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_cfg80211.h 655991 2016-08-24 18:34:07Z $
+ * $Id: wl_cfg80211.h 671000 2016-11-18 12:06:12Z $
  */
 
 /**
@@ -540,6 +540,12 @@ typedef struct wl_if_event_info {
 	char name[IFNAMSIZ+1];
 } wl_if_event_info;
 
+/* Instance corresponding to each radio */
+struct bcmcfg_cfg80211_netdev_notifier {
+	struct notifier_block netdev_notifier;
+	bool notifier_registered;
+};
+
 /* private data of cfg80211 interface */
 struct bcm_cfg80211 {
 	struct wireless_dev *wdev;	/* representing cfg cfg80211 device */
@@ -927,6 +933,12 @@ wl_get_netinfo_by_netdev(struct bcm_cfg80211 *cfg, struct net_device *ndev)
 #define for_each_ndev(cfg, iter, next) \
 	list_for_each_entry_safe(iter, next, &cfg->net_list, list)
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0))
+#define STA_INFO_BIT(info) (1ul << NL80211_STA_ ## info)
+#define strnicmp(str1, str2, len) strncasecmp((str1), (str2), (len))
+#else
+#define STA_INFO_BIT(info) (STATION_ ## info)
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0)) */
 
 /* In case of WPS from wpa_supplicant, pairwise siute and group suite is 0.
  * In addtion to that, wpa_version is WPA_VERSION_1
@@ -946,8 +958,12 @@ extern void wl_cfg80211_detach(void *para);
 extern void wl_cfg80211_event(struct net_device *ndev, const wl_event_msg_t *e,
             void *data);
 #if defined(USE_CFG80211) && defined(WLC_HIGH)
+#ifdef MULTI_CHIP
+extern s32 wl_cfg80211_query_if_name(struct net_device *ndev, char *if_name);
+#else
 extern s32 wl_cfg80211_query_if_name(char *if_name);
-extern s32 wl_cfg80211_setup_vwdev(struct net_device *ndev, s32 idx, s32 bssidx);
+#endif
+extern s32 wl_cfg80211_setup_vwdev(struct net_device *pdev, struct net_device *ndev, s32 idx, s32 bssidx);
 extern s32 wl_cfg80211_ifdel_ops(struct net_device *net);
 #endif
 void wl_cfg80211_set_parent_dev(void *dev);
@@ -955,22 +971,30 @@ struct device *wl_cfg80211_get_parent_dev(void);
 
 extern s32 wl_cfg80211_up(void *para);
 extern s32 wl_cfg80211_down(void *para);
+#ifdef MULTI_CHIP
+extern s32 wl_cfg80211_notify_ifadd(struct net_device *ndev,int ifidx, char *name, uint8 *mac, uint8 bssidx);
+#else
 extern s32 wl_cfg80211_notify_ifadd(int ifidx, char *name, uint8 *mac, uint8 bssidx);
+#endif
 #if defined(WLC_HIGH)
 extern s32 wl_cfg80211_notify_ifdel(struct net_device *ndev);
 #else
 extern s32 wl_cfg80211_notify_ifdel(int ifidx, char *name, uint8 *mac, uint8 bssidx);
 #endif
+#ifdef MULTI_CHIP
+extern s32 wl_cfg80211_notify_ifchange(struct net_device *ndev, int ifidx, char *name, uint8 *mac, uint8 bssidx);
+#else
 extern s32 wl_cfg80211_notify_ifchange(int ifidx, char *name, uint8 *mac, uint8 bssidx);
+#endif
 extern struct net_device* wl_cfg80211_allocate_if(struct bcm_cfg80211 *cfg, int ifidx, char *name,
 	uint8 *mac, uint8 bssidx);
 #if !defined(WLC_HIGH)
 extern int wl_cfg80211_register_if(struct bcm_cfg80211 *cfg, int ifidx, struct net_device* ndev);
 #endif
 extern int wl_cfg80211_remove_if(struct bcm_cfg80211 *cfg, int ifidx, struct net_device* ndev);
-extern int wl_cfg80211_scan_stop(bcm_struct_cfgdev *cfgdev);
-extern bool wl_cfg80211_is_vsdb_mode(void);
-extern void* wl_cfg80211_get_dhdp(void);
+extern int wl_cfg80211_scan_stop(bcm_struct_cfgdev *cfgdev, struct bcm_cfg80211 *cfg);
+extern bool wl_cfg80211_is_vsdb_mode(struct net_device *ndev);
+extern void* wl_cfg80211_get_dhdp(struct net_device *ndev);
 extern bool wl_cfg80211_is_p2p_active(void);
 extern void wl_cfg80211_dbg_level(u32 level);
 extern s32 wl_cfg80211_get_p2p_dev_addr(struct net_device *net, struct ether_addr *p2pdev_addr);
@@ -1062,7 +1086,10 @@ static inline void wl_escan_print_sync_id(s32 status, u16 result_id, u16 wl_id)
 #define wl_escan_increment_sync_id(a, b)
 #define wl_escan_init_sync_id(a)
 #endif /* DUAL_ESCAN_RESULT_BUFFER */
-extern void wl_cfg80211_ibss_vsie_set_buffer(vndr_ie_setbuf_t *ibss_vsie, int ibss_vsie_len);
+#ifdef MULTI_CHIP
+#define BCMCFG_GET_PRIV(ndev) (struct bcm_cfg80211 *) wiphy_priv(ndev->ieee80211_ptr->wiphy)
+#endif
+extern void wl_cfg80211_ibss_vsie_set_buffer(struct net_device *dev, vndr_ie_setbuf_t *ibss_vsie, int ibss_vsie_len);
 extern s32 wl_cfg80211_ibss_vsie_delete(struct net_device *dev);
 #ifdef WLAIBSS
 extern void wl_cfg80211_set_txfail_pid(int pid);

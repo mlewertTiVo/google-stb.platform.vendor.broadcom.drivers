@@ -1,0 +1,420 @@
+boardflags=0x10000000
+boardflags2=0x4
+boardflags3=0x40000000
+boardflags4=0xe
+
+# NOTE NOTE NOTE NOTE README READMe README README
+# BEFORE CHECK-IN BEFORE CHECK-IN BEFORE CHECK-IN
+# How to use the command svn propset before checking in a nvram file
+# > svn add bcm943569usb.txt (if not existent yet)
+# If there is already a line having the command like NVRAMRev=$Rev: 657567 $ it is ok,
+# the command svn propset svn:keywords Rev <nvram file name> updates the $Rev number
+# > svn propset svn:keywords Rev bcm943569usb.txt
+# > svn ci -m "nvram for p341 using a2 chip and usb31 host connector" bcm943569usb.txt
+NVRAMRev=$Rev: 657567 $
+sromrev=13
+srom13sig=0x4d55
+#  do not know, check?
+
+boardtype=0x07f7
+# get from running ../wlan/boardssid.py
+boardrev=0x1112
+
+subvid=0x106b
+# same for all boards
+vendid=0x14e4
+# BRCM
+
+#boardnum=1
+# board serial number
+boardnum=${serno}
+#### devid: 0x4410 dualband; 0x4411 2G; 0x4412 5G
+devid=0x4412
+
+macaddr=00:90:4c:1b:00:01
+
+ccode=ALL
+# NEr: CountryCode - was X0=FCC, X3 = ETSI, X2=rest of the world
+regrev=0
+# NEr: Regulatory revision, default 0
+
+#aa2g=0xf
+# NEr: 4 antennas in 2G
+aa2g=0x0
+# 0 antennas in 2G
+aa5g=0xf
+# NEr: 4 antennas in 25
+
+#Antenna gain (in dBi) defined by converting hexadecimal to 8-bit binary:
+#lower 0b:5 bits = signed 2s complement in units of dB
+#higher 6b:7 bits = unsigned number in units of quarter dB
+#Examples:
+#0x82 = 2.5 dB (2 + 2 C 0.25)
+#0x7f = b:0.75 dB (b:1 + 1 C 0.25)
+#agbg0=0x83
+# antenna gain bg band, 3,5 dB
+#agbg1=0x83
+#agbg2=0x83
+#agbg3=0x83
+aga0=0
+# antenna gain a band, 3,25 dB
+aga1=0
+aga2=0
+aga3=0
+
+txchain=0xf
+# 4 txchains, bitmap enable
+rxchain=0xf
+#antswitch=0
+# 0 means support ant diversity (eg 4350) ...7271 does not need it
+
+#tssiposslope2g=1
+# tssi slope positive, check and cc from 4347
+#epagain2g=0
+# 3 bits, 0 ensures that acphy_set_mimocfg_ipa_stat sets mimocfg(ipa) != on, val 2 is for iPA , 0 or 1 is for ePA
+#pdgain2g=0
+# 5 bits, power det par used in drv to program the tssi loopback path appropriately, if changed then pa params need to be re-calibrated
+#tworangetssi2g=0
+# two range tssi = no
+#papdcap2g=0
+# papd capable = no
+#femctrl=2
+# not used if the FEM ctrl is defined in the nvram itself via the swctrlmap parameters when boardflag BFL3_FEMTBL_FROM_NVRAM is set
+tssiposslope5g=1
+epagain5g=0
+# 3 bits, 0 ensures that acphy_set_mimocfg_ipa_stat sets mimocfg(ipa) != on, val 2 is for iPA , 0 or 1 is for ePA
+pdgain5g=3
+tworangetssi5g=0
+papdcap5g=0
+gainctrlsph=0
+# 4 bits, chech what it is - only used with SROM
+
+tempthresh=120
+tempoffset=255
+###NEr: here is how srom13 twiki page defines vars above
+#thermal	0x78ff	Upper 2 nibb: tempthresh, Lower: tempoffset , max. die temp. = 120C
+
+rawtempsense=0x1ff
+measpower=0x7f
+###NEr: here is how srom13 twiki page defines vars above
+#mpwr_rawts	0xffff	0:9 raw tempsense, 15:9 measured power
+
+tempsense_slope=0xff
+tempcorrx=0x3f
+tempsense_option=0x3
+###NEr: here is how srom13 twiki page defines vars above
+#ts_slp_opt_corrx	0xffff	0:7 tempsense slope, 8:9 tempsense option, 10:15 tempcorrs
+
+xtalfreq=54000
+# xtal freq in kHz, 7271 uses 54 MHz
+
+phycal_tempdelta=40
+# Temperature delta, in degrees C, when exceeded will initiate Perodic calibration. Range 0-63
+temps_period=10
+# NEr:poling interval 1 sec
+temps_hysteresis=5
+# NEr:unit = deg C
+###NEr: here is how srom13 twiki page defines vars above
+#Temp_hyst, temps_period, phycal_tempdelta	0x5A28	5C thermal hysteresis. 10sec polling interval
+
+########################################################
+# energy detect threshold
+#ed_thresh2g=-75
+#ed_thresh5g=-75
+# energy detect threshold for EU
+#eu_edthresh2g=-75
+#eu_edthresh5g=-75
+
+# NEr: something filled by manufacturing control ?
+measpower1=0x7f
+measpower2=0x7e
+# measpower1, measpower2	0xffff	6:0: Measpower1, 13:7: Measpower2. meas. Tx power CH7&13 in MFGc.
+
+#NEr: power det offsets, 1/4 dB per tick
+#pdoffset2gcck=0
+#pdoffset20in40m2g=0
+pdoffset20in40m5gb0=0
+# NEr: there are 5 subbands for 5G, see below
+pdoffset20in40m5gb1=0
+pdoffset20in40m5gb2=0
+pdoffset20in40m5gb3=0
+pdoffset20in40m5gb4=0
+pdoffset40in80m5gb0=0
+pdoffset40in80m5gb1=0
+pdoffset40in80m5gb2=0
+pdoffset40in80m5gb3=0
+pdoffset40in80m5gb4=0
+pdoffset20in80m5gb0=0
+pdoffset20in80m5gb1=0
+pdoffset20in80m5gb2=0
+pdoffset20in80m5gb3=0
+pdoffset20in80m5gb4=0
+#pdoffset20in40m2gcore3=0
+pdoffset20in40m5gcore3=0
+pdoffset40in80m5gcore3=0
+pdoffset20in80m5gcore3=0
+subband5gver=0x5
+# NEr:Low (ch36-48)/Mid(52-64)/high1(100-118)/High2(120-144)/X1(149-165)  http://hwnbu-twiki.broadcom.com/bin/view/Mwgroup/Subbands5GHz
+
+### NER even more power offsets, all 1/4 dB /tick
+#mcs1024qam2gpo=0
+mcs1024qam5glpo=825307458
+mcs1024qam5gmpo=825307458
+mcs1024qam5ghpo=825307458
+mcs1024qam5gx1po=825307458
+mcs1024qam5gx2po=825307458
+###NEr: power per rate bit expansion, whatever it may be ?
+mcs8poexp=0
+mcs9poexp=0
+mcs10poexp=0xFEFEFEFE
+mcs11poexp=0xFEFEFEFE
+
+
+#cckbw202gpo=0
+# NEr 2G CCK Power offsets for 20 MHz rates (11, 5.5, 2, 1Mbps)
+#cckbw20ul2gpo=0
+# NEr 2G CCK Power offsets for 20 U/L rates (11, 5.5, 2, 1 Mbps)
+#mcsbw202gpo=0
+# NEr 2G: 11n/11ac mcs 0/1/2, 3-7, 11ac mcs 8, 11ac mcs 9 20MHz. LSB nib: m0/m1/m2, MSB nib: c9.
+#mcsbw402gpo=0
+# NEr : 2G: 11n/11ac mcs 0/1/2, 3-7, 11ac mcs 8, 11ac mcs 9 40MHz. LSB nib: m0/m1/m2, MSB nib: c9.
+### NEr: and even more power offsets, consult link at the bottom of the file
+#dot11agofdmhrbw202gpo=0
+#ofdmlrbw202gpo=0
+mcsbw205glpo=3398989104
+mcsbw405glpo=3398989394
+mcsbw805glpo=3684202064
+mcsbw1605glpo=3684202068
+mcsbw205gmpo=3398989104
+mcsbw405gmpo=3398989394
+mcsbw805gmpo=3684202065
+mcsbw1605gmpo=3684202068
+mcsbw205ghpo=3398989104
+mcsbw405ghpo=3398989395
+mcsbw805ghpo=3684202066
+mcsbw1605ghpo=3684202068
+mcsbw205gx1po=3398989104
+mcsbw405gx1po=3398989395
+mcsbw805gx1po=3684202067
+mcsbw1605gx1po=3684202068
+mcsbw205gx2po=3398989105
+mcsbw405gx2po=3398989396
+mcsbw805gx2po=3684202068
+mcsbw1605gx2po=3684202068
+mcslr5glpo=0
+mcslr5gmpo=0
+mcslr5ghpo=0
+mcslr5gx1po=0
+mcslr5gx2po=0
+sb20in40hrpo=0
+sb20in40lrpo=0
+sb20in40hrlrpox=0
+dot11agduphrpo=0
+dot11agduplrpo=0
+dot11agduphrlrpox=0
+sb40and80hr5glpo=0
+sb40and80hr5gmpo=0
+sb40and80hr5ghpo=0
+sb40and80hr5gx1po=0
+sb40and80hr5gx2po=0
+sb20in80and160hr5glpo=0
+sb20in80and160hr5gmpo=0
+sb20in80and160hr5ghpo=0
+sb20in80and160hr5gx1po=0
+sb20in80and160hr5gx2po=0
+sb40and80lr5glpo=0
+sb40and80lr5gmpo=0
+sb40and80lr5ghpo=0
+sb40and80lr5gx1po=0
+sb40and80lr5gx2po=0
+sb20in80and160lr5glpo=0
+sb20in80and160lr5gmpo=0
+sb20in80and160lr5ghpo=0
+sb20in80and160lr5gx1po=0
+sb20in80and160lr5gx2po=0
+
+#pcieingress_war=15
+# not needed on 7271, comment out, but keep in...for SATA maybee?
+#pcieinterference	0xffff
+
+#noiselvl2ga0=31
+# NEr: Noise level: added during MFGc testing, not used in TCL
+#noiselvl2ga1=31
+#noiselvl2ga2=31
+#noiselvl2ga3=31
+noiselvl5ga0=31,31,31,31
+noiselvl5ga1=31,31,31,31
+noiselvl5ga2=31,31,31,31
+noiselvl5ga3=31,31,31,31
+#rxgainerr2ga0=63
+# NEr: Rx gain error: added during MFGc testing, not used in TCL
+#rxgainerr2ga1=31
+#rxgainerr2ga2=31
+#rxgainerr2ga3=31
+rxgainerr5ga0=63,63,63,63
+rxgainerr5ga1=31,31,31,31
+rxgainerr5ga2=31,31,31,31
+rxgainerr5ga3=31,31,31,31
+
+
+# NEr: look acphy_init for code that uses these nvram entries
+rxgains5gmelnagaina0=3
+# NEr 3 bit, mapping to dB need info
+rxgains5gmelnagaina1=3
+rxgains5gmelnagaina2=3
+rxgains5gmelnagaina3=3
+rxgains5gmtrisoa0=5
+# NEr 4 bit, mapping to dB need info
+rxgains5gmtrisoa1=5
+rxgains5gmtrisoa2=5
+rxgains5gmtrisoa3=5
+rxgains5gmtrelnabypa0=1
+# NEr 1 bit, probably lnabyp use/nouse
+rxgains5gmtrelnabypa1=1
+rxgains5gmtrelnabypa2=1
+rxgains5gmtrelnabypa3=1
+rxgains5ghelnagaina0=3
+rxgains5ghelnagaina1=3
+rxgains5ghelnagaina2=3
+rxgains5ghelnagaina3=3
+rxgains5ghtrisoa0=5
+rxgains5ghtrisoa1=5
+rxgains5ghtrisoa2=5
+rxgains5ghtrisoa3=5
+rxgains5ghtrelnabypa0=1
+rxgains5ghtrelnabypa1=1
+rxgains5ghtrelnabypa2=1
+rxgains5ghtrelnabypa3=1
+#rxgains core0	0xa9bc	upper 8 bits 5G b0, lower 2G. 8 bit definition b:tr_elnabypass[7], tr_iso[6:3], elna_gain[2:0]
+
+### Max Tx powers
+#maxp2ga0=72
+maxp5gb0a0=94
+maxp5gb1a0=94
+maxp5gb2a0=94
+maxp5gb3a0=94
+maxp5gb4a0=94
+#maxp2ga1=72
+maxp5gb0a1=94
+maxp5gb1a1=94
+maxp5gb2a1=94
+maxp5gb3a1=94
+maxp5gb4a1=94
+#maxp2ga2=72
+maxp5gb0a2=94
+maxp5gb1a2=94
+maxp5gb2a2=94
+maxp5gb3a2=94
+maxp5gb4a2=94
+#maxp2ga3=72
+maxp5gb0a3=94
+maxp5gb1a3=94
+maxp5gb2a3=94
+maxp5gb3a3=94
+maxp5gb4a3=94
+
+#rxgains2gelnagaina0=4
+# Gain in dB = 6 + 2 *rxgains2gelnagaina0. So value 4 indicates 14db for example.
+#rxgains2gtrisoa0=7
+# Isolation in dB = 8 + 2*rxgains2gtrisoa0. so value 7 indicates 22db for example.
+#rxgains2gtrelnabypa0=1
+# indicates if the ext lna bypass is used instead of using the TR switch in "T" mode. 1 = external bypass used
+rxgains5gelnagaina0=3
+rxgains5gtrisoa0=5
+rxgains5gtrelnabypa0=1
+#rxgains2gelnagaina1=4
+#rxgains2gtrisoa1=7
+#rxgains2gtrelnabypa1=1
+rxgains5gelnagaina1=3
+rxgains5gtrisoa1=5
+rxgains5gtrelnabypa1=1
+#rxgains2gelnagaina2=4
+#rxgains2gtrisoa2=7
+#rxgains2gtrelnabypa2=1
+rxgains5gelnagaina2=3
+rxgains5gtrisoa2=5
+rxgains5gtrelnabypa2=1
+#rxgains2gelnagaina3=4
+#rxgains2gtrisoa3=7
+#rxgains2gtrelnabypa3=1
+rxgains5gelnagaina3=3
+rxgains5gtrisoa3=5
+rxgains5gtrelnabypa3=1
+
+########################################################
+#  TSSI / PA Parameters as derived in LabNotebook 7271 TBD
+### NEr: FEMS have diode detector...new model results in 4 PA params (A,B,C and D), see att link on the bottom
+pa5ga0=0x1872,0xd1b5,0x3444,0x2775,0x1847,0xceef,0x28ed,0x2585,0x178c,0xcbab,0x23e3,0x257b,0x177d,0xca20,0x20cd,0x253e,0x1774,0xc8f7,0x2507,0x2807
+pa5g40a0=0x189e,0xd346,0x39ab,0x2819,0x1867,0xcdee,0x265e,0x256b,0x17e3,0xcfb8,0x2bfe,0x2673,0x17bc,0xca07,0x1bea,0x22e0,0x1760,0xcd74,0x2868,0x2674
+pa5g80a0=0x19f7,0xd6ff,0x3f05,0x274d,0x19b5,0xd74e,0x3f87,0x2790,0x18f4,0xd4f1,0x3712,0x26db,0x18aa,0xd390,0x34fe,0x26e4,0x186a,0xd35c,0x33dd,0x2663
+pa5ga1=0x190e,0xd6e9,0x492d,0x2a27,0x18e0,0xd21a,0x3512,0x2712,0x1821,0xcf99,0x2eff,0x26d8,0x183b,0xcd01,0x26a3,0x2540,0x17d8,0xd0da,0x3aab,0x28fa
+pa5g40a1=0x196c,0xd554,0x42ca,0x2934,0x18fe,0xd55f,0x4302,0x2979,0x187d,0xcde7,0x2788,0x2540,0x1837,0xd2aa,0x3ba4,0x2906,0x17c7,0xcd30,0x277e,0x25f3
+pa5g80a1=0x1a91,0xd224,0x33b2,0x2608,0x1a03,0xd6a8,0x4289,0x2804,0x1942,0xdb07,0x57f1,0x2b59,0x1903,0xd243,0x333e,0x2629,0x18c3,0xcef5,0x269c,0x2459
+pa5ga2=0x1931,0xd7c9,0x4e74,0x2b1b,0x18e6,0xd42d,0x3c2A,0x2851,0x183d,0xcc57,0x23ed,0x24ab,0x1858,0xcd0d,0x26df,0x25a3,0x1800,0xce4f,0x31f9,0x28a3
+pa5g40a2=0x199c,0xd100,0x338c,0x272e,0x1936,0xcf5a,0x2941,0x2512,0x1897,0xd40a,0x3afc,0x2806,0x1868,0xd004,0x3158,0x2764,0x180e,0xcf79,0x2fdb,0x26d9
+pa5g80a2=0x1b10,0xd2d7,0x3427,0x2616,0x1a8f,0xd79d,0x498d,0x2905,0x19b6,0xdbf4,0x585c,0x2ae9,0x1951,0xdbe0,0x5dfa,0x2c1f,0x1906,0xd9d2,0x4f0b,0x2a26
+pa5ga3=0x18a1,0xcedd,0x267c,0x254f,0x185f,0xce78,0x263f,0x253e,0x17c3,0xccaf,0x238a,0x256b,0x17a6,0xcda4,0x29a5,0x2712,0x1778,0xcc8d,0x2f76,0x29a3
+pa5g40a3=0x18dc,0xd6c0,0x488d,0x2a2e,0x1879,0xd73e,0x4f0e,0x2bb1,0x180f,0xca77,0x18d1,0x21bf,0x17c1,0xcd64,0x245e,0x247a,0x177f,0xcc3b,0x2868,0x261d
+pa5g80a3=0x1a2b,0xdc80,0x54e0,0x2a30,0x19e3,0xd677,0x3c71,0x2742,0x191b,0xdb2e,0x5153,0x2a7b,0x18ca,0xd785,0x4081,0x2874,0x1877,0xda07,0x51b5,0x2a77
+#pa2ga0=0x1c9b,0xbef2,0x0,0xba7
+#pa2g40a0=0x1c9b,0xbef2,0x0,0xba7
+#pa2ga1=0x1c3f,0xbec6,0x0,0x0
+#pa2g40a1=0xffff,0xffff,0xffff,0xffff
+#pa2ga2=0x1d05,0xbe32,0x0,0xaf2
+#pa2g40a2=0xffff,0xffff,0xffff,0xffff
+#pa2ga3=0x1d05,0xbe32,0x0,0xaf2
+#pa2g40a3=0xffff,0xffff,0xffff,0xffff
+
+########################################################
+# AvVmid 2GHz and 5GHz as derived in LabNotebook 7271 TBD  -- are these needed for 7271?
+AvVmid_c0=4,64,4,58,4,58,4,58,4,58,4,58
+AvVmid_c1=4,64,4,58,4,58,4,58,4,58,4,58
+AvVmid_c2=4,64,4,58,4,58,4,58,4,58,4,58
+AvVmid_c3=4,64,4,58,4,58,4,58,4,58,4,58
+
+
+#rpcal2g=0
+#rpcal2g	0x0000	2g reciprocity comp. coeffs. (U0.8 format): B[7:0] = angle(K(1))/2pi, B[15:8] = angle(K(2))/2pi
+rpcal5gb0=0
+rpcal5gb1=0
+rpcal5gb2=0
+rpcal5gb3=0
+rpcal5gb4=0
+
+# updated swctrl for 7271dv board (5G FEMs)
+swctrlmap4_cfg=0x5
+swctrlmap4_TX2g_fem3to0=0x0
+swctrlmap4_RX2g_fem3to0=0x0
+swctrlmap4_RXByp2g_fem3to0=0x0
+swctrlmap4_misc2g_fem3to0=0x0
+swctrlmap4_TX5g_fem3to0=0x4444
+swctrlmap4_RX5g_fem3to0=0x3333
+swctrlmap4_RXByp5g_fem3to0=0x2222
+swctrlmap4_misc5g_fem3to0=0x0
+swctrlmap4_TX2g_fem7to4=0
+swctrlmap4_RX2g_fem7to4=0
+swctrlmap4_RXByp2g_fem7to4=0
+swctrlmap4_misc2g_fem7to4=0
+swctrlmap4_TX5g_fem7to4=0
+swctrlmap4_RX5g_fem7to4=0
+swctrlmap4_RXByp5g_fem7to4=0
+swctrlmap4_misc5g_fem7to4=0
+
+paprdis=1
+
+########################################################
+# Rx gain and RSSI parameters
+#rssicorrnorm_c0=
+#rssicorrnorm_c1=
+#rssicorrnorm5g_c0=
+#rssicorrnorm5g_c1=
+########################################################
+
+# Links:
+# see http://hwnbu-twiki.sj.broadcom.com/bin/view/Mwgroup/SromRev13 for the meaning of variables above
+# see this BU page  http://confluence.broadcom.com/display/WLAN/4365+swctrlmapping to see how 4365 was filled in
+# bu page from above links to xcel file http://confluence.broadcom.com/download/attachments/315891405/femctrl_4365.xls?version=4&modificationDate=1421389476000&api=v2
+# Excel with more detailed nvram param explanation:
+# http://confluence.broadcom.com/login.action?os_destination=%2Fdownload%2Fattachments%2F314805596%2FACPHY_nvram_parameter_description.xlsx%3Fversion%3D2%26modificationDate%3D1416576453233%26api%3Dv2
+# PA params (new models with 4 instead 3 params)
+#see http://confluence.broadcom.com/download/attachments/230608048/white_paper.pdf?version=4&modificationDate=1441065166000&api=v2

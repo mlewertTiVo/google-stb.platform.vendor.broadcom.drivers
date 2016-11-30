@@ -10,7 +10,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc.h 646952 2016-07-01 09:26:00Z $
+ * $Id: wlc.h 665260 2016-10-17 07:38:06Z $
  */
 
 #ifndef _wlc_h_
@@ -495,6 +495,27 @@ typedef struct iscan_ignore {
 #define	PSQ_PKTS_HI		500
 #endif
 
+/*
+ * Macro returns tx queue structure given the txq info structure
+ *
+ * This should be used in preference to direct access when
+ * backporting code form other branches.
+ *
+ * The internal structure of the TXQ Info is subject
+ * to change as the new TXQ features are introduced.
+ */
+#define WLC_GET_TXQ(qi) (&(qi)->q)
+
+
+/* operations for single precedence queues */
+#define pktqflush(osh, pq)      pktq_flush(osh, ((struct pktq *)(void *)pq), TRUE, NULL, 0)
+
+/* scb+prec based txq pktq filter */
+extern void wlc_txq_pktq_scb_pfilter(wlc_info_t *wlc, int prec, struct pktq *pq, struct scb *scb);
+/* scb based txq pktq filter */
+extern void wlc_txq_pktq_scb_filter(wlc_info_t *wlc, uint prec_bmp, struct pktq *pq,
+	struct scb *scb);
+
 #ifdef STA
 /* if wpa is in use then portopen is true when the group key is plumbed otherwise it is always true
  */
@@ -578,7 +599,7 @@ extern const uint8 prio2fifo[];
 #define	RETRY_SHORT_FB			3	/* Short retry count for fallback rate */
 #define	RETRY_LONG_FB			2	/* Long retry count for fallback rate */
 
-#define	MAXTXPKTS		6		/* max # pkts pending */
+#define	MAXTXPKTS		256		/* max # pkts pending */
 #define	MAXTXPKTS_AMPDUMAC	64
 #ifndef	AMPDU_BA_MAX_WSIZE
 /* max Tx/Rx ba window size (in pdu) for array allocations in structures. */
@@ -2302,6 +2323,7 @@ struct wlc_info {
 	wlc_modesw_info_t *modesw; /* modesw Wlc structure pointer */
 	wlc_assoc_dc_cb_t	*assoc_dc_cb_head;	/* assoc decision callback */
 	wlc_addrmatch_info_t *addrmatch_info;	/* amt_infio */
+	struct spktq *delq;     /* delete queue holding pkts-to-delete temporarily */
 };
 
 struct wlc_btc_param_vars_entry {

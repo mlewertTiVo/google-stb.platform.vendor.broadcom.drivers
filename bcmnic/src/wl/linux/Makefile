@@ -1,0 +1,1028 @@
+#
+# GNUmakefile for Linux
+# Broadcom 802.11abg Networking Device Driver
+#
+# Broadcom Proprietary and Confidential. Copyright (C) 2016,
+# All Rights Reserved.
+# 
+# This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom;
+# the contents of this file may not be disclosed to third parties, copied
+# or duplicated in any form, in whole or in part, without the prior
+# written permission of Broadcom.
+#
+#
+# <<Broadcom-WL-IPTag/Proprietary:>>
+#
+# Usage:
+#
+# make { [LINUXDIR=<path>] | [LINUXVER=<version>] }
+#      [debug|nodebug]-[native|mipsel|mipseb|arm]-[<config file>]{-<config file>}
+#      [API=WEXT|CFG80211|NONE]
+#
+# <config file> is a file which is included by this makefile for the purpose
+#   of defining pre-defined make variables.  These make variables are then
+#   converted to CC flags, file lists, etc which are used to control the
+#   compilation, linking, etc.  These config files are by default in directory
+#   .../src/wl/config and have a prefix wlconfig_lx_wl_.  For example
+#   <config file> "stadef" would include file wlconfig_lx_wl_stadef.
+#   Multiple <config file>'s can be specified separated by a - in which
+#   case they are included in the order specified before conversion.
+#   In addition, these make variables can be set using the command line,
+#   e.g. make WLxxx=1 or by exporting to the make process environment.  An
+#   important point is that assignments made in config files (or internally
+#   by this script) will override initial make process environment variables
+#   but not command line specified variables so be careful.
+#
+# If no make target is specified, a collection of various combinations of
+#   debug/nodebug and <config file>'s for the "native" architecture will be
+#   built.
+#
+# An object directory(s) of the form obj-<fully qualified target name>-$(LINUXVER)
+#   will be created in the current directory and populated.  Typically this
+#   make file is invoked from its parent directory .../src/wl/linux.
+#
+#   The object directory will have these files
+#      *.o            bet you know what these are! :-)
+#      wlcfg-obj      make variables from inclusion of <config file>('s)
+#      wlconf.h       sample (commented out) tunable parameters file
+#                     (used if no <config file> appropriate option>)
+#      Module.symvers (2.6 kernel only)  ??? 0 length file created by
+#                     Linux 2.6 external kernel module framework
+#      Makefile       (2.6 kernel only)  Linux 2.6 external kernel
+#                     module make file
+#      *.c            (2.6 kernels only) These are symbolic links to
+#                     all .c's (not .h's) because using the Linux 2.6
+#                     external kernel module build framework requires
+#                     all source in a single directory.
+#
+#   Note: The make file, object directory and source can be in different
+#   locations through judicious use of make's -C and -f options plus
+#   definition of make variable SRCBASE via the environment or a make
+#   command line option,
+#
+
+#
+# Description:
+#
+# Determines $(TARGETS) based on command-line target or a default set then
+# selects each $(TARGET), creating an objdir and launching a submake.
+#
+# Phased operation:
+#  1) For each cmdline target, generate a $(TARGETS) set for a submake.
+#  2) Given $(TARGETS) list from (1), do an objdir submake for each $(TARGET).
+#  3) Use $(TARGET) to build OBJDIR and wl config file, do submake in objdir.
+#  4) Now $(INOBJDIR): read config and wl.mk for most flags/files settings,
+#     may still use $(TARGET) for architecture and such.  Do dep, modules.
+#
+# $Id: Makefile 657363 2016-08-31 23:59:32Z $
+#
+
+# Some unix systems have /bin/sh linked to some incompatible shells
+# that break the build. So set it to bash by default
+SHELL=/bin/bash
+
+# Root name for object dir - could be just a prefix, could be a directory.
+ObjPfx := obj-
+
+# Bring in global settings using the location of current makefile as a guide.
+include $(dir $(lastword $(MAKEFILE_LIST)))/../../makefiles/WLAN_Common.mk
+
+# Targets are built one at a time, but within each target they
+# are built parallel by default.
+#   To change parallelism do not use -j directly; use "make MAKEJOBS=-jn ...".
+#   To build serially, force MAKEJOBS to null: "make MAKEJOBS= ..."
+#   The alternatives "make PAR='-j n' ..." and "make JOBS=n ..." are also
+#   supported for compatibility.
+ifndef MAKEJOBS
+    ifdef JOBS
+        MAKEJOBS := -j $(JOBS)
+    else ifdef PAR
+        MAKEJOBS := $(PAR)
+    else
+        MAKEJOBS := -j 4
+    endif
+endif
+
+# If a source file is generated it should not be copied or linked
+# from source control. Instead, a rule must be written to generate it.
+GENERATED_SOURCES := wlc_clm_data.c
+
+# Although 32ON64 flag is supposed to be passed from caller, set it
+# if not set by caller on certain kernels and platforms
+ifndef EXPANDED
+# default version of GCC defined here. It is pushed explicitely to next levels of make
+   GCCVER ?= 4.8.2
+   ifneq (,$(filter %-32,$(GCCVER)))
+      export 32ON64 := 1
+     override GCCVER := $(patsubst %-32,%,$(GCCVER))
+   else ifndef 32ON64
+      ifndef HOSTARCH
+          HOSTARCH := $(shell uname -m)
+      endif
+      ifneq (,$(findstring x86_64,$(HOSTARCH)))
+          ifndef NATIVEVER
+              NATIVEVER := $(shell uname -r)
+          endif
+          ifneq (,$(findstring i386,$(LINUXVER))$(findstring i686,$(LINUXVER)))
+             export 32ON64 := 1
+         endif
+      endif
+   endif
+endif # EXPANDED
+
+ifeq ($(TARGETS),)
+
+ifeq ($(DEFBASICS),)
+     #Default combinations
+     DEFBASICS	:= apdef
+     DEFBASICS	+= stadef
+     DEFBASICS	+= apdef-stadef
+#     DEFBASICS	+= apdef-stadef-high
+endif # DEFBASICS
+
+DEBUGS := debug nodebug
+
+# Default list of targets
+DEFTARGETS = $(foreach dvar,$(DEBUGS),\
+                $(patsubst %,$(dvar)-native-%,$(DEFBASICS)))
+
+# Note: TARGETS command variable will be inherited through MAKEFLAGS to
+#       cause recursive makes to only see the else condition.
+# Generate targets from command-line args, or use default set
+.DEFAULT:
+	@echo "Generating target(s) from $@"
+	+$(MAKE) GCCVER=$(GCCVER) EXPANDED=true TARGETS="$@" $@
+default all:
+	@echo "Using default target(s) $(DEFTARGETS)"
+	+$(MAKE) GCCVER=$(GCCVER) EXPANDED=true TARGETS="$(DEFTARGETS)" $(DEFTARGETS)
+native mipsel mipseb arm:
+	@echo "Using default target(s) for $@ architecture"
+	+$(MAKE) EXPANDED=true TARGETS="$(subst native,$@,$(DEFTARGETS))" \
+		$(subst native,$@,$(DEFTARGETS))
+clean:
+ifeq (,$(filter %/,$(ObjPfx)))
+	$(RM) -r $(ObjPfx)*
+else
+	$(RM) -r $(ObjPfx)
+endif
+ifneq ($(findstring external,$(BRAND)),)
+	$(MAKE) -C $(WLAN_SrcBaseA)/linuxdev clean
+endif
+
+help:
+	@echo "make [LINUXDIR=<path>] [LINUXVER=<version>]"
+	@echo "     [debug|nodebug]-[native|mipsel|arm]-[<config>]"
+	@echo
+	@echo "     Use WLCFGDIR=x, WLCFG_PREFIX=y to override defaults of"
+	@echo "     \$$(WLAN_SrcBaseA)/wl/config and wlconfig_lx_wl_ for <config>."
+	@echo
+	@echo "     A <config> is the \"basename\" of a configuration file,"
+	@echo "     for example, \"native-stadef\" refers to the config file"
+	@echo "     \$$(WLCFGDIR)/wlconfig_lx_wl_stadef (w/default prefix)."
+	@echo
+	@echo "     More than one <config> (e.g. native-apdef-stadef) may be"
+	@echo "     specified; they concatenate into a single configuration."
+	@echo "     If no target is specified, the ap/sta and debug/nodebug "
+	@echo "     variants are built; specifying just an arch (e.g. arm)"
+	@echo "     builds the variants for that architecture.  Otherwise"
+	@echo "     at least one <config> must be specified."
+	@echo
+	@echo "examples:"
+	@echo "  default set                    make"
+	@echo "  default set for mips           make mipsel"
+	@echo "  debug ap-sta                   make debug-apdef-stadef"
+	@echo "  sta for specific linux         make LINUXVER=2.4.18-3 stadef"
+	@echo
+
+else # TARGETS set
+
+# Setup LINUXDIR if not specified.  Use LINUXVER if specified to create
+# a LINUXDIR.  Use uname -r for LINUXVER ifuna, else use h
+ifeq ($(LINUXDIR),)
+    ifeq ($(LINUXVER),)
+        # LINUXVER is not set, derive it from native 'uname -r'
+        LINUXVER := $(shell uname -r)
+        ifndef ECLOUD_BUILD_ID
+            $(info LINUXVER not defined, set to native $(LINUXVER))
+        endif # ECLOUD_BUILD_ID
+    endif
+    ifneq ($(wildcard /lib/modules/$(LINUXVER)/build/include/linux/version.h),)
+        # If native host matches LINUXVER, then use local LINUXDIR
+        LINUXDIR := /lib/modules/$(LINUXVER)/build
+    else ifneq ($(wildcard /lib/modules/$(LINUXVER)/build/include/generated/uapi/linux/version.h),)
+        # Linux 3.7+ has moved version.h to include/generated/uapi/linux.
+        LINUXDIR := /lib/modules/$(LINUXVER)/build
+    else ifneq ($(wildcard /tools/linux/src/linux-$(LINUXVER)/include/linux/version.h),)
+        LINUXDIR := /tools/linux/src/linux-$(LINUXVER)
+    else ifneq ($(wildcard /tools/linux/src/linux-$(LINUXVER)/include/generated/uapi/linux/version.h),)
+        # Linux 3.7+ has moved version.h to include/generated/uapi/linux.
+        LINUXDIR := /tools/linux/src/linux-$(LINUXVER)
+    else
+        LINUXDIR := /usr/src/linux
+        ifeq (,$(wildcard $(LINUXDIR)))
+          $(error no such directory: $(LINUXDIR))
+        else
+          $(warning LINUXDIR is set to native $(LINUXDIR))
+        endif
+    endif
+endif # LINUXDIR
+
+ifeq ($(findstring android,$(TARGET)),)
+# This is the name of a directory which will be created in the obj-* area
+# containing links to $(LINUXDIR). Note that it cannot be a direct symlink
+# to LINUXDIR because cd-ing into it would traverse the link.
+# Instead we make it a real directory containing symlinks, such that every
+# file/directory in $(LINUXDIR) has a symlink "$(LINUXLNK)/foo -> $(LINUXDIR)/foo".
+# This allows us to cd into $(LINUXLNK) and address $(LINUXDIR) via symlinks.
+    LINUXLNK := LINUXLNK
+endif # android
+
+# Default WLARCH is x86
+WLARCH ?= x86
+ifneq ($(findstring native,$(TARGET)),)
+   WLARCH = x86
+endif
+ifneq ($(findstring mips,$(TARGET)),)
+   WLARCH = mips
+endif
+ifneq ($(findstring arm,$(TARGET)),)
+   WLARCH = arm
+endif
+
+ifneq ($(findstring armv7l,$(TARGET)),)
+   WLARCH = arm
+endif
+
+ifneq ($(findstring armv8,$(TARGET)),)
+   WLARCH = arm64
+endif
+
+# Derive LINUXVER from LINUXDIR
+ifneq ($(findstring android,$(TARGET)),)
+   LINUXSRC := $(LINUXDIR)
+# Try to fix for not local build
+   ifneq ($(wildcard $(LINUXSRC)/source), )
+      LINUXSRC := $(LINUXDIR)/source
+   endif
+endif # android
+MYKERNEL_RELEASE_KEYWORD:="KERNELRELEASE[[:space:]]*=.*kernel.release"
+MYKERNEL_DEFINITION:=$(if \
+  $(shell grep $(MYKERNEL_RELEASE_KEYWORD) $(LINUXDIR)/Makefile 2> /dev/null),\
+  grep $(MYKERNEL_RELEASE_KEYWORD) $(LINUXDIR)/Makefile,\
+  cat $(LINUXDIR)/Makefile)
+
+# Check if specified LINUXVER conflicts with LINUXDIR's LINUXVER
+# Most of the times LINUXVER is supplied in env for FCx variant builds
+LINUXVER:=$(shell ($(MYKERNEL_DEFINITION); echo "show_kernel_version_number$$$$:;@echo \$$(KERNELRELEASE)") 2> /dev/null | $(MAKE) --no-print-directory -k -C $(LINUXDIR) MYUNAME="" -f - show_kernel_version_number$$$$ 2> /dev/null)
+
+LINUXPROC := $(shell uname -m)
+
+BCM_KVERSIONSTRING := $(word 1,$(subst -,$(space),$(LINUXVER)))
+
+ifeq (,$(word 3,$(subst .,$(space),$(BCM_KVERSIONSTRING))))
+     $(error LINUXVER bad format: "$(LINUXVER)")
+endif
+
+# Kernel include paths changed starting from fc9
+# We need usb shim layer module for FC9 kernels for split driver
+# Build usb shim only for external bmac builds that need 2.6.21+ kernels
+
+# Check if 2.6.18+ or higher
+ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6.18),TRUE)
+    # Disable for developers and enable for external and mfgtest builds
+    ifneq ($(findstring external,$(BRAND))$(findstring mfgtest,$(BRAND)),)
+        # The external module 'bcm_dbus.ko' is needed only for usb/bmac driver
+        ifneq ($(findstring high,$(TARGET)),)
+	    BCM_EXTERNAL_MODULE=1
+	    export BCM_EXTERNAL_MODULE_REQUIRED=TRUE
+	    export BCM_EXTERNAL_MODULE_NAME=bcm_dbus
+	    export KBUILD_EXTRA_SYMBOLS=$(WLAN_SrcBaseA)/linuxdev/$(ObjPfx)$(BCM_EXTERNAL_MODULE_NAME)-$(LINUXVER)-$(WLARCH)/Module.symvers
+        endif # TARGET
+    endif # BRAND
+endif # KERNEL >= 2.6.18
+
+ifneq ($(findstring cfg80211,$(TARGET)),)
+    ifneq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6.38),TRUE)
+	$(error -cfg80211 must be built against kernel 2.6.38 or after)
+    endif # KERNEL >= 2.6.38
+    BCM_STA_CFG80211=1
+    export API=CFG80211
+endif # TARGET
+
+# IFLAGS computation precedes WLCONFFILE inclusion,
+# so set flags for set-top-box wl driver build, as they
+# are used to derive include paths.
+ifneq ($(findstring media-mips,$(TARGET))$(findstring mips-media,$(TARGET)),)
+    WLARCH=mips
+    STBLINUX=1
+endif # media-mips
+
+ifneq ($(findstring stb,$(TARGET)),)
+    STBLINUX=1
+endif # stb
+
+ifndef ECLOUD_BUILD_ID
+       $(info TARGET=$(TARGET) BCM_EXTERNAL_MODULE=$(BCM_EXTERNAL_MODULE) WLARCH=$(WLARCH) STBLINUX=$(STBLINUX))
+endif # ECLOUD_BUILD_ID
+
+# basic options, include current obj dir for wl driver config file
+DFLAGS := -DLINUX
+
+DFLAGS += -DSRCBASE=\"$(WLAN_SrcBaseA)\" -DBCMDRIVER
+
+ifeq ($(STBLINUX),1)
+	WOWL_GPIOPIN?=11
+	WOWL_GPIO_POLARITY?=1
+	DFLAGS +=-DWOWL_GPIO=$(WOWL_GPIOPIN)
+	DFLAGS +=-DWOWL_GPIO_POLARITY=$(WOWL_GPIO_POLARITY)
+endif
+
+ifneq ($(findstring comp,$(TARGET)),)
+   DFLAGS += -DBCMUSBDEV_COMPOSITE
+endif
+
+ifneq ($(findstring armv7l,$(TARGET)),)
+# Should add the arm arch version specific details
+  DFLAGS += -D__LINUX_ARM_ARCH__=7 -march=armv7-a
+endif #armv7l
+
+ifneq ($(findstring armv8,$(TARGET)),)
+   DFLAGS += -D__LINUX_ARM_ARCH__=8 -march=armv8-a
+endif #armv8
+
+IFLAGS=
+IFLAGS   += -isystem$(LINUXDIR)/include
+ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),3.7.0),TRUE)
+  IFLAGS   += -isystem$(LINUXDIR)/include/uapi
+  IFLAGS   += -isystem$(LINUXDIR)/include/generated/uapi
+endif
+
+ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6.25),TRUE)
+  LINUXDIR_INC_BASE = $(LINUXDIR)/arch/$(WLARCH)
+else
+  LINUXDIR_INC_BASE = $(LINUXDIR)
+endif
+IFLAGS += -isystem$(LINUXDIR_INC_BASE)/include
+IFLAGS += -isystem$(LINUXDIR_INC_BASE)/include/generated
+ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),3.7.0),TRUE)
+  IFLAGS += -isystem$(LINUXDIR_INC_BASE)/include/uapi
+  IFLAGS += -isystem$(LINUXDIR_INC_BASE)/include/generated/uapi
+endif
+ifeq ($(STBLINUX),1)
+  IFLAGS += -isystem$(LINUXDIR_INC_BASE)/include/asm/mach-brcmstb
+  IFLAGS += -isystem$(LINUXDIR_INC_BASE)/include/asm/mach-generic
+else
+  IFLAGS += -isystem$(LINUXDIR)/include/asm-$(WLARCH)/mach-default
+  IFLAGS += -isystem$(LINUXDIR_INC_BASE)/include/asm/mach-default
+endif
+ifneq ($(findstring android,$(TARGET)),)
+  IFLAGS += -isystem$(LINUXSRC)/include
+  IFLAGS += -isystem$(LINUXSRC)/arch/$(WLARCH)/include
+  IFLAGS += -isystem$(LINUXSRC)/arch/$(WLARCH)/include/generated
+  ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),3.7.0),TRUE)
+    IFLAGS += -isystem$(LINUXSRC)/include/uapi
+    IFLAGS += -isystem$(LINUXSRC)/include/generated/uapi
+    IFLAGS += -isystem$(LINUXSRC)/arch/$(WLARCH)/include/uapi
+    IFLAGS += -isystem$(LINUXSRC)/arch/$(WLARCH)/include/generated/uapi
+  endif
+endif # android 
+IFLAGS   += -I.
+
+IFLAGS   += $(WLAN_ComponentIncPathA)
+IFLAGS   += $(WLAN_IncPathA)
+IFLAGS   += -I$(WLAN_SrcBaseA)/shared/zlib
+############################################################
+# BCM7271 SPECIFICS
+############################################################
+ifneq ($(findstring stb7271,$(TARGET)),)
+	WLAN_EmuSrc=$(WLAN_SrcBaseA)/tools/7271emu
+	IFLAGS   += -I$(WLAN_EmuSrc)
+endif
+
+############################################################
+# Check if the dongle image is embedded
+############################################################
+
+ifeq ($(BCMEMBEDIMAGE),1)
+	DNGL_IMAGE_NAME ?=
+	DNGL_IMAGE_PATH := $(WLAN_SrcBaseA)/dongle/rte/wl/builds/$(DNGL_IMAGE_NAME)
+	DFLAGS += -DBCMEMBEDIMAGE=\"$(DNGL_IMAGE_PATH)/rtecdc.h\"
+endif
+
+# List of firmwares that can be embedded into linux high driver
+  # External/release images
+  EMBED_IMAGE_43236b=43236b-bmac/ag-nodis
+
+
+# Actual list of firmwares to embed into high driver
+# NOTE: Top-level release makefile may supply list of embeddable firmwares
+# NOTE: So update build release makefile in src/tools/release when you update
+# NOTE: following list
+ifndef EMBED_DONGLE_IMAGES
+  ifeq ($(findstring highsdio,$(TARGET)),)
+  EMBED_DONGLE_IMAGES += $(EMBED_IMAGE_43236b)
+  else
+	EMBED_DONGLE_IMAGES_SD :=
+  endif
+endif
+
+# For <tgt>-high-dnglimage target, embed a list of firmwares
+# Firmware image names come from wlconfig_lx_wl_dnglimage config file
+EMBED_DONGLE_CHIPREVS=$(foreach img,$(EMBED_DONGLE_IMAGES),$(subst -bmac,,$(word 1,$(subst /,$(space),$(img)))))
+ifneq ($(findstring high,$(TARGET)),)
+  ifneq ($(findstring dnglimage,$(TARGET)),)
+    CFLAGS += -DBCM_DNGL_EMBEDIMAGE
+    IFLAGS += -I$(shell pwd)
+
+    ifneq ($(findstring highsdio,$(TARGET)),)
+      override EMBED_DONGLE_IMAGES =  $(EMBED_DONGLE_IMAGES_SD)
+    endif
+
+    # Developer can override like on windows side, by specifying
+    ifdef FIRMWARE
+      override EMBED_DONGLE_IMAGES = $(FIRMWARE)
+    endif # FIRMWARE
+
+    CFLAGS += $(EMBED_DONGLE_CHIPREVS:%=-DEMBED_IMAGE_%)
+    IFLAGS += $(EMBED_DONGLE_IMAGES:%=-I$(WLAN_SrcBaseA)/dongle/rte/wl/builds/%)
+  endif # dnglimage
+endif # high
+
+#disabled# # Kernel starting from fc15 need a gcc 4.6.+ compiler that is more stricter
+#disabled# # and doesn't allow warnings pass compilation step.
+#disabled# # Development group requested that fixing FC15+ warnings takes few weeks
+#disabled# # hence for now suppress those warnings, but do NOT let them linger for too
+#disabled# # long as this may mask real sloppy compilation mistakes.
+#disabled# # WARN: Intentionally masking errors only until 2.6.40.x
+
+#disabled# ifeq ($(filter arm% mips%,$(TARGETARCH))$(filter arm% mips%,$(ARCH)),)
+#disabled#   ifneq ($(filter 2.6.38% 2.6.39% 2.6.40%,$(LINUXVER)),)
+#disabled#     WFLAGS += -Wno-unused-but-set-variable
+#disabled#     WFLAGS += -Wno-unused-but-set-parameter
+#disabled#     WFLAGS += -Wframe-larger-than=1024
+#disabled#     WFLAGS += -maccumulate-outgoing-args
+#disabled#   endif # LINUXVER
+#disabled# endif # TARGETARCH
+
+# Use -Wmissing-prototypes,
+# except for Linux 2.4.20-8 which had a warning in <fs.h>
+# except for Linux 2.4.21-40 which had a warning in <quota.h>
+# except for Linux 2.6.11-1 which had a warning in <div64.h>
+NO_MISSING_PROTOTYPES_LINUXVER_PATTERNS :=
+NO_MISSING_PROTOTYPES_LINUXVER_PATTERNS += 2.4.20-%
+NO_MISSING_PROTOTYPES_LINUXVER_PATTERNS += 2.4.21-%
+NO_MISSING_PROTOTYPES_LINUXVER_PATTERNS += 2.6.9-%
+NO_MISSING_PROTOTYPES_LINUXVER_PATTERNS += 2.6.11-%
+
+LDFLAGS := -r
+MODULES := wl.o
+ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6),TRUE)
+  # Kernel module names in 2.6 kernel have .ko suffix
+  KMODULES:=wl.ko
+  ifneq ($(findstring nintendo,$(TARGET)),)
+    KMODULES := wlpci.ko
+    ifneq ($(findstring nintendo-sdio,$(TARGET)),)
+      KMODULES := wlsdio.ko
+    endif
+    ifneq ($(findstring high,$(TARGET)),)
+      KMODULES := wl.ko
+    endif
+  else
+    KMODULES := wl.ko
+  endif
+else # KERNEL < 2.6
+  KMODULES:=$(MODULES)
+endif # KERNEL
+
+# some helpful variables
+WLCFGDIR        ?= $(WLAN_SrcBaseA)/wl/config
+WLCFG_PREFIX    ?= wlconfig_lx_wl_
+WLTUNEFILE      ?= wltunable_sample.h
+
+UPDATESH        := bash $(WLCFGDIR)/diffupdate.sh
+
+WLCONF_DEF_FILE := $(WLCFGDIR)/wlconfig_lx_wl_feature
+WLCONFFILE      := wlcfg-obj
+
+
+########################################################
+# Generate TARGETS if needed (first pass), else set
+# TARGET to current TARGETS element and start build
+# process with objdir (second pass).
+#
+# NOTE: #ifdef and #endif are mogrification if blocks
+# NOTE: ifdef/ifeq/ifneq and endif (without '#') are
+#       makefile if blocks
+########################################################
+
+# Target portions recognized by make: arch and debug
+ARCHES := native mipsel mipseb arm
+
+DEBUGS := debug nodebug
+
+###########################################################
+# (TARGET) specified, determine OBJDIR and WLCONFS
+###########################################################
+
+# Directory name includes target
+OBJDIR=$(ObjPfx)$(TARGET)-$(LINUXVER)
+
+# Split apart make and config stuff
+INMAKE:= $(filter $(DEBUGS) $(ARCHES),$(subst -,$(space),$(TARGET)))
+WLCONFS:=$(filter-out $(INMAKE),$(subst -,$(space),$(TARGET)))
+
+############################################################
+# In the objdir, actual building takes place.  Set the
+# required variables by setting basic options, getting
+# more from the config file, and using wl.mk to map to
+# flags and files.  Some arch/debug stuff done here.
+############################################################
+
+ifeq ($(INOBJDIR),true)
+  # Set basic config options for Linux WL
+  WL=1
+  WLLX=1
+  WLLXIW=1
+  WLLXCFG80211=1
+  OSLLX=1
+
+####################################
+# To force one of the wireless APIs, specify
+# on the command line like so:
+# make stadef-debug API=WEXT
+# make stadef-debug API=CFG80211
+# make stadef-debug API=NONE
+####################################
+  ifneq ($(API),)
+    # API is specified on command ine
+    ifeq ($(API), CFG80211)
+      APICHOICE := FORCE_CFG80211
+      BCM_STA_CFG80211 := 1
+      $(info CFG80211 API specified in command line)
+    else
+      ifeq ($(API), WEXT)
+        APICHOICE := FORCE_WEXT
+        $(info Wireless Extension API specified in command line)
+      else
+        ifeq ($(API), NONE)
+          APICHOICE := FORCE_NONE
+          $(info NONE was API specified in command line)
+        else
+          $(error Unknown Wireless API type.  Must be CFG80211|WEXT|NONE or unspecified)
+        endif
+      endif
+    endif
+  else
+    # No API was specified on command line, figure it out
+    ifeq ($(findstring pcoem,$(TARGET)),)
+      #ifndef BCM_STA_CFG80211
+        # cfg80211 only supported in hybrid and -cfg80211 target, everything else get wext
+	APICHOICE := FORCE_WEXT
+        $(info Non hybrid build: Forcing WEXT)
+      #endif
+    else
+      $(info Hybrid build: Autosense WEXT/CFG80211)
+      ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6.32),TRUE)
+        # if (kernel > 2.6.32) then eligible to use cfg80211
+        APICHOICE := PREFER_CFG80211
+        $(info CFG80211 API is preferred for this kernel version)
+      else
+        ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6.17),TRUE)
+          APICHOICE := PREFER_WEXT
+          $(info Wireless Extension API is preferred for this kernel version)
+        else
+          APICHOICE := FORCE_WEXT
+          $(info Wireless Extension is the only possible API for this kernel version)
+        endif
+      endif
+    endif
+  endif
+
+  export APICHOICE
+
+  ifneq ($(filter debug,$(INMAKE)),)
+    DEBUG=1
+    BCMDBG_MEM=1
+    #BCMDBG_PKT=1
+  endif
+  ifeq ($(filter mipsel,$(INMAKE)),)
+    WLLXNOMIPSEL=1
+  endif
+
+  # Get remaining WL config, set flags and files
+  include $(WLCONFFILE)
+  include $(WLCFGDIR)/wl.mk
+
+  ifeq ($(WLFILES),)
+    $(error WLFILES is not defined. Check WLCONFFILE=$(WLCONFFILE))
+  endif
+
+  # The wireless API was chosen prior to including the config files.  Now
+  # that they have been read, disable API if they were explicitly excluded in config.
+  # NOTE: Since cfg80211 is new and not mentioned in cfg files yet, this excludes both WEXT
+  # and CFG80211 even though only WEXT was disabled.
+  ifeq ($(WLLXIW),0)
+    APICHOICE := FORCE_NONE
+    export APICHOICE
+    $(info After importing config, WLLXIW is 0, so forcing no API)
+  endif
+
+  ifeq ($(BCMJTAG),1)
+    WLTUNEFILE = wltunable_jtag.h
+  endif
+
+# For BCMDBUS feature WL_FW_DECOMP
+  ifeq ($(BCMDBUS),1)
+    IFLAGS   += -I$(WLAN_SrcBaseA)/shared/zlib
+  endif
+
+  # Remove duplicate filenames, pick up flags
+  CFILES := $(sort $(WLFILES))
+  # For all WLFILES that are not part of CXO datapath, use the regular WLFLAGS
+  $(filter-out $(WLFILES_CXO_DATA),$(WLFILES)): DFLAGS += $(WLFLAGS)
+  # For CXO datapath related files, use WLFLAGS_CXO_DATA instead
+  # Note: in a cxo_full build, different objects will be built with different compiler flags!
+  $(WLFILES_CXO_DATA): DFLAGS += $(WLFLAGS_CXO_DATA)
+  # Export per-object flags to kernel makefiles for the module build using the same logic
+  $(foreach obj,$(filter-out $(WLFILES_CXO_DATA),$(WLFILES)),$(eval export CFLAGS_$(basename $(obj)).o := $$(WLFLAGS)))
+  $(foreach obj,$(WLFILES_CXO_DATA),$(eval export CFLAGS_$(basename $(obj)).o := $$(WLFLAGS_CXO_DATA)))
+
+  # Set some arch-specific definitions
+  ifneq ($(filter mipsel,$(INMAKE)),)
+    CROSS_COMPILE := mipsel-linux-
+    ifneq ($(wildcard $(WLAN_SrcBaseA)/linux/linux),)
+      # TODO: Need to investigate who needs these overrides
+      # It doesn't seem like a good idea to use a dir iff it exists.
+      # Reset LINUXDIR and LINUXVER for cross builds
+      LINUXDIR := $(WLAN_SrcBaseA)/linux/linux
+      LINUXVER := $(shell $(MAKE) --no-print-directory -s -C $(LINUXDIR) script 'SCRIPT=@echo $$(KERNELRELEASE)')
+    endif
+  else
+    ifneq ($(filter mipseb,$(INMAKE)),)
+      CROSS_COMPILE ?= mips-linux-
+      DFLAGS += -DIL_BIGENDIAN
+      ifneq ($(filter nodebug,$(INMAKE)),)
+        LDFLAGS += -S
+      endif
+    endif
+    ifneq ($(filter arm,$(INMAKE)),)
+      CROSS_COMPILE ?= armeb-linux-
+      DFLAGS += -DIL_BIGENDIAN
+      ifneq ($(filter nodebug,$(INMAKE)),)
+        LDFLAGS += -S
+      endif
+    endif
+  endif
+
+  # CROSS_COMPILE was decided by arch
+  CC := $(CROSS_COMPILE)gcc
+  LD := $(CROSS_COMPILE)ld
+  NM := $(CROSS_COMPILE)nm
+  OBJCOPY := $(CROSS_COMPILE)objcopy
+  STRIP   := $(CROSS_COMPILE)strip
+
+# GCC warnings
+STRICT_GCC_WARNINGS := -Wall -Werror -Wpointer-arith -Wswitch -Wshadow -Wclobbered \
+	-Wmissing-parameter-type -Wold-style-declaration -Woverride-init -Wtype-limits \
+	-Wstrict-prototypes
+# certain linux kernel files aren't missing-prototypes warning clean
+ifeq (,$(filter $(NO_MISSING_PROTOTYPES_LINUXVER_PATTERNS),$(LINUXVER)))
+  STRICT_GCC_WARNINGS += -Wmissing-prototypes
+endif
+# GCC warnings are enabled conditionally only for newer GCC versions.
+# STRICT_GCC_WARNINGS C flag is defined only for these warnings in case
+# #pragma used to disable these warnings in C code in extreme cases is not
+# allowed inside functions by the GCC versions.
+ifeq ($(call wlan_version_ge,$(shell $(CC) -dumpversion),4.5),TRUE)
+# disable these warnings on (BCG STB) target - it uses
+# outdated 4.5.4 version of gcc which can't handle them.
+ifeq ($(findstring stbgcc-4.5.4,$(CROSS_COMPILE)),)
+  DFLAGS += -DSTRICT_GCC_WARNINGS
+# The generated file wl.mod.c on ARM target is missing initializers
+# hence turn off missing-field-initializers warning.
+ifneq ($(WLARCH),arm)
+  STRICT_GCC_WARNINGS += -Wmissing-field-initializers
+endif
+  #STRICT_GCC_WARNINGS += -Wcast-qual
+endif
+endif
+
+# GCC warning exceptions
+STRICT_GCC_WARNINGS_EXCEPTIONS := -Wno-main -Wno-format-zero-length -Wno-attributes \
+	-Wno-unused-parameter -Wno-strict-aliasing
+# date-time error flags introduced in gcc 4.9
+ifeq ($(call wlan_version_ge,$(shell $(CC) -dumpversion),4.9),TRUE)
+  STRICT_GCC_WARNINGS_EXCEPTIONS += -Wno-date-time
+endif
+
+WFLAGS += $(STRICT_GCC_WARNINGS) $(STRICT_GCC_WARNINGS_EXCEPTIONS)
+
+  OFILES := $(CFILES:.c=.o) $(WLFILES_O)
+  # Add our custom CFLAGS
+  CFLAGS += $(DFLAGS) $(IFLAGS) $(WFLAGS) $(MY_C_DEFINES)
+
+  # Divine CFLAGS from kernel source
+  ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6),TRUE)
+    # the kernel will compile the module itself. So the flags are defined,
+    # except for __KERNEL__ !
+    ifeq ($(findstring wluser,$(TARGET)),)
+      CFLAGS += -D__KERNEL__
+    endif
+    export WLOFILES := $(OFILES)
+  else # KERNEL < 2.6
+    CFLAGS += $(shell $(MAKE) --no-print-directory -s -C $(LINUXDIR) script BCMINTERNAL= 'SCRIPT=@echo $$(CFLAGS) $$(MODFLAGS) $$(NOSTDINC_FLAGS)')
+  endif # KERNEL
+
+endif # INOBJDIR==true
+
+############################################################
+# Check if the dongle image is embedded
+############################################################
+
+ifeq ($(BCM_DNGL_EMBEDIMAGE),1)
+	ifeq ($(EMBED_IMAGE_43236),1)
+		DNGL_IMAGE_NAME := 43236-bmac/ag-nodis
+	endif
+	DNGL_IMAGE_PATH := $(WLAN_SrcBaseA)/dongle/rte/wl/builds/$(DNGL_IMAGE_NAME)
+	IFLAGS += -I$(shell pwd)
+	IFLAGS += -I$(DNGL_IMAGE_PATH)
+endif
+
+# parameter override for SKUs such as media dslcpe etc
+ifneq ($(RPC_RETURN_WAIT_TIMEOUT_MSEC),)
+	DFLAGS += -DRPC_RETURN_WAIT_TIMEOUT_MSEC=$(RPC_RETURN_WAIT_TIMEOUT_MSEC)
+endif
+ifneq ($(BRCM_WLAN_IFNAME),)
+	DFLAGS += -DBRCM_WLAN_IFNAME=$(BRCM_WLAN_IFNAME)
+endif
+ifneq ($(EXTENDED_VID_PID),)
+	DFLAGS += -DEXTENDED_VID_PID='$(EXTENDED_VID_PID)'
+endif
+ifeq ($(USB_TRIGGER_DEBUG),1)
+	DFLAGS += -DUSB_TRIGGER_DEBUG
+endif
+ifeq ($(DISABLE_HT_RATE_FOR_WEP_TKIP),1)
+	DFLAGS += -DDISABLE_HT_RATE_FOR_WEP_TKIP
+endif
+ifeq ($(AP_KEEP_ALIVE),1)
+	DFLAGS += -DAP_KEEP_ALIVE
+endif
+ifneq ($(AP_KEEP_ALIVE_INTERVAL),)
+	DFLAGS += -DAP_KEEP_ALIVE_INTERVAL=$(AP_KEEP_ALIVE_INTERVAL)
+endif
+ifeq ($(DEFAULT_EAPVER_AP),1)
+	DFLAGS += -DDEFAULT_EAPVER_AP
+endif
+ifeq ($(USB_DISABLE_INT_EP),1)
+	DFLAGS += -DUSB_DISABLE_INT_EP
+endif
+
+ifeq ($(BCM_STA_CFG80211),1)
+	DFLAGS += -DWLP2P
+	DFLAGS += -DUSE_CFG80211
+	DFLAGS += -DWL_CFG80211_STA_EVENT
+	DFLAGS += -DWL_CFG80211_GON_COLLISION
+	DFLAGS += -DWL_CFG80211
+	DFLAGS += -DWL_CFG80211_SYNC_GON
+	DFLAGS += -DVSDB
+
+	# WL_ENABLE_P2P_IF and WL_CFG80211_P2P_DEV_IF are mutually exclusive.
+	# Define WL_CFG80211_P2P_DEV_IF if kernel version is greater than 3.8.0
+	ifeq ($(call KERNEL_GE,3.8.0),TRUE)
+		DFLAGS += -DWL_CFG80211_P2P_DEV_IF
+	else
+		DFLAGS += -DWL_ENABLE_P2P_IF
+	endif
+	ifeq ($(BCM_ANDROID),1)
+		DFLAGS += -DOEM_ANDROID
+	endif
+	#	DFLAGS += -DP2PONEINT
+endif
+
+########################################################
+# TARGET is one of completed $(TARGETS)
+########################################################
+
+$(TARGETS):
+	+$(MAKE) TARGET=$@ objdir
+
+objdir:
+	@echo "Making objdir: TARGET=$(TARGET), level $(MAKELEVEL) kernel $(BCM_KVERSIONSTRING)"
+	install -d $(OBJDIR)
+	# Generate WL config file from WLCONFS tokens
+	cat $(foreach config,$(WLCONFS),$(WLCFGDIR)/$(WLCFG_PREFIX)$(config)) > \
+		$(OBJDIR)/$(WLCONFFILE)
+ifdef BCM_EXTERNAL_MODULE_REQUIRED
+	# Start building external modules
+	+$(MAKE) -r $(MAKEJOBS) -C $(OBJDIR) -f $(WLAN_SrcBaseA)/wl/linux/Makefile \
+		INOBJDIR=true ext_modules
+	cp $(WLAN_SrcBaseA)/linuxdev/obj-$(BCM_EXTERNAL_MODULE_NAME)-$(LINUXVER)-$(WLARCH)/Module.symvers $(OBJDIR)/Module.symvers.$(BCM_EXTERNAL_MODULE_NAME)
+	cp $(WLAN_SrcBaseA)/linuxdev/obj-$(BCM_EXTERNAL_MODULE_NAME)-$(LINUXVER)-$(WLARCH)/$(BCM_EXTERNAL_MODULE_NAME).ko $(OBJDIR)
+endif # BCM_EXTERNAL_MODULE_REQUIRED
+	  # kernel-mode driver target requested
+	  # Build dependencies
+	  +$(strip $(MAKE) -r $(MAKEJOBS) -C $(OBJDIR) -f $(WLAN_SrcBaseA)/wl/linux/Makefile INOBJDIR=true dep)
+	  # Build modules
+	  +$(strip $(MAKE) -r $(MAKEJOBS) -C $(OBJDIR) -f $(WLAN_SrcBaseA)/wl/linux/Makefile INOBJDIR=true modules)
+
+wlconf.h: $(WLCFGDIR)/$(WLTUNEFILE) force
+	[ ! -f $@ ] || chmod +w $@
+	@echo "check and update config file"
+	cp $< wltemp
+	$(UPDATESH) wltemp $@
+
+# Include makefile to build d11 shm files
+SRCBASE := $(WLAN_SrcBaseA)
+D11SHM_IFLAGS := $(IFLAGS)
+D11SHM_CFLAGS := $(DFLAGS) $(IFLAGS) $(WFLAGS)
+D11SHM_CFGFILE := $(SRCBASE)/wl/sys/wlc_cfg.h
+include $(WLAN_SrcBaseA)/makefiles/d11shm.mk
+
+# This is the flag set that gets passed to the Linux kernel makefiles.
+# Switch all WLAN -I paths from absolute to relative to keep command lines shorter.
+# Same with -isystem flags.
+ifeq ($(findstring android,$(TARGET)),)
+export WLCFLAGS := $(strip $(patsubst -I$(WLAN_TreeBaseA)/%,-I../../../../../%,\
+                           $(patsubst -isystem$(LINUXDIR)/%,-isystem./%,$(CFLAGS))) -I..)
+else
+    WLCFLAGS = $(CFLAGS) -I$(shell pwd)
+    export WLCFLAGS
+endif # android
+
+# These following targets are called by release makefile (linux-wl.mk)
+# These are intended to provide kernel info to a list of
+# wl-files and flags given a wl target
+
+# Show current $(TARGET) kernel info
+showkernel:
+	@echo "=== Current Linux Kernel Info ==="
+	@echo "LINUXVER=$(LINUXVER)"
+	@echo "LINUXDIR=$(LINUXDIR)"
+	@echo "BCM_KVERSIONSTRING=$(BCM_KVERSIONSTRING)"
+	@echo "BCM_KEXTRAVERSION=$(BCM_KEXTRAVERSION)"
+	@echo "================================="
+
+# Show current $(TARGET) wl flags and files
+showwlconf:
+	@echo "----- TARGET $(TARGET) FLAGS -----"; \
+	echo "* LINUXVER   = $(LINUXVER)";          \
+	echo "* LINUXDIR   = $(LINUXDIR)";          \
+	echo "* WLCONFS    = $(WLCONFS)";           \
+	echo "* WLTUNEFILE = $(WLTUNEFILE)";        \
+	echo "* WLFILES    = $(WLFILES)";           \
+	echo "* WLFLAGS    = $(WLFLAGS)";           \
+	echo "* WLCFLAGS   = $(WLCFLAGS)";          \
+	echo "----------------------------------"
+
+# Following targets act as API's to this makefile by release makefile
+# to get a list of wl files or flags given a custom target.
+showwlfiles:
+	@echo "$(WLFILES)"
+
+showwlfiles_src:
+	@echo "$(WLFILES_SRC)"
+
+showwlflags:
+	@echo "$(WLFLAGS)"
+
+# Show compiler version, for the current target build
+showenv:
+	@echo "CC = $(CC) (ver=`$(CC) -dumpversion`; host=`hostname`; processor=`uname -m`)"
+
+# Target to show embeddable firmware image names
+show_dongle_images:
+	@echo "$(EMBED_DONGLE_IMAGES)"
+
+# Target to show embeddable firmware chiprevs
+show_dongle_chiprevs:
+	@echo "$(EMBED_DONGLE_CHIPREVS)"
+
+ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6),TRUE)
+ext_modules:
+	@echo "Building external kernel module for $(BCM_KVERSIONSTRING)"
+	$(MAKE) -C $(WLAN_SrcBaseR)/linuxdev \
+		$(if $(CROSS_COMPILE),CROSS_COMPILE=$(CROSS_COMPILE)) \
+		$(if $(GCCVER),GCCVER=$(GCCVER)) \
+		LINUXVER=$(LINUXVER) TARGETARCH=$(WLARCH) \
+		DFLAGS_IN="$(DFLAGS) $(CFLAGS_EMBED_IMAGE)" \
+		WFLAGS_IN="$(WFLAGS)" \
+		IFLAGS_IN="$(IFLAGS_EMBED_IMAGE)"
+
+ifneq ($(findstring android,$(TARGET)),)
+# Electric make (emake) has, or at least at one time had, a bug when tee-ing
+# to a file so we switch emake to regular make below.
+modules: $(OFILES)
+	test -r ./Makefile || ln -s $(WLAN_SrcBaseR)/wl/linux/makefile.26 ./Makefile
+	+$(strip { set -o pipefail 2>/dev/null ||:; }; \
+		$(if $(findstring emake,$(MAKE)),make,$(MAKE)) \
+		-r -C $(LINUXDIR) M=$(shell pwd) $(if $(VERBOSE),V=1) ARCH=$(WLARCH) \
+		$(WLAN_ShellDebugSHELL) \
+		KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) \
+		modules 2>&1 | tee ,BUILD_LOG)
+else
+# This directory is placed in <objdir> and contains symlinks to LINUXDIR.
+# Building in this link tree allows us to address our IP via relative paths
+# making command lines much shorter.
+$(LINUXLNK):
+	mkdir $@
+	ln -s $(wildcard $(LINUXDIR)/* $(LINUXDIR)/.[^.]*) $@
+
+# Electric make (emake) has, or at least at one time had, a bug when tee-ing
+# to a file so we switch emake to regular make below.
+modules: $(OFILES) | $(LINUXLNK)
+	test -r ./Makefile || ln -s $(WLAN_SrcBaseR)/wl/linux/makefile.26 ./Makefile
+	+$(strip { set -o pipefail 2>/dev/null ||:; }; \
+		$(if $(findstring emake,$(MAKE)),make,$(MAKE)) \
+		-r -C $(LINUXLNK) M=.. $(if $(VERBOSE),V=1) ARCH=$(WLARCH) \
+		$(WLAN_ShellDebugSHELL) \
+		KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) \
+		modules 2>&1 | tee ,BUILD_LOG)
+endif # android
+
+# For most module builds (except usermode and sdio), exit on
+# undefined symbols as driver will not be useable anyway
+ifeq ($(WLUMK),)
+	@if grep -i -q "\*\*\* Warning: .* undefined" ,BUILD_LOG; then \
+		echo >&2 "ERROR: "; \
+		echo >&2 "ERROR: Following unresolved symbols found"; \
+		echo >&2 "ERROR: This kernel module may not load on targets"; \
+		echo >&2 "======================================="; \
+		grep >&2 "\*\*\* Warning: .* undefined" ,BUILD_LOG; \
+		echo >&2 "======================================="; \
+		exit 1; \
+	fi
+endif # WLUMK
+	-$(STRIP) -g $(KMODULES)
+
+else # KERNEL < 2.6
+
+modules: $(MODULES)
+
+endif # KERNEL
+
+# Dependencies
+dep: showenv wlconf.h d11shm.h $(if $(SHOWWLCONF)$(VERBOSE),showwlconf)
+$(foreach file,$(CFILES),.$(file).depend): wlconf.h d11shm.h
+ifneq ($(findstring x86_64,$(LINUXPROC)),x86_64)
+dep: $(foreach file,$(CFILES),.$(file).depend)
+endif
+#dep: $(foreach file,$(CFILES),.$(file).preprocessor)
+
+# For dependencies, perform same CXO based filtering as for object files above.
+# For all WLFILES that are not part of CXO datapath, add the regular WLFLAGS
+$(patsubst %,.%.depend,$(filter-out $(WLFILES_CXO_DATA),$(WLFILES))): CFLAGS := $(strip $(patsubst -I$(WLAN_TreeBaseA)/%,-I../../../../%,$(CFLAGS) $(WLFLAGS)))
+# For CXO datapath related files, add WLFLAGS_CXO_DATA instead
+$(patsubst %,.%.depend,$(WLFILES_CXO_DATA)): CFLAGS := $(strip $(patsubst -I$(WLAN_TreeBaseA)/%,-I../../../../%,$(CFLAGS) $(WLFLAGS_CXO_DATA)))
+.%.c.depend: %.c
+	@echo "Making $@"
+	@$(CC) $(CFLAGS) -M $< > $@
+
+.%.c.preprocessor: %.c
+	$(CC) -E -C $(CFLAGS) $< > $@
+#	$(CC) -S $(CFLAGS) $<
+
+# Update the CLM database C code from XML inputs if present.
+CLM_TYPE := 43xx_pcoem
+$(call WLAN_GenClmCompilerRule,$(CURDIR),$(WLAN_SrcBaseR))
+
+vpath %.c $(addprefix $(WLAN_SrcBaseR)/,wl/linux \
+	   shared/nvram bcmsdio/sys $(if $(WL_FW_DECOMP),shared/zlib)) \
+	   $(WLAN_StdSrcDirsR) $(WLAN_ComponentSrcDirsR) $(WLAN_EmuSrc)
+
+ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6),TRUE)
+# When make is used from 2.6, vpath doesn't help so we need to link the files
+# unless they're generated.
+
+%.o: %.c
+	$(strip \
+	$(if $(filter-out $(GENERATED_SOURCES),$(<F)),test -r $(<F) || ln -s $< .) \
+	$(if $(findstring wluser,$(TARGET)), && $(CC) $(CFLAGS) -g -c -o $@ $(<F)))
+
+%.o: %.o_shipped
+	test -r ./$(<F) || ln -s $< .
+
+else # KERNEL < 2.6
+
+# THE module for Linux 2.4
+wl.o: $(OFILES)
+	$(LD) $(LDFLAGS) -o $@ $^
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+	@( \
+	echo 'ifneq ($$(CFLAGS),$(CFLAGS))' ; \
+	echo '$@: force' ; \
+	echo 'endif' ; \
+	) > .$*.c.flags
+
+endif # KERNEL
+
+force:
+
+-include $(wildcard .*.depend)
+-include $(wildcard .*.flags)
+
+.PHONY: native all objdir dep modules ext_modules clean force $(TARGETS:%=%-$(LINUXVER))
+.PHONY: default $(DEBUGS) $(ARCHES)
+
+endif # TARGETS

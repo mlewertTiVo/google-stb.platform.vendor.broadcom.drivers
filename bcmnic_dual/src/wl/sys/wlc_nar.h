@@ -41,4 +41,7 @@ extern void wlc_nar_dotxstatus(wlc_nar_info_t *, struct scb *scb, void *sdu, tx_
 extern struct pktq *wlc_nar_prec_pktq(wlc_info_t* wlc, struct scb* scb);
 #endif
 
+/** free all pkts asscoated with the given scb on the pktq for given precedences */
+void wlc_nar_flush_scb_pqueues(wlc_info_t *wlc, uint prec_bmp, struct pktq *pq1, struct scb *scb);
+
 #endif /* __WLC_NAR_H__ */

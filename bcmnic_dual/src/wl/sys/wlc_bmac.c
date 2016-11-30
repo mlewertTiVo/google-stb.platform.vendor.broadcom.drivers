@@ -12,7 +12,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc_bmac.c 601032 2015-11-20 07:04:23Z $
+ * $Id: wlc_bmac.c 658979 2016-09-12 06:09:32Z $
  */
 
 /**
@@ -164,6 +164,7 @@
 
 /* chip specific */
 #define SYNTHPU_DLY_LCNPHY_4336_US	400 	/* lcnphy 4336 synthpu_dly time in us */
+#define	SYNTHPU_DLY_NPHY_43217_US	1736	/* n phy 43217 synthpu_dly time in us */
 #if defined(PMU_OPT_REV6)
 #define SYNTHPU_DLY_ACPHY_4339_US	310 	/* acphy 4339 synthpu_dly time in us */
 #else
@@ -6230,6 +6231,8 @@ WLBANDINITFN(wlc_bmac_synthpu_dly)(wlc_hw_info_t *wlc_hw)
 		} else if (WLCISNPHY(wlc_hw->band)) {
 			v = NREV_GE(wlc_hw->band->phyrev, 3) ?
 				SYNTHPU_DLY_NPHY_US : SYNTHPU_DLY_BPHY_US;
+			if (CHIPID(wlc_hw->sih->chip) == BCM43217_CHIP_ID)
+				v = SYNTHPU_DLY_NPHY_43217_US;
 		} else if (WLCISHTPHY(wlc_hw->band)) {
 			v = SYNTHPU_DLY_HTPHY_US;
 		} else if (WLCISLCNPHY(wlc_hw->band)) {

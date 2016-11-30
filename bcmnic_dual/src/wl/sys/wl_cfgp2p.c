@@ -15,7 +15,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_cfgp2p.c 655991 2016-08-24 18:34:07Z $
+ * $Id: wl_cfgp2p.c 671000 2016-11-18 12:06:12Z $
  *
  */
 #include <typedefs.h>
@@ -2493,11 +2493,16 @@ static int wl_cfgp2p_if_open(struct net_device *net)
 static int wl_cfgp2p_if_stop(struct net_device *net)
 {
 	struct wireless_dev *wdev = net->ieee80211_ptr;
+#ifdef MULTI_CHIP
+	struct bcm_cfg80211 *cfg = BCMCFG_GET_PRIV(net);
+#else
+	struct bcm_cfg80211 *cfg = g_bcm_cfg;
+#endif
 
 	if (!wdev)
 		return -EINVAL;
 
-	wl_cfg80211_scan_stop(net);
+	wl_cfg80211_scan_stop(net, cfg);
 
 	wdev->wiphy->interface_modes = (wdev->wiphy->interface_modes)
 					& (~(BIT(NL80211_IFTYPE_P2P_CLIENT)|
@@ -2593,7 +2598,7 @@ wl_cfgp2p_stop_p2p_device(struct wiphy *wiphy, struct wireless_dev *wdev)
 
 	WL_TRACE(("Enter\n"));
 
-	ret = wl_cfg80211_scan_stop(wdev);
+	ret = wl_cfg80211_scan_stop(wdev, cfg);
 	if (unlikely(ret < 0)) {
 		CFGP2P_ERR(("P2P scan stop failed, ret=%d\n", ret));
 	}

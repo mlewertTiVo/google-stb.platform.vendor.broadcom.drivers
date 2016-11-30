@@ -14,7 +14,7 @@
 # WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 # OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 # CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-# $Id: wl.mk 655991 2016-08-24 18:34:07Z $
+# $Id: wl.mk 671000 2016-11-18 12:06:12Z $
 
 
 WLFLAGS += -DBCM943217ROUTER_ACI_SCANMORECH
@@ -615,6 +615,7 @@ ifeq ($(BCM_STA_CFG80211),1)
 	WLFILES_SRC_HI += src/wl/sys/wl_cfgp2p.c
 	WLFILES_SRC_HI += src/wl/sys/wldev_common.c
 	WLFILES_SRC_HI += src/wl/sys/wl_linux_mon.c
+	WLFLAGS += -DMULTI_CHIP
 endif
 
 #ifdef WLCFE
@@ -2431,6 +2432,21 @@ ifeq ($(ARMV7L),1)
 	ifeq ($(STBLINUX),1)
 		WLFLAGS += -DSTBLINUX
 		WLFLAGS += -DSTB
+		ifneq ($(BCM_SECURE_DMA),1)
+                        WLFLAGS += -DBCM47XX
+                endif
+		ifeq ($(BCM_SECURE_DMA),1)
+			WLFILES_SRC_LO += src/shared/stbutils.c
+		endif
+	endif
+endif
+
+# ARMV8A
+ifeq ($(ARMV8A),1)
+	ifeq ($(STBLINUX),1)
+		WLFLAGS += -DSTBLINUX
+		WLFLAGS += -DSTB
+		WLFLAGS += -DARMV8A
 		ifneq ($(BCM_SECURE_DMA),1)
                         WLFLAGS += -DBCM47XX
                 endif

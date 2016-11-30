@@ -1,0 +1,33 @@
+/*
+ * HTPHY BlueToothCoExistence control module interface (to other PHY modules).
+ *
+ * Broadcom Proprietary and Confidential. Copyright (C) 2016,
+ * All Rights Reserved.
+ * 
+ * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom;
+ * the contents of this file may not be disclosed to third parties, copied
+ * or duplicated in any form, in whole or in part, without the prior
+ * written permission of Broadcom.
+ *
+ *
+ * <<Broadcom-WL-IPTag/Proprietary:>>
+ *
+ * $Id: phy_ht_btcx.h 583048 2015-08-31 16:43:34Z jqliu $
+ */
+
+#ifndef _phy_ht_btcx_h_
+#define _phy_ht_btcx_h_
+
+#include <phy_api.h>
+#include <phy_ht.h>
+#include <phy_btcx.h>
+
+/* forward declaration */
+typedef struct phy_ht_btcx_info phy_ht_btcx_info_t;
+
+/* register/unregister HTPHY specific implementations to/from common */
+phy_ht_btcx_info_t *phy_ht_btcx_register_impl(phy_info_t *pi,
+	phy_ht_info_t *hti, phy_btcx_info_t *btcxi);
+void phy_ht_btcx_unregister_impl(phy_ht_btcx_info_t *info);
+
+#endif /* _phy_ht_btcx_h_ */

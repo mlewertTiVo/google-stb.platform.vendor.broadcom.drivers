@@ -10,7 +10,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc_phy_ac.c 642614 2016-06-09 10:07:38Z $
+ * $Id: wlc_phy_ac.c 658606 2016-09-08 17:21:58Z $
  */
 
 #include <wlc_cfg.h>
@@ -11862,6 +11862,8 @@ wlc_phy_farrow_setup_acphy(phy_info_t *pi, chanspec_t chanspec)
 				resamp_set = resamp_4360fcc_2457m;
 			else if (fc == 2462)
 				resamp_set = resamp_4360fcc_2462m;
+		} else {
+			MOD_PHYREG(pi, AfeClkDivOverrideCtrl, afediv_sel_div_ovr, 0x0);
 		}
 
 		if (resamp_set != NULL) {

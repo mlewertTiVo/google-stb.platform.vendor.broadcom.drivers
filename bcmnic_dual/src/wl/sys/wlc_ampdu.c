@@ -10,7 +10,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc_ampdu.c 641787 2016-06-06 09:07:54Z $
+ * $Id: wlc_ampdu.c 668446 2016-11-03 09:00:38Z $
  */
 
 /**
@@ -7113,6 +7113,9 @@ wlc_ampdu_dotxstatus_aqm_complete(ampdu_tx_info_t *ampdu_tx, struct scb *scb,
 	const bool pps_retry = FALSE;
 #endif
 	const bool cs_retry = wlc_ampdu_cs_retry(ampdu_tx, txs);
+#ifdef WLCNT
+	struct dot11_header *h;
+#endif
 #if defined(BCMDBG_AMPDU)
 #ifdef WL11AC
 	uint8 vht[D11AC_MFBR_NUM];
@@ -7459,6 +7462,18 @@ wlc_ampdu_dotxstatus_aqm_complete(ampdu_tx_info_t *ampdu_tx, struct scb *scb,
 			SCB_BS_DATA_CONDADD(bs_data_counters, throughput, prec_pktlen);
 #endif
 
+#ifdef WLCNT
+			h = (struct dot11_header *)(txh_info->d11HdrPtr);
+
+			if (bsscfg && bsscfg->BSS && BSSCFG_STA(bsscfg) && ETHER_ISMULTI(&h->a3)) {
+				if (ETHER_ISBCAST(&h->a3)) {
+					WLCNTINCR(wlc->pub->_cnt->txbcast);
+				} else {
+					WLCNTINCR(wlc->pub->_cnt->txmulti);
+					WLCIFCNTINCR(scb, txmulti);
+				}
+			}
+#endif
 			/* call any matching pkt callbacks */
 			wlc_pcb_fn_invoke(wlc->pcb, p, TX_STATUS_ACK_RCV);
 
@@ -8389,6 +8404,17 @@ wlc_ampdu_dotxstatus_complete(ampdu_tx_info_t *ampdu_tx, struct scb *scb, void *
 				WLCNTCONDADD(actq_cnt, actq_cnt->throughput, prec_pktlen);
 				SCB_BS_DATA_CONDADD(bs_data_counters, throughput, prec_pktlen);
 #endif /* PKTQ_LOG */
+#ifdef WLCNT
+				if (bsscfg && bsscfg->BSS && BSSCFG_STA(bsscfg) &&
+				    ETHER_ISMULTI(&h->a3)) {
+					if (ETHER_ISBCAST(&h->a3)) {
+						WLCNTINCR(wlc->pub->_cnt->txbcast);
+					} else {
+						WLCNTINCR(wlc->pub->_cnt->txmulti);
+						WLCIFCNTINCR(scb, txmulti);
+					}
+				}
+#endif
 				suc_mpdu++;
 			}
 		}

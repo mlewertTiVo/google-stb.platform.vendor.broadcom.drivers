@@ -9,7 +9,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlu.c 636417 2016-05-09 12:03:55Z $
+ * $Id: wlu.c 662470 2016-09-29 14:18:21Z $
  */
 
 
@@ -17852,13 +17852,13 @@ wl_interfere(void *wl, cmd_t *cmd, char **argv)
 							ACPHY_ACI_W2NB_PKTGAINLMT);
 				if (mode & ACPHY_ACI_PREEMPTION)
 					printf("\tbit-mask %d:  Preemption is enabled\n",
-							ACPHY_ACI_PREEMPTION);
+						ACPHY_ACI_PREEMPTION);
 				if (mode & ACPHY_HWACI_MITIGATION)
 					printf("\tbit-mask %d: HW ACI Detection + Mitigation\n",
-							ACPHY_HWACI_MITIGATION);
+						ACPHY_HWACI_MITIGATION);
 				if (mode & ACPHY_LPD_PREEMPTION)
 					printf("\tbit-mask %d: Low Power Detect Preemption\n",
-							ACPHY_LPD_PREEMPTION);
+						ACPHY_LPD_PREEMPTION);
 			}
 			printf("\n");
 		} else {
@@ -17982,13 +17982,13 @@ wl_interfere_override(void *wl, cmd_t *cmd, char **argv)
 							ACPHY_ACI_W2NB_PKTGAINLMT);
 				if (mode & ACPHY_ACI_PREEMPTION)
 					printf("\tbit-mask %d:  Preemption is enabled\n",
-							ACPHY_ACI_PREEMPTION);
+						ACPHY_ACI_PREEMPTION);
 				if (mode & ACPHY_HWACI_MITIGATION)
 					printf("\tbit-mask %d: HW ACI Detection + Mitigation\n",
-							ACPHY_HWACI_MITIGATION);
+						ACPHY_HWACI_MITIGATION);
 				if (mode & ACPHY_LPD_PREEMPTION)
 					printf("\tbit-mask %d: Low Power Detect Preemption\n",
-							ACPHY_LPD_PREEMPTION);
+						ACPHY_LPD_PREEMPTION);
 			}
 			printf("\n");
 		} else {
@@ -23447,21 +23447,21 @@ wl_counters(void *wl, cmd_t *cmd, char **argv)
 	PRVAL(txframe); PRVAL(txbyte); PRVAL(txretrans); PRVAL(txerror);
 	PRVAL(rxframe); PRVAL(rxbyte); PRVAL(rxerror); PRNL();
 
-	PRVAL(txprshort); PRVAL(txdmawar); PRVAL(txnobuf); PRVAL(txnoassoc);
+	PRVAL(txdropped); PRVAL(txprshort); PRVAL(txdmawar); PRVAL(txnobuf); PRVAL(txnoassoc);
 	PRVAL(txchit); PRVAL(txcmiss); PRNL();
 
 	PRVAL(reset); PRVAL(txserr); PRVAL(txphyerr); PRVAL(txphycrs);
 	PRVAL(txfail); PRVAL(tbtt); PRNL();
 
-	pbuf += sprintf(pbuf, "d11_txfrag %u d11_txmulti %u d11_txretry %u d11_txretrie %u\n",
-		dtoh32(cnt->txfrag), dtoh32(cnt->txmulti), dtoh32(cnt->txretry),
-		dtoh32(cnt->txretrie));
+	pbuf += sprintf(pbuf, "d11_txfrag %u d11_txmulti %u d11_txbcast %u d11_txretry %u"
+		" d11_txretrie %u\n", dtoh32(cnt->txfrag), dtoh32(cnt->txmulti),
+		 dtoh32(cnt->txbcast), dtoh32(cnt->txretry), dtoh32(cnt->txretrie));
 
 	pbuf += sprintf(pbuf, "d11_txrts %u d11_txnocts %u d11_txnoack %u d11_txfrmsnt %u\n",
 		dtoh32(cnt->txrts), dtoh32(cnt->txnocts), dtoh32(cnt->txnoack),
 		dtoh32(cnt->txfrmsnt));
 
-	PRVAL(rxcrc); PRVAL(rxnobuf); PRVAL(rxnondata); PRVAL(rxbadds);
+	PRVAL(rxdropped); PRVAL(rxcrc); PRVAL(rxnobuf); PRVAL(rxnondata); PRVAL(rxbadds);
 	PRVAL(rxbadcm); PRVAL(rxdup);
 	if (cnt->version == 7) {
 		if (cnt->length >= OFFSETOF(wl_cnt_t, dma_hang) + sizeof(uint32))
@@ -23476,8 +23476,9 @@ wl_counters(void *wl, cmd_t *cmd, char **argv)
 	PRVAL(rxrunt); PRVAL(rxgiant); PRVAL(rxnoscb); PRVAL(rxbadproto);
 	PRVAL(rxbadsrcmac); PRNL();
 
-	pbuf += sprintf(pbuf, "d11_rxfrag %u d11_rxmulti %u d11_rxundec %u\n",
-		dtoh32(cnt->rxfrag), dtoh32(cnt->rxmulti), dtoh32(cnt->rxundec));
+	pbuf += sprintf(pbuf, "d11_rxfrag %u d11_rxmulti %u d11_rxbcast %u d11_rxundec %u\n",
+		dtoh32(cnt->rxfrag), dtoh32(cnt->rxmulti), dtoh32(cnt->rxbcast),
+		dtoh32(cnt->rxundec));
 
 	PRVAL(rxctl); PRVAL(rxbadda); PRVAL(rxfilter); PRNL();
 

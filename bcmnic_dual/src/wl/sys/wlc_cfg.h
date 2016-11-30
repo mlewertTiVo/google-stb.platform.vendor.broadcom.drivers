@@ -10,7 +10,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc_cfg.h 615871 2016-01-29 02:47:53Z $
+ * $Id: wlc_cfg.h 669236 2016-11-08 14:29:19Z $
  */
 
 #ifndef _wlc_cfg_h_
@@ -118,19 +118,16 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #endif /* WLRXEXTHDROOM */
 
 /* **** Core type/rev defaults **** */
-#ifdef STBLINUX
+/*  To reduce the Linux NIC driver size which is around 15MB,
+ *  due to enabling all D11 cores.Linux allows all lodable
+ *  modules together size limits to 14MB.To avoid module load
+ *  prevention by linux, Enabling only 43217,43228,4360 and 4352
+ *  D11 for STB Linux
+ */
+#if defined(STBLINUX) && !defined(WLC_HIGH_ONLY)
 
-#if defined(STB_BCM4360) || defined(STB_BCM43217) || defined(STB_BCM43228)
-#define D11_DEFAULT	0x00000000
-#define D11_DEFAULT2	0x00000F00	/* Supported  D11 revs: 40-43 */
-#else
-#define D11_DEFAULT	0xffffffb0	/* Supported  D11 revs: 4, 5, 7-31 */
-#ifdef UNRELEASEDCHIP
-#define D11_DEFAULT2	0x000fffa7	/* Supported  D11 revs: 32-34, 37, 39, 40-51 */
-#else
-#define D11_DEFAULT2	0x0003ff27	/* Supported  D11 revs: 32-34, 37, 40-49 */
-#endif  /* UNRELEASEDCHIP */
-#endif /* defined(STB_BCM4360) || defined(STB_BCM43217) || defined(STB_BCM43228)  */
+#define D11_DEFAULT	0x40000000 /* Supported  D11 rev: 29 */
+#define D11_DEFAULT2	0x00000f00 /* Supported  D11 revs: 40-43 */
 
 #else
 
@@ -141,7 +138,7 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #define D11_DEFAULT2	0x0003ff27	/* Supported  D11 revs: 32-34, 37, 40-49 */
 #endif  /* UNRELEASEDCHIP */
 
-#endif /* STBLINUX */
+#endif /* defined(STBLINUX) && !defined(WLC_HIGH_ONLY) */
 /*
  * The supported PHYs are either specified explicitly in the wltunable_xxx.h file, or the
  * defaults are used.
@@ -162,6 +159,27 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 	 ** NCONF || HTCONF || ACONF || GCONF || LCN20CONF
 	 */
 #endif /* !PHYCONF_DEFAULTS */
+
+/*  To reduce the Linux NIC driver size which is around 15MB,
+ *  due to enabling all PHY cores.Linux allows all lodable
+ *  modules together size limits to 14MB.To avoid module load
+ *  prevention by linux, Enabling only 43217,43228,4360 and 4352
+ *  PHYs for STB Linux
+ */
+#if defined(STBLINUX) && !defined(WLC_HIGH_ONLY)
+
+#define APHY_DEFAULT	0
+#define GPHY_DEFAULT	0
+#define NPHY_DEFAULT	0x00020000	/* Supported for only 43228 and 43217 */
+#define HTPHY_DEFAULT	0
+#define LPPHY_DEFAULT	0
+#define SSLPNPHY_DEFAULT	0
+#define LCNPHY_DEFAULT	0
+#define LCN40PHY_DEFAULT	0
+#define LCN20PHY_DEFAULT	0
+#define ACPHY_DEFAULT	0x00000003       /* Supported for only 4360 and 4352 */
+
+#else
 
 #define APHY_DEFAULT	0x000001ec	/* Supported aphy revs:
 					 *	2	4306b0
@@ -285,6 +303,8 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 						 *	18	43602a1
 						 */
 #endif /* UNRELEASEDCHIP */
+
+#endif /* defined(STBLINUX) && !defined(WLC_HIGH_ONLY) */
 
 #define D11CONF1_BASE		0
 #define D11CONF2_BASE		32

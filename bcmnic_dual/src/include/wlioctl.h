@@ -19,7 +19,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wlioctl.h 655991 2016-08-24 18:34:07Z $
+ * $Id: wlioctl.h 662470 2016-09-29 14:18:21Z $
  */
 
 #ifndef _wlioctl_h_
@@ -2896,6 +2896,45 @@ typedef struct {
 				 * number of occasions that no valid delimiter is detected
 				 * by ampdu parser.
 				 */
+	uint32  rxmpdu_mu;      /**< Number of MU MPDUs received */
+
+	/* detailed control/management frames */
+	uint32  txbar;          /**< Number of TX BAR */
+	uint32  rxbar;          /**< Number of RX BAR */
+	uint32  txpspoll;       /**< Number of TX PS-poll */
+	uint32  rxpspoll;       /**< Number of RX PS-poll */
+	uint32  txnull;         /**< Number of TX NULL_DATA */
+	uint32  rxnull;         /**< Number of RX NULL_DATA */
+	uint32  txqosnull;      /**< Number of TX NULL_QoSDATA */
+	uint32  rxqosnull;      /**< Number of RX NULL_QoSDATA */
+	uint32  txassocreq;     /**< Number of TX ASSOC request */
+	uint32  rxassocreq;     /**< Number of RX ASSOC request */
+	uint32  txreassocreq;   /**< Number of TX REASSOC request */
+	uint32  rxreassocreq;   /**< Number of RX REASSOC request */
+	uint32  txdisassoc;     /**< Number of TX DISASSOC */
+	uint32  rxdisassoc;     /**< Number of RX DISASSOC */
+	uint32  txassocrsp;     /**< Number of TX ASSOC response */
+	uint32  rxassocrsp;     /**< Number of RX ASSOC response */
+	uint32  txreassocrsp;   /**< Number of TX REASSOC response */
+	uint32  rxreassocrsp;   /**< Number of RX REASSOC response */
+	uint32  txauth;         /**< Number of TX AUTH */
+	uint32  rxauth;         /**< Number of RX AUTH */
+	uint32  txdeauth;       /**< Number of TX DEAUTH */
+	uint32  rxdeauth;       /**< Number of RX DEAUTH */
+	uint32  txprobereq;     /**< Number of TX probe request */
+	uint32  rxprobereq;     /**< Number of RX probe request */
+	uint32  txprobersp;     /**< Number of TX probe response */
+	uint32  rxprobersp;     /**< Number of RX probe response */
+	uint32  txaction;       /**< Number of TX action frame */
+	uint32  rxaction;       /**< Number of RX action frame */
+	uint32  ampdu_wds;      /**< Number of AMPDU watchdogs */
+	uint32  txlost;         /**< Number of lost packets reported in txs */
+	uint32  txdatamcast;    /**< Number of TX multicast data packets */
+	uint32  txdatabcast;    /**< Number of TX broadcast data packets */
+	uint32  txbcast;        /* Broadcast TransmittedFrameCount */
+	uint32  txdropped;      /* tx dropped pkts */
+	uint32  rxbcast;        /* BroadcastReceivedFrameCount */
+	uint32  rxdropped;      /* rx dropped pkts (derived: sum of others) */
 } wl_cnt_t;
 
 #ifndef LINUX_POSTMOGRIFY_REMOVAL

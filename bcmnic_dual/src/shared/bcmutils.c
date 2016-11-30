@@ -14,7 +14,7 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- * $Id: bcmutils.c 503082 2014-09-17 06:36:56Z $
+ * $Id: bcmutils.c 665260 2016-10-17 07:38:06Z $
  */
 
 #ifndef __FreeBSD__
@@ -1353,6 +1353,80 @@ pktq_pdel(struct pktq *pq, void *pktbuf, int prec)
 	PKTSETLINK(pktbuf, NULL);
 	return TRUE;
 }
+
+
+static void
+_pktq_pfilter(struct pktq *pq, int prec, pktq_filter_t fltr, void* fltr_ctx,
+              defer_free_pkt_fn_t defer, void *defer_ctx)
+{
+	struct pktq_prec wq;
+	struct pktq_prec *q;
+	void *p;
+	uint enq_len = 0;
+
+	/* move the prec queue aside to a work queue */
+	q = &pq->q[prec];
+
+	wq = *q;
+
+	q->head = NULL;
+	q->tail = NULL;
+	q->len = 0;
+
+#ifdef WL_TXQ_STALL
+	q->dequeue_count += wq.len;
+#endif
+
+	/* start with the head of the work queue */
+	while ((p = wq.head) != NULL) {
+		/* unlink the current packet from the list */
+		wq.head = PKTLINK(p);
+		PKTSETLINK(p, NULL);
+		wq.len--;
+
+#ifdef WL_TXQ_STALL
+		wq.dequeue_count++;
+#endif
+
+		/* call the filter function on current packet */
+		ASSERT(fltr != NULL);
+		switch ((*fltr)(fltr_ctx, p)) {
+		case PKT_FILTER_NOACTION:
+			/* put this packet back */
+			pktq_penq(pq, prec, p);
+			break;
+
+		case PKT_FILTER_DELETE:
+			/* delete this packet */
+			ASSERT(defer != NULL);
+			(*defer)(defer_ctx, p);
+			enq_len++;
+			break;
+
+		case PKT_FILTER_REMOVE:
+			/* pkt already removed from list */
+			break;
+
+		default:
+			ASSERT(0);
+			break;
+		}
+	}
+
+	ASSERT(wq.len == 0);
+}
+
+
+void
+pktq_pfilter(struct pktq *pq, int prec, pktq_filter_t fltr, void* fltr_ctx,
+	defer_free_pkt_fn_t defer, void *defer_ctx, flush_free_pkt_fn_t flush, void *flush_ctx)
+{
+	_pktq_pfilter(pq, prec, fltr, fltr_ctx, defer, defer_ctx);
+
+	ASSERT(flush != NULL);
+	(*flush)(flush_ctx);
+}
+
 
 void
 pktq_init(struct pktq *pq, int num_prec, int max_len)

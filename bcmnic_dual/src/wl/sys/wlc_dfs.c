@@ -1698,7 +1698,7 @@ wlc_dfs_set_radar(wlc_dfs_info_t *dfs, int radar)
 		}
 
 		/* Can't do radar detect on non-radar channel */
-		if (wlc_radar_chanspec(wlc->cmi, wlc->home_chanspec) != TRUE) {
+		if (wlc_radar_chanspec(wlc->cmi, WLC_BAND_PI_RADIO_CHANSPEC) != TRUE) {
 			return BCME_BADCHAN;
 		}
 

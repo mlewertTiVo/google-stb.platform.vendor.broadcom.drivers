@@ -12,7 +12,7 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- * $Id: typedefs.h 452599 2014-01-31 07:25:38Z $
+ * $Id: typedefs.h 670799 2016-11-17 15:56:56Z $
  */
 
 #ifndef _TYPEDEFS_H_
@@ -63,7 +63,11 @@
 #if defined(__x86_64__)
 #define TYPEDEF_UINTPTR
 typedef unsigned long long int uintptr;
+#elif defined(ARMV8A)
+#define TYPEDEF_UINTPTR
+typedef unsigned long int uintptr;
 #endif
+
 
 
 

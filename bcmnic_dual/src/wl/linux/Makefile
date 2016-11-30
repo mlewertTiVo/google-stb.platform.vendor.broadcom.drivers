@@ -217,6 +217,10 @@ ifneq ($(findstring armv7l,$(TARGET)),)
    WLARCH = arm
 endif
 
+ifneq ($(findstring armv8,$(TARGET)),)
+	WLARCH = arm64
+endif
+
 # Derive LINUXVER from LINUXDIR
 MYKERNEL_RELEASE_KEYWORD:="KERNELRELEASE[[:space:]]*=.*kernel.release"
 MYKERNEL_DEFINITION:=$(if \
@@ -316,6 +320,10 @@ endif
 ifneq ($(findstring armv7l,$(TARGET)),)
 # Should add the arm arch version specific details
    DFLAGS += -D__LINUX_ARM_ARCH__=7 -march=armv7-a
+endif
+
+ifneq ($(findstring armv8,$(TARGET)),)
+	DFLAGS += -D__LINUX_ARM_ARCH__=8 -march=armv8-a
 endif
 
 IFLAGS=
@@ -839,7 +847,7 @@ modules: $(OFILES)
 # Electric emake will not be able to tee to a log file,
 # so do not update make to be $(MAKE) for kernelbuilds.
 	+{ set -o pipefail 2> /dev/null || true; }; \
-	$(strip make -r -C $(LINUX_OUT) M=$(shell pwd) $(if $(VERBOSE),V=1) \
+	$(strip make -r -C $(LINUX_OUT) M=$(shell pwd) $(if $(VERBOSE),V=1) ARCH=$(WLARCH) \
 		$(WLAN_ShellDebugSHELL) \
 		KBUILD_EXTRA_SYMBOLS=$(KBUILD_EXTRA_SYMBOLS) \
 		modules 2>&1 | tee ,BUILD_LOG)

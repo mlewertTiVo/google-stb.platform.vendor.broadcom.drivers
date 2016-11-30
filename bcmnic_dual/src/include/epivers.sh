@@ -57,7 +57,7 @@ else # epivers.h doesn't exist
 	fi
 
 	# Following SVNURL should be expanded on checkout
-	SVNURL='$HeadURL: svn://wlan-sj1-svn01.sj.broadcom.com/svn/wlansvn/proj/tags/BISON04T/BISON04T_REL_7_14_124_80/src/include/epivers.sh $'
+	SVNURL='$HeadURL: svn://wlan-sj1-svn01.sj.broadcom.com/svn/wlansvn/proj/tags/BISON04T/BISON04T_REL_7_14_124_86/src/include/epivers.sh $'
 
 	# .gclient_info is created by gclient checkout/sync steps
 	# and contains "DEPS='<deps-url1> <deps-url2> ..." entry

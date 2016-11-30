@@ -15,7 +15,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_android.c 655991 2016-08-24 18:34:07Z $
+ * $Id: wl_android.c 671000 2016-11-18 12:06:12Z $
  */
 
 #include <linuxver.h>
@@ -2434,7 +2434,7 @@ int wl_android_set_ibss_beacon_ouidata(struct net_device *dev, char *command, in
 	}
 	else {
 		/* do NOT free 'vndr_ie' for the next process */
-		wl_cfg80211_ibss_vsie_set_buffer(vndr_ie, tot_len);
+		wl_cfg80211_ibss_vsie_set_buffer(dev, vndr_ie, tot_len);
 	}
 
 	if (ioctl_buf) {

@@ -55,6 +55,16 @@ elif [ "${TARGETARCH}" == arm ]; then
 		echo "TARGETMACH==${TARGETMACH} undefined"
 		exit
 	fi
+elif [ "${TARGETARCH}" == arm64 ]; then
+	if [ "${TARGETMACH}" == arm ] ; then
+		export BUILDCFG=${BUILDCFG}-armv8
+	elif [ "${TARGETMACH}" == armeb ] ; then
+		export BUILDCFG=${BUILDCFG}-armeb
+	else
+		echo "TARGETARCH==${TARGETARCH}"
+		echo "TARGETMACH==${TARGETMACH} undefined"
+		exit
+	fi
 else
 	echo "TARGETARCH==${TARGETARCH}"
 	echo "TARGETMACH==${TARGETMACH} undefined"
@@ -74,15 +84,15 @@ sleep 3
 
 mkdir -p ${TARGETDIR}
 
-if [ ! -f ./main/src/include/epivers.h ]; then
-	cd ./main/src/include
+if [ ! -f ./src/include/epivers.h ]; then
+	cd ./src/include
 	make
 	cd -
 fi
 
 
-make -C ./main/src/wl/linux ${BUILDCFG} FIRMWARE="${FIRMWARE}"  LINUXVER=${LINUXVER} ${BUILDARG}
+make -C ./src/wl/linux ${BUILDCFG} FIRMWARE="${FIRMWARE}"  LINUXVER=${LINUXVER} ${BUILDARG}
 
-cp  -v ./main/src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}
-cp  -v ./main/src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}/${BUILDCFG}-wl.ko
+cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}
+cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}/${BUILDCFG}-wl.ko
 

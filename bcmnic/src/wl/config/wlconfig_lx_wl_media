@@ -1,0 +1,50 @@
+# Broadcom 802.11abg Networking Device Driver Configuration file for
+# Media group's wl/high driver delivery (for x86 or non-stblinux)
+#
+# Copyright (C) 2016, Broadcom. All Rights Reserved.
+# 
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+# SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
+# OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+# CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+#
+#
+# <<Broadcom-WL-IPTag/Open:>>
+#
+# $Id: wlconfig_lx_wl_media,v 1.19 2010-10-12 23:31:39 $
+#
+# src/wl/linux driver config file
+
+include $(WLCFGDIR)/wlconfig_lx_wl_apdef
+include $(WLCFGDIR)/wlconfig_lx_wl_stadef
+
+WLLXIW=0
+RPC_RETURN_WAIT_TIMEOUT_MSEC = 10000
+BRCM_WLAN_IFNAME=eth%d
+DISABLE_HT_RATE_FOR_WEP_TKIP=0
+DEFAULT_EAPVER_AP=1
+AP_KEEP_ALIVE=1
+AP_KEEP_ALIVE_INTERVAL=60
+USB_TRIGGER_DEBUG=0
+GTK_RESET=1
+USB_DISABLE_INT_EP=1
+EXTENDED_VID_PID={ USB_DEVICE(0x0846, 0x9011) }, \
+                 { USB_DEVICE(0x050d, 0xd321) }, \
+                 { USB_DEVICE(0x1eda, 0x0bdc) }, \
+                 { USB_DEVICE(0x043E, 0x3001) }
+SEQ_CMDS=0
+WOWL=1
+WL_WOWL_MEDIA=1
+WL_ASSOC_RECREATE=1
+
+#include $(WLCFGDIR)/wl.mk
+#all:
+#	@echo "WLFLAGS = $(WLFLAGS)"
+#	@echo "WLFILES = $(WLFILES)"

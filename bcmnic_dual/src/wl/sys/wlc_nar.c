@@ -504,6 +504,43 @@ wlc_nar_reset_release_state(nar_scb_cubby_t *cubby)
 #endif
 }
 
+/** free all pkts asscoated with the given scb on the pktq for given precedences */
+void
+wlc_nar_flush_scb_pqueues(wlc_info_t *wlc, uint prec_bmp, struct pktq *pq1, struct scb *scb)
+{
+	wlc_nar_info_t *nit = wlc->nar_handle;
+	nar_scb_cubby_t *cubby;
+	struct pktq *pq = NULL;
+	uint prec;
+	int prec_cnt = PKTQ_MAX_PREC-1;
+	uint packet_count = 0;
+
+	/* Get the packet queue for this scb */
+	cubby = SCB_NAR_CUBBY(nit, scb);
+	if (!cubby) {
+		return;
+	}
+	pq = &cubby->tx_queue;
+	packet_count = pq->len;
+
+	/* Loop over all precedences set in the bitmap, and flush the target prec */
+	while (prec_cnt >= 0) {
+		prec = (prec_bmp & (1 << prec_cnt));
+		if ((prec) && (!pktq_pempty(pq, prec_cnt))) {
+			WL_PRINT(("wl%d: filter %d packets of prec=%d for scb:0x%p\n",
+				wlc->pub->unit, pktq_plen(pq, prec_cnt), prec_cnt, scb));
+			pktq_pflush(wlc->osh, pq, prec_cnt, TRUE, NULL, 0);
+		}
+		prec_cnt--;
+	}
+
+	packet_count -= pq->len;
+	cubby->packets_in_queue -= packet_count;
+	cubby->packets_in_transit -= packet_count;
+	nit->packets_in_queue -= cubby->packets_in_queue;
+	nit->packets_in_transit -= cubby->packets_in_transit;
+}
+
 static void
 wlc_nar_flush_scb_queues(wlc_nar_info_t * nit, struct scb *scb)
 {
