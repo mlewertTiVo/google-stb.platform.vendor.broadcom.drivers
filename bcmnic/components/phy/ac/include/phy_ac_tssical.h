@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_tssical.h 647004 2016-07-01 15:56:22Z kriedte $
+ * $Id: phy_ac_tssical.h 657820 2016-09-02 18:26:33Z $
  */
 
 #ifndef _phy_ac_tssical_h_
@@ -45,19 +45,23 @@ extern void phy_ac_tssi_loopback_path_setup(phy_info_t *pi, uint8 for_iqcal);
 extern uint8 wlc_phy_ac_set_tssi_params_maj36(phy_info_t *pi);
 
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-extern int16 wlc_phy_test_tssi_acphy(phy_info_t *pi, int8 ctrl_type, int8 pwr_offs);
-extern int16 wlc_phy_test_idletssi_acphy(phy_info_t *pi, int8 ctrl_type);
-#endif /* BCMINTERNAL || WLTEST */
 
 #ifdef WLC_TXCAL
-extern uint16 wlc_phy_adjusted_tssi_acphy(phy_info_t *pi, uint8 core_num);
-extern uint8 wlc_phy_apply_pwr_tssi_tble_chan_acphy(phy_info_t *pi);
-#endif	/* WLC_TXCAL */
+uint16 wlc_phy_adjusted_tssi_acphy(phy_info_t *pi, uint8 core_num);
+uint8 wlc_phy_set_olpc_anchor_acphy(phy_info_t *pi);
+uint8 wlc_phy_apply_pwr_tssi_tble_chan_acphy(phy_info_t *pi);
+uint8 wlc_phy_estpwrlut_intpol_acphy(phy_info_t *pi, uint8 channel,
+	wl_txcal_power_tssi_t *pwr_tssi_lut_ch1, wl_txcal_power_tssi_t *pwr_tssi_lut_ch2);
+uint8 wlc_phy_olpc_idx_tempsense_comp_acphy(phy_info_t *pi, uint8 *iidx, uint8 core);
+void phy_ac_tssical_set_olpc_threshold(phy_info_t *pi);
+#endif /* WLC_TXCAL */
 
 extern void
 wlc_phy_set_tssisens_lim_acphy(phy_info_t *pi, uint8 override);
 
 void phy_ac_tssical_idle(phy_info_t *pi);
+#ifdef PHYCAL_CACHING
+void phy_ac_tssical_idle_save_cache(phy_ac_tssical_info_t *ti, ch_calcache_t *ctx);
+#endif /* PHYCAL_CACHING */
 
 #endif /* _phy_ac_tssical_h_ */

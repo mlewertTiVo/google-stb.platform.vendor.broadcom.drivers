@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_dfs.h 633968 2016-04-26 09:01:47Z $
+ * $Id: wlc_dfs.h 668637 2016-11-04 08:47:37Z $
  */
 
 
@@ -38,6 +38,9 @@ extern void wlc_set_dfs_cacstate(wlc_dfs_info_t *dfs, int state, wlc_bsscfg_t *c
 extern chanspec_t wlc_dfs_sel_chspec(wlc_dfs_info_t *dfs, bool force, wlc_bsscfg_t *cfg);
 extern void wlc_dfs_reset_all(wlc_dfs_info_t *dfs);
 extern int wlc_dfs_set_radar(wlc_dfs_info_t *dfs, int radar);
+//extern bool wlc_valid_dfs_chanspec(wlc_dfs_info_t *dfs, chanspec_t chspec);
+extern uint wlc_dfs_get_cactime_ms(wlc_dfs_info_t *dfs);
+extern bool wlc_cac_is_clr_chanspec(wlc_dfs_info_t *dfs, chanspec_t chspec);
 
 extern bool wlc_dfs_valid_ap_chanspec(wlc_info_t *wlc, chanspec_t chspec);
 /* accessors */

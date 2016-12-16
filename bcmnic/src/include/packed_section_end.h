@@ -32,7 +32,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: packed_section_end.h 641797 2016-06-06 09:34:30Z $
+ * $Id: packed_section_end.h 660496 2016-09-20 19:28:50Z $
  */
 
 
@@ -45,8 +45,6 @@
 #else
 	#error "BWL_PACKED_SECTION is NOT defined!"
 #endif
-
-
 
 
 /* Compiler-specific directives for structure packing are declared in

@@ -105,9 +105,16 @@ static const uint16 smfs_rc_table[] = {
 /* local fn declarations */
 static int wlc_smfs_doiovar(void *hdl, uint32 actionid,
         void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
+#if defined(BCMDBG_DUMP)
+static int wlc_smfs_dump(wlc_smfs_info_t *smfs, struct bcmstrbuf *b);
+#endif
 static int wlc_smfs_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_smfs_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG_DUMP)
+static void wlc_smfs_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_smfs_bss_dump NULL
+#endif
 
 static int wlc_smfs_get_stats(wlc_smfs_info_t *smfs, wlc_bsscfg_t *cfg,
 	int idx, char *buf, int len);
@@ -145,6 +152,9 @@ BCMATTACHFN(wlc_smfs_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "smfstats", (dump_fn_t)wlc_smfs_dump, (void *)smfs);
+#endif
 
 	wlc->pub->_smfs = TRUE;
 
@@ -512,4 +522,87 @@ wlc_smfs_clear_stats(wlc_smfs_info_t *smfs, wlc_bsscfg_t *cfg)
 }
 
 
+#if defined(BCMDBG_DUMP)
+/* debug */
+static void
+wlc_dump_smfs_type(wlc_smf_stats_t *smf_stats, struct bcmstrbuf *b)
+{
+	static const struct {uint8 type; char name[32];} type_names[] = {
+		{SMFS_TYPE_AUTH, "Authentication_Request"},
+		{SMFS_TYPE_ASSOC, "Association_Request"},
+		{SMFS_TYPE_REASSOC, "Reassociation_Request"},
+		{SMFS_TYPE_DISASSOC_TX, "Disassociation_Request_TX"},
+		{SMFS_TYPE_DISASSOC_RX, "Disassociation_Request_RX"},
+		{SMFS_TYPE_DEAUTH_TX, "Deauthentication_Request_TX"},
+		{SMFS_TYPE_DEAUTH_RX, "Deauthentication_Request_RX"}
+	};
+	const char *tname = "UNKNOWN";
+	uint i;
+
+	for (i = 0; i < ARRAYSIZE(type_names); i++) {
+		if (type_names[i].type == smf_stats->smfs_main.type)
+		    tname = type_names[i].name;
+	}
+
+	bcm_bprintf(b, "\tFrame Type: ");
+	bcm_bprintf(b, "%s\n", tname);
+}
+
+static void
+wlc_dump_smf_stats(wlc_smf_stats_t *smf_stats, struct bcmstrbuf *b)
+{
+	wlc_smfs_elem_t *elemt;
+
+	ASSERT(smf_stats);
+
+	wlc_dump_smfs_type(smf_stats, b);
+	bcm_bprintf(b, "\tIgnored Count: %d\n", smf_stats->smfs_main.ignored_cnt);
+	bcm_bprintf(b, "\tMalformed Count: %d\n", smf_stats->smfs_main.malformed_cnt);
+	bcm_bprintf(b, "\tSuccessful/Failed Count with status or reason code:\n");
+
+	elemt = smf_stats->stats;
+
+	while (elemt) {
+		bcm_bprintf(b, "\t\t SC/RC: %d Count: %d\n",
+		  elemt->smfs_elem.code, elemt->smfs_elem.count);
+		elemt = elemt->next;
+	}
+	bcm_bprintf(b, "\n");
+}
+
+static void
+wlc_smfs_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_smfs_info_t *smfs = (wlc_smfs_info_t *)ctx;
+	bss_smfs_info_t *smfs_info;
+	char bssbuf[ETHER_ADDR_STR_LEN];
+	int i;
+
+	smfs_info = BSS_SMFS_INFO(smfs, cfg);
+	ASSERT(smfs_info != NULL);
+
+	bcm_bprintf(b, "BSS Config %d: BSSID: %s\n",
+	            WLC_BSSCFG_IDX(cfg), bcm_ether_ntoa(&cfg->BSSID, bssbuf));
+
+	for (i = 0; i < SMFS_TYPE_MAX; i++) {
+		wlc_dump_smf_stats(&smfs_info->smf_stats[i], b);
+	}
+}
+
+static int
+wlc_smfs_dump(wlc_smfs_info_t *smfs, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = smfs->wlc;
+	uint i;
+	wlc_bsscfg_t *bsscfg;
+
+	bcm_bprintf(b, "Selected Management Frame Stats for each BSS:\n");
+
+	FOREACH_BSS(wlc, i, bsscfg) {
+		wlc_smfs_bss_dump(smfs, bsscfg, b);
+	}
+
+	return BCME_OK;
+}
+#endif 
 #endif /* SMF_STATS */

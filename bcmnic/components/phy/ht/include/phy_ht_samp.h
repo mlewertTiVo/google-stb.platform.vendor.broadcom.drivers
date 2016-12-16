@@ -11,5 +11,5 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_samp.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_ht_samp.h 583048 2015-08-31 16:43:34Z $
  */

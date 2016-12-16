@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_modesw.c 632680 2016-04-20 05:38:33Z $
+ * $Id: wlc_modesw.c 662085 2016-09-28 07:48:19Z $
  */
 
 #include <wlc_cfg.h>
@@ -36,6 +36,9 @@
 #include <wlc_ap.h>
 #include <wlc_scan.h>
 #include <wlc_tx.h>
+#include <phy_cache_api.h>
+#include <phy_chanmgr_api.h>
+#include <phy_calmgr_api.h>
 #ifdef WLRSDB
 #include <wlc_rsdb.h>
 #endif
@@ -46,7 +49,6 @@
 #ifdef WLMCHAN
 #include <wlc_mchan.h>
 #endif
-#include <wlc_ulb.h>
 #ifdef WL_NAN
 #include <wlc_nan.h>
 #endif
@@ -55,6 +57,9 @@
 #endif
 #include <wlc_scb_ratesel.h>
 #include <wlc_pm.h>
+#ifdef WLCSA
+#include <wlc_csa.h>
+#endif
 
 enum msw_oper_mode_states {
 	MSW_NOT_PENDING = 0,
@@ -166,6 +171,11 @@ static const bcm_iovar_t modesw_iovars[] = {
 	(0), 0, IOVT_BOOL, 0
 	},
 	{"ht_bwswitch", IOV_HT_BWSWITCH, 0, 0, IOVT_UINT32, 0},
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	{"dump_modesw_dyn_bwsw", IOV_DUMP_DYN_BWSW,
+	(IOVF_GET_UP), 0, IOVT_BUFFER, WLC_IOCTL_MAXLEN,
+	},
+#endif
 #ifdef WL_MODESW_TIMECAL
 	{"modesw_timecal", IOV_MODESW_TIME_CALC,
 	(0), 0, IOVT_BUFFER, 0
@@ -198,6 +208,7 @@ typedef struct {
 	uint32 ctrl_flags;	/* control some overrides, eg: used for pseudo operation */
 	uint8 orig_pmstate;
 	uint32 start_time;
+	bool is_csa_lock;
 } modesw_bsscfg_cubby_t;
 
 /* SCB Cubby for modesw */
@@ -333,6 +344,9 @@ static void wlc_modesw_set_pmstate(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t*
 
 static void wlc_modesw_ctrl_hdl_all_cfgs(wlc_modesw_info_t *modesw_info,
 		wlc_bsscfg_t *cfg, enum notif_events signal);
+#ifdef WLCSA
+static void wlc_modesw_csa_cb(void *ctx, wlc_csa_notif_cb_data_t *notif_data);
+#endif
 
 static void wlc_modesw_restore_defaults(void *ctx, wlc_bsscfg_t *bsscfg, bool isup);
 
@@ -432,7 +446,16 @@ BCMATTACHFN(wlc_modesw_attach)(wlc_info_t *wlc)
 			OSL_OBFUSCATE_BUF(wlc_modesw_scb_state_upd_cb)));
 		goto err;
 	}
-
+#ifdef WLCSA
+	if (wlc->csa) {
+		if (wlc_csa_obss_dynbw_notif_cb_register(wlc->csa,
+			wlc_modesw_csa_cb, modesw_info) != BCME_OK) {
+			WL_ERROR(("%s: csa notif callbk failed, but continuing\n",
+				__FUNCTION__));
+			goto err;
+		}
+	}
+#endif
 	wlc->pub->_modesw = TRUE;
 
 #if defined(RSDB_PM_MODESW) && !defined(RSDB_PM_MODESW_DISABLED)
@@ -456,6 +479,15 @@ BCMATTACHFN(wlc_modesw_detach)(wlc_modesw_info_t *modesw_info)
 	WL_TRACE(("wl%d: wlc_modesw_detach\n", wlc->pub->unit));
 	wlc_module_unregister(wlc->pub, "modesw", modesw_info);
 
+#ifdef WLCSA
+	if (wlc->csa) {
+		if (wlc_csa_obss_dynbw_notif_cb_unregister(wlc->csa,
+			wlc_modesw_csa_cb, modesw_info) != BCME_OK) {
+			WL_ERROR(("wl%d: %s: wlc_csa_notif_cb_unregister() failed\n",
+				wlc->pub->unit, __FUNCTION__));
+		}
+	}
+#endif /* WLCSA */
 	if (modesw_info->modesw_notif_hdl != NULL) {
 		WL_MODE_SWITCH(("REMOVING NOTIFICATION LIST\n"));
 		bcm_notif_delete_list(&modesw_info->modesw_notif_hdl);
@@ -481,6 +513,39 @@ BCMATTACHFN(wlc_modesw_detach)(wlc_modesw_info_t *modesw_info)
 	}
 	MFREE(wlc->osh, modesw_info, sizeof(wlc_modesw_info_t));
 }
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_modesw_dyn_bwsw_dump(wlc_modesw_info_t *modesw_info, void *input, int buf_len, void *output)
+{
+	wlc_info_t *wlc = modesw_info->wlc;
+	wlc_bsscfg_t *cfg;
+	int idx;
+	modesw_bsscfg_cubby_t *pmodesw_bsscfg = NULL;
+	struct bcmstrbuf b;
+	char *buf_ptr;
+
+	buf_ptr = (char *) output;
+
+	bcm_binit(&b, buf_ptr, buf_len);
+
+	bcm_bprintf(&b, "Dump Details :\n");
+
+	FOREACH_AS_BSS(wlc, idx, cfg) {
+		pmodesw_bsscfg = MODESW_BSSCFG_CUBBY(modesw_info, cfg);
+
+		bcm_bprintf(&b, "\n\nInterface ID=%d\n", cfg->ID);
+		bcm_bprintf(&b, "Modesw State=%d\n", pmodesw_bsscfg->state);
+		bcm_bprintf(&b, "New Chanspec=%x\n", pmodesw_bsscfg->new_chanspec);
+		bcm_bprintf(&b, "Max Opermode Chanspec =%x\n",
+			pmodesw_bsscfg->max_opermode_chanspec);
+		bcm_bprintf(&b, "Action Sendout Counter = %d\n",
+			pmodesw_bsscfg->action_sendout_counter);
+		bcm_bprintf(&b, "Old Oper mode = %x\n", pmodesw_bsscfg->oper_mode_old);
+		bcm_bprintf(&b, "New oper mode = %x\n", pmodesw_bsscfg->oper_mode_new);
+	}
+	return 0;
+}
+#endif 
 
 /* function sets the modesw init flag, which determines whether modesw just happened */
 INLINE
@@ -686,6 +751,11 @@ wlc_modesw_doiovar(void *handle, uint32 actionid,
 			} else
 				err = BCME_UNSUPPORTED;
 			break;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+		case IOV_GVAL(IOV_DUMP_DYN_BWSW) :
+			err = wlc_modesw_dyn_bwsw_dump(modesw, p, alen, a);
+			break;
+#endif
 #ifdef WL_MODESW_TIMECAL
 		case IOV_SVAL(IOV_MODESW_TIME_CALC) :
 			modesw->modesw_timecal_enable = bool_val;
@@ -1167,7 +1237,7 @@ wlc_modesw_alloc_context(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t *cfg)
 					sizeof(wlc_modesw_cb_ctx_t));
 				return BCME_ERROR;
 			}
-		}
+	}
 	return BCME_OK;
 }
 
@@ -1688,6 +1758,9 @@ void wlc_modesw_resume_opmode_change(wlc_modesw_info_t *modesw_info, wlc_bsscfg_
 {
 	wlc_info_t *wlc = modesw_info->wlc;
 	modesw_bsscfg_cubby_t *pmodesw_bsscfg = NULL;
+#if defined(BCMDBG)
+	modesw_bsscfg_cubby_t *ipmode_cfg = NULL;
+#endif
 	int idx;
 	wlc_bsscfg_t* icfg;
 	pmodesw_bsscfg = MODESW_BSSCFG_CUBBY(modesw_info, bsscfg);
@@ -1700,7 +1773,17 @@ void wlc_modesw_resume_opmode_change(wlc_modesw_info_t *modesw_info, wlc_bsscfg_
 
 	/* Check if other cfg's are done before any HW change */
 	FOREACH_AS_BSS(wlc, idx, icfg) {
+#if defined(BCMDBG)
+		ipmode_cfg = MODESW_BSSCFG_CUBBY(modesw_info, icfg);
+#endif
 		if ((icfg != bsscfg) && wlc_modesw_opmode_pending(modesw_info, icfg)) {
+#if defined(BCMDBG)
+			WL_MODE_SWITCH(("wl%d: Opmode pending for cfg = %d"
+				" with state = %s..Deferring cfg %d\n",
+				WLCWLUNIT(wlc), icfg->_idx,
+				opmode_st_names[ipmode_cfg->state].name,
+				bsscfg->_idx));
+#endif
 			if (pmodesw_bsscfg->state == MSW_DN_PERFORM) {
 				wlc_modesw_change_state(modesw_info, bsscfg, MSW_DN_DEFERRED);
 			}
@@ -2019,6 +2102,7 @@ wlc_modesw_change_ap_oper_mode(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t *bss
 	wlc_info_t * wlc = modesw_info->wlc;
 	modesw_bsscfg_cubby_t *pmodesw_bsscfg = NULL;
 	uint32 ctrl_flags;
+	uint8 new_rxnss, old_rxnss;
 
 	pmodesw_bsscfg = MODESW_BSSCFG_CUBBY(modesw_info, bsscfg);
 
@@ -2032,6 +2116,11 @@ wlc_modesw_change_ap_oper_mode(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t *bss
 	{
 		return TRUE;
 	}
+	pmodesw_bsscfg->oper_mode_old = bsscfg->oper_mode;
+	pmodesw_bsscfg->oper_mode_new = oper_mode;
+	new_rxnss = DOT11_OPER_MODE_RXNSS(pmodesw_bsscfg->oper_mode_new);
+	old_rxnss = DOT11_OPER_MODE_RXNSS(pmodesw_bsscfg->oper_mode_old);
+
 	/* Upgrade */
 	if (!wlc_modesw_is_downgrade(wlc, bsscfg, bsscfg->oper_mode, oper_mode)) {
 		WL_MODE_SWITCH(("AP upgrade \n"));
@@ -2043,9 +2132,8 @@ wlc_modesw_change_ap_oper_mode(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t *bss
 			CHSPEC_BW(pmodesw_bsscfg->new_chanspec)));
 
 		wlc_modesw_change_state(modesw_info, bsscfg, MSW_UPGRADE_PENDING);
-
-		pmodesw_bsscfg->oper_mode_old = bsscfg->oper_mode;
-		pmodesw_bsscfg->oper_mode_new = oper_mode;
+		/* Update current oper mode to reflect upgraded bw */
+		bsscfg->oper_mode = oper_mode;
 		ctrl_flags = pmodesw_bsscfg->ctrl_flags;
 		wlc_modesw_time_measure(wlc->modesw, pmodesw_bsscfg->ctrl_flags,
 			MODESW_TM_PM1);
@@ -2071,12 +2159,14 @@ wlc_modesw_change_ap_oper_mode(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t *bss
 		}
 		wlc_modesw_time_measure(wlc->modesw, pmodesw_bsscfg->ctrl_flags,
 			MODESW_TM_PM0);
-		wlc_modesw_oper_mode_complete(wlc->modesw, bsscfg, BCME_OK,
-			MODESW_UP_AP_COMPLETE);
+
+		if (old_rxnss != new_rxnss) {
+			wlc_modesw_oper_mode_complete(wlc->modesw, bsscfg,
+				BCME_OK, MODESW_UP_AP_COMPLETE);
+		}
 	}
 	/* Downgrade */
 	else {
-		uint8 new_rxnss, old_rxnss;
 		WL_MODE_SWITCH(("AP Downgrade Case \n"));
 		pmodesw_bsscfg->new_chanspec = wlc_modesw_find_downgrade_chanspec(wlc, bsscfg,
 			oper_mode, bsscfg->oper_mode);
@@ -2089,11 +2179,7 @@ wlc_modesw_change_ap_oper_mode(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t *bss
 			WL_MODE_SWITCH(("Entering %s again \n", __FUNCTION__));
 
 		wlc_modesw_change_state(modesw_info, bsscfg, MSW_DOWNGRADE_PENDING);
-		pmodesw_bsscfg->oper_mode_new = oper_mode;
-		pmodesw_bsscfg->oper_mode_old = bsscfg->oper_mode;
 
-		new_rxnss = DOT11_OPER_MODE_RXNSS(pmodesw_bsscfg->oper_mode_new);
-		old_rxnss = DOT11_OPER_MODE_RXNSS(pmodesw_bsscfg->oper_mode_old);
 		if (CTRL_FLAGS_HAS(pmodesw_bsscfg->ctrl_flags,
 			MODESW_CTRL_AP_ACT_FRAMES) &&
 			(new_rxnss == old_rxnss)) {
@@ -2103,7 +2189,6 @@ wlc_modesw_change_ap_oper_mode(wlc_modesw_info_t *modesw_info, wlc_bsscfg_t *bss
 				wlc_modesw_change_state(wlc->modesw, bsscfg, MSW_WAIT_DRAIN);
 				return TRUE;
 			}
-
 			if (wlc->block_datafifo & DATA_BLOCK_TXCHAIN) {
 				/* Unblock and measure time at drain end */
 				WLC_BLOCK_DATAFIFO_CLEAR(wlc, DATA_BLOCK_TXCHAIN);
@@ -2166,6 +2251,12 @@ int wlc_modesw_handle_oper_mode_notif_request(wlc_modesw_info_t *modesw_info,
 		WL_MODE_SWITCH(("wl%d.%d: MODESW Aborting the SCAN\n", WLCWLUNIT(wlc),
 			WLC_BSSCFG_IDX(bsscfg)));
 		wlc_scan_abort(wlc->scan, WLC_E_STATUS_ABORT);
+	}
+
+	if (!bsscfg->oper_mode_enabled) {
+		bsscfg->oper_mode = wlc_modesw_derive_opermode(wlc->modesw,
+			bsscfg->current_bss->chanspec, bsscfg,
+			wlc->stf->op_rxstreams);
 	}
 
 	old_bw = DOT11_OPER_MODE_CHANNEL_WIDTH(bsscfg->oper_mode);
@@ -2276,7 +2367,7 @@ wlc_modesw_derive_opermode(wlc_modesw_info_t *modesw_info, chanspec_t chanspec,
 		bw = DOT11_OPER_MODE_80MHZ;
 	else if (CHSPEC_IS40(chanspec))
 		bw = DOT11_OPER_MODE_40MHZ;
-	else if (WLC_ULB_CHSPEC_ISLE20(wlc, chanspec))
+	else if (CHSPEC_IS20(chanspec))
 		bw = DOT11_OPER_MODE_20MHZ;
 	else {
 		ASSERT(FALSE);
@@ -2583,8 +2674,8 @@ wlc_modesw_send_action_frame_request(wlc_modesw_info_t *modesw_info, wlc_bsscfg_
 	else
 		body_len = sizeof(struct dot11_action_ht_ch_width);
 
-	p = wlc_frame_get_mgmt(wlc, FC_ACTION, ea, &bsscfg->cur_etheraddr,
-		&bsscfg->BSSID, body_len, &pbody);
+	p = wlc_frame_get_action(wlc, ea, &bsscfg->cur_etheraddr,
+		&bsscfg->BSSID, body_len, &pbody, DOT11_ACTION_NOTIFICATION);
 	if (p == NULL)
 	{
 		WL_ERROR(("Unable to allocate the mgmt frame \n"));
@@ -2860,6 +2951,33 @@ wlc_modesw_notify_cleanup(wlc_modesw_info_t* modesw_info, wlc_bsscfg_t* bsscfg)
 	}
 }
 
+/* Callback from CSA. This Function will reset
+* the bsscfg variables on channel change.
+*/
+
+#ifdef WLCSA
+static void
+wlc_modesw_csa_cb(void *ctx, wlc_csa_notif_cb_data_t *notif_data)
+{
+	wlc_modesw_info_t *modesw_info = (wlc_modesw_info_t *)ctx;
+	wlc_bsscfg_t *bsscfg = notif_data->cfg;
+	modesw_bsscfg_cubby_t *pmodesw_bsscfg = MODESW_BSSCFG_CUBBY(modesw_info, bsscfg);
+	ASSERT(notif_data->cfg != NULL);
+	ASSERT(ctx != NULL);
+
+	if ((notif_data->signal == CSA_CHANNEL_CHANGE_START) &&
+		(!pmodesw_bsscfg->is_csa_lock)) {
+		WL_MODE_SWITCH(("%s:Got Callback from CSA. resetting modesw\n",
+			__FUNCTION__));
+		pmodesw_bsscfg->is_csa_lock = TRUE;
+		wlc_modesw_restore_defaults(ctx, bsscfg, FALSE);
+
+	} else if (notif_data->signal == CSA_CHANNEL_CHANGE_END) {
+		pmodesw_bsscfg->is_csa_lock = FALSE;
+	}
+}
+#endif /* WLCSA */
+
 /* Callback from wldown. This Function will reset
 * the bsscfg variables on wlup event.
 */
@@ -2917,9 +3035,6 @@ wlc_modesw_clear_phy_chanctx(void *ctx, wlc_bsscfg_t *cfg)
 	/* Get 20 Mhz Chanspec  using the Control channel */
 	{
 		uint16 min_bw = WL_CHANSPEC_BW_20;
-#ifdef WL11ULB
-		min_bw = WLC_ULB_GET_BSS_MIN_BW(wlc, cfg);
-#endif /* WL11ULB */
 		chanspec_20 = wf_channel2chspec(ctl_ch, min_bw);
 	}
 	WL_MODE_SWITCH(("%s: chanspec_80 [%x]chanspec_40[%x] chanspec_20 [%x]\n",
@@ -2956,13 +3071,13 @@ wlc_modesw_clear_phy_chanctx(void *ctx, wlc_bsscfg_t *cfg)
 
 	/* Clear all the PHY contexts  */
 	if (!cspec80)
-		wlc_phy_destroy_chanctx(wlc->pi, chanspec_80);
+		phy_chanmgr_destroy_ctx((phy_info_t *) wlc->pi, chanspec_80);
 
 	if (!cspec40)
-		wlc_phy_destroy_chanctx(wlc->pi, chanspec_40);
+		phy_chanmgr_destroy_ctx((phy_info_t *) wlc->pi, chanspec_40);
 
 	if (!cspec20)
-		wlc_phy_destroy_chanctx(wlc->pi, chanspec_20);
+		phy_chanmgr_destroy_ctx((phy_info_t *) wlc->pi, chanspec_20);
 }
 
 /* Function to Measure Time taken for each step for Actual Downgrade,
@@ -3441,11 +3556,6 @@ wlc_modesw_move_cfgs_for_mimo(wlc_modesw_info_t *modesw_info)
 		FOREACH_AS_BSS(wlc1, idx, icfg) {
 			if (WLC_BSS_CONNECTED(icfg)) {
 				/* move to wlc 0 */
-#ifdef WL_NAN
-				if (NAN_ENAB(wlc1->pub) && BSSCFG_NAN_MGMT(icfg)) {
-					wlc_nan_bsscfg_move(wlc1, wlc0, icfg, &ret);
-				} else
-#endif
 				{
 					wlc_rsdb_bsscfg_clone(wlc1, wlc0, icfg, &ret);
 				}

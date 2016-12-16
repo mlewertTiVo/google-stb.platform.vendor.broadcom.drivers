@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: defaults.c 643259 2016-06-14 02:39:21Z $
+ * $Id: defaults.c 667237 2016-10-26 11:12:51Z $
  */
 
 #include <epivers.h>
@@ -338,7 +338,7 @@ struct nvram_tuple router_defaults[] = {
 	{ "wl_radio", "1", 0 },			/* Enable (1) or disable (0) radio */
 	{ "wl_closed", "0", 0 },		/* Closed (hidden) network */
 	{ "wl_ap_isolate", "0", 0 },            /* AP isolate mode */
-	{ "wl_wmf_bss_enable", "0", 0 },	/* WMF Enable/Disable */
+	{ "wl_wmf_bss_enable", "1", 0 },	/* WMF Enable/Disable */
 	{ "wl_mcast_regen_bss_enable", "1", 0 },	/* MCAST REGEN Enable/Disable */
 	/* operational capabilities required for stations to associate to the BSS */
 	{ "wl_bss_opmode_cap_reqd", "0", 0 },
@@ -371,7 +371,7 @@ struct nvram_tuple router_defaults[] = {
 						 */
 	{ "wl_assoc_retry_max", "3", 0 },	/* Non-zero limit for association retries */
 	{ "wl_chanspec", "11", 0 },		/* Channel specification */
-	{ "wl_reg_mode", "off", 0 },		/* Regulatory: 802.11H(h)/802.11D(d)/off(off) */
+	{ "wl_reg_mode", "h", 0 },		/* Regulatory: 802.11H(h)/802.11D(d)/off(off) */
 	{ "wl_rate", "0", 0 },			/* Rate (bps, 0 for auto) */
 	{ "wl_mrate", "0", 0 },			/* Mcast Rate (bps, 0 for auto) */
 	{ "wl_frameburst", "on", 0 },		/* BRCM Frambursting mode (off|on) */
@@ -485,13 +485,16 @@ struct nvram_tuple router_defaults[] = {
 
 	{ "wl_unit", "0", 0 },			/* Last configured interface */
 	{ "wl_sta_retry_time", "5", 0 }, /* Seconds between association attempts */
+#ifdef BCMDBG
+	{ "wl_nas_dbg", "0", 0 }, /* Enable/Disable NAS Debugging messages */
+#endif
 
 #ifdef __CONFIG_EMF__
 	/* EMF defaults */
 	{ "emf_entry", "", 0 },			/* Static MFDB entry (mgrp:if) */
 	{ "emf_uffp_entry", "", 0 },		/* Unreg frames forwarding ports */
 	{ "emf_rtport_entry", "", 0 },		/* IGMP frames forwarding ports */
-	{ "emf_enable", "0", 0 },		/* Disable EMF by default */
+	{ "emf_enable", "1", 0 },		/* Disable EMF by default */
 #endif /* __CONFIG_EMF__ */
 #ifdef __CONFIG_IPV6__
 	{ "lan_ipv6_mode", "3", 0 },		/* 0=disable 1=6to4 2=native 3=6to4+native! */
@@ -526,9 +529,10 @@ struct nvram_tuple router_defaults[] = {
 	{ "wl_trf_mgmt_rssi_policy", "0", 0 }, /* Disable RSSI (default) */
 #endif /* TRAFFIC_MGMT_RSSI_POLICY */
 #ifdef __CONFIG_EMF__
-	{ "wl_wmf_ucigmp_query", "0", 0 }, /* Disable Converting IGMP Query to ucast (default) */
-	{ "wl_wmf_mdata_sendup", "0", 0 }, /* Disable Sending Multicast Data to host  (default) */
-	{ "wl_wmf_ucast_upnp", "0", 0 }, /* Disable Converting upnp to ucast (default) */
+	{ "wl_wmf_ucigmp_query", "1", 0 },	/* Enable converting IGMP Query to ucast */
+	{ "wl_wmf_mdata_sendup", "1", 0 },	/* Enable sending Multicast Data to host */
+	{ "wl_wmf_ucast_upnp", "0", 0 },	/* Disable converting upnp to ucast */
+	{ "wl_wmf_igmpq_filter", "1", 0 },	/* Enable igmp query filter */
 #endif /* __CONFIG_EMF__ */
 
 	/* Tx Beamforming */
@@ -538,8 +542,8 @@ struct nvram_tuple router_defaults[] = {
 	{ "wl_mu_features", "0x8000", 0 },
 
 	/* acsd setting */
-	{ "wl_acs_fcs_mode", "0", 0 },		/* acsd disable FCS mode */
-	{ "wl_dcs_csa_unicast", "0", 0 },	/* disable unicast csa */
+	{ "wl_acs_fcs_mode", "1", 0 },		/* acsd disable FCS mode */
+	{ "wl_dcs_csa_unicast", "1", 0 },	/* disable unicast csa */
 	{ "wl_acs_excl_chans", "", 0 },		/* acsd exclude chanspec list */
 	{ "wl_acs_dfs", "2", 0 },		/* acsd fcs disable init DFS chan */
 	{ "wl_acs_dfsr_immediate", "300 3", 0 },   /* immediate if > 3 switches last 5 minutes */
@@ -595,33 +599,8 @@ struct nvram_tuple router_defaults[] = {
 	{ "iqos_refresh_interval", "5", 0},	/* iQoS refresh interval in seconds */
 #endif /* __CONFIG_TREND_IQOS__ */
 	{ "wl_acs_boot_only", "0", 0 },		/* enable acsd full operation */
-	{ 0, 0, 0 }
-};
-
-/* nvram override default setting for Media Router */
-struct nvram_tuple router_defaults_override_type1[] = {
-	{ "router_disable", "1", 0 },		/* lan_proto=static lan_stp=0 wan_proto=disabled */
-	{ "lan_stp", "0", 0 },			/* LAN spanning tree protocol */
-	{ "wl_wmf_bss_enable", "1", 0 },	/* WMF Enable for IPTV Media */
-	{ "wl_reg_mode", "h", 0 },		/* Regulatory: 802.11H(h) */
-	{ "wl_frameburst", "on", 0 },		/* BRCM Frambursting mode (off|on) */
-#ifdef __CONFIG_EMF__
-	{ "emf_enable", "1", 0 },		/* Enable EMF by default */
-	{ "wl_wmf_ucigmp_query", "1", 0 },	/* Enable Converting IGMP Query to ucast */
-	{ "wl_wmf_ucast_upnp", "1", 0 },	/* enable upnp to ucast conversion */
-#endif
-	{ "wl_acs_fcs_mode", "1", 0 },		/* enable acsd fcs mode */
-	{ "wl_dcs_csa_unicast", "1", 0 },	/* enable unicast csa */
-	/* Exclude ACSD to select 140l, 144u, 140/80, 144/80 to compatible with Ducati 11N */
-	{ "wl_acs_excl_chans", "0xd98e,0xd88e,0xe28a,0xe38a", 0 },
-	{ "wl_taf_enable", "0", 0 },		/* Disable TAF */
-	{ "wl_amsdu", "off", 0 },		/* Disable AMSDU Tx by default */
-	{ "wl_rx_amsdu_in_ampdu", "off", 0 },	/* Disable AMSDU Rx by default */
-	{ "wl_cal_period", "0", 0 },		/* Disable periodic cal */
-	{ "wl_psta_inact", "0", 0 },		/* PSTA inactivity timer */
-	{ "telnet_enable", "0", 0 },		/* telnet service */
-	{ "wl_srl", "11", 0},			/* Short Retry Limit */
-	{ "wl_lrl", "11", 0},			/* Long Retry Limit */
+	{ "wl_cal_period", "-1", 0 },		/* Disable periodic cal */
+	{ "wl_psta_inact", "600", 0 },		/* PSTA inactivity timer */
 	{ 0, 0, 0 }
 };
 
@@ -696,14 +675,6 @@ nvram_default_get(const char *name)
 		}
 	}
 
-	if (!strcmp(nvram_safe_get("devicemode"), "1")) {
-		for (idx = 0; router_defaults_override_type1[idx].name != NULL; idx++) {
-			if (strcmp(router_defaults_override_type1[idx].name, fixed_name) == 0) {
-				return router_defaults_override_type1[idx].value;
-			}
-		}
-	}
-
 	if (!strcmp(nvram_safe_get("devicemode"), "sta")) {
 		for (idx = 0; router_defaults_override_type_sta[idx].name != NULL; idx++) {
 			if (strcmp(router_defaults_override_type_sta[idx].name, fixed_name) == 0) {
@@ -756,19 +727,6 @@ nvram_validate_all(char *prefix, bool restore)
 		}
 	}
 
-	/* override router type1 nvram setting */
-	if (!strcmp(nvram_safe_get("devicemode"), "1")) {
-		for (t = router_defaults_override_type1; t->name; t++) {
-			if (!strncmp(t->name, "wl_", 3)) {
-				strcat_r(prefix, &t->name[3], tmp);
-				if (!restore && nvram_get(tmp))
-					continue;
-				v = nvram_get(t->name);
-				nvram_set(tmp, v ? v : t->value);
-			}
-		}
-	}
-
 #ifdef __CONFIG_RSDB__
 	if (restore && !strcmp(nvram_safe_get("rsdb_mode"), "1")) {
 		int wlunit = -1, wlsubunit = -1, ifname_len;
@@ -803,13 +761,4 @@ nvram_restore_var(char *prefix, char *name)
 		}
 	}
 
-	/* override router type1 setting */
-	if (!strcmp(nvram_safe_get("devicemode"), "1")) {
-		for (t = router_defaults_override_type1; t->name; t++) {
-			if (!strncmp(t->name, "wl_", 3) && !strcmp(&t->name[3], name)) {
-				nvram_set(strcat_r(prefix, name, tmp), t->value);
-				break;
-			}
-		}
-	}
 }

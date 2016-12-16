@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_papdcal.h 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_papdcal.h 657373 2016-09-01 01:08:38Z $
  */
 
 #ifndef _phy_papdcal_h_
@@ -45,19 +45,12 @@ bool phy_papdcal_epapd(phy_papdcal_info_t *papdcali);
 int phy_papdcal_set_wfd_ll_enable(phy_papdcal_info_t *papdcali, uint8 int_val);
 int phy_papdcal_get_wfd_ll_enable(phy_papdcal_info_t *papdcali, int32 *ret_int_ptr);
 #endif /* WFD_PHY_LL */
-#if defined(WLTEST) || defined(BCMDBG)
+#if defined(BCMDBG)
 void phy_papdcal_epa_dpd_set(phy_info_t *pi, uint8 enab_epa_dpd, bool in_2g_band);
-#endif /* defined(WLTEST) || defined(BCMDBG) */
-#if defined(BCMINTERNAL) || defined(WLTEST)
-int phy_papdcal_get_lut_idx0(phy_info_t *pi, int32* idx);
-int phy_papdcal_get_lut_idx1(phy_info_t *pi, int32* idx);
-int phy_papdcal_set_idx(phy_info_t *pi, int8 idx);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-#ifndef ATE_BUILD
+#endif 
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 int phy_papdcal_set_skip(phy_info_t *pi, uint8 skip);
 int phy_papdcal_get_skip(phy_info_t *pi, int32* skip);
-#endif /* !ATE_BUILD */
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
+#endif 
+int phy_papdcal_decode_epsilon(uint32 epsilon, int32 *eps_real, int32 *eps_imag);
 #endif /* _phy_papdcal_h_ */

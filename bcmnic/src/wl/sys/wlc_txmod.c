@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_txmod.c 617211 2016-02-04 13:34:03Z $
+ * $Id: wlc_txmod.c 664818 2016-10-13 22:06:23Z $
  */
 
 #include <wlc_cfg.h>
@@ -47,7 +47,12 @@ struct wlc_txmod_info {
 /* local declaration */
 static int wlc_txmod_scb_init(void *ctx, struct scb *scb);
 /* Dump the active txpath for the current SCB */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_txmod_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_txmod_scb_dump NULL
+#endif
+static int wlc_txmod_update(void *ctx, struct scb *scb, wlc_bsscfg_t *cfg);
 
 /* sub-alloc sizes, only reference TXMOD_LAST at attach time */
 #define TXMOD_REGSZ	TXMOD_LAST * sizeof(txmod_info_t)
@@ -58,6 +63,7 @@ wlc_txmod_info_t *
 BCMATTACHFN(wlc_txmod_attach)(wlc_info_t *wlc)
 {
 	wlc_txmod_info_t *txmodi;
+	scb_cubby_params_t txmod_scb_cubby_params;
 
 	/* allocate state info plus the txmod registry */
 	if ((txmodi = MALLOCZ(wlc->osh, sizeof(*txmodi) + TXMOD_REGSZ)) == NULL) {
@@ -67,11 +73,18 @@ BCMATTACHFN(wlc_txmod_attach)(wlc_info_t *wlc)
 	}
 
 	txmodi->wlc = wlc;
+	/* reserve cubby in the scb container for per-scb private data */
+	bzero(&txmod_scb_cubby_params, sizeof(txmod_scb_cubby_params));
+	txmod_scb_cubby_params.context = txmodi;
+	txmod_scb_cubby_params.fn_init = wlc_txmod_scb_init;
+	txmod_scb_cubby_params.fn_dump = wlc_txmod_scb_dump;
+	txmod_scb_cubby_params.fn_deinit = NULL;
+	txmod_scb_cubby_params.fn_update = wlc_txmod_update;
 
 	/* reserve the scb cubby for per scb txpath */
-	if ((txmodi->scbh = wlc_scb_cubby_reserve(wlc, TXPATH_REGSZ,
-			wlc_txmod_scb_init, NULL, wlc_txmod_scb_dump,
-			txmodi)) < 0) {
+	txmodi->scbh = wlc_scb_cubby_reserve_ext(wlc, TXPATH_REGSZ,
+			&txmod_scb_cubby_params);
+	if (txmodi->scbh < 0) {
 		WL_ERROR(("wl%d: %s: wlc_scb_cubby_reserve failed\n",
 		          wlc->pub->unit, __FUNCTION__));
 		goto fail;
@@ -162,6 +175,40 @@ wlc_txmod_txpktcnt(wlc_txmod_info_t *txmodi)
 }
 
 /* Dump the active txpath for the current SCB */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static const char *txmod_names[TXMOD_LAST] = {
+	"Start",
+	"Transmit",
+	"TDLS",
+	"APPS",
+	"TrafficMgmt",
+	"NAR",
+	"A-MSDU",
+	"A-MPDU",
+	"SCBQ",
+	"AIBSS",
+	"BCMC"
+};
+
+static void
+wlc_txmod_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_txmod_info_t *txmodi = (wlc_txmod_info_t *)ctx;
+	txmod_id_t fid, next_fid;
+
+	bcm_bprintf(b, "     Tx Path:");
+	fid = TXMOD_START;
+	do {
+		next_fid = wlc_txmod_fid(txmodi, scb->tx_path[fid].next_tx_fn);
+		/* for each txmod print out name and # total pkts held fr all scbs */
+		bcm_bprintf(b, " -> %s (pkts=%u)",
+		            txmod_names[next_fid],
+		            wlc_txmod_get_pkts_pending(txmodi, next_fid));
+		fid = next_fid;
+	} while (fid != TXMOD_TRANSMIT && fid != 0);
+	bcm_bprintf(b, "\n");
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* Helper macro for txpath in scb */
 /* A feature in Tx path goes through following states:
@@ -177,9 +224,10 @@ wlc_txmod_txpktcnt(wlc_txmod_info_t *txmodi)
 }
 
 /* Numeric value designating this feature's position in tx_path */
+#if !defined(TXQ_MUX)
 static const uint8 txmod_pos[TXMOD_LAST] = {
 	0, /* TXMOD_START */		/* First */
-	8, /* TXMOD_TRANSMIT */		/* Last */
+	9, /* TXMOD_TRANSMIT */		/* Last */
 	2, /* TXMOD_TDLS */
 	7, /* TXMOD_APPS */
 	3, /* TXMOD_TRF_MGMT */
@@ -187,7 +235,23 @@ static const uint8 txmod_pos[TXMOD_LAST] = {
 	5, /* TXMOD_AMSDU */
 	6, /* TXMOD_AMPDU */
 	1, /* TXMOD_SCBQ */
+	8  /* TXMOD_AIBSS */
 };
+#else
+static const uint8 txmod_pos[TXMOD_LAST] = {
+	0, /* 0 TXMOD_START */          /* First */
+	10, /* 1 TXMOD_TRANSMIT */       /* Last */
+	4, /* 2 TXMOD_TDLS */
+	2, /* 3 TXMOD_APPS */
+	5, /* 4 TXMOD_TRF_MGMT */
+	6, /* 5 TXMOD_NAR */
+	7, /* 6 TXMOD_AMSDU */
+	8, /* 7 TXMOD_AMPDU */
+	3, /* 8 TXMOD_SCBQ */
+	9, /* 9 TXMOD_AIBSS */
+	1, /* 10  TXMOD BCMC */
+};
+#endif /* TXQ_MUX */
 
 static const uint8 *
 wlc_txmod_get_pos(void)
@@ -267,7 +331,7 @@ BCMATTACHFN(wlc_txmod_fn_register)(wlc_txmod_info_t *txmodi, txmod_id_t feature_
 {
 	ASSERT(feature_id < txmodi->txmod_last);
 	/* tx_fn can't be NULL */
-	ASSERT(fns.tx_fn != NULL && fns.pktcnt_fn != NULL);
+	ASSERT(fns.tx_fn != NULL);
 
 	txmodi->txmod[feature_id].fns = fns;
 	txmodi->txmod[feature_id].ctx = ctx;
@@ -314,4 +378,21 @@ wlc_txmod_unconfig(wlc_txmod_info_t *txmodi, struct scb *scb, txmod_id_t fid)
 		return;
 
 	wlc_txmod_deactivate(txmodi, scb, fid);
+}
+
+static int
+wlc_txmod_update(void *ctx, struct scb *scb, wlc_bsscfg_t *cfg)
+{
+	txmod_id_t fid;
+	wlc_txmod_info_t *tmd_to = cfg->wlc->txmodi;
+
+	UNUSED_PARAMETER(ctx);
+	/* assume txmod list on both wlcs are the same */
+	for (fid = TXMOD_START; fid < TXMOD_LAST; fid++) {
+		if (SCB_TXMOD_ACTIVE(scb, fid)) {
+			scb->tx_path[fid].next_handle =
+				tmd_to->txmod[SCB_TXMOD_NEXT_FID(scb, fid)].ctx;
+		}
+	}
+	return BCME_OK;
 }

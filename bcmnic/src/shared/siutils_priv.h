@@ -18,21 +18,27 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: siutils_priv.h 653755 2016-08-09 22:40:17Z $
+ * $Id: siutils_priv.h 658440 2016-09-08 01:07:31Z $
  */
 
 #ifndef	_siutils_priv_h_
 #define	_siutils_priv_h_
 
-#if defined(SI_ERROR_ENFORCE)
+#if defined(BCMDBG_ERR) && defined(ERR_USE_LOG_EVENT)
+#define	SI_ERROR(args)	EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_SI_ERROR, args)
+#elif defined(BCMDBG_ERR) || defined(SI_ERROR_ENFORCE)
 #define	SI_ERROR(args)	printf args
 #else
 #define	SI_ERROR(args)
-#endif	
+#endif	/* BCMDBG_ERR */
 
 #if defined(ENABLE_CORECAPTURE)
 
+#if !defined(BCMDBG)
 #define	SI_PRINT(args)	osl_wificc_logDebug args
+#else
+#define	SI_PRINT(args)	printf args
+#endif /* !BCMDBG */
 
 #else
 
@@ -41,7 +47,11 @@
 #endif /* ENABLE_CORECAPTURE */
 
 
+#ifdef BCMDBG
+#define	SI_MSG(args)	printf args
+#else
 #define	SI_MSG(args)
+#endif	/* BCMDBG */
 
 #ifdef BCMDBG_SI
 #define	SI_VMSG(args)	printf args
@@ -256,9 +266,16 @@ extern uint32 sb_set_initiator_to(si_t *sih, uint32 to, uint idx);
 
 extern bool sb_taclear(si_t *sih, bool details);
 
-#if defined(BCMDBG_PHYDUMP)
+#ifdef BCMDBG
+extern void sb_view(si_t *sih, bool verbose);
+extern void sb_viewall(si_t *sih, bool verbose);
+#endif
+#if defined(BCMDBG_DUMP)
+extern void sb_dump(si_t *sih, struct bcmstrbuf *b);
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)|| defined(BCMDBG_PHYDUMP)
 extern void sb_dumpregs(si_t *sih, struct bcmstrbuf *b);
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP|| BCMDBG_PHYDUMP */
 
 /* Wake-on-wireless-LAN (WOWL) */
 extern bool sb_pci_pmecap(si_t *sih);
@@ -300,7 +317,7 @@ extern uint32 ai_addrspace(si_t *sih, uint spidx, uint baidx);
 extern uint32 ai_addrspacesize(si_t *sih, uint spidx, uint baidx);
 extern void ai_coreaddrspaceX(si_t *sih, uint asidx, uint32 *addr, uint32 *size);
 extern uint ai_wrap_reg(si_t *sih, uint32 offset, uint32 mask, uint32 val);
-extern void ai_enable_backplane_timeouts(si_t *sih);
+extern void ai_update_backplane_timeouts(si_t *sih, bool enable, uint32 timeout, uint32 cid);
 extern uint32 ai_clear_backplane_to(si_t *sih);
 void ai_force_clocks(si_t *sih, uint clock_state);
 extern uint ai_num_slaveports(si_t *sih, uint coreidx);
@@ -313,9 +330,13 @@ uint32 ai_clear_backplane_to_fast(si_t *sih, void * addr);
 extern uint32 ai_clear_backplane_to_per_core(si_t *sih, uint coreid, uint coreunit, void * wrap);
 #endif /* AXI_TIMEOUTS || BCM_BACKPLANE_TIMEOUT */
 
-#if defined(BCMDBG_PHYDUMP)
+#ifdef BCMDBG
+extern void ai_view(si_t *sih, bool verbose);
+extern void ai_viewall(si_t *sih, bool verbose);
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)|| defined(BCMDBG_PHYDUMP)
 extern void ai_dumpregs(si_t *sih, struct bcmstrbuf *b);
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP|| BCMDBG_PHYDUMP */
 
 extern uint32 ai_wrapper_dump_buf_size(si_t *sih);
 extern uint32 ai_wrapper_dump_binary(si_t *sih, uchar *p);

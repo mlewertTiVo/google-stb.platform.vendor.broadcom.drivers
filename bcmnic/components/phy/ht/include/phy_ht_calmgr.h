@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_calmgr.h 620395 2016-02-23 01:15:14Z vyass $
+ * $Id: phy_ht_calmgr.h 620395 2016-02-23 01:15:14Z $
  */
 
 #ifndef _phy_ht_calmgr_h_

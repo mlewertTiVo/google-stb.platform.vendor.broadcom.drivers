@@ -89,6 +89,10 @@ int bcm_obj_registry_unref(obj_registry_t *objr, int key);
 /* A special helper function to identify if we are cleaning up for the final obj reg */
 int bcm_obj_registry_islast(obj_registry_t *objr);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* Debug function to dump out all contents of the registry */
+int bcm_dump_objr(obj_registry_t *objr, struct bcmstrbuf *b);
+#endif
 
 
 #endif /* _bcm_objregistry_h_ */

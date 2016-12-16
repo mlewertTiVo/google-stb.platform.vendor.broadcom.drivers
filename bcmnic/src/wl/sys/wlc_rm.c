@@ -238,6 +238,11 @@ wlc_rm_start(wlc_info_t *wlc)
 {
 	rm_info_t *rm_info = wlc->rm_info;
 	wlc_rm_req_state_t* rm_state = rm_info->rm_state;
+#ifdef BCMDBG
+	wlc_rm_req_t *req;
+	const char *name;
+	int i;
+#endif /* BCMDBG */
 	DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
 
 	rm_state->cur_req = 0;
@@ -249,6 +254,35 @@ wlc_rm_start(wlc_info_t *wlc)
 	}
 #endif /* WLOLPC */
 
+#ifdef BCMDBG
+	WL_INFORM(("wl%d: wlc_rm_start(): %d RM Requests, token 0x%x (%d)\n",
+		rm_info->wlc->pub->unit, rm_state->req_count,
+		rm_state->token, rm_state->token));
+
+	for (i = 0; i < rm_state->req_count; i++) {
+		req = &rm_state->req[i];
+		switch (req->type) {
+		case WLC_RM_TYPE_BASIC:
+			name = " Basic";
+			break;
+		case WLC_RM_TYPE_CCA:
+			name = " CCA";
+			break;
+		case WLC_RM_TYPE_RPI:
+			name = " RPI";
+			break;
+		default:
+			name = "";
+			break;
+		}
+
+		WL_INFORM(("RM REQ token 0x%02x (%2d) type %2d%s chanspec %s tsf 0x%x:%08x dur %4d"
+			" TUs\n",
+			req->token, req->token, req->type, name,
+			wf_chspec_ntoa_ex(req->chanspec, chanbuf), req->tsf_h, req->tsf_l,
+			req->dur));
+	}
+#endif /* BCMDBG */
 	wlc_rm_validate(rm_info);
 
 	wlc_rm_next_set(rm_info);

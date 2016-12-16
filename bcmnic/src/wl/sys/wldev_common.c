@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wldev_common.c 655259 2016-08-18 15:48:30Z $
+ * $Id: wldev_common.c 668765 2016-11-04 21:59:07Z $
  */
 
 #include <osl.h>
@@ -28,6 +28,9 @@
 
 #include <wldev_common.h>
 #include <bcmutils.h>
+#ifdef WL_CFG80211
+#include <wl_cfg80211.h>
+#endif /* WL_CFG80211 */
 
 #if defined(IL_BIGENDIAN)
 #include <bcmendian.h>
@@ -362,13 +365,18 @@ int wldev_set_band(
 	struct net_device *dev, uint band)
 {
 	int error = -1;
+#if defined(WL_CFG80211) && !defined(BCMDONGLEHOST)
+	struct bcm_cfg80211 * cfg = wl_get_cfg(dev);
+#endif /* WL_CFG80211 && !BCMDONGLEHOST */
 
 	if ((band == WLC_BAND_AUTO) || (band == WLC_BAND_5G) || (band == WLC_BAND_2G)) {
 		error = wldev_ioctl(dev, WLC_SET_BAND, &band, sizeof(band), true);
-#if defined(BCMDONGLEHOST)
 		if (!error)
+#if defined(WL_CFG80211) && !defined(BCMDONGLEHOST)
+			wl_update_wiphybands(cfg, true);
+#else
 			dhd_bus_band_set(dev, band);
-#endif /* BCMDONGLEHOST */
+#endif /* WL_CFG80211 && !BCMDONGLEHOST */
 	}
 	return error;
 }
@@ -454,6 +462,11 @@ int wldev_set_country(
 	wl_country_t cspec = {{0}, 0, {0}};
 	scb_val_t scbval;
 	char smbuf[WLC_IOCTL_SMLEN];
+#ifdef WL_CFG80211
+	struct wireless_dev *wdev = ndev_to_wdev(dev);
+	struct wiphy *wiphy = wdev->wiphy;
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+#endif /* WL_CFG80211 */
 
 	if (!country_code)
 		return error;
@@ -471,7 +484,11 @@ int wldev_set_country(
 #endif /* OEM_ANDROID */
 	    (strncmp(country_code, cspec.ccode, WLC_CNTRY_BUF_SZ) != 0)) {
 
+#ifdef WL_CFG80211
+		if ((user_enforced) && (wl_get_drv_status(cfg, CONNECTED, dev))) {
+#else
 		if (user_enforced) {
+#endif /* WL_CFG80211 */
 			bzero(&scbval, sizeof(scb_val_t));
 			error = wldev_ioctl(dev, WLC_DISASSOC, &scbval, sizeof(scb_val_t), true);
 			if (error < 0) {

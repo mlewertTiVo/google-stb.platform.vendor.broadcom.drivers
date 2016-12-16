@@ -12,7 +12,7 @@
  *
  *   <<Broadcom-WL-IPTag/Proprietary:>>
  *
- *   $Id: wlc_pm.c 644819 2016-06-21 20:37:30Z $
+ *   $Id: wlc_pm.c 665131 2016-10-15 02:11:11Z $
  */
 
 /**
@@ -39,6 +39,10 @@
 #include <sbchipc.h>
 #include <pcicfg.h>
 #include <bcmsrom.h>
+#if defined(BCMDBG_DUMP)
+#include <bcmnvram.h>
+#endif
+#include <wlc_event_utils.h>
 #include <wlioctl.h>
 #include <epivers.h>
 #if defined(BCMSUP_PSK) || defined(STA) || defined(LINUX_CRYPTO)
@@ -148,6 +152,9 @@
 #endif /* RWL_DONGLE || UART_REFLECTOR */
 #include <wlc_extlog.h>
 #include <wlc_assoc.h>
+#ifdef BCMASSERT_LOG
+#include <bcm_assert_log.h>
+#endif
 #if defined(RWL_WIFI) || defined(WIFI_REFLECTOR)
 #include <wlc_rwl.h>
 #endif
@@ -186,7 +193,6 @@
 #endif
 #include <wlc_macfltr.h>
 #include <wlc_addrmatch.h>
-#include <wlc_bmon.h>
 #ifdef WL_RELMCAST
 #include "wlc_relmcast.h"
 #endif
@@ -208,9 +214,6 @@
 #endif
 #include <wlc_hs20.h>
 
-#ifdef WL_PWRSTATS
-#include <wlc_pwrstats.h>
-#endif
 #include <wlc_pm.h>
 
 #ifdef WL_EXCESS_PMWAKE
@@ -223,6 +226,10 @@
 #include <wlc_pwrstats.h>
 #endif /* WL_PWRSTATS */
 
+#ifdef WL_LEAKY_AP_STATS
+#include <wlc_leakyapstats.h>
+#endif /* WL_LEAKY_AP_STATS */
+
 #ifdef BCMULP
 #include <ulp.h>
 #include <wlc_ulp.h>
@@ -232,6 +239,7 @@
 #include <wlc_iocv.h>
 
 #include <wlc_rsdb.h>
+#include <phy_calmgr_api.h>
 
 #ifdef STA
 #ifdef WL_EXCESS_PMWAKE
@@ -391,10 +399,13 @@ wlc_pm2_sleep_ret_timeout(wlc_bsscfg_t *cfg)
 				 * Wait for the next power save mode enter check
 				 */
 				WL_SRSCAN(("Extend background roam scan home time by %dms "
-					"(wake=%dms)", 2 * pm->pm2_sleep_ret_time, wake_time));
+					"(wake=%dms)",
+					time_left + pm->pm2_sleep_ret_time, wake_time));
 				WL_ASSOC(("Extend background roam scan home time by %dms "
-					"(wake=%dms)", 2 * pm->pm2_sleep_ret_time, wake_time));
-				wlc_scan_timer_update(wlc->scan, 2 * pm->pm2_sleep_ret_time);
+					"(wake=%dms)",
+					time_left + pm->pm2_sleep_ret_time, wake_time));
+				wlc_scan_timer_update(wlc->scan,
+					time_left + pm->pm2_sleep_ret_time);
 			} else {
 				/* Cancel background roam scan in presence of any activity */
 				WL_SRSCAN(("Cancel background roam scan (wake=%dms)", wake_time));
@@ -502,6 +513,12 @@ wlc_pm2_enter_ps(wlc_bsscfg_t *cfg)
 	if (pm->PMpending || pm->PMenabledModuleId) {
 		WL_RTDC(wlc, "wlc_pm2_enter_ps: succeeded", 0, 0);
 
+#ifdef WL_LEAKY_AP_STATS
+		if (WL_LEAKYAPSTATS_ENAB(wlc->pub)) {
+			wlc_leakyapstats_gt_reason_upd(wlc, wlc->cfg, WL_LEAKED_GUARD_TIME_FRTS);
+		}
+#endif /* WL_LEAKY_AP_STATS */
+
 		/* Enter the Receive Throttle feature state where we are in the
 		 * transition between the ON and OFF parts of the duty cycle.  In this
 		 * state we are waiting for a PM-indicated ACK to complete entering PS
@@ -535,6 +552,14 @@ wlc_pm2_enter_ps(wlc_bsscfg_t *cfg)
 		WL_RTDC2(wlc, "wlc_pm2_enter_ps: restart timer", 0, 0);
 		wlc_pm2_sleep_ret_timer_start(cfg, 0);
 
+#ifdef BCMDBG
+		WL_RTDC(wlc, "wlc_pm2_enter_ps: enter PS failed, PMep=%02u AW=%02u",
+			(pm->PMenabled ? 10 : 0) | pm->PMpending,
+			(PS_ALLOWED(cfg) ? 10 : 0) | STAY_AWAKE(wlc));
+		WL_RTDC(wlc, "    bss=%u assoc=%u", cfg->BSS, cfg->associated);
+		WL_RTDC(wlc, "    dptpend=%u portopen=%u",
+			FALSE, WLC_PORTOPEN(cfg));
+#endif /* BCMDBG */
 	}
 }
 
@@ -670,7 +695,7 @@ wlc_update_sleep_ret(wlc_bsscfg_t *bsscfg, bool inc_rx, bool inc_tx,
 	bool sleep_tmr_restart = FALSE;
 	uint sleep_tmr_new_threshold = pm->pm2_sleep_ret_time;
 
-	if (pm->PM != PM_FAST || !bsscfg->associated)
+	if (pm->PM != PM_FAST || !bsscfg->associated || pm->PMblocked)
 		return;
 
 	if (pm->PMenabled) {
@@ -783,7 +808,7 @@ wlc_create_pmalert_data(wlc_info_t *wlc, wl_pmalert_t **pm_alert_data, uint32 *d
 		fixed->curr_time = OSL_SYSUPTIME();
 		fixed->prev_stats_time = wlc->excess_pm_last_osltime;
 
-		fixed->cal_dur = wlc_phy_get_cal_dur(WLC_PI(wlc));
+		fixed->cal_dur = phy_calmgr_get_cal_dur(WLC_PI(wlc));
 		fixed->prev_cal_dur = wlc->excess_pmwake->last_cal_dur;
 		fixed->prev_frts_dur = wlc->excess_pmwake->last_frts_dur;
 #ifdef WLPFN
@@ -845,7 +870,7 @@ wlc_get_ucode_dbg(wlc_info_t *wlc, wl_pmalert_ucode_dbg_t *ud)
 {
 	uint32 i;
 	d11regs_t *regs = wlc->regs;
-	ud->type = WL_PMALERT_UCODE_DBG;
+	ud->type = WL_PMALERT_UCODE_DBG_V2;
 	ud->len = sizeof(wl_pmalert_ucode_dbg_t);
 	ud->macctrl = R_REG(wlc->osh, &wlc->regs->maccontrol);
 #ifdef WLMCNX
@@ -908,7 +933,7 @@ wlc_reset_epm_dur(wlc_info_t *wlc)
 	}
 	wlc_pwrstats_frts_checkpoint(wlc->pwrstats);
 	epm->last_frts_dur = wlc_pwrstats_get_frts_data_dur(wlc->pwrstats);
-	epm->last_cal_dur = wlc_phy_get_cal_dur(WLC_PI(wlc));
+	epm->last_cal_dur = phy_calmgr_get_cal_dur(WLC_PI(wlc));
 	wlc_pwrstats_copy_event_wake_dur(epm->pp_start_event_dur, wlc->pwrstats);
 	if (wlc->excess_pmwake->pm_alert_data) {
 		MFREE(wlc->osh, wlc->excess_pmwake->pm_alert_data,
@@ -1276,6 +1301,9 @@ bool
 wlc_sendapsdtrigger(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 {
 	struct scb *scb;
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	ASSERT(cfg != NULL);
 	ASSERT(cfg->associated);
@@ -1359,11 +1387,32 @@ wlc_InTIM(wlc_bsscfg_t *cfg, bcm_tlv_t *tim_ie, uint tim_ie_len)
 	    tim_ie->len < DOT11_MNG_TIM_FIXED_LEN ||
 	    tim_ie->data[DOT11_MNG_TIM_DTIM_COUNT] >= tim_ie->data[DOT11_MNG_TIM_DTIM_PERIOD]) {
 		/* sick AP, prevent going to power-save mode */
+#ifdef BCMDBG
+		if (tim_ie == NULL) {
+			WL_PRINT(("wl%d.%d: %s: no TIM\n",
+			          cfg->wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__));
+		}
+		else if (tim_ie->len < DOT11_MNG_TIM_FIXED_LEN) {
+			WL_PRINT(("wl%d.%d: %s: short TIM %d\n",
+			          cfg->wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__,
+			          tim_ie->len));
+		}
+		else {
+			WL_PRINT(("wl%d.%d: %s: bad DTIM count %d\n",
+			          cfg->wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__,
+			          tim_ie->data[DOT11_MNG_TIM_DTIM_COUNT]));
+		}
+#endif
 		wlc_set_pmoverride(cfg, TRUE);
 		return FALSE;
 	}
 
 	if (cfg->pm->PM_override) {
+#ifdef BCMDBG
+		WL_PRINT(("wl%d.%d: %s: good TIM is restored\n",
+			cfg->wlc->pub->unit, WLC_BSSCFG_IDX(cfg),
+			__FUNCTION__));
+#endif
 		wlc_set_pmoverride(cfg, FALSE);
 	}
 	if (cfg->dtim_programmed == 0) {
@@ -1381,6 +1430,10 @@ wlc_InTIM(wlc_bsscfg_t *cfg, bcm_tlv_t *tim_ie, uint tim_ie_len)
 
 	/* compute bitmap length (N2 - N1) from info element length */
 	pvblen = tim_ie->len - DOT11_MNG_TIM_FIXED_LEN;
+
+	/* bit[0] is used to indicate BCMC */
+	cfg->pm->tim_bits_in_last_bcn = (tim_ie->data[DOT11_MNG_TIM_BITMAP_CTL] & 0x1) +
+		(bcm_bitcount(&tim_ie->data[DOT11_MNG_TIM_PVB], pvblen) << 1);
 
 	/* bail early if our AID precedes the TIM */
 	AIDbyte = (cfg->AID & DOT11_AID_MASK) >> 3;
@@ -1550,41 +1603,6 @@ wlc_bcn_parse_tim_ie(void *ctx, wlc_iem_parse_data_t *data)
 
 	return BCME_OK;
 }
-
-/* Parse TIM IE for bcast/mcast to defer watch dog */
-static int
-wlc_bcn_parse_tim_ie_wd(void *ctx, wlc_iem_parse_data_t *data)
-{
-	wlc_info_t *wlc = (wlc_info_t *)ctx;
-	wlc_bsscfg_t *cfg = data->cfg;
-	wlc_pm_st_t *pm = cfg->pm;
-	bcm_tlv_t *tim_ie = (bcm_tlv_t *)data->ie;
-
-	if (!BSSCFG_STA(cfg) || !cfg->BSS)
-		return BCME_OK;
-
-	if (cfg->associated && pm->PM != PM_OFF &&
-		wlc->pub->align_wd_tbtt) {
-
-		wlc->wd_run_flag = TRUE;
-
-		if (tim_ie == NULL ||
-			tim_ie->len < DOT11_MNG_TIM_FIXED_LEN ||
-			(tim_ie->data[DOT11_MNG_TIM_DTIM_COUNT] >=
-			tim_ie->data[DOT11_MNG_TIM_DTIM_PERIOD])) {
-			/* AP has problem; don't defer WD in that case */
-			return BCME_ERROR;
-		}
-
-		/* bcast/mcast traffic indication is set in beacon; defer WD */
-		if (!tim_ie->data[DOT11_MNG_TIM_DTIM_COUNT] &&
-			tim_ie->data[DOT11_MNG_TIM_BITMAP_CTL] & 0x1) {
-
-			 wlc->wd_run_flag = FALSE;
-		}
-	}
-	return BCME_OK;
-}
 #endif /* STA */
 
 #ifdef BCMULP
@@ -1692,7 +1710,7 @@ struct wlc_pm_info {
 
 #ifdef STA
 /* iovar table */
-enum {
+enum wlc_pm_iov {
 	IOV_PM2_RCV_DUR = 1,	/* PM=2 burst receive duration limit, in ms */
 	IOV_SEND_NULLDATA = 2,	/* Used to tx a null frame to the given mac addr */
 	IOV_PSPOLL_PRD = 3,	/* PS poll interval in milliseconds */
@@ -1714,6 +1732,7 @@ enum {
 	IOV_CONST_AWAKE_THRESH = 19,
 	IOV_PM_BCMC_WAIT = 20,
 	IOV_PM_BCMC_MOREDATA_WAIT = 21,
+	IOV_TIMIE = 22,
 	IOV_LAST
 };
 
@@ -1724,8 +1743,8 @@ static const bcm_iovar_t pm_iovars[] = {
 	{"send_nulldata", IOV_SEND_NULLDATA,
 	IOVF_SET_UP | IOVF_BSSCFG_STA_ONLY, 0, IOVT_BUFFER, ETHER_ADDR_LEN},
 	{"pspoll_prd", IOV_PSPOLL_PRD, IOVF_BSSCFG_STA_ONLY, 0, IOVT_UINT16, 0},
-	{"bcn_li_bcn", IOV_BCN_LI_BCN, 0, 0, IOVT_UINT8, 0},
-	{"bcn_li_dtim", IOV_BCN_LI_DTIM, 0, 0, IOVT_UINT8, 0},
+	{"bcn_li_bcn", IOV_BCN_LI_BCN, IOVF_RSDB_SET, 0, IOVT_UINT8, 0},
+	{"bcn_li_dtim", IOV_BCN_LI_DTIM, IOVF_RSDB_SET, 0, IOVT_UINT8, 0},
 #if defined(ADV_PS_POLL)
 	{"adv_ps_poll", IOV_ADV_PS_POLL, IOVF_BSSCFG_STA_ONLY, 0, IOVT_BOOL, 0},
 #endif
@@ -1733,7 +1752,7 @@ static const bcm_iovar_t pm_iovars[] = {
 	{"pm2_sleep_ret_ext", IOV_PM2_SLEEP_RET_EXT,
 	0, 0, IOVT_BUFFER, sizeof(wl_pm2_sleep_ret_ext_t)},
 	{"pm2_refresh_badiv", IOV_PM2_REFRESH_BADIV, IOVF_BSSCFG_STA_ONLY, 0, IOVT_INT16, 0},
-	{"pm_dur", IOV_PM_DUR, 0, 0, IOVT_UINT32, 0},
+	{"pm_dur", IOV_PM_DUR, 0, IOVF2_RSDB_CORE_OVERRIDE, IOVT_UINT32, 0},
 	{"pm2_radio_shutoff_dly", IOV_PM2_RADIO_SHUTOFF_DLY, 0, 0, IOVT_UINT16, 0},
 #ifdef WL_EXCESS_PMWAKE
 	{"excess_pm_period", IOV_EXCESS_PM_PERIOD, IOVF_WHL, 0, IOVT_INT16, 0},
@@ -1752,6 +1771,9 @@ static const bcm_iovar_t pm_iovars[] = {
 	},
 	{"pm_bcmc_moredata_wait", IOV_PM_BCMC_MOREDATA_WAIT,
 	(0), 0, IOVT_UINT16, 0
+	},
+	{"timie", IOV_TIMIE,
+	(0), 0, IOVT_UINT32, 0
 	},
 	{NULL, 0, 0, 0, 0, 0}
 };
@@ -1820,6 +1842,9 @@ wlc_pm_doiovar(void *ctx, uint32 actionid,
 #endif /* WL_PM2_RCV_DUR_LIMIT */
 
 	case IOV_SVAL(IOV_SEND_NULLDATA): {
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+		char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 		if (!bsscfg->BSS) {
 			WL_ERROR(("wl%d.%d: not an Infra STA\n",
@@ -2122,6 +2147,14 @@ wlc_pm_doiovar(void *ctx, uint32 actionid,
 		break;
 	}
 
+	case IOV_GVAL(IOV_TIMIE):
+		if (!bsscfg->associated) {
+			err = BCME_NOTASSOCIATED;
+			break;
+		}
+		*ret_int_ptr = pm->tim_bits_in_last_bcn;
+		break;
+
 	default:
 		err = BCME_UNSUPPORTED;
 		break;
@@ -2191,6 +2224,19 @@ wlc_pm_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif)
 
 		break;
 
+#ifdef BCMDBG
+	case WLC_GET_WAKE:
+		*pval = wlc->wake;
+		break;
+
+	case WLC_SET_WAKE:
+		WL_PS(("wl%d: setting WAKE to %d\n", WLCWLUNIT(wlc), val));
+		wlc->wake = val ? TRUE : FALSE;
+
+		/* apply to the mac */
+		wlc_set_wake_ctrl(wlc);
+		break;
+#endif /* BCMDBG */
 
 	default:
 		bcmerror = BCME_UNSUPPORTED;
@@ -2329,6 +2375,17 @@ wlc_pm_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_pm_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	bcm_bprintf(b, "WME_PM_blocked %d\n", cfg->pm->WME_PM_blocked);
+	bcm_bprintf(b, "PM mode %d PMenabled %d PM_override %d PSpoll %d\n",
+	            cfg->pm->PM, cfg->pm->PMenabled, cfg->pm->PM_override, cfg->pm->PSpoll);
+	bcm_bprintf(b, "PMpending %d priorPMstate %d\n",
+	            cfg->pm->PMpending, cfg->pm->priorPMstate);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #ifdef STA
 /* handle bsscfg state change */
@@ -2344,20 +2401,26 @@ wlc_pm_bss_state_upd(void *ctx, bsscfg_state_upd_data_t *evt)
 
 		if (BSSCFG_STA(cfg) && cfg->pm != NULL) {
 			/* cancel any apsd trigger timer */
-			if (!wl_del_timer(wlc->wl, cfg->pm->apsd_trigger_timer))
+			if (!wl_del_timer(wlc->wl, cfg->pm->apsd_trigger_timer)) {
 				callbacks++;
+			}
 			/* cancel any pspoll timer */
-			if (!wl_del_timer(wlc->wl, cfg->pm->pspoll_timer))
+			if (!wl_del_timer(wlc->wl, cfg->pm->pspoll_timer)) {
 				callbacks ++;
+			}
 		}
 
 		/* return to the caller */
 		evt->callbacks_pending = callbacks;
 	}
+	/* stopped the PM2 timer when the device is down */
+	if (!cfg->up && BSSCFG_STA(cfg) && cfg->pm->PM == PM_FAST) {
+		wlc_pm2_sleep_ret_timer_stop(cfg);
+	}
 }
 #endif /* STA */
 
-#if defined(ENABLE_DUMP_PM)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(ENABLE_DUMP_PM)
 static int
 wlc_dump_pm(wlc_info_t *wlc, struct bcmstrbuf *b)
 {
@@ -2375,9 +2438,9 @@ wlc_dump_pm(wlc_info_t *wlc, struct bcmstrbuf *b)
 	            wlc->PMawakebcn,
 	            wlc->check_for_unaligned_tbtt);
 	bcm_bprintf(b, "wlc->gptimer_stay_awake_req %d wlc->pm2_radio_shutoff_pending %d"
-	            " wlc->user_wake_req %d BTA_ACTIVE() %d\n",
-	            wlc->gptimer_stay_awake_req, wlc->pm2_radio_shutoff_pending, wlc->user_wake_req,
-	            BTA_ACTIVE(wlc));
+				"wlc->user_wake_req %d \n",
+				wlc->gptimer_stay_awake_req, wlc->pm2_radio_shutoff_pending,
+				wlc->user_wake_req);
 #ifdef WL11K
 	bcm_bprintf(b, "wlc_rrm_inprog %d\n", wlc_rrm_inprog(wlc));
 #endif
@@ -2398,21 +2461,29 @@ wlc_dump_pm(wlc_info_t *wlc, struct bcmstrbuf *b)
 
 	return BCME_OK;
 }
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || ENABLE_DUMP_PM */
 
 #ifdef WLRSDB
 typedef struct {
 	uint8	PM;	/* power-management mode (CAM, PS or FASTPS) */
+	uint16	pspoll_prd;		/* pspoll interval in milliseconds */
+	uint16	pm_bcmc_wait;    	/* wait time in usecs for bcmc traffic */
+	uint16	pm_bcmc_moredata_wait;	/* wait time in usecs for bcmc traffic with MoreData=0 */
 } wlc_pm_copy_t;
 #define PM_COPY_SIZE	sizeof(wlc_pm_copy_t)
 static int
 wlc_pm_bss_get(void *ctx, wlc_bsscfg_t *cfg, uint8 *data, int *len)
 {
 #ifdef STA
+	wlc_pm_info_t *pmi = (wlc_pm_info_t *)ctx;
+
 	/* retrieve the PM mode between bsscfg's */
 	if (BSSCFG_STA(cfg)) {
 		wlc_pm_copy_t *cp = (wlc_pm_copy_t *)data;
 		cp->PM = cfg->pm->PM;
+		cp->pspoll_prd = cfg->pm->pspoll_prd;
+		cp->pm_bcmc_wait = pmi->pm_bcmc_wait;
+		cp->pm_bcmc_moredata_wait = pmi->pm_bcmc_moredata_wait;
 	}
 #endif
 	return BCME_OK;
@@ -2421,10 +2492,15 @@ static int
 wlc_pm_bss_set(void *ctx, wlc_bsscfg_t *cfg, const uint8 *data, int len)
 {
 #ifdef STA
+	wlc_pm_info_t *pmi = (wlc_pm_info_t *)ctx;
+
 	/* copy the PM mode between bsscfg's */
 	if (BSSCFG_STA(cfg)) {
 		wlc_pm_copy_t *cp = (wlc_pm_copy_t *)data;
 		cfg->pm->PM = cp->PM;
+		cfg->pm->pspoll_prd = cp->pspoll_prd;
+		pmi->pm_bcmc_wait = cp->pm_bcmc_wait;
+		pmi->pm_bcmc_moredata_wait = cp->pm_bcmc_moredata_wait;
 	}
 #endif
 	return BCME_OK;
@@ -2456,6 +2532,9 @@ BCMATTACHFN(wlc_pm_attach)(wlc_info_t *wlc)
 	cubby_params.context = pmi;
 	cubby_params.fn_init = wlc_pm_bss_init;
 	cubby_params.fn_deinit = wlc_pm_bss_deinit;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = wlc_pm_bss_dump;
+#endif
 	cubby_params.fn_get = wlc_pm_bss_get;
 	cubby_params.fn_set = wlc_pm_bss_set;
 	cubby_params.config_size = PM_COPY_SIZE;
@@ -2473,13 +2552,6 @@ BCMATTACHFN(wlc_pm_attach)(wlc_info_t *wlc)
 	if (wlc_iem_add_parse_fn(wlc->iemi, FC_BEACON, DOT11_MNG_TIM_ID,
 			wlc_bcn_parse_tim_ie, wlc) != BCME_OK) {
 		WL_ERROR(("wl%d: %s: wlc_iem_add_parse_fn failed, tim ie in bcn\n",
-		          wlc->pub->unit, __FUNCTION__));
-		goto fail;
-	}
-	/* Register call back for bcast/mcast to defer watch dog */
-	if (wlc_iem_add_parse_fn(wlc->iemi, FC_BEACON, DOT11_MNG_TIM_ID,
-			wlc_bcn_parse_tim_ie_wd, wlc) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: wlc_iem_add_parse_fn failed, tim ie in bcn for wd\n",
 		          wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
@@ -2506,9 +2578,9 @@ BCMATTACHFN(wlc_pm_attach)(wlc_info_t *wlc)
 	}
 #endif /* STA */
 
-#if defined(ENABLE_DUMP_PM)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(ENABLE_DUMP_PM)
 	wlc_dump_register(wlc->pub, "pm", (dump_fn_t)wlc_dump_pm, (void *)wlc);
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || ENABLE_DUMP_PM */
 
 #ifdef BCMULP
 	if (wlc_pm_ulp_init(wlc) != BCME_OK) {

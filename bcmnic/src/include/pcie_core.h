@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: pcie_core.h 631379 2016-04-14 06:53:28Z $
+ * $Id: pcie_core.h 665160 2016-10-15 06:11:01Z $
  */
 #ifndef	_PCIE_CORE_H
 #define	_PCIE_CORE_H
@@ -158,7 +158,8 @@ typedef volatile struct sbpcieregs {
 	uint32 biststatus;	/* bist Status: 0x00C */
 	uint32 gpiosel;		/* PCIE gpio sel: 0x010 */
 	uint32 gpioouten;	/* PCIE gpio outen: 0x14 */
-	uint32 PAD[2];
+	uint32 gpioout;		/* PCIE gpio out: 0x18 */
+	uint32 PAD;
 	uint32 intstatus;	/* Interrupt status: 0x20 */
 	uint32 intmask;		/* Interrupt mask: 0x24 */
 	uint32 sbtopcimailbox;	/* sb to pcie mailbox: 0x028 */
@@ -666,6 +667,11 @@ typedef volatile struct sbpcieregs {
 #define PCIE_LTR0_REG_DEFAULT_150	0x88968896u	/* active latency default to 150usec */
 #define PCIE_LTR1_REG_DEFAULT		0x88648864u	/* idle latency default to 100usec */
 #define PCIE_LTR2_REG_DEFAULT		0x90039003u	/* sleep latency default to 3msec */
+#define PCIE_LTR_LAT_VALUE_MASK		0x3FF		/* LTR Latency mask */
+#define PCIE_LTR_LAT_SCALE_SHIFT	10		/* LTR Scale shift */
+#define PCIE_LTR_LAT_SCALE_MASK		0x1C00		/* LTR Scale mask */
+#define PCIE_LTR_SNOOP_REQ_SHIFT	15		/* LTR SNOOP REQ shift */
+#define PCIE_LTR_SNOOP_REQ_MASK		0x8000		/* LTR SNOOP REQ mask */
 
 /* Status reg PCIE_PLP_STATUSREG */
 #define PCIE_PLP_POLARITYINV_STAT	0x10

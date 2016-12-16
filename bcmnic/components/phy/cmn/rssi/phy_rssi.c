@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rssi.c 646150 2016-06-28 17:04:40Z jqliu $
+ * $Id: phy_rssi.c 663069 2016-10-04 01:20:17Z $
  */
 
 #include <phy_cfg.h>
@@ -44,10 +44,10 @@ typedef struct {
 
 /* module private states */
 struct phy_rssi_info {
-	phy_info_t *pi;
-	phy_type_rssi_fns_t *fns;
-	phy_rssi_ma_t *ma;
-	bool do_ma;
+	phy_info_t 		*pi;
+	phy_type_rssi_fns_t 	*fns;
+	phy_rssi_ma_t 		*ma;
+	bool 			do_ma;
 };
 
 /* module private states memory layout */
@@ -183,10 +183,20 @@ phy_rssi_compute_rssi(phy_info_t *pi, wlc_d11rxhdr_t *wrxh)
 end:
 	wrxh->rssi = WLC_RSSI_INVALID;
 	wrxh->rssi_qdb = 0;
-	/* skip calc rssi MA */
-	wrxh->do_rssi_ma = 1;
 
 	return WLC_RSSI_INVALID;
+}
+
+int8
+phy_rssi_get_rssi(phy_info_t *pi, const uint8 core)
+{
+	phy_rssi_info_t *info = pi->rssii;
+	phy_type_rssi_fns_t *fns = info->fns;
+	int8 rssi = 0x80;
+	if (fns->get_rssi != NULL) {
+		rssi = (fns->get_rssi)(fns->ctx, core);
+	}
+	return rssi;
 }
 
 static void
@@ -301,54 +311,6 @@ phy_rssi_dump(void *ctx, struct bcmstrbuf *b)
 }
 #endif /* BCMDBG || BCMDBG_DUMP */
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-void
-wlc_phy_pkteng_rxstats_update(wlc_phy_t *ppi, uint8 statidx)
-{
-	phy_info_t *pi = (phy_info_t*)ppi;
-	phy_type_rssi_fns_t *fns = pi->rssii->fns;
-
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->update_pkteng_rxstats != NULL) {
-		(fns->update_pkteng_rxstats)(fns->ctx, statidx);
-	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-	}
-}
-
-int
-wlc_phy_pkteng_stats_get(phy_rssi_info_t *rssii, void *a, int alen)
-{
-	phy_type_rssi_fns_t *fns = rssii->fns;
-	phy_info_t *pi = rssii->pi;
-	wl_pkteng_stats_t stats;
-	uint16 hi, lo;
-
-	if (!pi->sh->up) {
-		return BCME_NOTUP;
-	}
-
-	PHY_INFORM(("Pkteng Stats Called\n"));
-
-	bzero(&stats, sizeof(stats));
-
-	/* Read with guard against carry */
-	do {
-		hi = wlapi_bmac_read_shm(pi->sh->physhim, M_MFGTEST_FRMCNT_HI(pi));
-		lo = wlapi_bmac_read_shm(pi->sh->physhim, M_MFGTEST_FRMCNT_LO(pi));
-	} while (hi != wlapi_bmac_read_shm(pi->sh->physhim, M_MFGTEST_FRMCNT_HI(pi)));
-
-	stats.lostfrmcnt = (hi << 16) | lo;
-
-	if (fns->get_pkteng_stats != NULL) {
-		return (fns->get_pkteng_stats)(fns->ctx, a, alen, stats);
-	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-		return BCME_UNSUPPORTED;
-	}
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 
 int
 phy_rssi_set_gain_delta_2g(phy_rssi_info_t *rssii, uint32 aid, int8 *deltaValues)
@@ -405,61 +367,3 @@ phy_rssi_get_gain_delta_5g(phy_rssi_info_t *rssii, uint32 aid, int8 *deltaValues
 		return BCME_UNSUPPORTED;
 	}
 }
-
-#ifdef WLTEST
-int
-phy_rssi_set_gain_delta_2gb(phy_rssi_info_t *rssii, uint32 aid, int8 *deltaValues)
-{
-	phy_type_rssi_fns_t *fns = rssii->fns;
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->set_gain_delta_2gb != NULL) {
-		return (fns->set_gain_delta_2gb)(fns->ctx, aid, deltaValues);
-	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-		return BCME_UNSUPPORTED;
-	}
-}
-
-int
-phy_rssi_get_gain_delta_2gb(phy_rssi_info_t *rssii, uint32 aid, int8 *deltaValues)
-{
-	phy_type_rssi_fns_t *fns = rssii->fns;
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->get_gain_delta_2gb != NULL) {
-		return (fns->get_gain_delta_2gb)(fns->ctx, aid, deltaValues);
-	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-		return BCME_UNSUPPORTED;
-	}
-}
-
-int
-phy_rssi_set_cal_freq_2g(phy_rssi_info_t *rssii, int8 *nvramValues)
-{
-	phy_type_rssi_fns_t *fns = rssii->fns;
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->set_cal_freq_2g != NULL) {
-		return (fns->set_cal_freq_2g)(fns->ctx, nvramValues);
-	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-		return BCME_UNSUPPORTED;
-	}
-}
-
-int
-phy_rssi_get_cal_freq_2g(phy_rssi_info_t *rssii, int8 *nvramValues)
-{
-	phy_type_rssi_fns_t *fns = rssii->fns;
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->get_cal_freq_2g != NULL) {
-		return (fns->get_cal_freq_2g)(fns->ctx, nvramValues);
-	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-		return BCME_UNSUPPORTED;
-	}
-}
-#endif /* WLTEST */

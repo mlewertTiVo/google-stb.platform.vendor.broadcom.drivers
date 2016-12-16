@@ -21,7 +21,7 @@
 #
 #  <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makerules 629114 2016-04-04 08:29:40Z $
+# $Id: Makerules 646625 2016-06-30 02:57:52Z $
 
 # This is the TOP level makefile rules, which is used by many makefiles.
 # Please be cautious on changes, especially compatibilities.
@@ -30,6 +30,8 @@
 
 # first rule (default)
 all:
+
+APPLY_PREFIX ?= true
 
 WLAN_ComponentsInUse ?= bcmwifi
 include $(dir $(lastword $(MAKEFILE_LIST)))makefiles/WLAN_Common.mk
@@ -207,10 +209,12 @@ $(warning : LINUXDIR is not set!)
 	endif
 	endif
 
-	CC = $(TARGET_PREFIX)gcc
-	AS = $(TARGET_PREFIX)as
-	LD = $(TARGET_PREFIX)ld
-	AR = $(TARGET_PREFIX)ar
+	ifeq ($(APPLY_PREFIX),true)
+		CC = $(TARGET_PREFIX)gcc
+		AS = $(TARGET_PREFIX)as
+		LD = $(TARGET_PREFIX)ld
+		AR = $(TARGET_PREFIX)ar
+	endif
 
 	INSTALL = install -c
 

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_sta.c 645620 2016-06-24 22:29:00Z $
+ * $Id: wlc_sta.c 665171 2016-10-15 15:40:29Z $
  */
 
 /* Define wlc_cfg.h to be the first header file included as some builds
@@ -42,7 +42,6 @@
 #endif /* WLP2P */
 #include <wlc_ie_misc_hndlrs.h>
 #ifdef PROP_TXSTATUS
-#include <wlfc_proto.h>
 #include <wlc_ampdu.h>
 #include <wlc_apps.h>
 #include <wlc_wlfc.h>
@@ -62,10 +61,19 @@
 #ifdef WL_MODESW
 #include <wlc_modesw.h>
 #endif
+#ifdef WLRSDB
+#include <wlc_rsdb.h>
+#endif /* WLRSDB */
 #include <wlc_hw.h>
 #include <wlc_pm.h>
 #include <wlc_scan_utils.h>
+#include <wlc_he.h>
 #include <wlc_iocv.h>
+#include <phy_chanmgr_api.h>
+#include <phy_calmgr_api.h>
+#ifdef WL_LEAKY_AP_STATS
+#include <wlc_leakyapstats.h>
+#endif /* WL_LEAKY_AP_STATS */
 
 struct wlc_sta_info {
 	wlc_info_t *wlc;		/* pointer to main wlc structure */
@@ -105,6 +113,12 @@ static void sta_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_sta_assoc_state_clbk(void *arg,
 	bss_assoc_state_data_t *notif_data);
 static void wlc_sta_bsscfg_state_upd(void *ctx, bsscfg_state_upd_data_t *evt);
+static wlc_bsscfg_t* wlc_sta_iface_create(void *module_ctx, wl_interface_create_t *if_buf,
+	wl_interface_info_t *wl_info, int32 *err);
+static int32 wlc_sta_iface_remove(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg);
+#ifdef WLRSDB
+static void wlc_sta_rsdb_clone_handler(void *ctx, rsdb_cfg_clone_upd_t *notif_data);
+#endif /* WLRSDB */
 
 wlc_sta_info_t *
 BCMATTACHFN(wlc_sta_attach)(wlc_info_t *wlc)
@@ -141,6 +155,31 @@ BCMATTACHFN(wlc_sta_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+	/* Add callback function for STA interface creation */
+	if (wlc_bsscfg_iface_register(wlc, WL_INTERFACE_TYPE_STA, wlc_sta_iface_create,
+		wlc_sta_iface_remove, sta_info) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bsscfg_iface_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#ifdef WLRSDB
+	if (RSDB_ENAB(wlc->pub)) {
+		/* One instance of registration of notif interest is required here,
+		 * otherwise during clone we get clone start notification twice
+		 * and  clone end twice since  attach happens on both the wlc's
+		 * and hence two instance of registration
+		 */
+		if (wlc == WLC_RSDB_GET_PRIMARY_WLC(wlc)) {
+			if (wlc_rsdb_cfg_clone_register(wlc->rsdbinfo,
+				wlc_sta_rsdb_clone_handler, sta_info) != BCME_OK) {
+				WL_ERROR(("wl%d: %s: wlc_rsdb_cfg_clone_register failed\n",
+					wlc->pub->unit, __FUNCTION__));
+				goto fail;
+			}
+		}
+	}
+#endif /* WLRSDB */
+
 	return sta_info;
 
 fail:
@@ -159,6 +198,12 @@ BCMATTACHFN(wlc_sta_detach)(wlc_sta_info_t *sta_info)
 
 	(void)wlc_bss_assoc_state_unregister(wlc, wlc_sta_assoc_state_clbk, sta_info);
 	(void)wlc_bsscfg_state_upd_unregister(wlc, wlc_sta_bsscfg_state_upd, sta_info);
+
+	/* Unregister the STA interface during detach */
+	if (wlc_bsscfg_iface_unregister(wlc, WL_INTERFACE_TYPE_STA) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bsscfg_iface_unregister() failed\n",
+			WLCWLUNIT(wlc), __FUNCTION__));
+	}
 
 	MFREE(wlc->osh, sta_info, sizeof(wlc_sta_info_t));
 }
@@ -189,6 +234,9 @@ wlc_sta_assoc_state_clbk(void *arg, bss_assoc_state_data_t *notif_data)
 		WL_INFORM(("wlc_sta_assoc_state_clbk: timeslot registered:"
 			" cfg_idx:%d, type:%d, notif_state:%d\n",
 			WLC_BSSCFG_IDX(cfg), cfg->type, notif_data->state));
+	} else if (notif_data->state == AS_SCAN && !cfg->associated) {
+		/* --- unregister STA request --- */
+		wlc_sta_timeslot_unregister(cfg);
 	}
 }
 
@@ -198,7 +246,13 @@ wlc_sta_bsscfg_state_upd(void *ctx, bsscfg_state_upd_data_t *evt)
 	wlc_bsscfg_t *cfg = evt->cfg;
 	ASSERT(cfg != NULL);
 
-	if (!BSSCFG_STA(cfg) || BSSCFG_SPECIAL(cfg->wlc, cfg)) {
+	if (BSSCFG_AP(cfg)) {
+		/* some AP cfg state changed, handle watchdog alignment appropriately for STA */
+		wlc_watchdog_upd(cfg, WLC_WATCHDOG_TBTT(cfg->wlc));
+		return;
+	}
+
+	if (BSSCFG_SPECIAL(cfg->wlc, cfg)) {
 		return;
 	}
 
@@ -206,6 +260,65 @@ wlc_sta_bsscfg_state_upd(void *ctx, bsscfg_state_upd_data_t *evt)
 	if (evt->old_enable && !cfg->enable) {
 		wlc_sta_timeslot_unregister(cfg);
 	}
+}
+
+/*
+ * Function:	wlc_sta_iface_create
+ *
+ * Purpose:	Function to create sta interface through interface create command.
+ *
+ * Parameters:
+ * module_ctx	: Module context
+ * if_buf	: interface create buffer
+ * wl_info	: out parameter of created interface
+ * err		: pointer to store the error status
+ *
+ * Returns:	cfg pointer - If success
+ *		NULL on failure
+ */
+static wlc_bsscfg_t*
+wlc_sta_iface_create(void *module_ctx, wl_interface_create_t *if_buf, wl_interface_info_t *wl_info,
+	int32 *err)
+{
+	wlc_bsscfg_t *cfg;
+	wlc_sta_info_t *sta_info = module_ctx;
+	wlc_bsscfg_type_t type = {BSSCFG_TYPE_GENERIC, BSSCFG_GENERIC_STA};
+
+	ASSERT(sta_info->wlc);
+
+	cfg = wlc_iface_create_generic_bsscfg(sta_info->wlc, if_buf, &type, err);
+
+	return (cfg);
+}
+
+/*
+ * Function:	wlc_sta_iface_remove
+ *
+ * Purpose:	Function to remove sta interface(s) through interface_remove IOVAR.
+ *
+ * Input Parameters:
+ *	wlc	: Pointer to wlc
+ *	bsscfg	: Pointer to bsscfg corresponding to the interface
+ *
+ * Returns:	BCME_OK - If success
+ *		Respective error code on failures.
+ */
+static int32
+wlc_sta_iface_remove(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
+{
+	int32 ret;
+
+	if (bsscfg->subtype != BSSCFG_GENERIC_STA) {
+		ret = BCME_NOTSTA;
+	} else {
+		if (bsscfg->enable) {
+			wlc_bsscfg_disable(wlc, bsscfg);
+		}
+		wlc_bsscfg_free(wlc, bsscfg);
+		ret = BCME_OK;
+	}
+
+	return (ret);
 }
 
 static int
@@ -244,6 +357,8 @@ sta_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 		return;
 	}
 
+	if (ANY_SCAN_IN_PROGRESS(wlc->scan))
+		wlc_scan_abort_ex(wlc->scan, cfg, WLC_E_STATUS_ABORT);
 	sta_cfg_cubby = BSSCFG_STA_CUBBY(sta_info, cfg);
 	if (sta_cfg_cubby != NULL) {
 		if (sta_cfg_cubby->msch_req_hdl) {
@@ -408,6 +523,7 @@ wlc_sta_timeslot_unregister(wlc_bsscfg_t *bsscfg)
 		if (sta_cfg_cubby->msch_state == WLC_MSCH_PM_NOTIF_PEND) {
 			wlc_update_pmstate(bsscfg, TX_STATUS_BE);
 		}
+		wlc_txqueue_end(wlc, bsscfg, NULL);
 		wlc_msch_timeslot_unregister(wlc->msch_info, &sta_cfg_cubby->msch_req_hdl);
 		sta_cfg_cubby->msch_req_hdl = NULL;
 
@@ -497,6 +613,7 @@ wlc_sta_timeslot_update(wlc_bsscfg_t *bsscfg, uint32 start_tsf, uint32 interval)
 	wlc_msch_timeslot_update(wlc->msch_info, sta_cfg_cubby->msch_req_hdl, req, update_mask);
 }
 
+/** called back by multiple channel scheduler */
 static int
 wlc_sta_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 {
@@ -507,7 +624,7 @@ wlc_sta_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 	DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
 
 	if (!cfg || !cfg->up || !cfg->associated) {
-		/* The requeset is been cancelled, ignore the Clbk */
+		/* The request has been cancelled, ignore the Clbk */
 		return BCME_OK;
 	}
 
@@ -545,6 +662,9 @@ wlc_sta_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 		 * In CSA scenario a PHY cal has to be started
 		 */
 		if (!(sta_cfg_cubby->join_flags & STA_JOIN_FLAGS_NEW_JOIN)) {
+#ifdef PHYCAL_CACHING
+			phy_chanmgr_create_ctx((phy_info_t *) WLC_PI(wlc), cb_info->chanspec);
+#endif
 			wlc_full_phy_cal(wlc, cfg, PHY_PERICAL_JOIN_BSS);
 		}
 		sta_cfg_cubby->join_flags &= ~STA_JOIN_FLAGS_NEW_JOIN;
@@ -564,7 +684,6 @@ wlc_sta_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 	}
 
 	if ((type & MSCH_CT_SLOT_END) || (type & MSCH_CT_OFF_CHAN)) {
-		/* fall through */
 		if (sta_cfg_cubby->msch_state == WLC_MSCH_ON_CHANNEL) {
 			sta_cfg_cubby->msch_state = WLC_MSCH_OFFCHANNEL_PREP;
 			wlc_sta_prepare_off_channel(wlc, cfg);
@@ -628,6 +747,8 @@ wlc_sta_prepare_off_channel(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 			WLFC_CTL_TYPE_INTERFACE_CLOSE, FALSE);
 	}
 #endif /* PROP_TXSTATUS */
+
+	wlc_he_on_switch_bsscfg(wlc->hei, cfg, BSSCOLOR_DIS);
 }
 
 /* Indicate PM 1 to associated APs.
@@ -654,7 +775,6 @@ wlc_sta_prepare_pm_mode(wlc_bsscfg_t *cfg)
 	}
 
 	if (wlc->exptime_cnt == 0 && !quiet_channel) {
-
 		/* block any PSPoll operations for holding off AP traffic */
 #if defined(WLMCHAN) && defined(WLP2P)
 		if (MCHAN_ENAB(wlc->pub) && MCHAN_ACTIVE(wlc->pub) &&
@@ -692,16 +812,6 @@ wlc_sta_prepare_pm_mode(wlc_bsscfg_t *cfg)
 #endif /* WLMCHAN */
 		}
 	}
-	/* We are supposed to wait for PM0->PM1 transition to finish off channel but in case
-	 * we failed to send PM indications or failed to receive ACKs fake a PM0->PM1
-	 * transition so that anything depending on the transition to finish can move
-	 * forward
-	 * N.B.: to get wlc->PMpending updated in case all BSSs have done above
-	 * fake PM0->PM1 transitions.
-	 */
-	wlc_pm_pending_complete(wlc);
-
-	wlc_set_wake_ctrl(wlc);
 
 	/* PSPEND completed immediately */
 	if (sta_cfg_cubby->msch_state != WLC_MSCH_PM_NOTIF_PEND) {
@@ -710,6 +820,12 @@ wlc_sta_prepare_pm_mode(wlc_bsscfg_t *cfg)
 
 		return FALSE;
 	}
+
+#ifdef WL_LEAKY_AP_STATS
+	if (WL_LEAKYAPSTATS_ENAB(wlc->pub)) {
+		wlc_leakyapstats_gt_reason_upd(wlc, cfg, WL_LEAKED_GUARD_TIME_INFRA_STA);
+	}
+#endif /* WL_LEAKY_AP_STATS */
 	return TRUE;
 }
 
@@ -773,7 +889,6 @@ static void
 wlc_sta_return_home_channel(wlc_bsscfg_t *cfg)
 {
 	wlc_info_t *wlc = cfg->wlc;
-	wlc_txq_info_t *qi = cfg->wlcif->qi;
 #ifdef WLMCHAN
 	int btc_flags = wlc_bmac_btc_flags_get(wlc->hw);
 	uint16 protections = 0;
@@ -869,8 +984,6 @@ wlc_sta_return_home_channel(wlc_bsscfg_t *cfg)
 
 	wlc_enable_mac(wlc);
 
-	wlc_txflowcontrol_override(wlc, qi, OFF, TXQ_STOP_FOR_MSCH_FLOW_CNTRL);
-
 	/* Update PS modes for clients on new channel if their
 	* user settings so desire
 	*/
@@ -908,25 +1021,22 @@ wlc_sta_return_home_channel(wlc_bsscfg_t *cfg)
 		}
 
 		wlc_set_wake_ctrl(wlc);
-
-		/* run txq if not empty */
-		if (WLC_TXQ_OCCUPIED(wlc)) {
-			wlc_send_q(wlc, wlc->active_queue);
-		}
 	} else {
 		/* GC cfg is still in ABS, cannot bring it out of PS.
 		* Simply return
 		*/
 	}
-}
 
-/* prepare to leave home channel */
+	wlc_he_on_switch_bsscfg(wlc->hei, cfg, BSSCOLOR_EN);
+} /* wlc_sta_return_home_channel */
+
+/*  We are off home channel now */
 static void
 wlc_sta_off_channel_done(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 {
+#ifdef PROP_TXSTATUS
 	WL_INFORM(("wl%d.%d: %s\n", wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__));
 
-#ifdef PROP_TXSTATUS
 	if (PROP_TXSTATUS_ENAB(wlc->pub)) {
 		wlc_wlfc_mchan_interface_state_update(wlc, cfg,
 			WLFC_CTL_TYPE_INTERFACE_CLOSE, FALSE);
@@ -935,8 +1045,11 @@ wlc_sta_off_channel_done(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	}
 #endif /* PROP_TXSTATUS */
 
-	wlc_txflowcontrol_override(wlc, cfg->wlcif->qi, ON,
-		TXQ_STOP_FOR_MSCH_FLOW_CNTRL);
+#ifdef WL_LEAKY_AP_STATS
+	if (WL_LEAKYAPSTATS_ENAB(wlc->pub)) {
+		wlc_leakyapstats_gt_event(wlc, cfg);
+	}
+#endif /* WL_LEAKY_AP_STATS */
 }
 
 int
@@ -978,3 +1091,87 @@ wlc_sta_get_infra_bcn(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, void *buf, uint *le
 
 	return BCME_OK;
 }
+
+#ifdef WLRSDB
+static void
+wlc_sta_rsdb_clone_handler(void *ctx, rsdb_cfg_clone_upd_t *notif_data)
+{
+	wlc_bsscfg_t *cfg;
+	wlc_info_t *to_wlc;
+	wlc_info_t *from_wlc;
+
+	ASSERT(notif_data->cfg != NULL);
+	ASSERT(notif_data->to_wlc != NULL);
+
+	cfg = notif_data->cfg;
+	to_wlc = notif_data->to_wlc;
+	from_wlc = notif_data->from_wlc;
+	switch (notif_data->type) {
+		case CFG_CLONE_END: {
+			if (BSSCFG_STA(cfg) && (cfg->assoc->type == AS_ASSOCIATION ||
+				cfg->assoc->type == AS_ROAM)) {
+				wlc_bss_info_t *bi = NULL;
+				wlc_assoc_set_as_cfg(to_wlc, cfg);
+				bi = wlc_assoc_get_next_join_bi(to_wlc);
+				if (!to_wlc->bandlocked) {
+					int other_bandunit = (CHSPEC_WLCBANDUNIT(bi->chanspec) ==
+						BAND_5G_INDEX) ? BAND_2G_INDEX : BAND_5G_INDEX;
+
+					if (wlc_rsdb_change_band_allowed(to_wlc, other_bandunit)) {
+						wlc_change_band(to_wlc, other_bandunit);
+					}
+				}
+
+				/* Change the max rateset as per new mode. */
+				wlc_rsdb_init_max_rateset(to_wlc, NULL);
+				wlc_assoc_change_state(cfg, AS_SCAN);
+				wlc_rsdb_join_prep_wlc(to_wlc, cfg, cfg->SSID,
+					cfg->SSID_len, cfg->scan_params,
+					cfg->assoc_params,
+					cfg->assoc_params_len);
+				/* Inc the Join target last since in assoc_get_next_join_bi
+				* it was pre decremented so that in the next call to
+				* join attempt select we get the intended target
+				*/
+				wlc_assoc_next_join_target(to_wlc);
+				wlc_set_wake_ctrl(from_wlc);
+				wlc_join_attempt_select(cfg);
+			}
+			if (BSSCFG_IBSS(cfg) && cfg->ibss_up_pending) {
+				WL_INFORM(("wl%d.%d: wlc_sta_rsdb_clone_handler. Starting IBSS\n",
+					WLCWLUNIT(to_wlc), WLC_BSSCFG_IDX(cfg)));
+				wlc_assoc_set_as_cfg(to_wlc, cfg);
+				wlc_assoc_change_state(cfg, AS_SCAN);
+				wlc_rsdb_join_prep_wlc(to_wlc, cfg, cfg->SSID,
+					cfg->SSID_len, cfg->scan_params,
+					cfg->assoc_params,
+					cfg->assoc_params_len);
+				/* Note that target_bss on to_cfg is valid after rsdb_join prep
+				 * call where it is updated from to_wlc->default_bss. Any usage
+				 * before point will give incorrect target chanspec
+				 */
+				if (!to_wlc->bandlocked) {
+					wlc_bss_info_t *bi = cfg->target_bss;
+					int other_bandunit = (CHSPEC_WLCBANDUNIT(bi->chanspec) ==
+						BAND_5G_INDEX) ? BAND_2G_INDEX : BAND_5G_INDEX;
+
+					if (wlc_rsdb_change_band_allowed(from_wlc,
+						other_bandunit)) {
+						wlc_change_band(from_wlc, other_bandunit);
+					}
+				}
+				wlc_assoc_change_state(cfg, AS_IBSS_CREATE);
+				if (_wlc_join_start_ibss(to_wlc, cfg, cfg->target_bss->bss_type)
+					!= BCME_OK) {
+					wlc_set_ssid_complete(cfg, WLC_E_STATUS_FAIL, NULL,
+						DOT11_BSSTYPE_INDEPENDENT);
+				}
+				cfg->ibss_up_pending = FALSE;
+			}
+			break;
+		}
+		default:
+			break;
+	}
+}
+#endif /* WLRSDB */

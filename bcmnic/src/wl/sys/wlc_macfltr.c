@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_macfltr.c 639002 2016-05-19 21:12:42Z $
+ * $Id: wlc_macfltr.c 660317 2016-09-20 05:54:54Z $
  */
 
 #include <wlc_cfg.h>
@@ -70,6 +70,9 @@ typedef struct {
 /* ioctl */
 static int wlc_macfltr_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif);
 /* dump */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_macfltr_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* cubby */
 static void wlc_macfltr_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
@@ -77,7 +80,11 @@ static void wlc_macfltr_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
 static int wlc_macfltr_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static int wlc_macfltr_acksupr_enable(wlc_bsscfg_t *cfg, bool enable);
 #endif /* ACKSUPR_MAC_FILTER */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_macfltr_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_macfltr_bss_dump NULL
+#endif
 #ifdef ACKSUPR_MAC_FILTER
 static int wlc_macfltr_acksupr_doiovar(
 		    void                *hdl,
@@ -103,6 +110,12 @@ static const bcm_iovar_t acksupr_iovars[] = {
 	{NULL, 0, 0, 0, 0, 0 }
 };
 #endif /* ACKSUPR_MAC_FILTER */
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 /* module entries */
 wlc_macfltr_info_t *
@@ -154,6 +167,9 @@ BCMATTACHFN(wlc_macfltr_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "macfltr", wlc_macfltr_dump, (void *)mfi);
+#endif
 
 	return mfi;
 
@@ -227,6 +243,29 @@ wlc_macfltr_acksupr_doiovar(
 
 	return err;
 }
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void dump_amt_table(wlc_info_t *wlc)
+{
+	int i;
+	struct ether_addr ea;
+	uint16 attr;
+	char eabuf[ETHER_ADDR_STR_LEN];
+	int size;
+
+	if (D11REV_GE(wlc->pub->corerev, 40)) /* 11ac */
+		size = wlc->pub->max_addrma_idx;
+	else /* pre 11ac */
+		size = RCMTA_SIZE;
+
+	printf("\n---------------- current MHF ----------------\n");
+	printf("                0x%x\n", wlc_mhf_get(wlc, MHF4, wlc->band->bandtype));
+	printf("\n------------- current AMT table -------------\n");
+	for (i = 0; i < size; i++) {
+		wlc_get_addrmatch(wlc, i, &ea, &attr);
+		printf("%s \tattr 0x%x\n", bcm_ether_ntoa(&ea, eabuf), attr);
+	}
+}
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 static bool
 wlc_macfltr_is_stamon_resrv_slot(wlc_info_t *wlc, int amt_idx)
@@ -241,6 +280,9 @@ wlc_macfltr_acksupr_is_duplicate(wlc_info_t *wlc, struct ether_addr *ea)
 	int idx, i;
 	wlc_bsscfg_t *cfg;
 	bss_macfltr_info_t *bfi;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	if (!WLC_ACKSUPR(wlc))
 		return FALSE;
 
@@ -402,6 +444,9 @@ wlc_macfltr_acksupr_set(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int *max_maclist, bo
 	int i, amt_idx;
 	uint16 attr;
 	bss_macfltr_info_t *bfi;
+#if defined(BCMDBG_ERR)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	bfi = BSS_MACFLTR_INFO(wlc->macfltr, cfg);
 	ASSERT(bfi != NULL);
@@ -532,6 +577,9 @@ wlc_macfltr_acksupr_enable(wlc_bsscfg_t *cfg, bool enable)
 	if (!acksupr) {
 		wlc_addrmatch_info_free(wlc, max_maclist);
 	}
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	dump_amt_table(wlc);
+#endif
 	return BCME_OK;
 }
 #endif /* ACKSUPR_MAC_FILTER */
@@ -597,6 +645,23 @@ wlc_macfltr_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlc
 }
 
 /* debug... */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_macfltr_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_macfltr_info_t *mfi = (wlc_macfltr_info_t *)ctx;
+	wlc_info_t *wlc = mfi->wlc;
+	int idx;
+	wlc_bsscfg_t *cfg;
+
+	FOREACH_BSS(wlc, idx, cfg) {
+		bcm_bprintf(b, "bsscfg %d >\n", WLC_BSSCFG_IDX(cfg));
+		wlc_macfltr_bss_dump(mfi, cfg, b);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 #ifdef ACKSUPR_MAC_FILTER
 static int
 wlc_macfltr_bss_init(void *ctx, wlc_bsscfg_t *cfg)
@@ -652,6 +717,29 @@ wlc_macfltr_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_macfltr_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_macfltr_info_t *mfi = (wlc_macfltr_info_t *)ctx;
+	bss_macfltr_info_t *bfi;
+	int i;
+	char eabuf[ETHER_ADDR_STR_LEN];
+
+	ASSERT(cfg != NULL);
+
+	bfi = BSS_MACFLTR_INFO(mfi, cfg);
+	ASSERT(bfi != NULL);
+
+	bcm_bprintf(b, "\tmacmode %d (%s)\n", bfi->macmode,
+		bfi->macmode == 0  ? "disabled" : bfi->macmode == 1 ? "deny" : "allow");
+	if (bfi->macmode != WLC_MACMODE_DISABLED) {
+		bcm_bprintf(b, "\tnmac %d\n", bfi->nmac);
+		for (i = 0; i < (int)bfi->nmac; i++)
+			bcm_bprintf(b, "\t%s\n", bcm_ether_ntoa(&bfi->maclist[i], eabuf));
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #ifdef ACKSUPR_MAC_FILTER
 /*
@@ -732,6 +820,9 @@ wlc_macfltr_addrmatch_set(wlc_info_t *wlc, bss_macfltr_info_t *bfi, wlc_bsscfg_t
 			}
 		}
 	}
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	dump_amt_table(wlc);
+#endif
 
 }
 #endif /* ACKSUPR_MAC_FILTER */
@@ -792,6 +883,9 @@ wlc_macfltr_addrmatch_move(wlc_info_t *wlc)
 	uint16 attr;
 	int amt_idx;
 	wlc_bsscfg_t *cfg;
+#if defined(BCMDBG_ERR)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	bss_macfltr_info_t *bfi;
 
 	ASSERT(WLC_ACKSUPR(wlc));
@@ -825,6 +919,9 @@ wlc_macfltr_addrmatch_move(wlc_info_t *wlc)
 			wlc_clear_addrmatch(wlc, i);
 		}
 	}
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	dump_amt_table(wlc);
+#endif
 }
 #endif /* ACKSUPR_MAC_FILTER */
 /* set/get list */

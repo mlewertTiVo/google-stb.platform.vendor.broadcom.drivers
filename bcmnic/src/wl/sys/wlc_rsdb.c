@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rsdb.c 642395 2016-06-08 13:59:23Z $
+ * $Id: wlc_rsdb.c 665171 2016-10-15 15:40:29Z $
  */
 
 /**
@@ -29,6 +29,7 @@
 #include <wlc_cfg.h>
 #include <typedefs.h>
 #include <bcmdefs.h>
+#include <bcmdevs.h>
 #include <osl.h>
 #include <bcmutils.h>
 #include <wlioctl.h>
@@ -59,7 +60,6 @@
 #include <wlc_amsdu.h>
 #include <wlc_rsdb_policymgr.h>
 #ifdef PROP_TXSTATUS
-#include <wlfc_proto.h>
 #include <wlc_wlfc.h>
 #endif /* PROP_TXSTATUS */
 #ifdef WLAMPDU
@@ -111,57 +111,85 @@
 #include <wlc_iocv.h>
 #include <wlc_ampdu_cmn.h>
 #include <wlc_lq.h>
-
+#include <wlc_txmod.h>
 #ifdef WL_MU_RX
 #include <wlc_murx.h>
 #endif /* WL_MU_RX */
 
+#ifdef BCMDBG
+#define WLRSDB_DBG(x) WL_NONE(x)
+#else
 #define WLRSDB_DBG(x)
-
-static wlc_info_t * wlc_rsdb_find_wlc(wlc_info_t *wlc, wlc_bsscfg_t *join_cfg, wlc_bss_info_t *bi);
-static wlc_info_t * wlc_rsdb_get_mimo_wlc(wlc_info_t *wlc);
-static wlc_info_t * wlc_rsdb_get_siso_wlc(wlc_info_t *wlc);
-static int wlc_rsdb_get_max_chain_cap(wlc_info_t *wlc);
-#if defined(BCMDBG_RSDB)
-#include <wlc_dbg.h>
-static int wlc_rsdb_dump(void *wlc, struct bcmstrbuf *b);
 #endif
 
-#ifdef WL_MODESW
-static void wlc_rsdb_opmode_change_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data);
-static uint8 wlc_rsdb_ibss_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg);
-static wlc_bsscfg_t* wlc_rsdb_get_as_cfg(wlc_info_t* wlc);
-static void wlc_rsdb_clone_timer_cb(void *arg);
-#endif
-static void wlc_rsdb_mode_change_complete(wlc_info_t *wlc);
-static int wlc_rsdb_update_hw_mode(wlc_info_t *from_wlc, uint32 to_mode);
-static void wlc_rsdb_watchdog(void *context);
-static bool wlc_rsdb_peerap_ismimo(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
-static int wlc_rsdb_down(void *context);
-static int swmode2phymode[] = {PHYMODE_MIMO, PHYMODE_RSDB, PHYMODE_80P80, -1};
-static void wlc_rsdb_override_auto_mode_switch(wlc_info_t *wlc, uint32 reason);
-static void wlc_rsdb_restore_auto_mode_switch(wlc_info_t *wlc, uint32 reason);
-static int wlc_rsdb_ht_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *parse);
-static int wlc_rsdb_vht_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *parse);
-static void wlc_rsdb_update_scb_rateset(wlc_rsdb_info_t *rsdbinfo, struct scb *scb);
-static int
-wlc_rsdb_auto_assoc_mode_change(wlc_bsscfg_t **pcfg, wlc_bss_info_t *bi);
-static void wlc_rsdb_clone_assoc(wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg);
-static void wlc_rsdb_scb_reassoc(wlc_info_t *to_wlc, wlc_bsscfg_t *to_cfg);
-static void wlc_rsdb_sta_assoc_upd(wlc_bsscfg_t *cfg, bool state);
-static void wlc_rsdb_scb_state_upd_cb(void *ctx, scb_state_upd_data_t *notif_data);
-static int wlc_rsdb_trigger_modeswitch(wlc_bsscfg_t *bsscfg, int8 chain);
-static int wlc_dualmac_rsdb_monitor(wlc_info_t *wlc);
-static void wlc_rsdb_get_bands(wlc_info_t *wlc, rsdb_bands_t *rsdb_ptr);
+#include<phy_tpc_api.h>
 
 int phymode2swmode(int16 mode);
 #if defined(WLCHANIM)
 static void wlc_rsdb_check_load_based_upgarde(wlc_rsdb_info_t* rsdbinfo);
 #endif /* WLCHANIM */
-static bool wlc_rsdb_change_band_allowed(wlc_info_t *wlc, int bandunit);
+
 #define SWMODE2PHYMODE(x) swmode2phymode[(x)]
 #define PHYMODE2SWMODE(x) phymode2swmode(x)
 #define UNIT(ptr)	((ptr)->pub->unit)
+
+typedef enum rsdb_core_cap_bw {
+	WL_RSDB_CORE_CAP_BW_NONE = 0x00,
+	WL_RSDB_CORE_CAP_BW_2P5 = 0x01,
+	WL_RSDB_CORE_CAP_BW_5 = 0x02,
+	WL_RSDB_CORE_CAP_BW_10 = 0x04,
+	WL_RSDB_CORE_CAP_BW_20 = 0x08,
+	WL_RSDB_CORE_CAP_BW_40 = 0x10,
+	WL_RSDB_CORE_CAP_BW_80 = 0x20,
+	WL_RSDB_CORE_CAP_BW_160 = 0x40,
+	WL_RSDB_CORE_CAP_BW_8080 = 0x80
+} rsdb_core_cap_bw_t;
+
+typedef enum rsdb_core_cap_band {
+	WL_RSDB_CORE_CAP_BAND_NONE = 0x00,
+	WL_RSDB_CORE_CAP_BAND_2G = 0x01,
+	WL_RSDB_CORE_CAP_BAND_3G = 0x02,
+	WL_RSDB_CORE_CAP_BAND_4G = 0x04,
+	WL_RSDB_CORE_CAP_BAND_5G = 0x08
+} rsdb_core_cap_band_t;
+
+enum rsdb_clone_tmr_type {
+	RSDB_TMR_TYPE_AP_CLONE = 0,
+	RSDB_TMR_TYPE_STA_ASSOC = 1,
+	RSDB_TMR_TYPE_STA_CLONE = 2,
+	RSDB_TMR_TYPE_NONE = 3,
+	RSDB_TMR_TYPE_IBSS_CLONE = 4
+} rsdb_clone_tmr_type_t;
+
+/* The offsets should match the values of
+* bw inside chanspec defined in bcmwifi_channels.h
+*/
+rsdb_core_cap_bw_t rsdb_core_bw_map[] = {
+	WL_RSDB_CORE_CAP_BW_5,
+	WL_RSDB_CORE_CAP_BW_10,
+	WL_RSDB_CORE_CAP_BW_20,
+	WL_RSDB_CORE_CAP_BW_40,
+	WL_RSDB_CORE_CAP_BW_80,
+	WL_RSDB_CORE_CAP_BW_160,
+	WL_RSDB_CORE_CAP_BW_8080,
+	WL_RSDB_CORE_CAP_BW_2P5
+};
+
+/* The offsets should match the values of
+* band inside chanspec defined in bcmwifi_channels.h
+*/
+rsdb_core_cap_band_t rsdb_core_band_map[] = {
+	WL_RSDB_CORE_CAP_BAND_2G,
+	WL_RSDB_CORE_CAP_BAND_3G,
+	WL_RSDB_CORE_CAP_BAND_4G,
+	WL_RSDB_CORE_CAP_BAND_5G
+};
+
+typedef struct wlc_rsdb_core_cap {
+	rsdb_core_cap_band_t band;
+	rsdb_core_cap_bw_t bw;
+	uint8 chains;
+} wlc_rsdb_core_cap_t;
 
 typedef struct rsdb_assoc_cb_info {
 	rsdb_assoc_mode_change_cb_t cb; /* assoc mode change callback */
@@ -173,6 +201,11 @@ typedef struct rsdb_get_wlc_cb_info {
 	void * ctx;
 } rsdb_get_wlc_cb_info_t;
 
+typedef struct rsdb_timer_cb {
+	wlc_info_t *wlc;
+	wlc_bsscfg_t *cfg;
+	uint8 notif_type;
+} rsdb_timer_cb_t;
 
 struct wlc_rsdb_info {
 	wlc_info_t *wlc;
@@ -187,6 +220,20 @@ struct wlc_rsdb_info {
 struct rsdb_common_info {
 	int8 def_ampdu_mpdu;		/* default num of mpdu in ampdu */
 	bcm_notif_h	cfg_clone_notif_hdl;
+	struct wl_timer *rsdb_clone_timer;
+	rsdb_timer_cb_t *timer_ctx;
+	uint8		cmn_bwcap[MAXBANDS];	/**< Bandwidth bitmask for each band */
+	wlc_rsdb_core_cap_t core_cap[MAX_RSDB_MAC_NUM]; /* Core capabilites for each slice */
+
+	/* RSDB linked cfg indices, array size is WLC_MAXBSSCFG
+	 * if linked bsscfgs are 2 and 5, arr[2] = 5, arr[5] = 2
+	 */
+	int8 *linked_cfg_indices;
+	/* RSDB linked cfg host if indices, array size is WLC_MAXBSSCFG
+	 * if linked bsscfgs are 2 and 5, arr[2] = arr[5] = host_if_idx
+	 * which is notified to host on cfg creation.
+	 */
+	int *linked_cfg_hostif_indices;
 };
 
 /* Maximum number of channel switch information stored per WLC */
@@ -250,6 +297,62 @@ static const bcm_iovar_t rsdb_iovars[] = {
 static const char *rsdb_gbl_iovars[] = {"mpc", "apsta", "country", "event_msgs"};
 #endif
 
+static wlc_info_t * wlc_rsdb_find_wlc(wlc_info_t *wlc, wlc_bsscfg_t *join_cfg, wlc_bss_info_t *bi);
+static int wlc_rsdb_get_max_chain_cap(wlc_info_t *wlc);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_RSDB)
+#include <wlc_dbg.h>
+static int wlc_rsdb_dump(void *wlc, struct bcmstrbuf *b);
+#endif
+
+#ifdef WL_MODESW
+static void wlc_rsdb_opmode_change_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data);
+static void wlc_rsdb_clone_timer_cb(void *arg);
+#endif
+static void wlc_rsdb_mode_change_complete(wlc_info_t *wlc);
+static int wlc_rsdb_update_hw_mode(wlc_info_t *from_wlc, uint32 to_mode);
+static void wlc_rsdb_watchdog(void *context);
+static bool wlc_rsdb_peerap_ismimo(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
+static int wlc_rsdb_down(void *context);
+static int swmode2phymode[] = {PHYMODE_MIMO, PHYMODE_RSDB, PHYMODE_80P80, -1};
+static void wlc_rsdb_override_auto_mode_switch(wlc_info_t *wlc, uint32 reason);
+static void wlc_rsdb_restore_auto_mode_switch(wlc_info_t *wlc, uint32 reason);
+static int wlc_rsdb_ht_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *parse);
+static int wlc_rsdb_vht_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *parse);
+static void wlc_rsdb_update_scb_rateset(wlc_rsdb_info_t *rsdbinfo, struct scb *scb);
+static int
+wlc_rsdb_auto_assoc_mode_change(wlc_bsscfg_t **pcfg, wlc_bss_info_t *bi);
+static void wlc_rsdb_clone_assoc(wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg);
+static void wlc_rsdb_scb_reassoc(wlc_info_t *to_wlc, wlc_bsscfg_t *to_cfg);
+static void wlc_rsdb_sta_assoc_upd(wlc_bsscfg_t *cfg, bool state);
+static void wlc_rsdb_scb_state_upd_cb(void *ctx, scb_state_upd_data_t *notif_data);
+static int wlc_rsdb_trigger_modeswitch(wlc_bsscfg_t *bsscfg, int8 chain);
+static int wlc_dualmac_rsdb_monitor(wlc_info_t *wlc);
+static void wlc_rsdb_get_bands(wlc_info_t *wlc, rsdb_bands_t *rsdb_ptr);
+static void wlc_rsdb_schedule_timer(wlc_rsdb_info_t* rsdbinfo, struct wl_timer* tmr,
+	uint ms, int periodic);
+static uint8 wlc_rsdb_map_core_bw(chanspec_t chanspec);
+static uint8 wlc_rsdb_map_core_band(chanspec_t chanspec);
+static void wlc_rsdb_create_reqd_cap(wlc_info_t *wlc, chanspec_t chanspec,
+	wlc_bss_info_t *bi, wlc_rsdb_core_cap_t* out_cap);
+static int wlc_rsdb_preferred_wlc(wlc_rsdb_info_t *rsdbinfo, wlc_info_t** list, chanspec_t chanspec,
+	wlc_bss_info_t *bi,	uint32 match_mask);
+static void wlc_rsdb_derive_core_cap(wlc_rsdb_info_t *rsdbinfo);
+static rsdb_core_cap_bw_t wlc_rsdb_get_core_bw(wlc_rsdb_info_t *rsdbinfo);
+static rsdb_core_cap_band_t wlc_rsdb_get_core_band(wlc_rsdb_info_t *rsdbinfo);
+#if defined(RSDB_CMN_BANDSTATE) && !defined(RSDB_CMN_BANDSTATE_DISABLED)
+static void wlc_rsdb_derive_cmn_bwcap(wlc_rsdb_info_t *rsdbinfo, int bandtype);
+#endif /* defined(RSDB_CMN_BANDSTATE) && !defined(RSDB_CMN_BANDSTATE_DISABLED) */
+static int wlc_rsdb_scb_update(wlc_info_t *wlc_from, wlc_info_t *wlc_to, wlc_bsscfg_t *cfg_to,
+	struct scb *scb);
+static void wlc_rsdb_link_teardown(wlc_info_t *wlc, struct scb *scb, uint8 *activefid);
+static void wlc_rsdb_link_rebind(wlc_info_t *wlc, struct scb *scb, uint8 *activefid);
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
+
 int phymode2swmode(int16 mode)
 {
 	uint8 i = 0;
@@ -281,158 +384,44 @@ wlc_rsdb_bss_state_upd(void *ctx, bsscfg_state_upd_data_t *evt_data)
 	}
 }
 
-#ifdef WL_NAN
-/* RSDB NAN thumb rules
- *
- * 1.	Nan should not force RSDB mode switch
- * 2. 4359 will continue supporting all concurrent operations in 4358
- *    Nan won't force RSDB switch, insted will work in MIMO mode
- *    Exception - SoftAP{5G} + NAN{2G} will work in RSDB mode
- * 3. In RSDB mode if Nan want to use other wlc, bsscfg move is required
- *
- */
-uint8
-wlc_rsdb_get_nan_coex(wlc_info_t *wlc, chanspec_t chanspec)
+/* This API deletes and adds the given timer */
+static void
+wlc_rsdb_schedule_timer(wlc_rsdb_info_t* rsdbinfo, struct wl_timer* tmr, uint ms, int periodic)
 {
-	wlc_info_t *to_wlc;
-	uint8 nan_coex = WLC_NAN_COEX_CONTINUE;
-	wlc_bsscfg_t *nan_cfg = wlc_nan_bsscfg_get(wlc, NULL);
+	wlc_info_t *wlc = rsdbinfo->wlc;
 
-	if (chanspec == INVCHANSPEC) {
-		return WLC_NAN_COEX_INVALID;
-	}
-
-	/* update nan wlc if connected */
-	if (nan_cfg && WLC_BSS_CONNECTED(nan_cfg)) {
-		wlc = nan_cfg->wlc;
-	}
-
-	to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, chanspec);
-
-	if (!WLC_RSDB_IS_AUTO_MODE(wlc) &&
-		WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
-		/* If rsdb mode is not auto and in mimo, nan will continue in mimo */
-		nan_coex = WLC_NAN_COEX_CONTINUE;
-	}
-	/* CASE: [AP{5G}] -> join NAN */
-	else if (WLC_RSDB_IS_AUTO_MODE(wlc) &&
-		WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
-
-		if (wlc->aps_associated  > 0) {
-			nan_coex = WLC_NAN_COEX_DN_MODESW;
-		}
-	}
-	else if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
-		wlc_info_t *wlc0, *wlc1;
-		int wlc0_as_count, wlc1_as_count;
-
-		wlc0 =  wlc->cmn->wlc[0];
-		wlc1 =  wlc->cmn->wlc[1];
-		wlc0_as_count = wlc0->aps_associated + wlc0->stas_associated;
-		wlc1_as_count = wlc1->aps_associated + wlc1->stas_associated;
-
-		if (wlc0->pub->associated && wlc1->pub->associated &&
-			!wlc0->aps_associated && !wlc1->aps_associated) {
-
-			if (nan_cfg && WLC_BSS_CONNECTED(nan_cfg)) {
-				/* CASE: [NAN{2G}] + [P2P{5G}+XY{5G}] */
-				if ((wlc0_as_count == 1) && (wlc0 == nan_cfg->wlc)) {
-					nan_coex = WLC_NAN_COEX_MOVE;
-				}
-				/* CASE: [P2P{5G}+XY{5G}] + [NAN{2G}] */
-				if ((wlc1_as_count == 1) && (wlc1 == nan_cfg->wlc)) {
-					nan_coex = WLC_NAN_COEX_MOVE;
-				}
-			}
-			/* CASE: [P2P{5G}] + [STA{2G}] -> join NAN */
-			else if (wlc != to_wlc) {
-				nan_coex = WLC_NAN_COEX_MOVE;
-			}
-		}
-		/* CASE: [P2P{5G}+NAN{2G}] -> assoc STA{2G} */
-		/* CASE: [AP{5G}] + [STA{2G}] -> join NAN */
-		else if ((wlc != to_wlc) && !to_wlc->aps_associated) {
-			nan_coex = WLC_NAN_COEX_MOVE;
-		}
-	}
-
-	WL_ERROR(("wl%d nan coex status \"%s\"\n",	WLCWLUNIT(wlc),
-			(nan_coex == WLC_NAN_COEX_DN_MODESW) ? "DOWN MODE SWITCH" :
-			(nan_coex == WLC_NAN_COEX_INVALID) ? "INVALID" :
-			(nan_coex == WLC_NAN_COEX_MOVE) ? "MOVE" : "CONTINUE"));
-
-	return nan_coex;
+	wl_del_timer(wlc->wl, tmr);
+	wl_add_timer(wlc->wl, tmr, ms, periodic);
+	return;
 }
 
-/*
- * Do mode switch or bsscfg move based on concurrent mode support
- */
 int
-wlc_rsdb_nan_bringup(wlc_info_t *wlc, chanspec_t chanspec, wlc_bsscfg_t **cfg_p)
+wlc_rsdb_handle_sta_csa(wlc_rsdb_info_t* rsdbinfo, wlc_bsscfg_t *bsscfg, chanspec_t chanspec)
 {
-	wlc_info_t *to_wlc = NULL;
-	wlc_bsscfg_t *to_cfg = NULL;
-	wlc_bsscfg_t *cfg = *cfg_p;
-	uint8 nan_coex;
-
-	if (cfg && !BSSCFG_NAN_MGMT(cfg)) {
-		WL_ERROR(("wl%d.%d is not nan bsscfg\n", WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg)));
-		return BCME_ERROR;
+	wlc_info_t* wlc = rsdbinfo->wlc;
+	wlc_info_t* to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, NULL, chanspec, NULL, 0);
+	if (to_wlc == wlc) {
+		return BCME_OK;
 	}
-
-	/* findout whether nan requires mode swith/cfg move */
-	nan_coex = wlc_rsdb_get_nan_coex(wlc, chanspec);
-
-#ifdef WL_MODESW
-	if (WLC_MODESW_ENAB(wlc->pub) &&
-	    (nan_coex == WLC_NAN_COEX_DN_MODESW)) {
-		/* mimo to rsdb mode switch */
-		wlc_rsdb_downgrade_wlc(wlc);
-
-		wlc_nan_set_pending(wlc, WLC_NAN_MODESW_PENDING);
-		return WLC_NAN_MODESW_PENDING;
-	} else
-#endif
-	if (nan_coex == WLC_NAN_COEX_MOVE) {
-		int ret;
-		to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, chanspec);
-
-		if (wlc == to_wlc) {
-			WL_ERROR(("wl%d.%d nan move is pending, can't fing other wlc\n",
-					WLCWLUNIT(cfg->wlc), WLC_BSSCFG_IDX(cfg)));
-			return BCME_ERROR;
-		}
-
-		WLRSDB_DBG(("wl%d.%d cfg move from wlc %d to wlc %d\n",
-				WLCWLUNIT(cfg->wlc), WLC_BSSCFG_IDX(cfg),
-				WLCWLUNIT(wlc), WLCWLUNIT(to_wlc)));
-
-		/* Clone NAN cfg to other_wlc */
-		to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, cfg, &ret);
-		ASSERT(to_cfg != NULL);
-		if (ret != BCME_OK || to_cfg == NULL)
-			return BCME_ERROR;
-		*cfg_p = to_cfg;
-
-		wlc_nan_set_pending(wlc, WLC_NAN_MOVE_PENDING);
-		return WLC_NAN_MOVE_PENDING;
+	if (wlc->rsdbinfo->cmn->timer_ctx->notif_type == RSDB_TMR_TYPE_NONE) {
+		wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+		wlc->rsdbinfo->cmn->timer_ctx->cfg = bsscfg;
+		wlc->rsdbinfo->cmn->timer_ctx->notif_type = RSDB_TMR_TYPE_STA_CLONE;
+		wlc_rsdb_schedule_timer(wlc->cmn->wlc[1]->rsdbinfo,
+			rsdbinfo->cmn->rsdb_clone_timer, 0, FALSE);
 	}
-
-	wlc_nan_set_pending(wlc, FALSE);
-	return BCME_OK;
+	return BCME_ASSOCIATED;
 }
-#endif /* WL_NAN */
 
-uint8
-wlc_rsdb_ap_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg_p)
+int
+wlc_rsdb_ap_bringup(wlc_rsdb_info_t* rsdbinfo, wlc_bsscfg_t** cfg_p)
 {
+	wlc_info_t* wlc = rsdbinfo->wlc;
 	wlc_info_t *to_wlc = NULL;
 	wlc_bsscfg_t *from_cfg;
 	int ret = BCME_OK;
 	wlc_bsscfg_t* cfg = NULL;
-#ifdef WL_RESTRICTED_APSTA
 	uint8 apsta_restrict = FALSE;
-#endif
 
 	/* If rsdb mode is not auto and in mimo  */
 	if (!(wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK) &&
@@ -440,21 +429,34 @@ wlc_rsdb_ap_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg_p)
 		return BCME_OK;
 
 	cfg = *cfg_p;
+	to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, cfg->target_bss,
+		cfg->target_bss->chanspec, NULL, WL_RSDB_CORE_MATCH_BW);
 #ifdef WL_RESTRICTED_APSTA
 	if (RAPSTA_ENAB(wlc->pub) && !P2P_GO(wlc, cfg)) {
 		apsta_restrict = (wlc->stas_associated &&
 			wlc_channel_apsta_restriction(wlc->cmi, wlc->home_chanspec,
 			wlc->default_bss->chanspec));
-		if (apsta_restrict) {
-			/* Bringup AP in watchdog context */
-			WL_ERROR(("wl%d: Defer AP bringup due to"
-				"RAPSTA scenario, Watchdog will bring it up\n", WLCWLUNIT(wlc)));
-			return BCME_ASSOCIATED;
-		}
 	}
 #endif
 
-	to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, cfg->target_bss->chanspec);
+	to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, cfg->target_bss,
+		cfg->target_bss->chanspec, NULL, WL_RSDB_CORE_MATCH_BW);
+
+	if (apsta_restrict ||
+		(WLC_DUALMAC_RSDB(wlc->cmn) && (wlc != to_wlc))) {
+		WLRSDB_DBG(("wl%d: Defer AP bringup due to"
+			"RSDB scenario.\n", WLCWLUNIT(wlc)));
+		if (WLC_DUALMAC_RSDB(wlc->cmn) && (wlc != to_wlc)) {
+			wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+			wlc->rsdbinfo->cmn->timer_ctx->cfg = cfg;
+			wlc->rsdbinfo->cmn->timer_ctx->notif_type = RSDB_TMR_TYPE_AP_CLONE;
+			WLRSDB_DBG(("wl%d.%d: Schedule the timer for clone of the AP CFG\n",
+				WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg)));
+			wlc_rsdb_schedule_timer(wlc->cmn->wlc[1]->rsdbinfo,
+				rsdbinfo->cmn->rsdb_clone_timer, 0, FALSE);
+		}
+		return BCME_ASSOCIATED;
+	}
 
 #ifdef WL_MODESW
 	/* Update the oper mode of the cfg based on chanspec */
@@ -465,40 +467,94 @@ wlc_rsdb_ap_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg_p)
 	/* Not valid for non-RSDB mac as there wont be any modeswitch in that
 	 * case
 	 */
-	if (!WLC_DUALMAC_RSDB(wlc->cmn)) {
-		if (wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK) {
-			/* When AP comes up as the first connection in wlc[0], */
-			/* check for MIMO upgrade from RSDB */
-			if ((to_wlc == wlc->cmn->wlc[0]) &&
-				(wlc_rsdb_association_count(wlc) == 0)) {
-				if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
+	if (wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK) {
+		/* When AP comes up as the first connection in wlc[0], */
+		/* check for MIMO upgrade from RSDB */
+		if ((to_wlc == wlc->cmn->wlc[0]) &&
+			(wlc_rsdb_association_count(wlc) == 0)) {
+			if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
 #if defined(WL_MODESW) && defined(AP)
-					if (WLC_MODESW_ENAB(wlc->pub)) {
-						wlc_set_ap_up_pending(wlc, cfg, TRUE);
-					}
-#endif
-					ret = wlc_rsdb_upgrade_wlc(wlc);
-#if defined(WL_MODESW) && defined(AP)
-					if (WLC_MODESW_ENAB(wlc->pub)) {
-						wlc_set_ap_up_pending(wlc, cfg, FALSE);
-					}
-#endif
-					return ret;
+				if (WLC_MODESW_ENAB(wlc->pub)) {
+					wlc_set_ap_up_pending(wlc, cfg, TRUE);
 				}
+#endif
+				ret = wlc_rsdb_upgrade_wlc(wlc);
+#if defined(WL_MODESW) && defined(AP)
+				if (WLC_MODESW_ENAB(wlc->pub)) {
+					wlc_set_ap_up_pending(wlc, cfg, FALSE);
+				}
+#endif
+				return ret;
 			}
 		}
-#endif /* WL_MODESW && AP */
+	}
+#endif /* WL_MODESW */
 
-		/* When we bringup AP in wlc[0] and if STA is already associated in it */
-		/* first STA downgrades to RSDB if in MIMO */
-		/* then the STA is moved to other_wlc. */
-		if ((wlc != to_wlc) && (wlc->stas_associated == 1)) {
+	/* When we bringup AP in wlc[0] and if STA is already associated in it */
+	/* first STA downgrades to RSDB if in MIMO */
+	/* then the STA is moved to other_wlc. */
+	if ((wlc != to_wlc) && (wlc->stas_associated == 1)) {
 
 #ifdef WL_MODESW
+		if (WLC_MODESW_ENAB(wlc->pub) &&
+			(WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) &&
+			(wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK)) {
+				/* Allow downgarde of wlc's only if mchan is not active */
+				if (!MCHAN_ACTIVE(wlc->pub)) {
+					wlc_rsdb_downgrade_wlc(wlc);
+				} else {
+					return BCME_OK;
+				}
+		}
+#endif
+		if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
+			wlc_bsscfg_t *icfg;
+			wlc_bsscfg_t *to_cfg;
+			WLRSDB_DBG(("associated cfg move from wlc %d to wlc %d",
+				wlc->pub->unit, to_wlc->pub->unit));
+
+			icfg = wlc_bsscfg_primary(wlc);
+			from_cfg = (BSSCFG_AS_STA(icfg) ? icfg : NULL);
+
+			if (from_cfg != NULL) {
+				WLRSDB_DBG(("Found AS-STA cfg[wl%d.%d] for clone\n",
+					wlc->pub->unit, WLC_BSSCFG_IDX(from_cfg)));
+				to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, from_cfg, &ret);
+				ASSERT(to_cfg != NULL);
+				if (ret != BCME_OK || to_cfg == NULL)
+					return BCME_ERROR;
+			}
+			else {
+				WL_ERROR(("wl%d Unsupported RSDB operation\n",
+					WLCWLUNIT(wlc)));
+				ASSERT(FALSE);
+				return BCME_ERROR;
+			}
+
+		}
+#if defined(WL_MODESW) && defined(AP)
+		else if (WLC_MODESW_ENAB(wlc->pub)) {
+			wlc_set_ap_up_pending(wlc, cfg, TRUE);
+			return BCME_NOTREADY;
+		}
+#endif
+	}
+	/* When we bringup AP in wlc[0] and if AP is already associated in it */
+	/* first AP downgrades to RSDB if in MIMO */
+	/* then the AP is moved to other_wlc. */
+	else if ((wlc != to_wlc) && BSSCFG_AP(cfg) &&
+		(!to_wlc->aps_associated) &&
+			(wlc->aps_associated) &&
+			(!wlc->stas_associated) &&
+			(!to_wlc->stas_associated)) {
+
+#ifdef WL_MODESW
+			/* first AP downgrades to RSDB if in MIMO */
 			if (WLC_MODESW_ENAB(wlc->pub) &&
 				(WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) &&
 				(wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK)) {
-					/* Allow downgarde of wlc's only if mchan is not active */
+
+				/* Allow downgarde of wlc's only if mchan is not active */
 					if (!MCHAN_ACTIVE(wlc->pub)) {
 						wlc_rsdb_downgrade_wlc(wlc);
 					} else {
@@ -506,174 +562,139 @@ wlc_rsdb_ap_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg_p)
 					}
 			}
 #endif
+			/* If the system in RSDB mode */
 			if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
-				wlc_bsscfg_t *icfg;
 				wlc_bsscfg_t *to_cfg;
-				WLRSDB_DBG(("associated cfg move from wlc %d to wlc %d",
-					wlc->pub->unit, to_wlc->pub->unit));
 
-				icfg = wlc_bsscfg_primary(wlc);
-				from_cfg = (BSSCFG_AS_STA(icfg) ? icfg : NULL);
-
-				if (from_cfg != NULL) {
-					WLRSDB_DBG(("Found AS-STA cfg[wl%d.%d] for clone\n",
-						wlc->pub->unit, WLC_BSSCFG_IDX(from_cfg)));
-					to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, from_cfg, &ret);
-					ASSERT(to_cfg != NULL);
-					if (ret != BCME_OK || to_cfg == NULL)
-						return BCME_ERROR;
-				}
-				else {
-					WL_ERROR(("wl%d Unsupported RSDB operation\n",
-						WLCWLUNIT(wlc)));
-					ASSERT(FALSE);
+				/* Clone AP cfg to other_wlc. */
+				to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, cfg, &ret);
+				ASSERT(to_cfg != NULL);
+				if (ret != BCME_OK || to_cfg == NULL)
 					return BCME_ERROR;
-				}
-
+				*cfg_p = to_cfg;
 			}
 #if defined(WL_MODESW) && defined(AP)
 			else if (WLC_MODESW_ENAB(wlc->pub)) {
+				/* Set AP ugrade pending if the system is
+				* still in MIMO mode. This flag is to ensure that
+				* 'cfg' upgrade is done after mode switch is
+				* complete
+				*/
 				wlc_set_ap_up_pending(wlc, cfg, TRUE);
 				return BCME_NOTREADY;
 			}
 #endif
-		}
-		/* When we bringup AP in wlc[0] and if AP is already associated in it */
-		/* first AP downgrades to RSDB if in MIMO */
-		/* then the AP is moved to other_wlc. */
-		else if ((wlc != to_wlc) && BSSCFG_AP(cfg) &&
-			(!to_wlc->aps_associated) &&
-				(wlc->aps_associated) &&
-				(!wlc->stas_associated) &&
-				(!to_wlc->stas_associated)) {
-
-#ifdef WL_MODESW
-				/* first AP downgrades to RSDB if in MIMO */
-				if (WLC_MODESW_ENAB(wlc->pub) &&
-					(WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) &&
-					(wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK)) {
-
-					/* Allow downgarde of wlc's only if mchan is not active */
-						if (!MCHAN_ACTIVE(wlc->pub)) {
-							wlc_rsdb_downgrade_wlc(wlc);
-						} else {
-							return BCME_OK;
-						}
-				}
-#endif
-				/* If the system in RSDB mode */
-				if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
-					wlc_bsscfg_t *to_cfg;
-
-					/* Clone AP cfg to other_wlc. */
-					to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, cfg, &ret);
-					ASSERT(to_cfg != NULL);
-					if (ret != BCME_OK || to_cfg == NULL)
-						return BCME_ERROR;
-					*cfg_p = to_cfg;
-				}
-#if defined(WL_MODESW) && defined(AP)
-				else if (WLC_MODESW_ENAB(wlc->pub)) {
-					/* Set AP ugrade pending if the system is
-					* still in MIMO mode. This flag is to ensure that
-					* 'cfg' upgrade is done after mode switch is
-					* complete
-					*/
-					wlc_set_ap_up_pending(wlc, cfg, TRUE);
-					return BCME_NOTREADY;
-				}
-#endif
-		} else if ((wlc != to_wlc) && (to_wlc == wlc->cmn->wlc[1])) {
-				WL_ERROR(("wl%d Unsupported RSDB operation\n",
-					WLCWLUNIT(wlc)));
-				return BCME_OK;
-		}
-	} else {
-		/* Is there any case where we need to move the STA across wlcs?
-		 * If so we have to handle 3x3 to 1x1 or 1x1 to 3x3 mode
-		 * switch and clone
-		 */
-		/* If 3x3 to 1x1 move - Do a downgrade and on completion do a
-		 * bsscfg clone. This could be a case in which AP need to have
-		 * higher bandwidth requrement and need to be in 3x3.
-		 */
-		/* If 1x1 to 3x3 move - Do a bsscfg clone. Is it required to
-		 * have a upgrade depends on the mode in which it is
-		 * associated. This is a possible case when the original assoc
-		 * Capability of STA is 3x3 and is moved to 1x1 during
-		 * powersave.
-		 */
+	} else if ((wlc != to_wlc) && (to_wlc == wlc->cmn->wlc[1])) {
+			WL_ERROR(("wl%d Unsupported RSDB operation\n",
+				WLCWLUNIT(wlc)));
+			return BCME_OK;
 	}
 	return BCME_OK;
 }
 
-#ifdef WL_MODESW
-static uint8
+
+/* This function check if RSDB conditions favour bringup of IBSS connection. If possible then it
+ * returns BCME_OK else IBSS connection is deferred to clone timer/modesw module
+ */
+int
 wlc_rsdb_ibss_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg_p)
 {
 	wlc_info_t *to_wlc = NULL;
 	wlc_bsscfg_t *from_cfg;
 	int ret;
 	wlc_bsscfg_t* cfg = NULL;
-
 	/* If rsdb mode is not auto and in mimo  */
-	if (!(wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK) &&
+	if (!(WLC_RSDB_IS_AUTO_MODE(wlc)) &&
 		WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
 		return BCME_OK;
 	}
 
 	cfg = *cfg_p;
-	to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, cfg->target_bss->chanspec);
+	to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, cfg->target_bss,
+			cfg->target_bss->chanspec, NULL, WL_RSDB_CORE_MATCH_BW);
 
-	/* Update the oper mode of the cfg based on chanspec */
-	if (cfg->oper_mode_enabled) {
-		cfg->oper_mode = wlc_modesw_derive_opermode(wlc->modesw,
-			cfg->target_bss->chanspec, cfg, wlc->stf->rxstreams);
-	}
-	/* When we bringup IBSS if STA is already associated in wlc[0]
-	 * first downgrade wlc to RSDB (DUAL MAC MODE) if in MIMO(SINGLE MAC MODE)
-	 * After downgrade completes, move STA to other wlc and bringup IBSS in wlc[0]
-	 */
-	if ((wlc != to_wlc) && (wlc_rsdb_association_count(wlc) == 1)) {
-		/* Target wlc for rsdb is different and STA is associated in current wlc
-		 * STA need to be moved to to_wlc in DUAL_MAC_MODE.
-		 * Downgrade STA if RSDB mode is AUTO
+	if (WLC_DUALMAC_RSDB(wlc->cmn) && (to_wlc != wlc)) {
+		ASSERT(wlc->rsdbinfo->cmn->timer_ctx->notif_type == RSDB_TMR_TYPE_NONE);
+
+		wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+		wlc->rsdbinfo->cmn->timer_ctx->cfg = cfg;
+		wlc->rsdbinfo->cmn->timer_ctx->notif_type = RSDB_TMR_TYPE_IBSS_CLONE;
+		WLRSDB_DBG(("wl%d.%d: Schedule the timer for completing"
+			" STA assoc\n", WLCWLUNIT(wlc),
+			WLC_BSSCFG_IDX(cfg)));
+		cfg->ibss_up_pending = TRUE;
+		wlc_rsdb_schedule_timer(wlc->cmn->wlc[1]->rsdbinfo,
+			wlc->rsdbinfo->cmn->rsdb_clone_timer, 0, FALSE);
+		return BCME_NOTREADY;
+	} else if (!WLC_DUALMAC_RSDB(wlc->cmn) && WLC_MODESW_ENAB(wlc->pub) &&
+			WLC_RSDB_IS_AUTO_MODE(wlc)) {
+		/* Update the oper mode of the cfg based on chanspec */
+		if (cfg->oper_mode_enabled) {
+			cfg->oper_mode = wlc_modesw_derive_opermode(wlc->modesw,
+				cfg->target_bss->chanspec, cfg, wlc->stf->rxstreams);
+		}
+
+		/* When an IBSS comes up as the first connection in wlc[0],
+		 * check for MIMO upgrade from RSDB
 		 */
-		if (WLC_MODESW_ENAB(wlc->pub) &&
-			(WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) &&
-			(wlc->cmn->rsdb_mode & WLC_RSDB_MODE_AUTO_MASK)) {
+		if ((to_wlc == wlc->cmn->wlc[0]) &&
+			(wlc_rsdb_association_count(wlc) == 0) &&
+			WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc)) &&
+			wlc_rsdb_upgrade_allowed(wlc)) {
+			wlc_rsdb_upgrade_wlc(wlc);
+
+			/* If STA upgrade is not complete, set ibss_up_pending */
+			if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
+				cfg->ibss_up_pending = TRUE;
+				return BCME_NOTREADY;
+			}
+
+		}
+		/* When we bringup IBSS if STA is already associated in wlc[0]
+		 * first downgrade wlc to RSDB (DUAL MAC MODE) if in MIMO(SINGLE MAC MODE)
+		 * After downgrade completes, move STA to other wlc and bringup IBSS in
+		 * wlc[0]
+		 */
+		else if ((wlc != to_wlc) && (wlc_rsdb_association_count(wlc) == 1)) {
+			/* Target wlc for rsdb is different and STA is associated in current
+			 * wlc STA need to be moved to to_wlc in DUAL_MAC_MODE.
+			 * Downgrade STA if RSDB mode is AUTO
+			 */
+			if (WLC_RSDB_SINGLE_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
 				wlc_rsdb_downgrade_wlc(wlc);
-		}
-		/* Once downgrade is complete MAC is in DUAL_MAC_MODE
-		 * carry out STA bsscfg cloning from from_cfg in wlc to to_cfg in to_wlc
-		 */
-		if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
-			wlc_bsscfg_t *to_cfg;
-			WLRSDB_DBG(("associated primary move from wlc %d to wlc %d",
-				wlc->pub->unit, to_wlc->pub->unit));
-			if (WLC_MODESW_ENAB(wlc->pub)) {
-				cfg->ibss_up_pending = FALSE;
 			}
-			from_cfg = wlc_bsscfg_primary(wlc);
-			to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, from_cfg, &ret);
-			ASSERT(to_cfg != NULL);
-			if (ret != BCME_OK || to_cfg == NULL) {
-				wlc_set_ssid_complete(cfg, WLC_E_STATUS_FAIL, NULL,
-					DOT11_BSSTYPE_INDEPENDENT);
-				return BCME_NORESOURCE;
+			/* Once downgrade is complete MAC is in DUAL_MAC_MODE
+			 * carry out STA bsscfg cloning from from_cfg in wlc to to_cfg in to_wlc
+			 */
+			if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc))) {
+				wlc_bsscfg_t *to_cfg;
+				WLRSDB_DBG(("associated primary move from wlc %d to wlc %d",
+					wlc->pub->unit, to_wlc->pub->unit));
+				if (WLC_MODESW_ENAB(wlc->pub)) {
+					cfg->ibss_up_pending = FALSE;
+				}
+				from_cfg = wlc_bsscfg_primary(wlc);
+				to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, from_cfg, &ret);
+				ASSERT(to_cfg != NULL);
+				if (ret != BCME_OK || to_cfg == NULL) {
+					WL_ERROR(("IBSS Clone Failed from wlc %d to wlc %d",
+						wlc->pub->unit, to_wlc->pub->unit));
+					ASSERT(0);
+					wlc_set_ssid_complete(cfg, WLC_E_STATUS_FAIL, NULL,
+						DOT11_BSSTYPE_INDEPENDENT);
+					return BCME_NORESOURCE;
+				}
+				*cfg_p = to_cfg;
 			}
-			*cfg_p = to_cfg;
-		}
-		/* If STA downgrade is not complete, set ibss_up_pending */
-		else if (WLC_MODESW_ENAB(wlc->pub)) {
-			cfg->ibss_up_pending = TRUE;
-			return BCME_NOTREADY;
+			/* If STA downgrade is not complete, set ibss_up_pending */
+			else {
+				cfg->ibss_up_pending = TRUE;
+				return BCME_NOTREADY;
+			}
 		}
 	}
-
 	return BCME_OK;
 }
-#endif /* WL_MODESW */
 
 uint8
 wlc_rsdb_association_count(wlc_info_t* wlc)
@@ -792,8 +813,7 @@ wlc_rsdb_auto_assoc_mode_change(wlc_bsscfg_t **pcfg, wlc_bss_info_t *bi)
 			/* Check if we need to MOVE the cfg across wlc */
 			if ((to_wlc != from_wlc) &&
 				(WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc)))) {
-				cfg =  wlc_rsdb_cfg_for_chanspec(from_wlc,
-					cfg, bi->chanspec);
+				cfg =  wlc_rsdb_cfg_for_chanspec(from_wlc, cfg, bi);
 				/* Mute any AP present in to_wlc */
 				if (to_wlc->aps_associated != 0) {
 					wlc_ap_mute(to_wlc, TRUE, cfg, -1);
@@ -979,8 +999,7 @@ wlc_rsdb_auto_assoc_mode_change(wlc_bsscfg_t **pcfg, wlc_bss_info_t *bi)
 #endif /* WL_MODESW */
 			if ((to_wlc != from_wlc) &&
 				(WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc)))) {
-				cfg =  wlc_rsdb_cfg_for_chanspec(from_wlc,
-					cfg, bi->chanspec);
+				cfg =  wlc_rsdb_cfg_for_chanspec(from_wlc, cfg, bi);
 				wlc = to_wlc;
 				ASSERT(wlc == cfg->wlc);
 				wlc_assoc_set_as_cfg(wlc, cfg);
@@ -1006,33 +1025,31 @@ wlc_rsdb_auto_assoc_mode_change(wlc_bsscfg_t **pcfg, wlc_bss_info_t *bi)
 			 * initial connection to 1x1
 			 */
 			if (to_wlc != from_wlc) {
-				wlc_bsscfg_t *to_cfg;
 				WL_MODE_SWITCH(("RSDB:wlc mismatch,making join attempt to"
 					"wl%d.%d from wl%d.%d\n",
 					to_wlc->pub->unit, cfg->_idx, wlc->pub->unit, cfg->_idx));
 				/* Since join is going to happen in a different wlc, */
 				/* unmute the muted AP in from_wlc */
 				wlc_ap_mute(from_wlc, FALSE, cfg, -1);
-				to_cfg = wlc_rsdb_bsscfg_clone(wlc, to_wlc, cfg, NULL);
-				if (!wlc->bandlocked) {
-					int other_bandunit = (CHSPEC_WLCBANDUNIT(bi->chanspec) ==
-						BAND_5G_INDEX) ? BAND_2G_INDEX : BAND_5G_INDEX;
+				ASSERT(wlc->rsdbinfo->cmn->timer_ctx->notif_type
+					== RSDB_TMR_TYPE_NONE);
+				wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+				wlc->rsdbinfo->cmn->timer_ctx->cfg = cfg;
+				wlc->rsdbinfo->cmn->timer_ctx->notif_type
+					= RSDB_TMR_TYPE_STA_ASSOC;
+				WLRSDB_DBG(("wl%d.%d: Schedule the timer for completing"
+						" STA assoc\n", WLCWLUNIT(wlc),
+						WLC_BSSCFG_IDX(cfg)));
+				wlc_rsdb_schedule_timer(wlc->cmn->wlc[1]->rsdbinfo,
+					wlc->rsdbinfo->cmn->rsdb_clone_timer, 0, FALSE);
+				/* Inc the join target last since it was pre dec in
+				* JOIN Attempt select function before calling clone so
+				* after clone we need to get the same old join target
+				*/
+				if (BSSCFG_STA(cfg))
+					wlc_assoc_next_join_target(wlc);
+				return BCME_NOTREADY;
 
-					if (wlc_rsdb_change_band_allowed(wlc, other_bandunit)) {
-						wlc_change_band(wlc, other_bandunit);
-					}
-				}
-				cfg = to_cfg;
-				wlc = to_wlc;
-				ASSERT(wlc == cfg->wlc);
-				wlc_assoc_set_as_cfg(wlc, cfg);
-				/* Change the max rateset as per new mode. */
-				wlc_rsdb_init_max_rateset(wlc, NULL);
-				wlc_rsdb_join_prep_wlc(wlc, cfg, cfg->SSID,
-					cfg->SSID_len, cfg->scan_params,
-					cfg->assoc_params,
-					cfg->assoc_params_len);
-				wlc_set_wake_ctrl(from_wlc);
 			} else {
 				if (!other_wlc->bandlocked) {
 					int other_bandunit = (CHSPEC_WLCBANDUNIT(bi->chanspec) ==
@@ -1536,23 +1553,18 @@ wlc_rsdb_downgrade_wlc(wlc_info_t *wlc)
 	return BCME_OK;
 }
 
-static wlc_bsscfg_t*
-wlc_rsdb_get_as_cfg(wlc_info_t* wlc)
-{
-	int idx;
-	wlc_bsscfg_t *cfg;
-	FOREACH_AS_STA(wlc, idx, cfg) {
-		if (WLC_BSS_CONNECTED(cfg))
-			break;
-	}
-	return cfg;
-}
-
 static void
 wlc_rsdb_clone_timer_cb(void *arg)
 {
-	wlc_info_t  *wlc = (wlc_info_t *)arg;
-	wlc_bsscfg_t* cfg = wlc_rsdb_get_as_cfg(wlc->cmn->wlc[1]);
+	rsdb_timer_cb_t *ctx = (rsdb_timer_cb_t*) arg;
+	wlc_info_t *wlc = ctx->wlc;
+	wlc_bsscfg_t *to_cfg = NULL;
+	int ret;
+	uint8 notif_type = ctx->notif_type;
+	wlc_bsscfg_t* cfg = ctx->cfg;
+#if defined(STA) && defined(WL_RESTRICTED_APSTA)
+	wlc_bsscfg_t *assoc_cfg = NULL;
+#endif
 	UNUSED_PARAMETER(cfg);
 #ifdef WL_MODESW
 	if (wlc_modesw_get_switch_type(wlc->cmn->wlc[0]->modesw) ==
@@ -1565,8 +1577,80 @@ wlc_rsdb_clone_timer_cb(void *arg)
 #ifdef WL_MODESW
 	} else if (WLC_RSDB_IS_AUTO_MODE(wlc)) {
 		wlc_modesw_move_cfgs_for_mimo(wlc->modesw);
-	}
+	} else
 #endif
+	if (WLC_DUALMAC_RSDB(wlc->cmn)) {
+		if (notif_type == RSDB_TMR_TYPE_AP_CLONE) {
+			WLRSDB_DBG(("wl%d.%d: Clone the AP CFG\n", WLCWLUNIT(wlc),
+				WLC_BSSCFG_IDX(cfg)));
+			to_cfg = wlc_rsdb_bsscfg_clone(wlc, wlc_rsdb_get_other_wlc(wlc), cfg, &ret);
+			if (to_cfg != NULL) {
+				WLRSDB_DBG(("wl%d.%d: Enable the AP cfg\n", WLCWLUNIT(to_cfg->wlc),
+					WLC_BSSCFG_IDX(cfg)));
+				wlc_bsscfg_enable(to_cfg->wlc, to_cfg);
+			}
+#ifdef WL_RESTRICTED_APSTA
+			if (RAPSTA_ENAB(wlc->pub)) {
+				assoc_cfg = wlc_assoc_get_as_cfg(wlc);
+				if ((assoc_cfg != NULL) &&
+					(((assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA) ||
+				    (assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA_ROAM_FAIL)))) {
+					wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+					wlc->rsdbinfo->cmn->timer_ctx->cfg = assoc_cfg;
+					wlc->rsdbinfo->cmn->timer_ctx->notif_type =
+						RSDB_TMR_TYPE_STA_ASSOC;
+					WLRSDB_DBG(("wl%d.%d: Schedule the timer for completing"
+						" STA assoc\n", WLCWLUNIT(wlc),
+						WLC_BSSCFG_IDX(assoc_cfg)));
+					wlc_rsdb_schedule_timer(wlc->cmn->wlc[1]->rsdbinfo,
+						wlc->rsdbinfo->cmn->rsdb_clone_timer, 0, FALSE);
+				}
+			}
+#endif /* WL_RESTRICTED_APSTA */
+		} else if (notif_type == RSDB_TMR_TYPE_STA_ASSOC) {
+#ifdef STA
+				if (cfg->assoc->state == AS_WAIT_FOR_AP_CSA) {
+					WLRSDB_DBG(("wl%d.%d: Continue STA cfg assoc\n",
+						WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg)));
+					wlc_join_bss(cfg);
+				}
+				else if (cfg->assoc->type == AS_ASSOCIATION ||
+						cfg->assoc->type == AS_ROAM) {
+					wlc_info_t *to_wlc = wlc_rsdb_get_other_wlc(wlc);
+					wlc_rsdb_bsscfg_clone(wlc, to_wlc, cfg, NULL);
+				}
+				else {
+					WLRSDB_DBG(("wl%d.%d: Continue STA cfg roam\n",
+						WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg)));
+					wlc_roam_complete(cfg, WLC_E_STATUS_FAIL,
+						&cfg->BSSID,
+						cfg->target_bss->bss_type);
+				}
+#endif /* STA */
+		} else if (notif_type == RSDB_TMR_TYPE_STA_CLONE) {
+			WLRSDB_DBG(("wl%d.%d: Clone the STA CFG for CSA\n", WLCWLUNIT(wlc),
+				WLC_BSSCFG_IDX(cfg)));
+			wlc_rsdb_bsscfg_clone(wlc, wlc_rsdb_get_other_wlc(wlc), cfg, &ret);
+		} else if (ctx->notif_type == RSDB_TMR_TYPE_IBSS_CLONE) {
+			wlc_info_t *to_wlc = wlc_rsdb_get_other_wlc(wlc);
+			WLRSDB_DBG(("wl%d.%d: Clone the IBSS STA CFG\n", WLCWLUNIT(wlc),
+				WLC_BSSCFG_IDX(cfg)));
+
+			if (!wlc_rsdb_bsscfg_clone(wlc, to_wlc, cfg, NULL)) {
+				WL_ERROR(("wl%d.%d: Clone Failed\n", WLCWLUNIT(wlc),
+					WLC_BSSCFG_IDX(cfg)));
+				ASSERT(0);
+			}
+			/* Sync from_wlc wake states to prevent any ASSERTs due to wlc_ps_check()
+			 * called from watch_dog running on from_wlc
+			 */
+			wlc_set_wake_ctrl(wlc);
+		}
+		/* Reset the notif type to NONE */
+		if (notif_type == wlc->rsdbinfo->cmn->timer_ctx->notif_type) {
+			wlc->rsdbinfo->cmn->timer_ctx->notif_type = RSDB_TMR_TYPE_NONE;
+		}
+	}
 }
 #endif /* WL_MODESW */
 
@@ -1650,16 +1734,17 @@ wlc_rsdb_change_mode(wlc_info_t *wlc, int8 to_mode)
 				WL_ERROR(("wl%d associated %d SCAN_IN_PROGRESS %d"
 					"MONITOR_ENAB %d\n mpc_out %d mpc_scan %d mpc_join"
 					"%d mpc_oidscan %d mpc_oidjoin %d mpc_oidnettype %d"
-					"\n delayed_down %d BTA_IN_PROGRESS %d"
+					"\n delayed_down %d "
 					"txfifo_detach_pending %d mpc_off_req %d\n",
 					wlc1->pub->unit, wlc1->pub->associated,
 					SCAN_IN_PROGRESS(wlc1->scan), MONITOR_ENAB(wlc1),
 					wlc1->mpc_out, wlc1->mpc_scan, wlc1->mpc_join,
 					wlc1->mpc_oidscan, wlc1->mpc_oidjoin,
 					wlc1->mpc_oidnettype, wlc1->pub->delayed_down,
-					BTA_IN_PROGRESS(wlc1), wlc1->txfifo_detach_pending,
+					wlc1->txfifo_detach_pending,
 					wlc1->mpc_off_req));
 				ASSERT(FALSE);
+				OSL_SYS_HALT();
 			}
 			wlc_cmn->rsdb_mode = to_mode;
 			if (wlc->pub->up) {
@@ -1705,16 +1790,17 @@ wlc_rsdb_change_mode(wlc_info_t *wlc, int8 to_mode)
 					WL_ERROR(("wl%d associated %d SCAN_IN_PROGRESS %d"
 						"MONITOR_ENAB %d\n mpc_out %d mpc_scan %d mpc_join"
 						"%d mpc_oidscan %d mpc_oidjoin %d mpc_oidnettype %d"
-						"\n delayed_down %d BTA_IN_PROGRESS %d"
+						"\n delayed_down %d "
 						"txfifo_detach_pending %d mpc_off_req %d\n",
 						wlc1->pub->unit, wlc1->pub->associated,
 						SCAN_IN_PROGRESS(wlc1->scan), MONITOR_ENAB(wlc1),
 						wlc1->mpc_out, wlc1->mpc_scan, wlc1->mpc_join,
 						wlc1->mpc_oidscan, wlc1->mpc_oidjoin,
 						wlc1->mpc_oidnettype, wlc1->pub->delayed_down,
-						BTA_IN_PROGRESS(wlc1), wlc1->txfifo_detach_pending,
+						wlc1->txfifo_detach_pending,
 						wlc1->mpc_off_req));
 					ASSERT(FALSE);
+					OSL_SYS_HALT();
 				}
 			}
 			wlc_cmn->rsdb_mode = to_mode;
@@ -1819,6 +1905,7 @@ static void wlc_rsdb_mode_change_complete(wlc_info_t *wlc)
 	if (NBANDS(wlc) > 1 && band->bandunit != CHSPEC_WLCBANDUNIT(wlc->chanspec))
 		band = wlc->bandstate[OTHERBANDUNIT(wlc)];
 	/* push to BMAC driver */
+	wlc_stf_chain_init(wlc);
 	wlc_reprate_init(wlc);
 	/* init per-band default rateset, depend on band->gmode */
 #ifdef WL11AC
@@ -1844,7 +1931,7 @@ static void wlc_rsdb_mode_change_complete(wlc_info_t *wlc)
 #endif /* defined(WL_BEAMFORMING) */
 
 #ifdef WLTXPWR_CACHE
-	wlc_phy_txpwr_cache_invalidate(wlc_phy_get_txpwr_cache(WLC_PI(wlc)));
+	wlc_phy_txpwr_cache_invalidate(phy_tpc_get_txpwr_cache(WLC_PI(wlc)));
 #endif /* WLTXPWR_CACHE */
 	wlc_bandinit_ordered(wlc, wlc->home_chanspec);
 
@@ -2216,7 +2303,7 @@ wlc_rsdb_get_bands(wlc_info_t *wlc, rsdb_bands_t *rsdb_ptr)
 		rsdb_ptr->band[1] = WLC_BAND_INVALID;
 	}
 }
-#if defined(BCMDBG_RSDB)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_RSDB)
 static int
 wlc_rsdb_dump(void *w, struct bcmstrbuf *b)
 {
@@ -2353,7 +2440,9 @@ wlc_rsdb_dyn_switch(wlc_info_t *wlc, bool mode)
 	if (mode == MODE_VSDB) {
 		if (wlc1->pub->associated) {
 			wlc_modesw_set_switch_type(wlc0->modesw, MODESW_RSDB_TO_VSDB);
-			wl_add_timer(wlc1->wl, wlc->cmn->rsdb_clone_timer,
+			wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+			wlc_rsdb_schedule_timer(wlc1->rsdbinfo,
+				wlc->rsdbinfo->cmn->rsdb_clone_timer,
 				WL_RSDB_VSDB_CLONE_WAIT, FALSE);
 		}
 	}
@@ -2429,7 +2518,7 @@ wlc_rsdb_opmode_change_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data)
 					if (BSSCFG_IBSS(up_pend_cfg))
 						wlc_rsdb_ibss_bringup(wlc, &up_pend_cfg);
 					else
-						wlc_rsdb_ap_bringup(wlc, &up_pend_cfg);
+						wlc_rsdb_ap_bringup(wlc->rsdbinfo, &up_pend_cfg);
 
 					wlc_bsscfg_enable(up_pend_cfg->wlc, up_pend_cfg);
 #if defined(AP)
@@ -2489,13 +2578,8 @@ wlc_rsdb_scb_state_upd_cb(void *ctx, scb_state_upd_data_t *notif_data)
 	scb = notif_data->scb;
 	bsscfg = scb->bsscfg;
 
-	/* Check if the state transited SCB is internal.
-	 * In that case we have to do nothing, just return back
-	 */
-	if (SCB_INTERNAL(scb))
-		return;
-
-	if (AS_IN_PROGRESS(wlc)) {
+	if (AS_IN_PROGRESS(wlc) || !WLC_RSDB_IS_AUTO_MODE(wlc) ||
+		SCB_INTERNAL(scb)) {
 		return;
 	}
 
@@ -2509,13 +2593,13 @@ wlc_rsdb_scb_state_upd_cb(void *ctx, scb_state_upd_data_t *notif_data)
 				!BSS_P2P_ENAB(wlc1, bsscfg)) {
 				WLRSDB_DBG(("wl%d: cfg %d Deauth Done. Check for Core 0 move\n",
 					WLCWLUNIT(bsscfg->wlc), bsscfg->_idx));
-				wl_add_timer(wlc1->wl, wlc->cmn->rsdb_clone_timer,
-					0, FALSE);
+				wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+				wlc_rsdb_schedule_timer(wlc1->rsdbinfo,
+					wlc->rsdbinfo->cmn->rsdb_clone_timer, 0, FALSE);
 			}
 		}
 	}
 }
-
 
 static
 void wlc_rsdb_assoc_state_cb(void *ctx, bss_assoc_state_data_t *notif_data)
@@ -2557,8 +2641,9 @@ void wlc_rsdb_assoc_state_cb(void *ctx, bss_assoc_state_data_t *notif_data)
 					/* Add timer with decent delay which is enough to receive
 					 * the ACK for the null packet sent above.
 					 */
-					wl_add_timer(wlc0->wl, wlc0->cmn->mchan_clone_timer,
-							WL_RSDB_UPGRADE_TIMER_DELAY, FALSE);
+					wlc_rsdb_schedule_timer(wlc0->rsdbinfo,
+						wlc0->cmn->mchan_clone_timer,
+						WL_RSDB_UPGRADE_TIMER_DELAY, FALSE);
 				} else {
 					WL_ERROR(("%s: Unable to add upgrade timer as "
 					"wlc_mchan_modesw_set_cbctx returned with error code %d\n",
@@ -2588,9 +2673,10 @@ void wlc_rsdb_assoc_state_cb(void *ctx, bss_assoc_state_data_t *notif_data)
 			*/
 			if (wlc1 && !AS_IN_PROGRESS(wlc) && !wlc0->pub->up &&
 				wlc1->pub->up && (cfg->wlc == wlc1) &&	BSSCFG_STA(cfg) &&
-				!BSS_P2P_ENAB(wlc1, cfg)) {
-				wl_add_timer(wlc1->wl, wlc->cmn->rsdb_clone_timer,
-					0, FALSE);
+				!BSS_P2P_ENAB(wlc1, cfg) && WLC_RSDB_IS_AUTO_MODE(wlc)) {
+				wlc->rsdbinfo->cmn->timer_ctx->wlc = wlc;
+				wlc_rsdb_schedule_timer(wlc1->rsdbinfo,
+					wlc->rsdbinfo->cmn->rsdb_clone_timer, 0, FALSE);
 			}
 		}
 		break;
@@ -2649,6 +2735,8 @@ BCMATTACHFN(wlc_rsdb_attach)(wlc_info_t* wlc)
 		FT2BMP(FC_BEACON) |
 #endif
 		0;
+	int8 *linked_cfg_indices = NULL;
+	int *linked_cfg_hostif_indices = NULL;
 
 	/* Allocate RSDB module structure */
 	if ((rsdbinfo = MALLOCZ(wlc->osh, sizeof(wlc_rsdb_info_t))) == NULL) {
@@ -2695,6 +2783,26 @@ BCMATTACHFN(wlc_rsdb_attach)(wlc_info_t* wlc)
 				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
 			goto fail;
 		}
+
+		if (!(linked_cfg_indices = (int8 *)MALLOC(wlc->osh,
+			sizeof(*linked_cfg_indices) * WLC_MAXBSSCFG))) {
+			WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			goto fail;
+		}
+		memset(linked_cfg_indices, 0xff, (sizeof(*linked_cfg_indices) * WLC_MAXBSSCFG));
+
+		if (!(linked_cfg_hostif_indices = (int *)MALLOC(wlc->osh,
+			sizeof(*linked_cfg_hostif_indices) * WLC_MAXBSSCFG))) {
+			WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			goto fail;
+		}
+
+		memset(linked_cfg_hostif_indices, 0xff,
+				(sizeof(*linked_cfg_hostif_indices) * WLC_MAXBSSCFG));
+		cmninfo->linked_cfg_indices = linked_cfg_indices;
+		cmninfo->linked_cfg_hostif_indices = linked_cfg_hostif_indices;
 		cmninfo->def_ampdu_mpdu = RSDB_AMPDU_MPDU_INIT_VAL;
 
 		/* Create notification list for cfg clone event */
@@ -2712,9 +2820,10 @@ BCMATTACHFN(wlc_rsdb_attach)(wlc_info_t* wlc)
 
 	rsdbinfo->cmn = cmninfo;
 
-#if defined(DNG_DBGDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(DNG_DBGDUMP) || \
+	defined(BCMDBG_RSDB)
 	/* Allocate structure to store the last N channels on a particular core */
-	if ((rsdbinfo->chan_sw_info = MALLOCZ_PERSIST(wlc->osh, sizeof(rsdb_chan_sw_info_t))) ==
+	if ((rsdbinfo->chan_sw_info = MALLOCZ(wlc->osh, sizeof(rsdb_chan_sw_info_t))) ==
 			NULL) {
 		WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
 			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
@@ -2746,7 +2855,7 @@ BCMATTACHFN(wlc_rsdb_attach)(wlc_info_t* wlc)
 		goto fail;
 	}
 
-#if defined(BCMDBG_RSDB)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_RSDB)
 	if (wlc_dump_register(wlc->pub, "rsdb", wlc_rsdb_dump, (void*)wlc) != BCME_OK) {
 		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
 		          wlc->pub->unit, __FUNCTION__));
@@ -2783,12 +2892,20 @@ BCMATTACHFN(wlc_rsdb_attach)(wlc_info_t* wlc)
 
 	/* Init stuff for WLC1 */
 	if (wlc != WLC_RSDB_GET_PRIMARY_WLC(wlc)) {
-		if (!(wlc->cmn->rsdb_clone_timer = wl_init_timer(wlc->wl,
-			wlc_rsdb_clone_timer_cb, wlc, "rsdb_clone_timer"))) {
+		if (!(rsdbinfo->cmn->timer_ctx =
+			(rsdb_timer_cb_t *)MALLOCZ(wlc->osh,
+			sizeof(rsdb_timer_cb_t)))) {
+			WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			goto fail;
+		}
+		if (!(rsdbinfo->cmn->rsdb_clone_timer = wl_init_timer(wlc->wl,
+			wlc_rsdb_clone_timer_cb, rsdbinfo->cmn->timer_ctx, "rsdb_clone_timer"))) {
 			WL_ERROR(("wl%d: %s rsdb_clone_timer failed\n",
 				wlc->pub->unit, __FUNCTION__));
 			goto fail;
 		}
+		rsdbinfo->cmn->timer_ctx->notif_type = RSDB_TMR_TYPE_NONE;
 	}
 #endif /* WL_MODESW */
 
@@ -2811,6 +2928,16 @@ BCMATTACHFN(wlc_rsdb_attach)(wlc_info_t* wlc)
 	mboolset(wlc->cmn->rsdb_move_ovr, WLC_RSDB_MOVE_OVR_IOVAR);
 	mboolset(wlc->cmn->rsdb_move_ovr, WLC_RSDB_MOVE_OVR_PM);
 
+#if defined(RSDB_CMN_BANDSTATE) && !defined(RSDB_CMN_BANDSTATE_DISABLED)
+	wlc->pub->cmn->_isrsdb_cmn_bandstate = TRUE;
+
+	/* Initialize common BW cap on the last core attach */
+	if (wlc->pub->unit == (MAX_RSDB_MAC_NUM - 1)) {
+		wlc_rsdb_derive_cmn_bwcap(rsdbinfo, WLC_BAND_2G);
+		wlc_rsdb_derive_cmn_bwcap(rsdbinfo, WLC_BAND_5G);
+	}
+#endif /* defined(RSDB_CMN_BANDSTATE) && !defined(RSDB_CMN_BANDSTATE_DISABLED) */
+	wlc_rsdb_derive_core_cap(rsdbinfo);
 	return rsdbinfo;
 fail:
 	MODULE_DETACH(rsdbinfo, wlc_rsdb_detach);
@@ -2839,16 +2966,22 @@ BCMATTACHFN(wlc_rsdb_detach)(wlc_rsdb_info_t* rsdbinfo)
 		wlc_modesw_notif_cb_unregister(wlc->modesw, wlc_rsdb_opmode_change_cb, wlc->modesw);
 	}
 #endif /* WL_MODESW */
-#if defined(DNG_DBGDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(DNG_DBGDUMP) || \
+	defined(BCMDBG_RSDB)
 	if (rsdbinfo->chan_sw_info) {
 		MFREE(rsdbinfo->wlc->osh, rsdbinfo->chan_sw_info,
 			sizeof(rsdb_chan_sw_info_t));
 	}
 #endif 
 	if (wlc != WLC_RSDB_GET_PRIMARY_WLC(wlc)) {
-		if (wlc->cmn->rsdb_clone_timer) {
-			wl_free_timer(wlc->wl, wlc->cmn->rsdb_clone_timer);
-			wlc->cmn->rsdb_clone_timer = NULL;
+		if (rsdbinfo->cmn->rsdb_clone_timer) {
+			wl_free_timer(wlc->wl, rsdbinfo->cmn->rsdb_clone_timer);
+			rsdbinfo->cmn->rsdb_clone_timer = NULL;
+		}
+		if (rsdbinfo->cmn->timer_ctx != NULL) {
+			MFREE(wlc->osh, rsdbinfo->cmn->timer_ctx,
+				sizeof(rsdb_timer_cb_t));
+			rsdbinfo->cmn->timer_ctx = NULL;
 		}
 	}
 
@@ -2856,6 +2989,19 @@ BCMATTACHFN(wlc_rsdb_detach)(wlc_rsdb_info_t* rsdbinfo)
 		obj_registry_set(rsdbinfo->wlc->objr, OBJR_RSDB_CMN_INFO, NULL);
 		if (rsdbinfo->cmn->cfg_clone_notif_hdl != NULL) {
 			bcm_notif_delete_list(&rsdbinfo->cmn->cfg_clone_notif_hdl);
+		}
+
+		if (rsdbinfo->cmn->linked_cfg_indices != NULL) {
+			MFREE(wlc->osh, rsdbinfo->cmn->linked_cfg_indices,
+					(sizeof(*rsdbinfo->cmn->linked_cfg_indices) *
+					WLC_MAXBSSCFG));
+			rsdbinfo->cmn->linked_cfg_indices = NULL;
+		}
+		if (rsdbinfo->cmn->linked_cfg_hostif_indices != NULL) {
+			MFREE(wlc->osh, rsdbinfo->cmn->linked_cfg_hostif_indices,
+					(sizeof(*rsdbinfo->cmn->linked_cfg_hostif_indices) *
+					WLC_MAXBSSCFG));
+			rsdbinfo->cmn->linked_cfg_hostif_indices = NULL;
 		}
 		MFREE(rsdbinfo->wlc->osh, rsdbinfo->cmn, sizeof(rsdb_cmn_info_t));
 	}
@@ -2905,17 +3051,15 @@ wlc_rsdb_get_wlcs(wlc_info_t *wlc, wlc_info_t **wlc_2g, wlc_info_t **wlc_5g)
 int
 wlc_rsdb_auto_get_wlcs(wlc_info_t *wlc, wlc_info_t **wlc_2g, wlc_info_t **wlc_5g)
 {
-	wlc_cmn_info_t* wlc_cmn;
-	int idx;
+	int idx = 0;
 	wlc_bsscfg_t *cfg;
-
-	WLRSDB_DBG(("wl%d:%s:%d\n", wlc->pub->unit, __FUNCTION__, __LINE__));
-	wlc_cmn = wlc->cmn;
-	/* Simple Init */
-	*wlc_2g = wlc_cmn->wlc[0];
-	*wlc_5g = wlc_cmn->wlc[1];
-
-	/* overwrite based on current association */
+	wlc_info_t *wlc_2g_l = NULL, *wlc_5g_l = NULL;
+	/* Get the preferred core for 5G and 2G bands */
+	wlc_5g_l = wlc_rsdb_find_wlc_for_band(wlc->rsdbinfo, BAND_5G_INDEX, NULL);
+	wlc_2g_l = wlc_rsdb_find_wlc_for_band(wlc->rsdbinfo, BAND_2G_INDEX, wlc_5g_l);
+	*wlc_2g = wlc_2g_l;
+	*wlc_5g = wlc_5g_l;
+	/* overwrite based on current association. Do we really need this section */
 	for (idx = 0; idx < WLC_MAXBSSCFG; idx++) {
 		cfg = wlc->bsscfg[idx];
 		if (cfg && cfg->associated) {
@@ -2925,13 +3069,11 @@ wlc_rsdb_auto_get_wlcs(wlc_info_t *wlc, wlc_info_t **wlc_2g, wlc_info_t **wlc_5g
 			} else {
 				*wlc_5g = cfg->wlc;
 				*wlc_2g = wlc_rsdb_get_other_wlc(*wlc_5g);
-			}
+		}
 			break;
 		}
 	}
-
-	ASSERT(wlc_2g != wlc_5g && wlc_2g && wlc_5g);
-
+	ASSERT((wlc_2g != wlc_5g) && wlc_2g && wlc_5g);
 	return BCME_OK;
 }
 
@@ -2951,7 +3093,7 @@ wlc_rsdb_get_other_wlc(wlc_info_t *wlc)
 			/* Other wlc might be in power down so if we need to
 			 * access registers/etc., need to request power
 			 */
-			if (SRPWR_ENAB()) {
+			if (SRPWR_ENAB() && (BUSTYPE(wlc->pub->sih->bustype) == PCI_BUS)) {
 				wlc_srpwr_request_on(to_wlc);
 			}
 
@@ -2977,65 +3119,405 @@ wlc_rsdb_any_wlc_associated(wlc_info_t *wlc)
 	return assoc_count;
 }
 
-/* Finds the WLC for RSDB usage based on chanspec
- *	Return any free / un-associated WLC. Give preference to the incoming wlc to
- * avoid un-necessary movement. Return associated wlc if oparating chanspec
+static uint8
+BCMRAMFN(wlc_rsdb_map_core_bw)(chanspec_t chanspec)
+{
+	uint32 bw;
+	bw = (chanspec & WL_CHANSPEC_BW_MASK) >> WL_CHANSPEC_BW_SHIFT;
+	return rsdb_core_bw_map[bw];
+}
+
+static uint8
+BCMRAMFN(wlc_rsdb_map_core_band)(chanspec_t chanspec)
+{
+	uint32 band;
+	band = (chanspec & WL_CHANSPEC_BAND_MASK) >> WL_CHANSPEC_BAND_SHIFT;
+	return rsdb_core_band_map[band];
+}
+
+static void
+wlc_rsdb_create_reqd_cap(wlc_info_t *wlc, chanspec_t chanspec, wlc_bss_info_t *bi,
+	wlc_rsdb_core_cap_t* out_cap)
+{
+	out_cap->band = wlc_rsdb_map_core_band(chanspec);
+	out_cap->bw = wlc_rsdb_map_core_bw(chanspec);
+	out_cap->chains = WLC_BITSCNT(wlc->stf->hw_txchain_cap);
+	if (bi && !wlc_bss_get_mimo_cap(bi)) {
+		out_cap->chains = 1;
+	}
+	return;
+}
+
+/* This function populates the RSDB core BW capabilites based upon
+* the given phy capabilities bit map.
+*/
+static rsdb_core_cap_bw_t
+BCMATTACHFN(wlc_rsdb_get_core_bw)(wlc_rsdb_info_t *rsdbinfo)
+{
+	rsdb_core_cap_bw_t out_bw = WL_RSDB_CORE_CAP_BW_NONE;
+	wlc_info_t *wlc = rsdbinfo->wlc;
+	/* 20 Mhz is mandatory */
+	out_bw |= WL_RSDB_CORE_CAP_BW_20;
+	out_bw |= WLC_40MHZ_CAP_PHY(wlc) ? WL_RSDB_CORE_CAP_BW_40 : 0;
+	out_bw |= WLC_80MHZ_CAP_PHY(wlc) ? WL_RSDB_CORE_CAP_BW_80 : 0;
+	out_bw |= WLC_160MHZ_CAP_PHY(wlc) ? WL_RSDB_CORE_CAP_BW_160 : 0;
+	out_bw |= WLC_8080MHZ_CAP_PHY(wlc) ? WL_RSDB_CORE_CAP_BW_8080 : 0;
+	out_bw |= WLC_10MHZ_CAP_PHY(wlc) ? WL_RSDB_CORE_CAP_BW_10 : 0;
+	out_bw |= WLC_5MHZ_CAP_PHY(wlc) ? WL_RSDB_CORE_CAP_BW_5 : 0;
+	out_bw |= WLC_2P5MHZ_CAP_PHY(wlc) ? WL_RSDB_CORE_CAP_BW_2P5 : 0;
+	return out_bw;
+}
+
+/* Map board's fem cap to core_band */
+static rsdb_core_cap_band_t
+BCMATTACHFN(wlc_rsdb_get_core_band)(wlc_rsdb_info_t *rsdbinfo)
+{
+	wlc_info_t *wlc = rsdbinfo->wlc;
+	rsdb_core_cap_band_t band_cap = WL_RSDB_CORE_CAP_BAND_NONE;
+
+	if (PHY_BOARD_2G_FEM((phy_info_t *)WLC_PI(wlc))) {
+		band_cap |= WL_RSDB_CORE_CAP_BAND_2G;
+	}
+
+	if (PHY_BOARD_5G_FEM((phy_info_t *)WLC_PI(wlc))) {
+		band_cap |= WL_RSDB_CORE_CAP_BAND_5G;
+	}
+	ASSERT(band_cap);
+	return band_cap;
+}
+
+/* This function derives the HW capabilities of the core based upon the
+* PHY inputs and boardtype settings.
+*/
+
+static void
+BCMATTACHFN(wlc_rsdb_derive_core_cap)(wlc_rsdb_info_t *rsdbinfo)
+{
+	wlc_rsdb_core_cap_t *core_cap;
+	wlc_info_t *wlc = rsdbinfo->wlc;
+	uint idx = WLCWLUNIT(wlc);
+	uint8 chains = WLC_BITSCNT(wlc->stf->hw_txchain_cap);
+	core_cap = rsdbinfo->cmn->core_cap;
+	core_cap[idx].band = wlc_rsdb_get_core_band(rsdbinfo);
+	core_cap[idx].bw = wlc_rsdb_get_core_bw(rsdbinfo);
+	core_cap[idx].chains = chains;
+	return;
+}
+
+/* Provides the list of WLC's as per the FEM configuration.
+ * match_mask (bit mask): WL_RSDB_CORE_MATCH_BW, WL_RSDB_CORE_MATCH_CHAINS
+ * WL_RSDB_CORE_MATCH_BW: Return the most optimal core to use based upon the BW
+ * WL_RSDB_CORE_MATCH_CHAINS: Return the most optimal core to use based upon the NSS
+ * Match_mask of ZERO means that BW and NSS values can be ignored. In that case, the list of
+ * all WLC's supporting the given band are returned.
+ */
+static int
+wlc_rsdb_preferred_wlc(wlc_rsdb_info_t *rsdbinfo, wlc_info_t** out_list, chanspec_t chanspec,
+	wlc_bss_info_t *bi, uint32 match_mask)
+{
+	wlc_info_t *wlc = rsdbinfo->wlc;
+	int found = 0;
+	int idx = 0, bw_bit = 0, count = 0;
+	wlc_info_t* iwlc = NULL;
+	wlc_info_t* filter_list[MAX_RSDB_MAC_NUM];
+	wlc_rsdb_core_cap_t req_cap;
+	wlc_rsdb_create_reqd_cap(wlc, chanspec, bi, &req_cap);
+	memset(filter_list, 0, sizeof(*filter_list) * MAX_RSDB_MAC_NUM);
+	if (match_mask & WL_RSDB_CORE_MATCH_BAND) {
+		/* Filter the list to get a wlc which can only work
+		* on the requested band. If such wlc is not used
+		* then it will not be usable for later connections.
+		*/
+		FOREACH_WLC(wlc->cmn, idx, iwlc) {
+			if (rsdbinfo->cmn->core_cap[idx].band == req_cap.band) {
+				out_list[idx] = iwlc;
+				found++;
+			}
+		}
+		if (!found) {
+			/* Get the basic list which contains wlc's based
+			* upon HW capabilites without any filtering.
+			*/
+			FOREACH_WLC(wlc->cmn, idx, iwlc) {
+				if (req_cap.band & rsdbinfo->cmn->core_cap[idx].band) {
+					out_list[idx] = iwlc;
+					found++;
+				}
+			}
+		}
+		bw_bit = bcm_find_fsb(req_cap.bw);
+		/* We can try to filter the wlc based upon BW if we have more
+		* than one possible option.
+		*/
+		if ((match_mask & WL_RSDB_CORE_MATCH_BW) && bw_bit && (found > 1)) {
+			/* We have to check for band of chanspec
+			* to get to the most optimal option of WLC.
+			* Without this, we may endanger future
+			* other band connections, who may need
+			* the WLC with higher or lower bandwidth.
+			*/
+			if (CHSPEC_IS2G(chanspec)) {
+				/* Find the core which do not support
+				* higher than the requested bandwidth.
+				*/
+				count = 0;
+				FOREACH_WLC(wlc->cmn, idx, iwlc) {
+					if (!(rsdbinfo->cmn->core_cap[idx].bw >> bw_bit)) {
+						filter_list[idx] = iwlc;
+						count++;
+					}
+				}
+			} else {
+				/* Find the core which supports
+				* higher than or equal to requested
+				* bandwidth.
+				*/
+				count = 0;
+				FOREACH_WLC(wlc->cmn, idx, iwlc) {
+					if ((rsdbinfo->cmn->core_cap[idx].bw >> (bw_bit - 1))) {
+						filter_list[idx] = iwlc;
+						count++;
+					}
+				}
+			}
+			if (count) {
+				/* We found something. So previous
+				* list can be cleared and the new list
+				* can be used now.
+				*/
+				found = count;
+				FOREACH_WLC(wlc->cmn, idx, iwlc) {
+					out_list[idx] = filter_list[idx];
+				}
+			}
+			if ((match_mask & WL_RSDB_CORE_MATCH_CHAINS) && (found > 1)) {
+				count = 0;
+				/* Seems we found multiple options even after BW filtering */
+				FOREACH_WLC(wlc->cmn, idx, iwlc) {
+					filter_list[idx] = NULL;
+					if (rsdbinfo->cmn->core_cap[idx].chains == req_cap.chains) {
+						/* We found exact match */
+						filter_list[idx] = iwlc;
+						count++;
+					}
+				}
+				/* Check if we found something.
+				* Otherwise existing list is good
+				* to go.
+				*/
+				if (count) {
+					/* Overwrite the main list
+					* with new entries.
+					*/
+					found = count;
+					FOREACH_WLC(wlc->cmn, idx, iwlc) {
+						out_list[idx] = filter_list[idx];
+					}
+				}
+			}
+		}
+	} else {
+		/* All wlc's can be returned */
+		FOREACH_WLC(wlc->cmn, idx, iwlc) {
+			out_list[idx] = iwlc;
+			found++;
+		}
+	}
+	return found;
+}
+
+/* Finds the WLC for RSDB usage based on chanspec depending upon match_mask
+ * Return any free / un-associated WLC. Returns associated wlc if operating chanspec
  * matches.
+ *
+ * bi: bss info for which the WLC is required. Chanspec is also used from bi, if bi is not NULL.
+ *
+ * Chanspec: chanspec which would be used on the given wlc. Used only if (bi == NULL)
+ *
+ * Skip_wlc: The wlc which should not be provided as an option. It may happen that the
+ * caller already has one wlc with it, and it wants another one.
+ *
+ * match_mask (bit mask): WL_RSDB_CORE_MATCH_BW, WL_RSDB_CORE_MATCH_CHAINS
+ * WL_RSDB_CORE_MATCH_BW: Return the most optimal core to use based upon the BW
+ * WL_RSDB_CORE_MATCH_CHAINS: Return the most optimal core to use based upon the NSS
+ * Match_mask of ZERO means that BW and NSS values can be ignored. In that case, the first
+ * WLC supporting the specified band in chanspec will be provided.
  */
 wlc_info_t*
-wlc_rsdb_find_wlc_for_chanspec(wlc_info_t *wlc, chanspec_t chanspec)
+wlc_rsdb_find_wlc_for_chanspec(wlc_info_t *wlc, wlc_bss_info_t *bi,	chanspec_t chanspec,
+	wlc_info_t *skip_wlc, uint32 match_mask)
 {
-	int idx;
+	int idx, ret;
 	wlc_info_t* iwlc = NULL;
 	wlc_info_t* to_wlc = NULL;
 	int wlc_busy = 0;
 	DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
+	wlc_info_t *list_wlc[MAX_RSDB_MAC_NUM];
+	if (wlc->bandlocked) {
+		wlc_rsdb_core_cap_t *core_cap = &(wlc->rsdbinfo->cmn->core_cap[wlc->pub->unit]);
+		if (core_cap->band & wlc_rsdb_map_core_band(chanspec)) {
+			WLRSDB_DBG(("Band Locked Return wlc:%d For chspec:%x\n",
+				wlc->pub->unit, chanspec));
+			return wlc;
+		} else {
+			/* Unsupported / core-band-cap mismatch */
+			WL_PRINT(("RSDB:Unsupported core-band/bw in bandlocked mode\n"));
+			OSL_SYS_HALT();
+		}
+	}
+	/* Band/BW matching is mandatory for this API */
+	match_mask |= (WL_RSDB_CORE_MATCH_BAND | WL_RSDB_CORE_MATCH_BW);
+	memset(list_wlc, 0, (MAX_RSDB_MAC_NUM * sizeof(*list_wlc)));
 
 	WLRSDB_DBG(("%s: Incoming wlc:%d Request wlc For chspec:%s \n", __FUNCTION__,
 		wlc->pub->unit, wf_chspec_ntoa_ex(chanspec, chanbuf)));
 
-	FOREACH_WLC(wlc->cmn, idx, iwlc) {
-		wlc_busy = 0;
-		if (iwlc->pub->associated) {
-			int bss_idx;
-			wlc_bsscfg_t *cfg;
-			FOREACH_AS_BSS(iwlc, bss_idx, cfg) {
-				if (cfg->assoc->type == AS_NONE) { /* cfg not in Roam */
-					wlc_busy = 1;
-					if ((CHSPEC_BAND(cfg->current_bss->chanspec)
-						== CHSPEC_BAND(chanspec))) {
-						/* Band matched with as'd wlc. MCHAN. */
-						WLRSDB_DBG(("Return MCNX wlc:%d For chspec:%s\n",
-						iwlc->pub->unit,
-						wf_chspec_ntoa_ex(chanspec, chanbuf)));
-						return iwlc;
-					}
+	do {
+		ret = wlc_rsdb_preferred_wlc(wlc->rsdbinfo, list_wlc, chanspec, bi, match_mask);
+		/* No wlc could be found. So return incoming wlc.
+		* This is very unlikely and incoming wlc is best
+		* option we are left with at this point of time.
+		*/
+		if (!ret) {
+			WLRSDB_DBG(("wl%d: Error no matching wlc found for"
+				" chanspec = %x\n", WLCWLUNIT(wlc), chanspec));
+			ASSERT(FALSE);
+			return NULL;
+		}
+		/* Looks like we have some wlc in hand.
+		* Check if we were told to avoid this wlc.
+		*/
+		if (skip_wlc) {
+			list_wlc[skip_wlc->pub->unit] = NULL;
+		}
+		/* Remove the wlc's from the list which have
+		* different band connections.
+		*/
+		FOREACH_WLC(wlc->cmn, idx, iwlc) {
+			if (list_wlc[idx]) {
+				wlc_busy = 0;
+				if (iwlc->pub->associated) {
+					int bss_idx;
+					wlc_bsscfg_t *cfg;
+					FOREACH_AS_BSS(iwlc, bss_idx, cfg) {
+					    if (cfg->assoc->type == AS_NONE) { /* cfg not in Roam */
+							wlc_busy = 1;
+							if ((CHSPEC_BAND(cfg->current_bss->chanspec)
+								== CHSPEC_BAND(chanspec))) {
+							    /* Band matched with as'd wlc. MCHAN. */
+						        WLRSDB_DBG(("Return MCNX wlc:%d For "
+						        "chspec:%s\n", iwlc->pub->unit,
+						        wf_chspec_ntoa_ex(chanspec, chanbuf)));
+								return iwlc;
+							}
+						}
+					} /* FOREACH_AS_BSS */
 				}
-			} /* FOREACH_AS_BSS */
+				if (wlc_busy) {
+					list_wlc[idx] = NULL;
+				}
+			}
+		} /* FOREACH_WLC */
+		/* Pick the incoming wlc if it is part
+		* of the list. This helps in avoiding
+		* cloning when not required.
+		*/
+		idx = 0;
+		while (idx < wlc->cmn->num_d11_cores) {
+			if (list_wlc[idx] == wlc) {
+				to_wlc = wlc;
+			}
+			idx++;
 		}
-		if (!wlc_busy) {
-			if (to_wlc == NULL)
-				to_wlc = iwlc;
-			else if (wlc == iwlc)
-				/* Return the incoming wlc if no other wlc has active connection
-				 * on the requested chanspec band.
-				 */
-				to_wlc = iwlc;
+		/* Lets pick the first wlc from list */
+		idx = 0;
+		while ((to_wlc == NULL) && (idx < wlc->cmn->num_d11_cores)) {
+			to_wlc = list_wlc[idx++];
 		}
-	} /* FOREACH_WLC */
-	WLRSDB_DBG(("Return wlc:%d For chspec:%s\n", to_wlc->pub->unit,
-		wf_chspec_ntoa_ex(chanspec, chanbuf)));
-
+	} while ((to_wlc == NULL) && (match_mask >>= 1) && match_mask);
+	WLRSDB_DBG(("Return wlc:%d For chspec:%x\n", to_wlc->pub->unit, chanspec));
+	ASSERT(to_wlc);
 	return to_wlc;
+}
+
+/* Finds the WLC for RSDB usage based on given band depending upon match_mask
+ * and the HW capabilities of the WLC's.
+ *
+ * bi: bss info for which the WLC is required. Chanspec is also used from bi, if bi is not NULL.
+ *
+ * Chanspec: chanspec which would be used on the given wlc. Used only if (bi == NULL)
+ *
+ * Skip_wlc: The wlc which should not be provided as an option. It may happen that the
+ * caller already has one wlc with it, and it wants another one.
+ *
+ */
+wlc_info_t*
+wlc_rsdb_find_wlc_for_band(wlc_rsdb_info_t *rsdbinfo, uint bandunit, wlc_info_t *skip_wlc)
+{
+	int idx, ret;
+	wlc_info_t *wlc = rsdbinfo->wlc;
+	wlc_info_t *to_wlc = NULL;
+	chanspec_t chanspec;
+	uint32 match_mask = 0;
+	wlc_info_t *list_wlc[MAX_RSDB_MAC_NUM];
+	chanspec = wlc_default_chanspec_by_band(wlc->cmi, bandunit);
+	/* Band matching is mandatory */
+	match_mask |= WL_RSDB_CORE_MATCH_BAND;
+	memset(list_wlc, 0, (MAX_RSDB_MAC_NUM * sizeof(*list_wlc)));
+	ret = wlc_rsdb_preferred_wlc(wlc->rsdbinfo, list_wlc, chanspec, NULL, match_mask);
+	/* No wlc could be found. So return incoming wlc.
+	* This is very unlikely and incoming wlc is best
+	* option we are left with at this point of time.
+	*/
+	if (!ret) {
+		WLRSDB_DBG(("wl%d: Error no matching wlc found for"
+			" chanspec = %x\n", WLCWLUNIT(wlc), chanspec));
+		return NULL;
+	}
+	/* Looks like we have some wlc in hand.
+	* Check if we were told to avoid this wlc.
+	*/
+	if (skip_wlc) {
+		list_wlc[skip_wlc->pub->unit] = NULL;
+	}
+	/* Lets pick the first wlc from list */
+	idx = 0;
+	do {
+		to_wlc = list_wlc[idx++];
+	} while ((to_wlc == NULL) && (idx < wlc->cmn->num_d11_cores));
+	return to_wlc;
+}
+
+/* Finds no of WLC's which can work on the specified bandunit.
+ * bandunit : BAND_5G_INDEX or BAND_2G_INDEX
+ */
+uint8
+wlc_rsdb_num_wlc_for_band(wlc_rsdb_info_t *rsdbinfo, uint bandunit)
+{
+	int idx;
+	wlc_info_t *wlc = rsdbinfo->wlc, *iwlc = NULL;
+	chanspec_t chanspec;
+	uint8 found = 0;
+	wlc_rsdb_core_cap_t req_cap;
+	chanspec = wlc_default_chanspec_by_band(wlc->cmi, bandunit);
+	wlc_rsdb_create_reqd_cap(wlc, chanspec, NULL, &req_cap);
+
+	FOREACH_WLC(wlc->cmn, idx, iwlc) {
+		if (req_cap.band & rsdbinfo->cmn->core_cap[idx].band) {
+			found++;
+		}
+	}
+	return found;
 }
 
 /* RSDB bsscfg allocation based on WLC band allocation
  * For RSDB, this involves creating a new cfg in the target WLC
  * Typically, called from JOIN/ROAM-attempt, AP-up
 */
-wlc_bsscfg_t* wlc_rsdb_cfg_for_chanspec(wlc_info_t *wlc, wlc_bsscfg_t *cfg, chanspec_t chanspec)
+wlc_bsscfg_t* wlc_rsdb_cfg_for_chanspec(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bss_info_t *bi)
 {
-	wlc_info_t *to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, chanspec);
+	wlc_info_t *to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, bi, bi->chanspec, NULL,
+		WL_RSDB_CORE_MATCH_BW);
 	wlc_bsscfg_t *to_cfg;
 
 	if (to_wlc != wlc) {
@@ -3213,7 +3695,8 @@ wlc_rsdb_suppress_pending_tx_pkts(wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg)
 	wlc_info_t *from_wlc = from_cfg->wlc;
 
 	/* Do a SCB reassoc only if the input cfg is an associated STA */
-	if (WLC_BSS_ASSOC_NOT_ROAM(from_cfg) && !BSSCFG_IBSS(from_cfg)) {
+	if ((WLC_BSS_ASSOC_NOT_ROAM(from_cfg) && !BSSCFG_IBSS(from_cfg)) ||
+			(BSSCFG_SLOTTED_BSS(from_cfg))) {
 		/* If there are pending packets on the fifo, then stop the fifo
 		 * processing and re-enqueue packets
 		 */
@@ -3275,7 +3758,7 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 	wlc_bsscfg_t *to_cfg;
 	bool primary_cfg_move = (wlc_bsscfg_primary(from_wlc) == from_cfg);
 	int8 old_idx = -1;
-	bool block_disassoc_tx = from_cfg->assoc->block_disassoc_tx;
+	bool block_disassoc_tx = 0;
 
 	WL_ERROR(("RSDB clone %s cfg[%d][%p] from wlc[%d] to wlc[%d] AS = %d CONN = %d"
 		" stas/ap/pub_assoc %d/%d/%d\n", primary_cfg_move ?"primary":"virtual",
@@ -3288,6 +3771,10 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 	}
 
 	wlc_rsdb_cfg_clone_notif(from_wlc->rsdbinfo, from_cfg, from_wlc, to_wlc, CFG_CLONE_START);
+
+	if (BSSCFG_STA(from_cfg)) {
+		block_disassoc_tx = from_cfg->assoc->block_disassoc_tx;
+	}
 
 #if defined(PROP_TXSTATUS) && defined(WLMCHAN)
 		if (PROP_TXSTATUS_ENAB(from_wlc->pub) && from_cfg->associated) {
@@ -3342,7 +3829,8 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 	* incase of primary move- set the primary bsscfg of 'to_wlc' to 'to_cfg'
 	*/
 	if (!primary_cfg_move) {
-		wlc_bsscfg_type_t type = {BSSCFG_TYPE_GENERIC, BSSCFG_SUBTYPE_NONE};
+		wlc_bsscfg_type_t type;
+		wlc_bsscfg_type_get(from_wlc, from_cfg, &type);
 		to_cfg = wlc_bsscfg_alloc(to_wlc, idx, &type,
 			(from_cfg->flags | WLC_BSSCFG_RSDB_CLONE),
 			&(from_cfg->cur_etheraddr));
@@ -3380,6 +3868,9 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 		 * correctly on to_cfg
 		 */
 		to_cfg->flags = from_cfg->flags;
+		to_cfg->flags2 = from_cfg->flags2;
+		/* Add CLONE flag to skip the OS interface free */
+		to_cfg->flags |= WLC_BSSCFG_RSDB_CLONE;
 
 		if ((err = wlc_bsscfg_init(to_wlc, to_cfg)) != BCME_OK) {
 			WL_ERROR(("wl%d.%d: %s: cannot init bsscfg\n",
@@ -3401,6 +3892,9 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 	from_cfg->flags |= WLC_BSSCFG_RSDB_CLONE;
 	to_cfg->flags |= WLC_BSSCFG_RSDB_CLONE;
 
+	/* Clone the iface_type */
+	to_cfg->iface_type = from_cfg->iface_type;
+
 	if (!primary_cfg_move) {
 		ASSERT(to_cfg->wlc == to_wlc);
 		ASSERT(to_wlc->cfg != to_cfg);
@@ -3413,13 +3907,15 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 		}
 
 		to_wlc->bsscfg[idx] = from_cfg;
+		from_cfg->assoc->state = AS_IDLE;
 	}
 	else {
 		from_cfg->assoc->state = AS_IDLE;
 		from_cfg->flags2 |= WLC_BSSCFG_FL2_RSDB_NOT_ACTIVE;
 	}
-
-	from_cfg->assoc->block_disassoc_tx = TRUE;
+	if (BSSCFG_STA(from_cfg)) {
+		from_cfg->assoc->block_disassoc_tx = TRUE;
+	}
 #ifdef SCB_MOVE
 	if (WLC_BSS_ASSOC_NOT_ROAM(from_cfg) && !BSSCFG_AP(from_cfg)) {
 		struct scb *from_scb;
@@ -3442,6 +3938,10 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 		if (!primary_cfg_move) {
 			wlc_bsscfg_disable(from_wlc, from_cfg);
 		}
+	} else if (BSSCFG_AP(from_cfg)) {
+		wlc_keymgmt_clone_bsscfg(from_cfg->wlc->keymgmt, to_cfg->wlc->keymgmt,
+			from_cfg, to_cfg);
+		wlc_rsdb_scb_clone(from_cfg, to_cfg);
 	}
 #endif /* SCB_MOVE */
 
@@ -3452,9 +3952,7 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 	if (!primary_cfg_move) {
 		from_wlc->bsscfg[idx] = from_cfg;
 		/* Disable the source config */
-		if (BSSCFG_AP(from_cfg)) {
-			wlc_bsscfg_disable(from_wlc, from_cfg);
-		}
+		wlc_bsscfg_disable(from_wlc, from_cfg);
 		wlc_bsscfg_free(from_wlc, from_cfg);
 	}
 	else {
@@ -3505,14 +4003,6 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 	}
 #endif /* SCB_MOVE */
 
-	/* If an associated AP cfg is moved,
-	* enable the AP on other wlc
-	*/
-	if (to_cfg ->associated &&
-		BSSCFG_AP(to_cfg)) {
-		wlc_bsscfg_enable(to_cfg->wlc, to_cfg);
-	}
-
 	if (primary_cfg_move)
 		from_cfg->flags &= ~WLC_BSSCFG_RSDB_CLONE;
 	if (!WLC_BSS_ASSOC_NOT_ROAM(to_cfg))
@@ -3528,14 +4018,151 @@ wlc_rsdb_bsscfg_clone(wlc_info_t *from_wlc, wlc_info_t *to_wlc, wlc_bsscfg_t *fr
 	}
 
 	/* Restore the value of block_disassoc_tx */
-	if (primary_cfg_move) {
+	if (BSSCFG_STA(from_cfg) && primary_cfg_move) {
 		from_cfg->assoc->block_disassoc_tx = block_disassoc_tx;
 	}
-	to_cfg->assoc->block_disassoc_tx = block_disassoc_tx;
+
+	if (BSSCFG_STA(to_cfg)) {
+		to_cfg->assoc->block_disassoc_tx = block_disassoc_tx;
+	}
+
 	wlc_rsdb_cfg_clone_notif(from_wlc->rsdbinfo, to_cfg, from_wlc, to_wlc, CFG_CLONE_END);
 	return to_cfg;
 }
 
+static int
+wlc_rsdb_scb_update(wlc_info_t *wlc_from, wlc_info_t *wlc_to, wlc_bsscfg_t *cfg_to,
+	struct scb *scb)
+{
+	uint8 active_fid[TXMOD_LAST];
+	ASSERT(wlc_to == cfg_to->wlc);
+
+	if (!BSSCFG_SLOTTED_BSS(cfg_to)) {
+		wlc_rsdb_link_teardown(wlc_from, scb, active_fid);
+	}
+
+	/* update wlc and bsscfg corresponding to the new wlc */
+	wlc_scb_wlc_cfg_update(wlc_from, wlc_to, cfg_to, scb);
+
+	if (!BSSCFG_SLOTTED_BSS(cfg_to)) {
+		wlc_rsdb_link_rebind(wlc_to, scb, active_fid);
+	}
+	return BCME_OK;
+}
+
+static void
+wlc_rsdb_link_teardown(wlc_info_t *wlc, struct scb *scb,
+	uint8 *activefid)
+{
+	txmod_id_t fid;
+
+#if defined(WL_BEAMFORMING)
+	if (TXBF_ENAB(wlc->pub)) {
+		wlc_txbf_delete_link(wlc->txbf, scb);
+	}
+#endif /* defined(WL_BEAMFORMING) */
+
+	/* Tearing down the AMPDU session is pending.
+	* Not sure if the client will be present after CSA
+	* to receive the session teardown.
+	*/
+
+	for (fid = TXMOD_START; fid < TXMOD_LAST; fid++) {
+		if (SCB_TXMOD_ACTIVE(scb, fid)) {
+			*(activefid + fid) = TRUE;
+			wlc_txmod_unconfig(wlc->txmodi, scb, fid);
+		}
+	}
+}
+
+static void
+wlc_rsdb_link_rebind(wlc_info_t *wlc, struct scb *scb,
+	uint8 *activefid)
+{
+	txmod_id_t fid;
+
+	if (!VHT_ENAB_BAND(wlc->pub, wlc->band->bandtype)) {
+		wlc_vht_update_scb_state(wlc->vhti, wlc->band->bandtype,
+			scb, NULL, NULL, NULL, 0);
+	}
+
+	wlc_scb_ratesel_init(wlc, scb);
+
+	/* invalidate txc */
+	if (WLC_TXC_ENAB(wlc))
+		wlc_txc_inv(wlc->txc, scb);
+
+	/* Config the txmod functions on to wlc */
+
+	for (fid = TXMOD_START; fid < TXMOD_LAST; fid++) {
+		if (*(activefid + fid) == TRUE) {
+			wlc_txmod_config(wlc->txmodi, scb, fid);
+		}
+	}
+
+#if defined(WL_BEAMFORMING)
+	if (TXBF_ENAB(wlc->pub)) {
+		wlc_txbf_scb_state_upd(wlc->txbf, scb, 0);
+		wlc_txbf_init_link(wlc->txbf, scb);
+	}
+#endif /* defined(WL_BEAMFORMING) */
+}
+
+int
+wlc_rsdb_scb_clone(wlc_bsscfg_t * from_cfg, wlc_bsscfg_t * to_cfg)
+{
+	struct scb *scb;
+	struct scb_iter scbiter;
+	int ret = BCME_OK;
+	bool suppress = TRUE;
+
+	/* Get all the scbs which needs to be moved to other wlc */
+	FOREACH_BSS_SCB(from_cfg->wlc->scbstate, &scbiter, from_cfg, scb) {
+		ret = wlc_rsdb_move_scb(from_cfg, to_cfg, scb, suppress);
+		if (ret != BCME_OK) {
+			WL_ERROR(("%s failed err=%d\n", __FUNCTION__, ret));
+			break;
+		}
+		suppress = FALSE;
+	}
+	return ret;
+}
+
+
+/* Call this function to move scb from from_cfg to to_cfg.
+ * This also suppresses the pending tx pkts on from_cfg.
+ *
+ * Typically called in slotted bss functionality where scb need to be moved
+ * from one bandunit to another.
+ */
+int
+wlc_rsdb_move_scb(wlc_bsscfg_t * from_cfg, wlc_bsscfg_t * to_cfg, struct scb *scb, bool suppress)
+{
+	int ret = BCME_OK;
+
+	/* Flush packets in txq, scb ampduq */
+	if (suppress) {
+		wlc_rsdb_suppress_pending_tx_pkts(from_cfg, to_cfg);
+	}
+
+	/* Get all the scbs which needs to be moved to other wlc */
+	/* Assuming we have one bsscfg tried to a wlcx, do not switch *
+	 * scb's wlc and other info
+	 */
+	if (scb->bsscfg == to_cfg) {
+		return ret;
+	}
+
+	/* Free up the remaining packets in old wlc. */
+	wlc_txq_scb_free(from_cfg->wlc, scb);
+
+	ret = wlc_rsdb_scb_update(from_cfg->wlc, to_cfg->wlc, to_cfg, scb);
+
+	if (ret != BCME_OK) {
+		WL_ERROR(("%s failed err=%d\n", __FUNCTION__, ret));
+	}
+	return ret;
+}
 
 /* Call this function to update the CFG's wlcif reference
  * Typically called after JOIN-success or AP-up
@@ -3560,6 +4187,12 @@ void wlc_rsdb_update_wlcif(wlc_info_t *wlc, wlc_bsscfg_t *from_cfg, wlc_bsscfg_t
 		OSL_OBFUSCATE_BUF(from_cfg), WLC_BSSCFG_IDX(from_cfg), OSL_OBFUSCATE_BUF(to_cfg),
 		WLC_BSSCFG_IDX(to_cfg), from_wlc->pub->unit, to_wlc->pub->unit));
 
+#ifdef BCMDBG_ASSERT
+	if (primary_cfg_move)
+		ASSERT(WLC_BSSCFG_IDX(from_cfg) != WLC_BSSCFG_IDX(to_cfg));
+	else
+		ASSERT(WLC_BSSCFG_IDX(from_cfg) == WLC_BSSCFG_IDX(to_cfg));
+#endif
 
 	if (primary_cfg_move) {
 		uint8 tmp_idx;
@@ -3703,6 +4336,10 @@ wlc_rsdb_mode(void *hdl)
 {
 	wlc_info_t *wlc = (wlc_info_t *)hdl;
 
+	if (WLC_DUALMAC_RSDB(wlc->cmn)) {
+		return PHYMODE_MIMO;
+	}
+
 	ASSERT(WLC_RSDB_CURR_MODE(wlc) < WLC_RSDB_MODE_MAX);
 
 	return (uint16)SWMODE2PHYMODE(WLC_RSDB_CURR_MODE(wlc));
@@ -3797,7 +4434,8 @@ wlc_rsdb_bmc_smac_template(void *hdl, int tplbuf, uint32 doublebufsize)
 /* This function evaluates if current iovar needs to be applied on both
 * cores or single core during dongle-MFGTEST & dualNIC DVT scenario
 */
-bool wlc_rsdb_chkiovar(wlc_info_t *wlc, const bcm_iovar_t *vi_ptr, uint32 actid, int32 wlc_indx)
+bool BCMRAMFN(wlc_rsdb_chkiovar)(wlc_info_t *wlc,
+	const bcm_iovar_t *vi_ptr, uint32 actid, int32 wlc_indx)
 {
 	bool result = FALSE;
 #ifndef WLRSDB_DVT
@@ -4033,12 +4671,7 @@ wlc_rsdb_watchdog(void *context)
 static int
 wlc_rsdb_down(void *context)
 {
-	wlc_rsdb_info_t* rsdbinfo = (wlc_rsdb_info_t *)context;
-	wlc_info_t *wlc = rsdbinfo->wlc;
-	if (wlc != WLC_RSDB_GET_PRIMARY_WLC(wlc)) {
-		/* secondary wlc, del rsdb_clone_timer */
-		wl_del_timer(wlc->wl, wlc->cmn->rsdb_clone_timer);
-	}
+	/* Do Nothing */
 	return BCME_OK;
 }
 
@@ -4159,43 +4792,6 @@ wlc_rsdb_get_max_chain_cap(wlc_info_t *wlc)
 		(WLC_BITSCNT(wlc1->stf->hw_rxchain_cap)));
 	return wlc_max_chain;
 }
-/* Get siso chain operating wlc */
-static wlc_info_t *
-wlc_rsdb_get_siso_wlc(wlc_info_t *wlc)
-{
-	wlc_cmn_info_t* wlc_cmn;
-	wlc_info_t *wlc_iter;
-	int wl_idx;
-	WL_TRACE(("wl%d:%s:%d\n", wlc->pub->unit, __FUNCTION__, __LINE__));
-	wlc_cmn = wlc->cmn;
-	/* Find wlc with 1x1 txchain */
-
-	FOREACH_WLC(wlc_cmn, wl_idx, wlc_iter) {
-		if ((WLC_BITSCNT(wlc_iter->stf->hw_txchain) == 1))
-			return wlc_iter;
-	}
-	return NULL;
-}
-
-/* Get mimo chain operating wlc */
-static wlc_info_t *
-wlc_rsdb_get_mimo_wlc(wlc_info_t *wlc)
-{
-	wlc_cmn_info_t* wlc_cmn;
-	wlc_info_t *wlc_iter;
-	int wl_idx;
-	WL_TRACE(("wl%d:%s:%d\n", wlc->pub->unit, __FUNCTION__, __LINE__));
-	wlc_cmn = wlc->cmn;
-	/* hw_txchain should be initialized to greater than zero.
-	 * Find wlc with 2x2 or higher, .. opermode
-	 */
-	FOREACH_WLC(wlc_cmn, wl_idx, wlc_iter) {
-		if ((WLC_BITSCNT(wlc_iter->stf->hw_txchain) != 1))
-			return wlc_iter;
-	}
-
-	return NULL;
-}
 
 /* Finds the WLC based on chanspec in RSDB case.
  * if there is no existing connection  find if AP is
@@ -4207,16 +4803,14 @@ static wlc_info_t*
 wlc_rsdb_find_wlc(wlc_info_t *wlc, wlc_bsscfg_t *join_cfg, wlc_bss_info_t *bi)
 {
 	wlc_info_t* to_wlc = wlc;
-	chanspec_t chanspec;
 	DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
-	/* Requested peer capability */
-	bool bi_mimo = wlc_bss_get_mimo_cap(bi);
-	chanspec = bi->chanspec;
 	WLRSDB_DBG(("%s: Incoming wlc:%d Request wlc for: is MIMO mode %d, chspec:%s\n",
-		__FUNCTION__, wlc->pub->unit, bi_mimo, wf_chspec_ntoa_ex(chanspec, chanbuf)));
+		__FUNCTION__, wlc->pub->unit, wlc_bss_get_mimo_cap(bi),
+		wf_chspec_ntoa_ex(bi->chanspec, chanbuf)));
 
 	if (!WLC_DUALMAC_RSDB(wlc->cmn)) {
-		to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, chanspec);
+		to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, bi, bi->chanspec, NULL,
+			WL_RSDB_CORE_MATCH_BW);
 	} else if (wlc_rsdb_any_wlc_associated(wlc) == 0) {
 		/* If there is no existing connection, find if AP is MIMO/SISO capable
 		 * & return corresponding wlc
@@ -4224,23 +4818,33 @@ wlc_rsdb_find_wlc(wlc_info_t *wlc, wlc_bsscfg_t *join_cfg, wlc_bss_info_t *bi)
 		WLRSDB_DBG(("Non-Associated case: \n"));
 
 		if (WLC_RSDB_IS_AUTO_MODE(wlc) && !wlc->bandlocked) {
-			if (bi_mimo) {
-				to_wlc = wlc_rsdb_get_mimo_wlc(wlc);
-			} else {
-				to_wlc = wlc_rsdb_get_siso_wlc(wlc);
-			}
-			if (!to_wlc)
-				to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, chanspec);
+				to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, bi,
+					bi->chanspec, NULL, (WL_RSDB_CORE_MATCH_BW |
+					WL_RSDB_CORE_MATCH_CHAINS));
 		} else {
-			to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, chanspec);
+			to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, bi, bi->chanspec, NULL,
+				WL_RSDB_CORE_MATCH_BW);
 		}
 	} else {
 		WLRSDB_DBG(("Associated case: \n"));
-		to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, chanspec);
+		to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc, bi, bi->chanspec, NULL,
+			WL_RSDB_CORE_MATCH_BW);
 	}
 
+#if defined(BCMDBG)
+	if (to_wlc) {
+		int chainbit_count = (WLC_BITSCNT(to_wlc->stf->hw_txchain));
+		WLRSDB_DBG(("    Return wlc:%d : Chain %d :", to_wlc->pub->unit, chainbit_count));
+		if (chainbit_count && chainbit_count != 1) {
+			WLRSDB_DBG(("to_wlc chain is MIMO\n"));
+		} else {
+			WLRSDB_DBG(("to_wlc chain is SISO\n"));
+		}
+	}
+#endif
 	return to_wlc;
 }
+
 
 /* This function is a wrapper to restore/override the
 * AUTO mode switching
@@ -4429,7 +5033,8 @@ wlc_rsdb_check_load_based_upgarde(wlc_rsdb_info_t* rsdbinfo)
 }
 #endif /* WLCHANIM */
 
-static bool wlc_rsdb_change_band_allowed(wlc_info_t *wlc, int bandunit)
+bool
+wlc_rsdb_change_band_allowed(wlc_info_t *wlc, int bandunit)
 {
 	return CHSPEC_WLCBANDUNIT(wlc->chanspec) != bandunit;
 }
@@ -4449,4 +5054,443 @@ wlc_rsdb_get_infra_cfg(wlc_info_t *wlc)
 	}
 	return NULL;
 }
+
+#if defined(RSDB_CMN_BANDSTATE) && !defined(RSDB_CMN_BANDSTATE_DISABLED)
+/* Function handles updating of Common BW cap for RSDB chips. cmn_bwcap is common BW capability
+ * of all wlc cores. Currently this is derived to be max of all cores BW capability.
+ *
+ * cmn_bwcap is used instead of pub->phy_bwXXX_capable in various IOVARs like "bw_cap",
+ * "chanspecs", etc., to return overall chip capability irrespective of the WLC it is
+ * queried on. This was done to specifically solve issues related BW a
+ * SoftAP/IBSS is started due a interface getting cloned between asymmetric
+ * dual-mac RSDB slices (aux with 20MHz)
+ */
+static void
+BCMATTACHFN(wlc_rsdb_derive_cmn_bwcap)(wlc_rsdb_info_t *rsdbinfo, int bandtype)
+{
+	wlc_info_t* wlc = rsdbinfo->wlc;
+	wlc_info_t* iwlc;
+	uint8 *cmn_bwcap;
+	int idx;
+	bool phy_bw40_capable = FALSE;
+	bool phy_bw80_capable = FALSE;
+	bool phy_bw8080_capable = FALSE;
+	bool phy_bw160_capable = FALSE;
+
+	if (bandtype == WLC_BAND_5G) {
+		cmn_bwcap = &rsdbinfo->cmn->cmn_bwcap[BAND_5G_INDEX];
+	} else if (bandtype == WLC_BAND_2G) {
+		cmn_bwcap = &rsdbinfo->cmn->cmn_bwcap[BAND_2G_INDEX];
+	} else {
+		WL_ERROR(("wl%d: %s: In valid bandtype %d\n", wlc->pub->unit, __FUNCTION__,
+			bandtype));
+		return;
+	}
+
+	/* Ensure that for RSDB chips the PHY capability is best of both cores */
+	FOREACH_WLC(wlc->cmn, idx, iwlc) {
+		if (WLC_40MHZ_CAP_PHY(iwlc)) {
+			phy_bw40_capable = TRUE;
+		}
+		if (WLC_80MHZ_CAP_PHY(iwlc)) {
+			phy_bw80_capable = TRUE;
+		}
+		if (WLC_8080MHZ_CAP_PHY(iwlc)) {
+			phy_bw8080_capable = TRUE;
+		}
+		if (WLC_160MHZ_CAP_PHY(iwlc)) {
+			phy_bw160_capable = TRUE;
+		}
+	}
+
+	if (bandtype == WLC_BAND_2G) {
+		*cmn_bwcap = phy_bw40_capable ? WLC_BW_CAP_40MHZ : WLC_BW_CAP_20MHZ;
+	} else {
+		if (phy_bw160_capable || phy_bw8080_capable) {
+			*cmn_bwcap = WLC_BW_CAP_160MHZ;
+		} else if (phy_bw80_capable) {
+			*cmn_bwcap = WLC_BW_CAP_80MHZ;
+		} else if (phy_bw40_capable) {
+			*cmn_bwcap = WLC_BW_CAP_40MHZ;
+		} else {
+			*cmn_bwcap = WLC_BW_CAP_20MHZ;
+		}
+	}
+}
+
+uint8
+wlc_rsdb_get_cmn_bwcap(wlc_info_t *wlc, int bandtype)
+{
+	uint8 bwcap = 0;
+	int bandindex;
+
+	if (bandtype == WLC_BAND_5G) {
+		bandindex = BAND_5G_INDEX;
+	} else if (bandtype == WLC_BAND_2G) {
+		bandindex = BAND_2G_INDEX;
+	} else {
+		WL_ERROR(("wl%d: %s: In valid bandtype %d\n", wlc->pub->unit, __FUNCTION__,
+			bandtype));
+		ASSERT(0);
+		goto done;
+	}
+
+	/* If bandstate is shared across WLCs then we return common BW cap */
+	if (RSDB_CMN_BANDSTATE_ENAB(wlc->pub)) {
+		bwcap = wlc->rsdbinfo->cmn->cmn_bwcap[bandindex];
+	}
+
+done:
+	return bwcap;
+}
+#endif /* defined(RSDB_CMN_BANDSTATE) && !defined(RSDB_CMN_BANDSTATE_DISABLED) */
+
+uint8
+wlc_rsdb_any_go_active(wlc_info_t* wlc)
+{
+	wlc_info_t *wlc_iter;
+	uint8 idx1 = 0;
+	uint8 num_gos = 0;
+	wlc_cmn_info_t *wlc_cmn = wlc->cmn;
+
+	FOREACH_WLC(wlc_cmn, idx1, wlc_iter) {
+		uint8 idx2 = 0;
+		wlc_bsscfg_t *cfg;
+		FOREACH_UP_AP(wlc_iter, idx2, cfg) {
+			if (P2P_GO(wlc_iter, cfg))
+				num_gos++;
+		}
+	}
+	return num_gos;
+}
+
+uint8
+wlc_rsdb_any_aps_active(wlc_info_t* wlc)
+{
+	wlc_info_t *wlc_iter;
+	uint8 idx = 0;
+	uint8 num_aps = 0;
+	wlc_cmn_info_t *wlc_cmn = wlc->cmn;
+
+	FOREACH_WLC(wlc_cmn, idx, wlc_iter) {
+		if AP_ACTIVE(wlc_iter) {
+			num_aps += wlc_iter->aps_associated;
+		}
+	}
+
+	return num_aps;
+}
+
+#if defined(WL_NAN)
+/* This function returns the RSDB linked bsscfg for the given cfg */
+wlc_bsscfg_t *
+wlc_rsdb_bsscfg_get_linked_cfg(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *cfg)
+{
+	wlc_bsscfg_t *bsscfg;
+	wlc_info_t *wlc;
+	int16 linked_cfg_idx;
+
+	if (!cfg ||
+			!(cfg->flags2 & WLC_BSSCFG_FL2_RSDB_LINKED)) {
+		/* Linked bsscfg is either NULL or doesn't have
+		 * WLC_BSSCFG_FL2_RSDB_LINKED flag set.
+		 */
+		ASSERT(0);
+		goto fail;
+	}
+
+	ASSERT(rsdbinfo != NULL);
+	wlc = rsdbinfo->wlc;
+	ASSERT(wlc != NULL);
+
+	linked_cfg_idx = rsdbinfo->cmn->linked_cfg_indices[cfg->_idx];
+
+	if (linked_cfg_idx == WLC_BSSCFG_INVALID_IDX) {
+		goto fail;
+	}
+
+	bsscfg = wlc->bsscfg[linked_cfg_idx];
+	return bsscfg;
+
+fail:
+	return NULL;
+}
+
+/* This function is used to create a pair of bsscfgs one for each band and will create OS interface
+ * based on the flags.
+ *
+ * Modules which operate on both the bands either simultaneously or more frequently
+ * will have to use this function
+ *
+ * If flags has WLC_BSSCFG_RSDB_IF set, then host interface will be created for bsscfg on
+ * Core-0. Only wlcif, wlif will be created for cfg on Core-1.
+ *
+ * If flags has WLC_BSSCFG_NOIF set, then both bsscfgs won't be having any OS interface created.
+ * if_idx is returned from this function is not valid in this case.
+ *
+ * else if, none of the above flags is set, OS interfaces will be created for both the bsscfgs.
+ * But, only if_idx for the core-0 will be returned. If this option is really used and if_idx is
+ * needed, please get it from corresponding cfg.
+ */
+int
+wlc_rsdb_bsscfg_create(wlc_rsdb_info_t *rsdbinfo, uint32 flags, wlc_bsscfg_type_t *type,
+		struct ether_addr *mac_addr, wlc_bsscfg_t **cfg_arr, int *if_idx)
+{
+	wlc_info_t *wlc_iter;
+	int wlc_idx;
+	int idx, err = BCME_OK;
+	wlc_bsscfg_t *bsscfg = NULL;
+	int cfg_indices[MAX_RSDB_MAC_NUM];
+	int if_index = 0;
+
+	memset(cfg_indices, 0, sizeof(cfg_indices));
+
+	FOREACH_WLC(rsdbinfo->wlc->cmn, wlc_idx, wlc_iter) {
+		/* Assign NULL : To handle the cases where caller sends cfg_arr[]
+		 * argument uninitialized.
+		 */
+		cfg_arr[wlc_idx] = NULL;
+
+		/* If cores are more than 2, revisit this code */
+		ASSERT(wlc_iter->pub->unit <= MAC_CORE_UNIT_1);
+		/* Always ensuring that OS interface gets created on core 0 only
+		 */
+		if (wlc_iter->pub->unit == MAC_CORE_UNIT_1) {
+			flags |= WLC_BSSCFG_RSDB_IF;
+		}
+		/* allocate bsscfg */
+		if ((idx = wlc_bsscfg_get_free_idx(wlc_iter)) == -1) {
+			WL_ERROR(("wl%d: no free bsscfg\n", wlc_iter->pub->unit));
+			err = BCME_NORESOURCE;
+			goto fail;
+		}
+		else if ((bsscfg = wlc_bsscfg_alloc(wlc_iter, idx, type, flags,
+				mac_addr)) == NULL) {
+
+			WL_ERROR(("wl%d: cannot create bsscfg\n", wlc_iter->pub->unit));
+			err = BCME_NOMEM;
+			goto fail;
+		}
+
+		ASSERT(bsscfg != NULL);
+
+		cfg_arr[wlc_idx] = bsscfg;
+		cfg_indices[wlc_idx] = idx;
+
+		if (wlc_iter->pub->unit == MAC_CORE_UNIT_0) {
+			/* Get the interface idx created for the core-0 */
+			if_index = wl_find_if(bsscfg->wlcif->wlif);
+			*if_idx = if_index;
+			if (if_index <= 0) {
+				WL_ERROR(("%s wl%d can't find interface index\n",
+						__FUNCTION__, wlc_iter->pub->unit));
+				ASSERT(0);
+				err = BCME_ERROR;
+				goto fail;
+			}
+		} else {
+			/* Try rebinding this if_idx to other bsscfg */
+			err = wl_rebind_if(bsscfg->wlcif->wlif, if_index, FALSE);
+			if (err != BCME_OK) {
+				/* Rebind if failed */
+				WL_ERROR(("%s wl%d rebind interface failed with err %d",
+						__FUNCTION__, wlc_iter->pub->unit, err));
+				ASSERT(0);
+				err = BCME_ERROR;
+				goto fail;
+			}
+		}
+	}
+	/* Do the initialization of linked bsscfg indices.
+	 * Initialize the linked cfg idx in the cubby.
+	 */
+	if (cfg_arr[MAC_CORE_UNIT_0] && cfg_arr[MAC_CORE_UNIT_1]) {
+		int8 *linked_cfg_indices = rsdbinfo->cmn->linked_cfg_indices;
+		int *linked_cfg_hostif_indices =
+				rsdbinfo->cmn->linked_cfg_hostif_indices;
+
+		cfg_arr[MAC_CORE_UNIT_0]->flags2 |= WLC_BSSCFG_FL2_RSDB_LINKED;
+		cfg_arr[MAC_CORE_UNIT_1]->flags2 |= WLC_BSSCFG_FL2_RSDB_LINKED;
+		linked_cfg_indices[cfg_indices[MAC_CORE_UNIT_0]] = cfg_indices[MAC_CORE_UNIT_1];
+		linked_cfg_indices[cfg_indices[MAC_CORE_UNIT_1]] = cfg_indices[MAC_CORE_UNIT_0];
+
+		/* Store the ifindex that is notified to host for this linked cfgs */
+		linked_cfg_hostif_indices[cfg_indices[MAC_CORE_UNIT_0]] =
+			linked_cfg_hostif_indices[cfg_indices[MAC_CORE_UNIT_1]] = if_index;
+	}
+
+	return err;
+
+fail:
+	for (idx = 0; idx < MAX_RSDB_MAC_NUM; idx++) {
+		if (cfg_arr[idx]) {
+			wlc_bsscfg_free(cfg_arr[idx]->wlc, cfg_arr[idx]);
+			cfg_arr[idx] = NULL;
+		}
+	}
+	return err;
+}
+
+/* This function is used to delete the pair of bsscfgs created using wlc_rsdb_bsscfg_create().
+ */
+int
+wlc_rsdb_bsscfg_delete(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg)
+{
+	int err = BCME_OK, i;
+	wlc_bsscfg_t *linked_cfg = wlc_rsdb_bsscfg_get_linked_cfg(rsdbinfo, bsscfg);
+	wlc_bsscfg_t *cfg[MAX_RSDB_MAC_NUM] = {bsscfg, linked_cfg};
+	int8 *linked_cfg_indices = rsdbinfo->cmn->linked_cfg_indices;
+	int *linked_cfg_hostif_indices = rsdbinfo->cmn->linked_cfg_hostif_indices;
+
+	if (linked_cfg == NULL) {
+		ASSERT(0);
+		err = BCME_ERROR;
+		goto exit;
+	}
+
+	for (i = 0; i < MAX_RSDB_MAC_NUM; i++) {
+		wlc_bsscfg_disable(cfg[i]->wlc, cfg[i]);
+
+		/* Mark the linked cfg indices to invalid indices */
+		linked_cfg_indices[cfg[i]->_idx] = WLC_BSSCFG_INVALID_IDX;
+		linked_cfg_hostif_indices[cfg[i]->_idx] = WLC_BSSCFG_INVALID_IFIDX;
+
+		cfg[i]->flags2 &= ~WLC_BSSCFG_FL2_RSDB_LINKED;
+		/* delete the linked bsscfg */
+		wlc_bsscfg_free(cfg[i]->wlc, cfg[i]);
+	}
+
+exit:
+	return err;
+}
+
+/* This function is used to enable the pair of bsscfgs created using wlc_rsdb_bsscfg_create().
+ */
+int
+wlc_rsdb_bsscfg_enable(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg)
+{
+	int err = BCME_OK, i;
+	wlc_bsscfg_t *linked_cfg = wlc_rsdb_bsscfg_get_linked_cfg(rsdbinfo, bsscfg);
+	wlc_bsscfg_t *cfg[MAX_RSDB_MAC_NUM] = {bsscfg, linked_cfg};
+
+	if (linked_cfg == NULL) {
+		ASSERT(0);
+		err = BCME_ERROR;
+		goto exit;
+	}
+
+	for (i = 0; i < MAX_RSDB_MAC_NUM; i++) {
+		if ((err = wlc_bsscfg_enable(cfg[i]->wlc, cfg[i])) != BCME_OK) {
+			WL_ERROR(("wl%d: %s: wlc_bsscfg_enable failed %d\n",
+					cfg[i]->wlc->pub->unit, __FUNCTION__, err));
+		}
+	}
+
+exit:
+	return err;
+}
+
+/* This function is used to disable the pair of bsscfgs created using wlc_rsdb_bsscfg_create().
+ */
+int
+wlc_rsdb_bsscfg_disable(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg)
+{
+	int err = BCME_OK, i;
+	wlc_bsscfg_t *linked_cfg = wlc_rsdb_bsscfg_get_linked_cfg(rsdbinfo, bsscfg);
+	wlc_bsscfg_t *cfg[MAX_RSDB_MAC_NUM] = {bsscfg, linked_cfg};
+
+	if (linked_cfg == NULL) {
+		ASSERT(0);
+		err = BCME_ERROR;
+		goto exit;
+	}
+
+	for (i = 0; i < MAX_RSDB_MAC_NUM; i++) {
+		wlc_bsscfg_disable(cfg[i]->wlc, cfg[i]);
+	}
+
+exit:
+	return err;
+}
+
+/* This function is used to initialize the pair of bsscfgs created using wlc_rsdb_bsscfg_create().
+ */
+int
+wlc_rsdb_bsscfg_init(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg)
+{
+	int err = BCME_OK, i;
+	wlc_bsscfg_t *linked_cfg = wlc_rsdb_bsscfg_get_linked_cfg(rsdbinfo, bsscfg);
+	wlc_bsscfg_t *cfg[MAX_RSDB_MAC_NUM] = {bsscfg, linked_cfg};
+
+	if (linked_cfg == NULL) {
+		ASSERT(0);
+		err = BCME_ERROR;
+		goto exit;
+	}
+
+	for (i = 0; i < MAX_RSDB_MAC_NUM; i++) {
+		if ((err = wlc_bsscfg_init(cfg[i]->wlc, cfg[i])) != BCME_OK) {
+			WL_ERROR(("wl%d: %s: bsscfg init failed\n",
+					cfg[i]->wlc->pub->unit, __FUNCTION__));
+			goto exit;
+		}
+	}
+
+exit:
+	return err;
+}
+
+/* This function is used to de-init the pair of bsscfgs created using wlc_rsdb_bsscfg_create().
+ */
+int
+wlc_rsdb_bsscfg_deinit(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg)
+{
+	int err = BCME_OK, i;
+	wlc_bsscfg_t *linked_cfg = wlc_rsdb_bsscfg_get_linked_cfg(rsdbinfo, bsscfg);
+	wlc_bsscfg_t *cfg[MAX_RSDB_MAC_NUM] = {bsscfg, linked_cfg};
+
+	if (linked_cfg == NULL) {
+		ASSERT(0);
+		err = BCME_ERROR;
+		goto exit;
+	}
+
+	for (i = 0; i < MAXBANDS; i++) {
+		wlc_bsscfg_disable(cfg[i]->wlc, cfg[i]);
+		wlc_bsscfg_deinit(cfg[i]->wlc, cfg[i]);
+	}
+
+exit:
+	return err;
+}
+
+/* Call this function to switch if from one cfg to another.
+ *
+ * This function is called for linked cfgs where interface need to be moved
+ * from one bandunit cfg to another bandunit cfg.
+ */
+int
+wlc_rsdb_switch_if_to_linked_cfg(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *to_cfg)
+{
+	int idx;
+	wlc_bsscfg_t *from_cfg = NULL;
+	int hostif_idx = rsdbinfo->cmn->linked_cfg_hostif_indices[to_cfg->_idx];
+
+	ASSERT(hostif_idx != WLC_BSSCFG_INVALID_IFIDX);
+
+	idx = wl_find_if(to_cfg->wlcif->wlif);
+
+	if (idx != hostif_idx) {
+		from_cfg = wlc_rsdb_bsscfg_get_linked_cfg(rsdbinfo, to_cfg);
+
+		WLRSDB_DBG(("%s: to_cfg %p from_cfg %p idx %d hostif_idx %d\n",
+				__FUNCTION__, to_cfg, from_cfg, idx, hostif_idx));
+		/* rebinding of interface is needed */
+		wl_update_if(from_cfg->wlc->wl, to_cfg->wlc->wl,
+				from_cfg->wlcif->wlif, to_cfg->wlcif);
+	}
+
+	return BCME_OK;
+}
+#endif 
 #endif /* WLRSDB */

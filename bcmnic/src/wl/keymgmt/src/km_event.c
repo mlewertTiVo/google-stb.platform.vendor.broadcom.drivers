@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_event.c 617371 2016-02-05 05:16:56Z $
+ * $Id: km_event.c 654771 2016-08-16 13:04:43Z $
  */
 
 #include "km_pvt.h"
@@ -88,7 +88,8 @@ km_event_compat_signal(keymgmt_t *km, wlc_keymgmt_event_t event,
 
 	wlc_event = (wlc->eventq != NULL ? wlc_event_alloc(wlc->eventq, e_id) : NULL);
 	if (wlc_event == NULL) {
-		KM_ERR(("wl%d: %s: wlc event allocation failed\n", KM_UNIT(km), __FUNCTION__));
+		KM_ALLOC_ERR(("wl%d: %s: wlc event allocation failed\n",
+				KM_UNIT(km), __FUNCTION__));
 		return;
 	}
 
@@ -156,7 +157,7 @@ km_event_signal(keymgmt_t *km, wlc_keymgmt_event_t event,
 
 done:
 	KM_LOG(("wl%d.%d: %s: event %d [%s] key idx %d\n",
-		KM_UNIT(km), (bsscfg != NULL ? WLC_BSSCFG_IDX(bsscfg) : -1), __FUNCTION__,
+		KM_UNIT(km), WLC_BSSCFG_IDX(bsscfg), __FUNCTION__,
 		event, wlc_keymgmt_event_name(event), key_info.key_idx));
 }
 
@@ -205,7 +206,7 @@ done:
 	return err;
 }
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLMSG_WSEC)
 const char*
 wlc_keymgmt_event_name(wlc_keymgmt_event_t event)
 {
@@ -230,4 +231,4 @@ wlc_keymgmt_event_name(wlc_keymgmt_event_t event)
 
 	return name;
 }
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || WLMSG_WSEC */

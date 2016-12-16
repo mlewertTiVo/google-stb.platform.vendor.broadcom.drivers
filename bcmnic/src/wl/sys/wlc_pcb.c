@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_pcb.c 617664 2016-02-06 13:09:19Z $
+ * $Id: wlc_pcb.c 662131 2016-09-28 11:58:08Z $
  */
 
 
@@ -41,7 +41,6 @@
 #include <wlc_pub.h>
 #include <wlc.h>
 #ifdef PROP_TXSTATUS
-#include <wlfc_proto.h>
 #include <wlc_wlfc.h>
 #endif
 
@@ -97,8 +96,19 @@ static wlc_pcb_cd_t BCMATTACHDATA(pcb_cd_def)[] = {
 	{NULL, MAXCD4PCBS, OFFSETOF(wlc_pkttag_t, flags2), WLF2_PCB4_MASK, WLF2_PCB4_SHIFT},
 };
 
+enum {
+	WLF2_PCB1_INDEX = 0,
+	WLF2_PCB2_INDEX,
+	WLF2_PCB3_INDEX,
+	WLF2_PCB4_INDEX,
+	WLF2_PCBMAX_INDEX
+};
+
 /* local functions */
 /* module entries */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_pcb_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* Noop packet callback, used to abstract cancellled callbacks. */
 static void wlc_pktcb_noop_fn(wlc_info_t *wlc, uint txs, void *arg);
@@ -176,6 +186,9 @@ BCMATTACHFN(wlc_pcb_attach)(wlc_info_t *wlc)
 		}
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "pcb", wlc_pcb_dump, (void *)pcbi);
+#endif
 
 	/* Register with OSL the callback to be called when PKTFREE is called (w/o tx attempt) */
 	PKTFREESETCB(wlc->osh, _wlc_pcb_pktfree_fn_invoke, pcbi);
@@ -198,6 +211,13 @@ BCMATTACHFN(wlc_pcb_detach)(wlc_pcb_info_t *pcbi)
 
 	wlc = pcbi->wlc;
 
+#ifdef BCMDBG
+	/* Since all the packets should have been freed,
+	 * all callbacks should have been called
+	 */
+	for (i = 1; i <= pcbi->maxpktcb; i++)
+		ASSERT(pcbi->pkt_callback[i].fn == NULL);
+#endif
 
 	if (pcbi->pkt_callback != NULL) {
 		MFREE(wlc->osh, pcbi->pkt_callback, sizeof(pkt_cb_t) * (pcbi->maxpktcb + 1));
@@ -218,6 +238,34 @@ BCMATTACHFN(wlc_pcb_detach)(wlc_pcb_info_t *pcbi)
 	MFREE(wlc->osh, pcbi, sizeof(wlc_pcb_info_t));
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_pcb_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_pcb_info_t *pcbi = (wlc_pcb_info_t *)ctx;
+	int i, j;
+
+	bcm_bprintf(b, "callbacks: %d\n", pcbi->maxpktcb);
+	for (i = 1; i <= pcbi->maxpktcb; i ++) {
+		bcm_bprintf(b, "\t%d: fn %p arg %p next %d\n", i,
+		            OSL_OBFUSCATE_BUF(pcbi->pkt_callback[i].fn),
+			OSL_OBFUSCATE_BUF(pcbi->pkt_callback[i].arg),
+		            pcbi->pkt_callback[i].nextidx);
+	}
+	for (i = 0; i < pcbi->maxpcbcds; i ++) {
+		bcm_bprintf(b, "class %d callbacks: %d\n", i, pcbi->pcb_cd[i].size);
+		bcm_bprintf(b, "class %d pkttag: %d 0x%x %d\n", i,
+		            pcbi->pcb_cd[i].offset, pcbi->pcb_cd[i].mask,
+		            pcbi->pcb_cd[i].shift);
+		for (j = 1; j < pcbi->pcb_cd[i].size; j ++) {
+			bcm_bprintf(b, "\t%d: fn %p\n", j,
+				OSL_OBFUSCATE_BUF(pcbi->pcb_cd[i].cb[j]));
+		}
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* Prepend pkt's callback list to new_pkt. This is useful mainly for A-MSDU */
 void
@@ -358,34 +406,49 @@ wlc_pcb_callback(wlc_pcb_info_t *pcbi, void *pkt, uint txs)
 	}
 }
 
+#define CB_INVOKE(cbnum) \
+	do { \
+		if (*loc & WLF2_PCB##cbnum##_MASK) { \
+			idx = (*loc & WLF2_PCB##cbnum##_MASK) >> WLF2_PCB##cbnum##_SHIFT; \
+			(pcbi->pcb_cd[WLF2_PCB##cbnum##_INDEX].cb[idx])(pcbi->wlc, pkt, txs); \
+			*loc = (*loc & ~WLF2_PCB##cbnum##_MASK); \
+		} \
+	} while (0)
+/*
+ * For example
+ * CB_INVOKE(1)
+ *	if (*loc & WLF2_PCB1_MASK) {
+ *		idx = (*loc & WLF2_PCB1_MASK) >> WLF2_PCB1_SHIFT;
+ *		(pcbi->pcb_cd[WLF2_PCB1_INDEX].cb[idx])(pcbi->wlc, pkt, txs);
+ *		*loc = (*loc & ~WLF2_PCB1_MASK);
+ *	}
+ */
+
 /* invokes the packet class callback chain attached to 'pkt' */
 static void BCMFASTPATH
 wlc_pcb_invoke(wlc_pcb_info_t *pcbi, void *pkt, uint txs)
 {
-	int tbl;
-	bool going_down = pcbi->wlc->going_down;
+	wlc_pkttag_t *pt;
+	uint8 *loc;
+	uint idx;
 
-	/* invoke all registered callbacks in the order in defined by wlc_pcb_tbl */
-	for (tbl = 0; tbl < pcbi->maxpcbcds; tbl ++) {
-		wlc_pcb_cd_t *pcb_cd = &pcbi->pcb_cd[tbl];
-		wlc_pkttag_t *pt = WLPKTTAG(pkt);
-		uint8 *loc = (uint8 *)pt + pcb_cd->offset;
-		uint idx = (*loc & pcb_cd->mask) >> pcb_cd->shift;
-		wlc_pcb_fn_t cb;
-
-		/* No callback for this packet. Do nothing */
-		if (idx == 0)
-			continue;
-
-		/* call the function */
-		ASSERT(idx < pcb_cd->size);
-		/* no callbacks when going down or no callback specified */
-		if (!going_down && (cb = pcb_cd->cb[idx]) != NULL) {
-			(cb)(pcbi->wlc, pkt, txs);
-		}
-		/* clear after the invocation in case someone may check pcb value */
-		*loc = (*loc & ~pcb_cd->mask);
+	ASSERT(pcbi->maxpcbcds == WLF2_PCBMAX_INDEX);
+	if (pcbi->wlc->going_down) {
+		return;
 	}
+	pt = WLPKTTAG(pkt);
+	loc = (uint8 *)pt + OFFSETOF(wlc_pkttag_t, flags2);
+
+	/* If there are no registered callbacks, return early */
+	if ((*loc & (WLF2_PCB1_MASK | WLF2_PCB2_MASK | WLF2_PCB3_MASK | WLF2_PCB4_MASK)) == 0) {
+		return;
+	}
+
+	/* invoke all registered callbacks in the order defined by wlc_pcb_tbl */
+	CB_INVOKE(1);
+	CB_INVOKE(2);
+	CB_INVOKE(3);
+	CB_INVOKE(4);
 }
 
 /* move the packet class callback chain attached from 'pkt_from' to 'pkt_to' */

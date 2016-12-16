@@ -17,14 +17,14 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: cfg-phy.mk 595514 2015-10-27 23:31:45Z dboyce $
+# $Id: cfg-phy.mk 595514 2015-10-27 23:31:45Z $
 #
 
 PHY_CMN_DIR_LIST := dbg utils wd init
-PHY_TYPE_LIST := ac ht n lcn lcn20 lcn40
+PHY_TYPE_LIST := ac ht n lcn20
 PHY_MOD_LIST := ana antdiv btcx cache calmgr chanmgr core dccal dbg dsi et fcbs hirssi \
                 lpc misc mu nap noise papdcal radar radio rssi rxgcrs rxiqcal rxspur \
-                samp tbl temp tof tpc txpwrcap tssical txiqlocal vcocal ocl hecap
+                samp tbl temp tof tpc txpwrcap tssical txiqlocal vcocal ocl hecap prephy hc vasip stf
 PHY_MOD_SRC_DIRS := $(strip \
   $(foreach _phy_cmn_dir,$(PHY_CMN_DIR_LIST),cmn/$(_phy_cmn_dir)) \
   $(foreach _phy_type,cmn $(PHY_TYPE_LIST),\
@@ -40,6 +40,7 @@ PHY_SRC_INC_DIRS += $(foreach _phy_type,$(PHY_TYPE_LIST),$(_phy_type)/core)
 PHY_SRC_INC_DIRS += ac/dsi
 PHY_SRC_INC_DIRS += ac/papdcal
 PHY_SRC_INC_DIRS += ac/et
+PHY_SRC_INC_DIRS += ac/samp
 
 phy_IncDirs := old $(PHY_MOD_INC_DIRS) $(PHY_SRC_INC_DIRS)
 phy_SrcDirs := old $(PHY_MOD_SRC_DIRS) $(PHY_SRC_INC_DIRS)

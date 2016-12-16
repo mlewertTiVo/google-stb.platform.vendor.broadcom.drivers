@@ -19,7 +19,6 @@
 #define _BCMWIFI_MONITOR_H_
 
 #include <proto/monitor.h>
-#include <bcmmsgbuf.h>
 #include <bcmwifi_radiotap.h>
 
 #define MAX_RADIOTAP_SIZE	sizeof(wl_radiotap_vht_t)
@@ -27,10 +26,33 @@
 
 typedef struct monitor_info monitor_info_t;
 
+typedef struct monitor_pkt_ts {
+	union {
+		uint32	ts_low; /* time stamp low 32 bits */
+		uint32	reserved; /* If timestamp not used */
+	};
+	union {
+		uint32  ts_high; /* time stamp high 28 bits */
+		union {
+			uint32  ts_high_ext :28; /* time stamp high 28 bits */
+			uint32  clk_id_ext :3; /* clock ID source  */
+			uint32  phase :1; /* Phase bit */
+			uint32	marker_ext;
+		};
+	};
+} monitor_pkt_ts_t;
+
+typedef struct monitor_pkt_info {
+	uint32	marker;
+	/* timestamp */
+	monitor_pkt_ts_t ts;
+} monitor_pkt_info_t;
+
+
 extern uint16 bcmwifi_monitor_create(monitor_info_t**);
 extern void bcmwifi_monitor_delete(monitor_info_t* info);
 extern uint16 bcmwifi_monitor(monitor_info_t* info,
-	host_rxbuf_cmpl_t* msg, void *pdata, uint16 len, void* pout, uint16* offset);
+	monitor_pkt_info_t* pkt_info, void *pdata, uint16 len, void* pout, uint16* offset);
 extern uint16 wl_rxsts_to_rtap(struct wl_rxsts* rxsts, void *pdata, uint16 len, void* pout);
 
 #endif /* _BCMWIFI_MONITOR_H_ */

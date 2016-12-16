@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km.c 626490 2016-03-22 00:18:23Z $
+ * $Id: km.c 654777 2016-08-16 13:29:59Z $
  */
 
 /* This file implements the wlc keymgmt functionality. It provides
@@ -22,7 +22,11 @@
 
 #include "km_pvt.h"
 #include "wlc.h"
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define KM_SCB_DUMP km_scb_dump
+#else
 #define KM_SCB_DUMP NULL
+#endif
 
 #if defined(PKTC) || defined(PKTC_DONGLE)
 /* reset key cache. note: must be called when null key is valid */
@@ -61,6 +65,7 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	int err = BCME_OK;
 	wlc_key_info_t key_info;
 	bsscfg_cubby_params_t cubby_params;
+	scb_cubby_params_t km_scb_cubby_params;
 
 	STATIC_ASSERT(WLC_KEYMGMT_NUM_GROUP_KEYS == DOT11_MAX_DEFAULT_KEYS);
 	STATIC_ASSERT(WLC_KEYMGMT_NUM_BSS_IGTK == DOT11_MAX_IGTK_KEYS);
@@ -90,7 +95,8 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	err = km_module_register(km);
 
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: wlc_module_register failed\n", WLCWLUNIT(wlc), __FUNCTION__));
+		KM_REGST_ERR(("wl%d: %s: wlc_module_register failed\n",
+				WLCWLUNIT(wlc), __FUNCTION__));
 		err = BCME_NORESOURCE;
 		goto done;
 	}
@@ -101,6 +107,9 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	cubby_params.context = km;
 	cubby_params.fn_init = km_bsscfg_init;
 	cubby_params.fn_deinit = km_bsscfg_deinit;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = km_bsscfg_dump;
+#endif
 #ifdef WLRSDB
 	cubby_params.fn_get = km_bsscfg_get_static_config;
 	cubby_params.fn_set = km_bsscfg_set_static_config;
@@ -110,7 +119,7 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	km->h_bsscfg = wlc_bsscfg_cubby_reserve_ext(wlc, sizeof(km_bsscfg_t), &cubby_params);
 
 	if (km->h_bsscfg < 0) {
-		KM_ERR(("wl%d: %s: wlc_bsscfg_cubby_reserve failed\n",
+		KM_REGST_ERR(("wl%d: %s: wlc_bsscfg_cubby_reserve failed\n",
 		        WLCWLUNIT(wlc), __FUNCTION__));
 		err = BCME_NORESOURCE;
 		goto done;
@@ -119,16 +128,34 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	/* bss up/down */
 	err = wlc_bsscfg_updown_register(wlc, km_bsscfg_up_down, (void *)km);
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: wlc_bsscfg_updown_register failed, error %d\n",
+		KM_REGST_ERR(("wl%d: %s: wlc_bsscfg_updown_register failed, error %d\n",
 		        WLCWLUNIT(wlc), __FUNCTION__, err));
 		goto done;
 	}
 
-	/* reserve scb cubby */
-	km->h_scb = wlc_scb_cubby_reserve(wlc, sizeof(km_scb_t),
-		km_scb_init, km_scb_deinit, KM_SCB_DUMP, (void *)km);
+	/* reserve some space in scb container */
+	bzero(&km_scb_cubby_params, sizeof(km_scb_cubby_params));
+
+	km_scb_cubby_params.context = km;
+	km_scb_cubby_params.fn_init = km_scb_init;
+	km_scb_cubby_params.fn_deinit = km_scb_deinit;
+	km_scb_cubby_params.fn_dump = KM_SCB_DUMP;
+#ifdef WLRSDB
+	km_scb_cubby_params.fn_update = km_scb_update;
+
+	/* Allocate memory for tlv buffer for scb cubby update */
+	km->tlv_buffer = MALLOCZ(wlc->osh, TLV_KEY_SEQ_BUF_SIZE);
+	if (!km->tlv_buffer) {
+		err = BCME_NOMEM;
+		goto done;
+	}
+	km->tlv_buf_size = TLV_KEY_SEQ_BUF_SIZE;
+#endif /* WLRSDB */
+
+	km->h_scb = wlc_scb_cubby_reserve_ext(wlc, sizeof(km_scb_t), &km_scb_cubby_params);
+
 	if (km->h_scb < 0) {
-		KM_ERR(("wl%d: %s: wlc_scb_cubby_reserve failed\n",
+		KM_REGST_ERR(("wl%d: %s: wlc_scb_cubby_reserve failed\n",
 		        WLCWLUNIT(wlc), __FUNCTION__));
 		err = BCME_NORESOURCE;
 		goto done;
@@ -136,17 +163,26 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 
 	err = wlc_scb_state_upd_register(wlc, (scb_state_upd_cb_t)km_scb_state_upd, (void*)km);
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: wlc_scb_state_upd_register failed\n",
+		KM_REGST_ERR(("wl%d: %s: wlc_scb_state_upd_register failed\n",
 		        WLCWLUNIT(wlc), __FUNCTION__));
 		err = BCME_NORESOURCE;
 		goto done;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* register dump support */
+	err = km_register_dump(km);
+	if (err != BCME_OK) {
+		KM_REGST_ERR(("wl%d: %s: km_register_dump failed, error %d\n",
+		        WLCWLUNIT(wlc), __FUNCTION__, err));
+		goto done;
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	/* register ioctl support */
 	err = km_register_ioctl(km);
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: km_register_ioctl failed, error %d\n",
+		KM_REGST_ERR(("wl%d: %s: km_register_ioctl failed, error %d\n",
 		        WLCWLUNIT(wlc), __FUNCTION__, err));
 		goto done;
 	}
@@ -154,7 +190,7 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	/* notification support */
 	err = bcm_notif_create_list(wlc->notif, &km->h_notif);
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: bcm_notif_create_list failed, error %d\n",
+		KM_ALLOC_ERR(("wl%d: %s: bcm_notif_create_list failed, error %d\n",
 		        WLCWLUNIT(wlc), __FUNCTION__, err));
 		goto done;
 	}
@@ -163,7 +199,7 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	/* register ULP callback */
 	err = km_ulp_p1_module_register(km);
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: km_ulp_p1_module_register failed, error %d\n",
+		KM_REGST_ERR(("wl%d: %s: km_ulp_p1_module_register failed, error %d\n",
 		        WLCWLUNIT(wlc), __FUNCTION__, err));
 		goto done;
 	}
@@ -174,7 +210,7 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	KM_ASSERT(km->max_keys != 0);
 	km->keys  = (km_pvt_key_t *)MALLOCZ(wlc->osh, (sizeof(km_pvt_key_t) * km->max_keys));
 	if (km->keys ==  NULL) {
-		KM_ERR(("wl%d: %s: MALLOCZ failed\n", WLCWLUNIT(wlc), __FUNCTION__));
+		KM_ALLOC_ERR(("wl%d: %s: MALLOCZ failed\n", WLCWLUNIT(wlc), __FUNCTION__));
 		km->max_keys = 0;
 		err = BCME_NOMEM;
 		goto done;
@@ -185,7 +221,7 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	key_info.key_id = WLC_KEY_ID_INVALID;
 	err = km_key_create(km, &key_info, &km->null_key);
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: km_key_create failed, error %d\n",
+		KM_ALLOC_ERR(("wl%d: %s: km_key_create failed, error %d\n",
 		        WLCWLUNIT(wlc), __FUNCTION__, err));
 		goto done;
 	}
@@ -193,7 +229,7 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 #ifdef BRCMAPIVTW
 	km->ivtw = km_ivtw_attach(wlc, km);
 	if (km->ivtw == NULL) {
-		KM_ERR(("wl%d: %s: km_ivtw_attach failed\n", WLCWLUNIT(wlc), __FUNCTION__));
+		KM_ALLOC_ERR(("wl%d: %s: km_ivtw_attach failed\n", WLCWLUNIT(wlc), __FUNCTION__));
 		err = BCME_NORESOURCE;
 		goto done;
 	}
@@ -203,7 +239,8 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 	/* legacy wowl offloads */
 	km->wowl_hw = km_wowl_hw_attach(km->wlc, km); /* errors reported by callee */
 	if (!km->wowl_hw) {
-		KM_ERR(("wl%d: %s: km_wowl_hw_attach failed\n", WLCWLUNIT(wlc), __FUNCTION__));
+		KM_ALLOC_ERR(("wl%d: %s: km_wowl_hw_attach failed\n",
+				WLCWLUNIT(wlc), __FUNCTION__));
 		err = BCME_NORESOURCE;
 		goto done;
 	}
@@ -212,7 +249,8 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 #if defined(PKTC) || defined(PKTC_DONGLE)
 	km->key_cache = MALLOCZ(wlc->osh, sizeof(km_key_cache_t));
 	if (!km->key_cache) {
-		KM_ERR(("wl%d: %s: key cache allocation failed\n", WLCWLUNIT(wlc), __FUNCTION__));
+		KM_ALLOC_ERR(("wl%d: %s: key cache allocation failed\n",
+				WLCWLUNIT(wlc), __FUNCTION__));
 		err = BCME_NORESOURCE;
 		goto done;
 	}
@@ -224,8 +262,8 @@ BCMATTACHFN(wlc_keymgmt_attach)(wlc_info_t* wlc)
 
 done:
 	if (err != BCME_OK) {
-		KM_ERR(("wl%d: %s: done with error %d\n", WLCWLUNIT(wlc),
-			__FUNCTION__, err));
+		KM_REGST_ERR(("wl%d: %s: done with error %d\n",
+				WLCWLUNIT(wlc),	__FUNCTION__, err));
 		MODULE_DETACH(km, wlc_keymgmt_detach);
 		km = NULL;
 	} else {
@@ -285,6 +323,10 @@ BCMATTACHFN(wlc_keymgmt_detach)(keymgmt_t *km)
 	MFREE(wlc->osh, km->keys, km->max_keys * sizeof(km_pvt_key_t));
 	km->keys = NULL;
 	km->max_keys = 0;
+
+	if (km->tlv_buffer) {
+		MFREE(wlc->osh, km->tlv_buffer, km->tlv_buf_size);
+	}
 
 	/* clean up our notify lists */
 	if (km->h_notif != NULL)

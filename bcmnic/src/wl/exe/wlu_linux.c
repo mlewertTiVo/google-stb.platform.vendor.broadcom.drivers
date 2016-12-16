@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_linux.c 625881 2016-03-18 02:58:34Z $
+ * $Id: wlu_linux.c 659591 2016-09-15 03:19:00Z $
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -242,6 +242,15 @@ wl_find(struct ifreq *ifr)
 			continue;
 		strncpy(ifr->ifr_name, name, IFNAMSIZ-1);
 		ifr->ifr_name[IFNAMSIZ-1] = 0;
+
+		/*
+		 * If no -i interface, prioritize ethX, not say wl1.2
+		 * wlanX is Android
+		 */
+		if (!strncmp(name, "wl", 2) && strncmp(name, "wlan", 4)) {
+			continue;
+		}
+
 		if (wl_get_dev_type(name, dev_type, DEV_TYPE_LEN) >= 0 &&
 			(!strncmp(dev_type, "wl", 2) ||
 			!strncmp(dev_type, "brc", 3)))
@@ -576,6 +585,11 @@ main(int argc, char **argv)
 
 	/* Process for local wl */
 	if (remote_type == NO_REMOTE) {
+		if (*argv && strncmp (*argv, "-h", strlen(*argv)) == 0) {
+			wl_usage(stdout, NULL); /* outputs multiple screens of help information */
+			return err;
+		}
+
 		if (interactive_flag == 1)
 			(void)*argv--;
 		err = process_args(&ifr, argv);
@@ -763,7 +777,7 @@ process_args(struct ifreq* ifr, char **argv)
 		break;
 	} /* while loop end */
 
-/* provide for help on a particular command */
+	/* provide for help on a particular command */
 	if (help && *argv) {
 		cmd = wl_find_cmd(*argv);
 		if (cmd) {
@@ -772,14 +786,19 @@ process_args(struct ifreq* ifr, char **argv)
 			DPRINT_ERR(ERR, "%s: Unrecognized command \"%s\", type -h for help\n",
 			                                                          wlu_av0, *argv);
 		}
-	} else if (!cmd)
-		wl_usage(stdout, NULL);
-	else if (err == BCME_USAGE_ERROR)
+	} else if (!cmd) {
+		fprintf(stderr, "type -h for help\n");
+	} else if (err == BCME_USAGE_ERROR) {
 		wl_cmd_usage(stderr, cmd);
-	else if (err == BCME_IOCTL_ERROR)
+	} else if (err == BCME_IOCTL_ERROR) {
 		wl_printlasterror((void *) ifr);
-	else if (err == BCME_NODEVICE)
+	} else if (err == BCME_BADARG) {
+		DPRINT_ERR(ERR, "One or more parameters have invalid values\n");
+	} else if (err == BCME_NODEVICE) {
 		DPRINT_ERR(ERR, "%s : wl driver adapter not found\n", g_rem_ifname);
+	} else if (err) {
+		DPRINT_ERR(ERR, "error\n");
+	}
 
 	return err;
 }
@@ -937,18 +956,21 @@ wl_do_cmd(struct ifreq *ifr, char **argv)
 		/* do command */
 		err = (*cmd->func)((void *)ifr, cmd, argv);
 	}
-	/* provide for help on a particular command */
-	if (help && *argv) {
-	  cmd = wl_find_cmd(*argv);
-	 if (cmd) {
-		wl_cmd_usage(stdout, cmd);
-	} else {
-			DPRINT_ERR(ERR, "%s: Unrecognized command \"%s\", type -h for help\n",
-			       wlu_av0, *argv);
-	       }
-	} else if (!cmd)
-		wl_usage(stdout, NULL);
-	else if (err == BCME_USAGE_ERROR)
+
+	if (help) {
+		if (*argv) {
+			/* provide for help on a particular command */
+			cmd = wl_find_cmd(*argv);
+			if (cmd) {
+				wl_cmd_usage(stdout, cmd);
+			} else {
+				DPRINT_ERR(ERR, "%s: Unrecognized command \"%s\", "
+						"type -h for help\n", wlu_av0, *argv);
+			}
+		} else {
+			wl_usage(stdout, NULL); /* outputs multiple screens of help information */
+		}
+	} else if (err == BCME_USAGE_ERROR)
 		wl_cmd_usage(stderr, cmd);
 	else if (err == BCME_IOCTL_ERROR)
 		wl_printlasterror((void *)ifr);

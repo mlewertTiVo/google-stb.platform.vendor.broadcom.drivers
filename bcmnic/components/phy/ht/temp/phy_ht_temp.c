@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_temp.c 630449 2016-04-09 00:27:18Z vyass $
+ * $Id: phy_ht_temp.c 659187 2016-09-13 04:45:39Z $
  */
 
 #include <typedefs.h>
@@ -23,6 +23,7 @@
 #include "phy_temp_st.h"
 #include <phy_ht.h>
 #include <phy_ht_temp.h>
+#include <phy_stf.h>
 
 #ifndef ALL_NEW_PHY_MOD
 /* < TODO: all these are going away... */
@@ -42,6 +43,7 @@ struct phy_ht_temp_info {
 static uint16 phy_ht_temp_throttle(phy_type_temp_ctx_t *ctx);
 static int phy_ht_temp_get(phy_type_temp_ctx_t *ctx);
 static void phy_ht_temp_upd_gain(phy_type_temp_ctx_t *ctx, int16 *gain_err_temp_adj);
+static int16 phy_ht_temp_do_tempsense(phy_type_temp_ctx_t *ctx);
 
 /* Register/unregister HTPHY specific implementation to common layer */
 phy_ht_temp_info_t *
@@ -49,6 +51,7 @@ BCMATTACHFN(phy_ht_temp_register_impl)(phy_info_t *pi, phy_ht_info_t *hti, phy_t
 {
 	phy_ht_temp_info_t *info;
 	phy_type_temp_fns_t fns;
+	phy_txcore_temp_t *temp = NULL;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
@@ -67,7 +70,15 @@ BCMATTACHFN(phy_ht_temp_register_impl)(phy_info_t *pi, phy_ht_info_t *hti, phy_t
 	fns.throt = phy_ht_temp_throttle;
 	fns.get = phy_ht_temp_get;
 	fns.upd_gain = phy_ht_temp_upd_gain;
+	fns.do_tempsense = phy_ht_temp_do_tempsense;
 	fns.ctx = info;
+
+	/* Initialize any common layer variable */
+	temp = phy_temp_get_st(ti);
+	ASSERT(temp);
+	if ((temp->disable_temp == 0) || (temp->disable_temp == 0xff)) {
+		temp->disable_temp = HTPHY_CHAIN_TX_DISABLE_TEMP;
+	}
 
 	phy_temp_register_impl(ti, &fns);
 
@@ -100,14 +111,13 @@ phy_ht_temp_throttle(phy_type_temp_ctx_t *ctx)
 	phy_info_t *pi = info->pi;
 	phy_txcore_temp_t *temp;
 	uint8 txcore_shutdown_lut[] = {1, 1, 2, 1, 4, 1, 2, 5};
-	uint8 phyrxchain = pi->sh->phyrxchain;
-	uint8 phytxchain = pi->sh->phytxchain;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 	uint8 new_phytxchain;
 	int16 currtemp;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
-	ASSERT(phytxchain);
+	ASSERT(stf_shdata->phytxchain);
 
 	temp = phy_temp_get_st(ti);
 	ASSERT(temp != NULL);
@@ -123,15 +133,15 @@ phy_ht_temp_throttle(phy_type_temp_ctx_t *ctx)
 
 	if (!temp->heatedup) {
 		if (currtemp >= temp->disable_temp) {
-			new_phytxchain = txcore_shutdown_lut[phytxchain];
+			new_phytxchain = txcore_shutdown_lut[stf_shdata->phytxchain];
 			temp->heatedup = TRUE;
-			temp->bitmap = ((phyrxchain << 4) | new_phytxchain);
+			temp->bitmap = ((stf_shdata->phyrxchain << 4) | new_phytxchain);
 		}
 	} else {
 		if (currtemp <= temp->enable_temp) {
-			new_phytxchain = pi->sh->hw_phytxchain;
+			new_phytxchain = stf_shdata->hw_phytxchain;
 			temp->heatedup = FALSE;
-			temp->bitmap = ((phyrxchain << 4) | new_phytxchain);
+			temp->bitmap = ((stf_shdata->phyrxchain << 4) | new_phytxchain);
 		}
 	}
 
@@ -178,4 +188,12 @@ phy_ht_temp_upd_gain(phy_type_temp_ctx_t *ctx, int16 *gain_err_temp_adj)
 	} else {
 		*gain_err_temp_adj = (temp_diff * gain_temp_slope*2 - 25)/50;
 	}
+}
+
+static int16
+phy_ht_temp_do_tempsense(phy_type_temp_ctx_t *ctx)
+{
+	phy_ht_temp_info_t *info = (phy_ht_temp_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+	return wlc_phy_tempsense_htphy(pi);
 }

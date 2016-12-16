@@ -19,17 +19,13 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: sdiovar.h 610006 2016-01-06 01:38:47Z $
+ * $Id: sdiovar.h 660496 2016-09-20 19:28:50Z $
  */
 
 #ifndef _sdiovar_h_
 #define _sdiovar_h_
 
 #include <typedefs.h>
-
-/* require default structure packing */
-#define BWL_DEFAULT_PACKING
-#include <packed_section_start.h>
 
 typedef struct sdreg {
 	int func;
@@ -94,7 +90,5 @@ typedef struct wl_pwr_sdio_stats {
 
 	sdio_bus_metrics_t sdio;	/* stats from SDIO bus driver */
 } wl_pwr_sdio_stats_t;
-
-#include <packed_section_end.h>
 
 #endif /* _sdiovar_h_ */

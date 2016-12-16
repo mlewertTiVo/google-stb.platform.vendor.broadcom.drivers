@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_hs20.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_hs20.c 665073 2016-10-14 20:33:29Z $
  *
  */
 
@@ -80,7 +80,11 @@ static const bcm_iovar_t hs20_iovars[] = {
 /* cubby */
 static int wlc_hs20_bsscfg_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_hs20_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#ifdef BCMDBG
+static void wlc_hs20_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_hs20_bsscfg_dump NULL
+#endif
 
 typedef struct {
 	bool	osen;	/* enable/disable */
@@ -222,7 +226,7 @@ wlc_hs20_assoc_write_ie(void *ctx, wlc_iem_build_data_t *build)
 static int
 wlc_hs20_scan_parse_ie(void *ctx, wlc_iem_parse_data_t *parse)
 {
-	wlc_iem_pparm_t *pparm = wlc_iem_parse_get_parm(parse);
+	wlc_iem_pparm_t *pparm = parse->pparm;
 	wlc_bss_info_t *bi = pparm->ft->scan.result;
 	bcm_tlv_t *ie = (bcm_tlv_t *)parse->ie;
 
@@ -251,6 +255,17 @@ wlc_hs20_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	BCM_REFERENCE(cfg);
 }
 
+#ifdef BCMDBG
+static void
+wlc_hs20_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_hs20_info_t *hs20 = (wlc_hs20_info_t *)ctx;
+	wlc_hs20_bsscfg_cubby_t *cubby_hs20 = WLC_HS20_BSSCFG_CUBBY(hs20, cfg);
+	ASSERT(cubby_hs20 != NULL);
+
+	bcm_bprintf(b, "OSEN: %s\n", cubby_hs20->osen ? "enabled" : "disabled");
+}
+#endif /* BCMDBG */
 
 /*
  * initialize hotspot private context.

@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_dfs.c 641832 2016-06-06 12:11:39Z $
+ * $Id: wlc_dfs.c 668637 2016-11-04 08:47:37Z $
  */
 
 /**
@@ -58,6 +58,9 @@
 #include <wlc_stf.h>
 #include <wlc_hw_priv.h>
 #include <wl_dbg.h>
+#include <phy_misc_api.h>
+#include <phy_calmgr_api.h>
+#include <wlc_assoc.h>
 
 #ifdef WLRSDB
 #include <wlc_rsdb.h>
@@ -69,14 +72,16 @@
 
 /* IOVar table */
 /* No ordering is imposed */
-enum {
-	IOV_DFS_PREISM,		/* preism cac time */
-	IOV_DFS_POSTISM,	/* postism cac time */
-	IOV_DFS_STATUS,		/* dfs cac status */
-	IOV_DFS_ISM_MONITOR,    /* control the behavior of ISM state */
-	IOV_DFS_CHANNEL_FORCED, /* next dfs channel forced */
-	IOV_DFS_AP_MOVE,	/* Move the AP to specified RADAR Channel using second core. */
-	IOV_DFS_STATUS_ALL,	/* dfs status of multiple cores / parallel radar scans */
+enum wlc_dfs_iov {
+	IOV_DFS_PREISM = 1,		/* preism cac time */
+	IOV_DFS_POSTISM = 2,		/* postism cac time */
+	IOV_DFS_STATUS = 3,		/* dfs cac status */
+	IOV_DFS_ISM_MONITOR = 4,	/* control the behavior of ISM state */
+	IOV_DFS_CHANNEL_FORCED = 5,	/* next dfs channel forced */
+	IOV_DFS_AP_MOVE = 6,	/* Move the AP to specified RADAR Channel using second core. */
+	IOV_DFS_STATUS_ALL = 7,		/* dfs status of multiple cores / parallel radar scans */
+	IOV_DFS_MAX_SAFE_TX = 8,       /* Max safe tx traffic on main core during background scan */
+	IOV_DFS_TXBLANK_CHECK_MODE = 9,	/* Control considering tx on main core at end of CAC */
 	IOV_LAST
 };
 
@@ -200,6 +205,7 @@ struct wlc_dfs_info {
 	bool in_eu;			/* whenever the interface goes up, update whether in EU */
 	wlc_bsscfg_t *cfg;		/* AP bsscfg that triggered the DFS MOVE */
 	radar_detected_info_t radar_detected;
+	uint8 chan_cac_pending[MAXCHANNEL];	/* 11h: CAC pending on channel */
 };
 
 /* local functions */
@@ -224,9 +230,9 @@ static void wlc_dfs_send_event(wlc_dfs_info_t *dfs, chanspec_t target_chanspec);
 
 /* #define PHYMODE(w) (((phy_info_t *)WLC_PI(w))->cmni->phymode) */
 #define PHYMODE(w) 0
-#define wlc_phy_watchdog_override(x, y)  do { (void) x; (void) y; } while (0)
-#define wlc_phy_set_val_sc_chspec(x, y)  do { (void) x; (void) y; } while (0)
-#define wlc_phy_set_val_phymode(x, y)  do { (void) x; (void) y; } while (0)
+#define phy_wd_override(x, y)  do { (void) x; (void) y; } while (0)
+#define phy_ac_chanmgr_set_val_sc_chspec(x, y)  do { (void) x; (void) y; } while (0)
+#define phy_ac_chanmgr_set_val_phymode(x, y)  do { (void) x; (void) y; } while (0)
 
 static int wlc_dfs_get_chan_separation(wlc_info_t *wlc, chanspec_t chspec0, chanspec_t chspec1);
 static uint32 wlc_dfs_get_max_safe_tx_threshold(wlc_dfs_info_t *dfs, bool adjacent, bool weather);
@@ -262,15 +268,19 @@ static void wlc_dfs_scan_cleanup(wlc_dfs_info_t *dfs, bool return_home_chan, boo
 #endif /* RSDB_DFS_SCAN || BGDFS */
 
 
+#ifdef BCMDBG
+static int wlc_dfs_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* list of bandwidth in decreasing order of magnitude */
 static uint16 wlc_dfs_bw_list[] = { WL_CHANSPEC_BW_160, WL_CHANSPEC_BW_8080, WL_CHANSPEC_BW_80,
 	WL_CHANSPEC_BW_40, WL_CHANSPEC_BW_20, WL_CHANSPEC_BW_10, WL_CHANSPEC_BW_5,
-	WL_CHANSPEC_BW_2P5 },
-	/* length of the list of bandwidth */
-	wlc_dfs_bw_list_len = sizeof(wlc_dfs_bw_list) / sizeof(wlc_dfs_bw_list[0]);
+	WL_CHANSPEC_BW_2P5 };
 
 /* others */
+
+static uint16*	wlc_dfs_get_bw_list(void);
+static uint16	wlc_dfs_get_bw_list_len(void);
 static void wlc_dfs_cacstate_init(wlc_dfs_info_t *dfs);
 static int wlc_dfs_timer_init(wlc_dfs_info_t *dfs);
 static void wlc_dfs_timer_add(wlc_dfs_info_t *dfs);
@@ -295,6 +305,9 @@ static bool wlc_dfs_validate_forced_param(wlc_info_t *wlc, chanspec_t chanspec);
 
 /* IE mgmt */
 #ifdef STA
+#ifdef BCMDBG
+static int wlc_dfs_bcn_parse_ibss_dfs_ie(void *ctx, wlc_iem_parse_data_t *data);
+#endif
 #endif /* STA */
 
 /* Local Data Structures */
@@ -308,8 +321,8 @@ static void (*wlc_dfs_cacstate_fn_ary[WL_DFS_CACSTATES])(wlc_dfs_info_t *dfs) = 
 	wlc_dfs_cacstate_ooc /* postism_ooc */
 };
 
-#if defined(WLMSG_DFS)
-static const char *wlc_dfs_cacstate_str[WL_DFS_CACSTATES] = {
+#if defined(BCMDBG) || defined(WLMSG_DFS)
+const char *dfs_cacstate_str[WL_DFS_CACSTATES] = {
 	"IDLE",
 	"PRE-ISM Channel Availability Check",
 	"In-Service Monitoring(ISM)",
@@ -318,7 +331,21 @@ static const char *wlc_dfs_cacstate_str[WL_DFS_CACSTATES] = {
 	"PRE-ISM Out Of Channels(OOC)",
 	"POSTISM Out Of Channels(OOC)"
 };
-#endif 
+
+static const char *
+BCMRAMFN(wlc_dfs_cacstate_str)(uint state)
+{
+	const char * result;
+
+	if (state >= ARRAYSIZE(dfs_cacstate_str))
+		result = "UNKNOWN";
+	else {
+		result = dfs_cacstate_str[state];
+	}
+
+	return result;
+}
+#endif /* BCMDBG || WLMSG_DFS */
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -333,9 +360,9 @@ static const char *wlc_dfs_cacstate_str[WL_DFS_CACSTATES] = {
 static INLINE void
 wlc_dfs_cac_state_change(wlc_dfs_info_t *dfs, uint newstate)
 {
-#if defined(WLMSG_DFS)
-	WL_DFS(("DFS State %s -> %s\n", wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
-		wlc_dfs_cacstate_str[newstate]));
+#if defined(BCMDBG) || defined(WLMSG_DFS)
+	WL_DFS(("DFS State %s -> %s\n", wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
+		wlc_dfs_cacstate_str(newstate)));
 #endif
 	dfs->dfs_cac.status.state = newstate;	/* Controlled (logged) state change */
 }
@@ -370,10 +397,10 @@ wlc_dfs_updown_cb(void *ctx, bsscfg_up_down_event_data_t *updown_data)
 	}
 	dfs = wlc->dfs;
 
-#if defined(WLMSG_DFS)
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	WL_DFS(("%s:got callback from updown. interface %s\n",
 		__FUNCTION__, (updown_data->up?"up":"down")));
-#endif 
+#endif /* BCMDBG || WLMSG_DFS */
 
 	if (updown_data->up == TRUE) {
 		bool in_eu = wlc_is_dfs_eu(wlc);
@@ -419,6 +446,15 @@ BCMATTACHFN(wlc_dfs_attach)(wlc_info_t *wlc)
 	/* register IE mgmt callbacks */
 	/* parse */
 #ifdef STA
+#ifdef BCMDBG
+	/* bcn */
+	if (wlc_iem_add_parse_fn(wlc->iemi, FC_BEACON, DOT11_MNG_IBSS_DFS_ID,
+	                         wlc_dfs_bcn_parse_ibss_dfs_ie, dfs) != BCME_OK) {
+		WL_ERROR(("wl%d: %s wlc_iem_add_parse_fn failed, ibss dfs in bcn\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif
 #endif /* STA */
 
 	if (wlc_dfs_timer_init(dfs) != BCME_OK) {
@@ -427,6 +463,13 @@ BCMATTACHFN(wlc_dfs_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#ifdef BCMDBG
+	if (wlc_dump_register(wlc->pub, "dfs", wlc_dfs_dump, dfs) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif
 
 	/* keep the module registration the last other add module unregistratin
 	 * in the error handling code below...
@@ -1102,11 +1145,11 @@ wlc_dfs_bg_downgrade_phy(wlc_dfs_info_t *dfs)
 	ASSERT(dfs->dfs_scan);
 
 	/* disable periodic calibration; so that it doesn't interfere throughout CAC */
-	wlc_phy_watchdog_override((phy_info_t *)WLC_PI(wlc), FALSE);
+	phy_wd_override((phy_info_t *)WLC_PI(wlc), FALSE);
 
 	wlc_mute(wlc, ON, PHY_MUTE_FOR_PREISM);
-	wlc_phy_set_val_sc_chspec((phy_info_t *)WLC_PI(wlc), dfs->dfs_scan->csa.chspec);
-	wlc_phy_set_val_phymode((phy_info_t *)WLC_PI(wlc), PHYMODE_BGDFS);
+	phy_ac_chanmgr_set_val_sc_chspec((phy_info_t *)WLC_PI(wlc), dfs->dfs_scan->csa.chspec);
+	phy_ac_chanmgr_set_val_phymode((phy_info_t *)WLC_PI(wlc), PHYMODE_BGDFS);
 	dfs->phymode = PHYMODE(wlc);
 	dfs->upgrade_pending = TRUE;
 	wlc_mute(wlc, OFF, PHY_MUTE_FOR_PREISM);
@@ -1125,13 +1168,13 @@ wlc_dfs_bg_upgrade_phy(wlc_dfs_info_t *dfs)
 	ASSERT(dfs->dfs_scan);
 
 	wlc_mute(wlc, ON, PHY_MUTE_FOR_PREISM);
-	wlc_phy_set_val_phymode((phy_info_t *)WLC_PI(wlc), 0);
+	phy_ac_chanmgr_set_val_phymode((phy_info_t *)WLC_PI(wlc), 0);
 	dfs->phymode = PHYMODE(wlc);
 	dfs->upgrade_pending = FALSE;
 	wlc_mute(wlc, OFF, PHY_MUTE_FOR_PREISM);
 
 	/* enable periodic calibration */
-	wlc_phy_watchdog_override((phy_info_t *)WLC_PI(wlc), TRUE);
+	phy_wd_override((phy_info_t *)WLC_PI(wlc), TRUE);
 
 	WL_DFS(("wl%d: upgraded phy to %dx%d\n", wlc->pub->unit,
 			WLC_BITSCNT(wlc->stf->txchain), WLC_BITSCNT(wlc->stf->rxchain)));
@@ -1145,9 +1188,9 @@ wlc_dfs_opmode_change_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data)
 {
 	wlc_info_t *wlc = (wlc_info_t *)ctx;
 	wlc_dfs_info_t *dfs;
-#if defined(WLMSG_MODESW)
+#if defined(BCMDBG) || defined(WLMSG_MODESW)
 	wlc_bsscfg_t *bsscfg = NULL;
-#endif 
+#endif /* BCMDBG || WLMSG_MODESW */
 	ASSERT(wlc);
 	ASSERT(notif_data);
 	if (wlc->dfs == NULL) {
@@ -1162,9 +1205,9 @@ wlc_dfs_opmode_change_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data)
 	WL_MODE_SWITCH(("wl%d: MODESW Callback status: %d, opmode: %x, signal: %d, state: %d\n",
 			WLCWLUNIT(wlc), notif_data->status, notif_data->opmode, notif_data->signal,
 			dfs->dfs_scan->modeswitch_state));
-#if defined(WLMSG_MODESW)
+#if defined(BCMDBG) || defined(WLMSG_MODESW)
 	bsscfg = notif_data->cfg;
-#endif 
+#endif /* BCMDBG || WLMSG_MODESW */
 	switch (notif_data->signal) {
 		case MODESW_PHY_DN_COMPLETE:
 		case MODESW_PHY_UP_COMPLETE:
@@ -1595,7 +1638,7 @@ wlc_dfs_scan_complete_sc(wlc_dfs_info_t *dfs, int reason, int return_home_chan)
 	/* cac completed. resume normal bss operation */
 	if (dfs->scan_both) {
 		/* restore phymode as main core channel changes can't be done in 3+1 */
-		wlc_phy_set_val_phymode((phy_info_t *)WLC_PI(wlc), 0);
+		phy_ac_chanmgr_set_val_phymode((phy_info_t *)WLC_PI(wlc), 0);
 
 		wlc_dfs_cacstate_ism_set(dfs);
 	}
@@ -1778,9 +1821,11 @@ wlc_dfs_down(void *ctx)
 	int callback = 0;
 
 	/* cancel the radar timer */
-	if (!wlc_dfs_timer_delete(dfs))
-		callback = 1;
-	dfs->dfs_cac_enabled = FALSE;
+	if (dfs->dfs_cac.timer_running == TRUE) {
+		if (!wlc_dfs_timer_delete(dfs))
+			callback = 1;
+		dfs->dfs_cac_enabled = FALSE;
+	}
 
 	return callback;
 }
@@ -1837,6 +1882,33 @@ wlc_dfs_get_dfs_status_all(wlc_dfs_info_t *dfs, uint8 *arg, int len)
 	return BCME_OK;
 }
 
+#ifdef BCMDBG
+static int
+wlc_dfs_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_dfs_info_t *dfs = (wlc_dfs_info_t *)ctx;
+	uint32 i;
+
+	bcm_bprintf(b, "radar %d\n", dfs->radar);
+	bcm_bprhex(b, "chan_blocked ", TRUE,
+	           (uint8 *)dfs->chan_blocked, sizeof(dfs->chan_blocked));
+	bcm_bprintf(b, "cactime_pre_ism %u cactime_post_ism %u nop_sec %u ism_monitor %d\n",
+	            dfs->dfs_cac.cactime_pre_ism, dfs->dfs_cac.cactime_post_ism,
+	            dfs->dfs_cac.nop_sec, dfs->dfs_cac.ism_monitor);
+	if (dfs->dfs_cac.chanspec_forced_list) {
+		for (i = 0; i < dfs->dfs_cac.chanspec_forced_list->num; i++)
+			bcm_bprintf(b, "chanspec_forced %x status %d cactime %u\n",
+			            dfs->dfs_cac.chanspec_forced_list->list[i], dfs->dfs_cac.status,
+			            dfs->dfs_cac.cactime, dfs->dfs_cac);
+	}
+	bcm_bprintf(b, "duration %u chanspec_next %x timer_running %d\n",
+	            dfs->dfs_cac.duration, dfs->dfs_cac.chanspec_next,
+	            dfs->dfs_cac.timer_running);
+	bcm_bprintf(b, "dfs_cac_enabled %d\n", dfs->dfs_cac_enabled);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG */
 
 uint32
 wlc_dfs_get_chan_info(wlc_dfs_info_t *dfs, uint channel)
@@ -1908,6 +1980,16 @@ wlc_dfs_ism_cactime(wlc_info_t *wlc, int secs_or_default)
 
 }
 
+/*
+ * Return CAC duration in ms. ASSOC would want to know it.
+ */
+uint
+wlc_dfs_get_cactime_ms(wlc_dfs_info_t *dfs)
+{
+	ASSERT(dfs);
+	return (dfs->dfs_cac.cactime * WLC_DFS_RADAR_CHECK_INTERVAL);
+}
+
 static int
 BCMATTACHFN(wlc_dfs_timer_init)(wlc_dfs_info_t *dfs)
 {
@@ -1972,6 +2054,7 @@ wlc_dfs_chanspec_oos(wlc_dfs_info_t *dfs, chanspec_t chanspec)
 		/* work through each 20MHz channel in the 80MHz */
 		for (i = 0; i < 4; i++, channel += CH_20MHZ_APART) {
 			dfs->chan_blocked[channel] = dfs->dfs_cac.nop_sec;
+			dfs->chan_cac_pending[channel] = TRUE;
 			WL_DFS(("wl%d: dfs : channel %d put out of service\n", wlc->pub->unit,
 				channel));
 		}
@@ -1981,7 +2064,9 @@ wlc_dfs_chanspec_oos(wlc_dfs_info_t *dfs, chanspec_t chanspec)
 		ctrl_ch = LOWER_20_SB(CHSPEC_CHANNEL(chanspec));
 		ext_ch = UPPER_20_SB(CHSPEC_CHANNEL(chanspec));
 		dfs->chan_blocked[ctrl_ch] = dfs->dfs_cac.nop_sec;
+		dfs->chan_cac_pending[ctrl_ch] = TRUE;
 		dfs->chan_blocked[ext_ch] = dfs->dfs_cac.nop_sec;
+		dfs->chan_cac_pending[ext_ch] = TRUE;
 
 		WL_DFS(("wl%d: dfs : channel %d & %d put out of service\n", wlc->pub->unit,
 			ctrl_ch, ext_ch));
@@ -1989,6 +2074,7 @@ wlc_dfs_chanspec_oos(wlc_dfs_info_t *dfs, chanspec_t chanspec)
 		ctrl_ch = CHSPEC_CHANNEL(chanspec);
 		ext_ch = 0;
 		dfs->chan_blocked[ctrl_ch] = dfs->dfs_cac.nop_sec;
+		dfs->chan_cac_pending[ctrl_ch] = TRUE;
 
 		WL_DFS(("wl%d: dfs : channel %d put out of service\n", wlc->pub->unit, ctrl_ch));
 	}
@@ -2057,6 +2143,9 @@ wlc_dfs_chanspec_rand(wlc_dfs_info_t *dfs, uint16 *bw_list, uint16 bw_list_len, 
 #endif /* WL11AC_80P80 */
 	uint32 rand_tsf = wlc->clk ? R_REG(wlc->osh, &wlc->regs->u.d11regs.tsf_random) : 0;
 	int16 rand_idx;
+#if defined(BCMDBG)
+	char chanbuf[CHANSPEC_STR_LEN];
+#endif /* BCMDBG */
 
 	first_valid = rand_chspec = 0;
 	/* get to the first acceptable bw */
@@ -2147,6 +2236,10 @@ wlc_dfs_chanspec_rand(wlc_dfs_info_t *dfs, uint16 *bw_list, uint16 bw_list_len, 
 		return 0;
 	}
 
+#if defined(BCMDBG)
+	WL_DFS(("wl%d: %s: dfs selected random chanspec %s (%04x)\n", wlc->pub->unit, __FUNCTION__,
+			wf_chspec_ntoa(rand_chspec, chanbuf), rand_chspec));
+#endif
 
 	ASSERT(wlc_valid_chanspec_db(wlc->cmi, rand_chspec));
 
@@ -2217,6 +2310,20 @@ wlc_dfs_rearrange_channel_list(wlc_dfs_info_t *dfs, chanspec_list_t *ch_list)
 	}
 }
 
+/* Accessor : dfs_bw_list array */
+static uint16*
+BCMRAMFN(wlc_dfs_get_bw_list)(void)
+{
+	return wlc_dfs_bw_list;
+}
+
+/* Accessor : length of the list of bandwidth */
+static uint16
+BCMRAMFN(wlc_dfs_get_bw_list_len)(void)
+{
+	return (sizeof(wlc_dfs_bw_list) / sizeof(wlc_dfs_bw_list[0]));
+}
+
 /*
  * Returns a forced channel if valid or does a random channel selection for DFS
  * Returns a valid chanspec of a valid radar free channel, using the AP configuration
@@ -2240,7 +2347,8 @@ wlc_dfs_chanspec(wlc_dfs_info_t *dfs, bool radar_detected)
 
 	/* walk the channels looking for good channels */
 	/* When Radar is detected, look for Non-DFS or cleared (EDCRS_EU) channels */
-	return wlc_dfs_chanspec_rand(dfs, wlc_dfs_bw_list, wlc_dfs_bw_list_len, radar_detected);
+	return wlc_dfs_chanspec_rand(dfs, wlc_dfs_get_bw_list(),
+		wlc_dfs_get_bw_list_len(), radar_detected);
 }
 
 /* check for a chanspec on which an AP can set up a BSS
@@ -2272,6 +2380,73 @@ wlc_dfs_valid_ap_chanspec(wlc_info_t *wlc, chanspec_t chspec)
 	return TRUE;
 }
 
+#ifdef SLAVE_RADAR
+/*
+ * Since a STA does not decide it's own chanspec, this function
+ * will help check whether CAC has been done for a given chanspec
+ * after Non Occupancy period and whether this chanspec has been
+ * cleared for ISM.
+ */
+bool
+wlc_cac_is_clr_chanspec(wlc_dfs_info_t *dfs, chanspec_t chspec)
+{
+	uint channel = CHSPEC_CHANNEL(chspec);
+	wlc_info_t *wlc = dfs->wlc;
+
+	if (!wlc_valid_chanspec_db(wlc->cmi, chspec) ||
+	    wlc_restricted_chanspec(wlc->cmi, chspec))
+		return FALSE;
+
+	if (CHSPEC_IS80(chspec)) {
+		if (dfs->chan_cac_pending[LL_20_SB(channel)] ||
+		    dfs->chan_cac_pending[UU_20_SB(channel)] ||
+			dfs->chan_cac_pending[LU_20_SB(channel)] ||
+		    dfs->chan_cac_pending[UL_20_SB(channel)])
+			return FALSE;
+	} else if (CHSPEC_IS40(chspec)) {
+		if (dfs->chan_cac_pending[LOWER_20_SB(channel)] ||
+		    dfs->chan_cac_pending[UPPER_20_SB(channel)])
+			return FALSE;
+	} else if (dfs->chan_cac_pending[channel]) {
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/*
+ * Once a CAC was done on given chanspec and no radar found, clear
+ * it for ISM availability.
+ */
+static void
+wlc_cac_do_clr_chanspec(wlc_dfs_info_t *dfs, chanspec_t chspec)
+{
+	uint channel = CHSPEC_CHANNEL(chspec);
+	wlc_info_t *wlc = dfs->wlc;
+
+	if (!wlc_valid_chanspec_db(wlc->cmi, chspec) ||
+	    wlc_restricted_chanspec(wlc->cmi, chspec))
+		return;
+
+	if (CHSPEC_IS80(chspec)) {
+		dfs->chan_cac_pending[LL_20_SB(channel)] = FALSE;
+		dfs->chan_cac_pending[UU_20_SB(channel)] = FALSE;
+		dfs->chan_cac_pending[LU_20_SB(channel)] = FALSE;
+		dfs->chan_cac_pending[UL_20_SB(channel)] = FALSE;
+		return;
+	} else if (CHSPEC_IS40(chspec)) {
+		dfs->chan_cac_pending[LOWER_20_SB(channel)] = FALSE;
+		dfs->chan_cac_pending[UPPER_20_SB(channel)] = FALSE;
+		return;
+	} else {
+		dfs->chan_cac_pending[channel] = FALSE;
+		return;
+	}
+
+	return;
+}
+#endif /* SLAVE_RADAR */
+
 static bool
 wlc_radar_detected(wlc_dfs_info_t *dfs, bool scan_core)
 {
@@ -2280,9 +2455,14 @@ wlc_radar_detected(wlc_dfs_info_t *dfs, bool scan_core)
 	uint8 radar_type;
 	uint16 radar_interval;
 	uint16 min_pw;
-#if defined(WLMSG_DFS)
+	radar_detected_info_t radar_detected_u80;
+	uint8 radar_type_u80;
+	uint16 radar_interval_u80;
+	uint16 min_pw_u80;
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	uint i;
 	char radar_type_str[24];
+	char radar_type_str_u80[24];
 	char chanbuf[CHANSPEC_STR_LEN];
 	static const struct {
 		int radar_type;
@@ -2323,7 +2503,7 @@ wlc_radar_detected(wlc_dfs_info_t *dfs, bool scan_core)
 		{RADAR_TYPE_KN4, "KN4"},
 		{RADAR_TYPE_UNCLASSIFIED, "UNCLASSIFIED"}
 	};
-#endif 
+#endif /* BCMDBG || WLMSG_DFS */
 	wlc_bsscfg_t *cfg = dfs->cfg;
 	int radar_sim_mask = scan_core ? RADAR_SIM_SC : RADAR_SIM;
 	chanspec_t chspec = WLC_BAND_PI_RADIO_CHANSPEC;
@@ -2346,17 +2526,37 @@ wlc_radar_detected(wlc_dfs_info_t *dfs, bool scan_core)
 		return FALSE;
 	}
 #endif /* BGDFS */
-	radar_type = phy_radar_detect((phy_info_t *)WLC_PI(wlc), &radar_detected);
+	if ((CHSPEC_IS8080(wlc->chanspec) || CHSPEC_IS160(wlc->chanspec)) && scan_core == FALSE) {
+		radar_type = phy_radar_detect((phy_info_t *)WLC_PI(wlc),
+			&radar_detected, FALSE, TRUE);
+		radar_type_u80 =
+			phy_radar_detect((phy_info_t *)WLC_PI(wlc),
+			&radar_detected_u80, TRUE, TRUE);
+		radar_interval_u80 = radar_detected_u80.min_pri;
+		BCM_REFERENCE(radar_interval_u80);
+		min_pw_u80 = radar_detected_u80.min_pw;
+		BCM_REFERENCE(min_pw_u80);
+	} else {
+		radar_type =
+			phy_radar_detect((phy_info_t *)WLC_PI(wlc),
+			&radar_detected, scan_core, FALSE);
+		radar_type_u80 = 0;
+		radar_interval_u80 = 0;
+		min_pw_u80 = 0;
+	}
 	radar_interval = radar_detected.min_pri;
 	BCM_REFERENCE(radar_interval);
 	min_pw = radar_detected.min_pw;
 	BCM_REFERENCE(min_pw);
 	/* Pretend we saw radar - for testing */
 	if ((wlc_11h_get_spect_state(wlc->m11h, cfg) & radar_sim_mask) ||
-	    radar_type != RADAR_TYPE_NONE) {
-
-		dfs->radar_detected = radar_detected;
-#if defined(WLMSG_DFS)
+	    radar_type != RADAR_TYPE_NONE || radar_type_u80 != RADAR_TYPE_NONE) {
+		if (radar_type != RADAR_TYPE_NONE) {
+			dfs->radar_detected = radar_detected;
+		} else if (radar_type_u80 != RADAR_TYPE_NONE) {
+			dfs->radar_detected = radar_detected_u80;
+		}
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 		snprintf(radar_type_str, sizeof(radar_type_str),
 			"%s", "UNKNOWN");
 		for (i = 0; i < ARRAYSIZE(radar_names); i++) {
@@ -2373,7 +2573,24 @@ wlc_radar_detected(wlc_dfs_info_t *dfs, bool scan_core)
 			radar_interval, min_pw,
 			(dfs->dfs_cac.cactime - dfs->dfs_cac.duration) *
 			WLC_DFS_RADAR_CHECK_INTERVAL));
-#endif 
+
+		snprintf(radar_type_str_u80, sizeof(radar_type_str_u80),
+			"%s", "UNKNOWN");
+		for (i = 0; i < ARRAYSIZE(radar_names); i++) {
+			if (radar_names[i].radar_type == radar_type_u80)
+				snprintf(radar_type_str_u80, sizeof(radar_type_str_u80),
+					"%s", radar_names[i].radar_type_name);
+		}
+
+		WL_DFS(("WL%d: DFS: %s ########## RADAR%s DETECTED ON Upper80 of CHANNEL %s"
+			" ########## Intv=%dus, min_pw=%d (1/20us), AT %dMS\n", wlc->pub->unit,
+			radar_type_str_u80,
+			(scan_core ? "_SC" : ""),
+			wf_chspec_ntoa(WLC_BAND_PI_RADIO_CHANSPEC, chanbuf),
+			radar_interval_u80, min_pw_u80,
+			(dfs->dfs_cac.cactime - dfs->dfs_cac.duration) *
+			WLC_DFS_RADAR_CHECK_INTERVAL));
+#endif /* BCMDBG || WLMSG_DFS */
 
 		/* clear one-shot radar simulator */
 		wlc_11h_set_spect_state(wlc->m11h, cfg, radar_sim_mask, 0);
@@ -2387,7 +2604,7 @@ static void
 wlc_dfs_cacstate_idle_set(wlc_dfs_info_t *dfs)
 {
 	wlc_info_t *wlc = dfs->wlc;
-#if defined(WLMSG_DFS)
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -2395,7 +2612,7 @@ wlc_dfs_cacstate_idle_set(wlc_dfs_info_t *dfs)
 	wlc_mute(wlc, OFF, PHY_MUTE_FOR_PREISM);
 
 	WL_DFS(("wl%d: dfs : state to %s chanspec %s at %dms\n",
-		wlc->pub->unit, wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+		wlc->pub->unit, wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 		wf_chspec_ntoa_ex(WLC_BAND_PI_RADIO_CHANSPEC, chanbuf),
 		(dfs->dfs_cac.cactime -
 		dfs->dfs_cac.duration)*WLC_DFS_RADAR_CHECK_INTERVAL));
@@ -2427,7 +2644,7 @@ wlc_dfs_cacstate_ism_set(wlc_dfs_info_t *dfs)
 {
 	wlc_info_t *wlc = dfs->wlc;
 	int  cal_mode;
-#if defined(WLMSG_DFS)
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -2444,12 +2661,16 @@ wlc_dfs_cacstate_ism_set(wlc_dfs_info_t *dfs)
 	wlc_iovar_setint(wlc, "phy_percal", cal_mode);
 
 	WL_DFS(("wl%d: dfs : state to %s chanspec %s at %dms\n",
-		wlc->pub->unit, wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+		wlc->pub->unit, wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 		wf_chspec_ntoa_ex(WLC_BAND_PI_RADIO_CHANSPEC, chanbuf),
 		(dfs->dfs_cac.cactime - dfs->dfs_cac.duration) * WLC_DFS_RADAR_CHECK_INTERVAL));
 
 	dfs->dfs_cac.cactime =  /* unit in WLC_DFS_RADAR_CHECK_INTERVAL */
 	dfs->dfs_cac.duration = wlc_dfs_ism_cactime(wlc, dfs->dfs_cac.cactime_post_ism);
+#ifdef SLAVE_RADAR
+	/* ISM started, lets prepare for join */
+	wlc_join_bss_prep(wlc->cfg);
+#endif /* SLAVE_RADAR */
 
 }
 
@@ -2464,7 +2685,7 @@ wlc_dfs_cacstate_ooc_set(wlc_dfs_info_t *dfs, uint target_state)
 	wlc_dfs_cac_state_change(dfs, target_state);
 
 	WL_DFS(("wl%d: dfs : state to %s at %dms\n",
-		wlc->pub->unit, wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+		wlc->pub->unit, wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 		(dfs->dfs_cac.cactime - dfs->dfs_cac.duration) *
 	        WLC_DFS_RADAR_CHECK_INTERVAL));
 
@@ -2485,7 +2706,7 @@ static void
 wlc_dfs_handle_dfs_scan_cacstate(wlc_dfs_info_t *dfs)
 {
 	wlc_info_t *wlc = dfs->wlc;
-#if defined(WLMSG_DFS)
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -2580,7 +2801,7 @@ wlc_dfs_cacstate_cac(wlc_dfs_info_t *dfs)
 {
 	wlc_info_t* wlc = dfs->wlc;
 	wlc_bsscfg_t *cfg = dfs->cfg;
-#if defined(WLMSG_DFS)
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -2591,15 +2812,27 @@ wlc_dfs_cacstate_cac(wlc_dfs_info_t *dfs)
 		return;
 	}
 #endif /* RSDB_DFS_SCAN || BGDFS */
+	/*
+	 * If CAC was done earlier and chanspec is clear, STA can go to ISM.
+	 */
+#ifdef SLAVE_RADAR
+	if (WL11H_STA_ENAB(wlc) && wlc_radar_chanspec(wlc->cmi, WLC_BAND_PI_RADIO_CHANSPEC) &&
+		(wlc_cac_is_clr_chanspec(wlc->dfs, WLC_BAND_PI_RADIO_CHANSPEC)))
+	{
+		dfs->dfs_cac.cactime = 0;
+		dfs->dfs_cac.duration = 0;
+	}
+#endif /* SLAVE_RADAR */
 
 	if (wlc_radar_detected(dfs, FALSE) == TRUE) {
 		wlc_dfs_to_backup_channel(dfs, TRUE);
 
+		if (WL11H_AP_ENAB(wlc)) {
 		if (wlc_radar_chanspec(wlc->cmi, WLC_BAND_PI_RADIO_CHANSPEC) == TRUE) {
 			/* do cac with new channel */
 			WL_DFS(("wl%d: dfs : state to %s chanspec %s at %dms\n",
 				wlc->pub->unit,
-				wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+				wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 				wf_chspec_ntoa_ex(WLC_BAND_PI_RADIO_CHANSPEC, chanbuf),
 				(dfs->dfs_cac.cactime - dfs->dfs_cac.duration) *
 			        WLC_DFS_RADAR_CHECK_INTERVAL));
@@ -2613,9 +2846,33 @@ wlc_dfs_cacstate_cac(wlc_dfs_info_t *dfs)
 			wlc_dfs_cacstate_idle_set(dfs); /* set to IDLE */
 			return;
 		}
+		}
+#ifdef SLAVE_RADAR
+		else {
+			/* radar detected. mark the channel back to QUIET channel */
+			wlc_set_quiet_chanspec(wlc->cmi, dfs->dfs_cac.status.chanspec_cleared);
+			dfs->dfs_cac.status.chanspec_cleared = 0; /* clear it */
+			wlc_dfs_chanspec_oos(dfs, WLC_BAND_PI_RADIO_CHANSPEC);
+			/* Radar detected during CAC */
+			wlc_assoc_change_state(wlc->cfg, AS_DFS_CAC_FAIL);
+			/* Non Occupancy Period begins. */
+			wlc_dfs_cacstate_idle_set(dfs); /* set to IDLE */
+			return;
+		}
+#endif /* SLAVE_RADAR */
 	}
 
 	if (!dfs->dfs_cac.duration) {
+		WL_DFS((" CAC duration 0\n"));
+#ifdef SLAVE_RADAR
+		if (WL11H_STA_ENAB(wlc) &&
+			!wlc_cac_is_clr_chanspec(dfs, WLC_BAND_PI_RADIO_CHANSPEC)) {
+			wlc_cac_do_clr_chanspec(dfs, WLC_BAND_PI_RADIO_CHANSPEC);
+			/* No radar during CAC */
+			wlc_assoc_change_state(wlc->cfg, AS_DFS_ISM_INIT);
+			return;
+		}
+#endif /* SLAVE_RADAR */
 		/* cac completed. un-mute all. resume normal bss operation */
 		wlc_dfs_cacstate_ism_set(dfs);
 	}
@@ -2627,7 +2884,7 @@ wlc_dfs_cacstate_ism(wlc_dfs_info_t *dfs)
 	wlc_info_t* wlc = dfs->wlc;
 	wlc_bsscfg_t *cfg = dfs->cfg;
 	wl_chan_switch_t csa;
-#if defined(WLMSG_DFS)
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	char chanbuf1[CHANSPEC_STR_LEN];
 	char chanbuf2[CHANSPEC_STR_LEN];
 #endif
@@ -2677,30 +2934,49 @@ wlc_dfs_cacstate_ism(wlc_dfs_info_t *dfs)
 
 	/* continue with CSA */
 	wlc_dfs_chanspec_oos(dfs, WLC_BAND_PI_RADIO_CHANSPEC);
-	dfs->dfs_cac.chanspec_next = wlc_dfs_chanspec(dfs, TRUE); /* it will be included in csa */
+	if (AP_ENAB(wlc->pub)) {
+		/* it will be included in csa */
+		dfs->dfs_cac.chanspec_next = wlc_dfs_chanspec(dfs, TRUE);
 
-	wlc_dfs_send_event(dfs, dfs->dfs_cac.chanspec_next);
-	/* send csa */
-	if (!dfs->dfs_cac.chanspec_next) {
-	        /* out of channels */
-	        /* just use the current channel for csa */
-	        csa.chspec = WLC_BAND_PI_RADIO_CHANSPEC;
-	} else {
-	        csa.chspec = dfs->dfs_cac.chanspec_next;
+		wlc_dfs_send_event(dfs, dfs->dfs_cac.chanspec_next);
+		/* send csa */
+		if (!dfs->dfs_cac.chanspec_next) {
+			/* out of channels */
+			/* just use the current channel for csa */
+			csa.chspec = WLC_BAND_PI_RADIO_CHANSPEC;
+		} else {
+			csa.chspec = dfs->dfs_cac.chanspec_next;
+		}
+		csa.mode = DOT11_CSA_MODE_NO_TX;
+		csa.count = MAX((WLC_DFS_CSA_MSEC/cfg->current_bss->beacon_period),
+			WLC_DFS_CSA_BEACONS);
+		/* ensure count is at least DTIM of this AP */
+		csa.count = MAX(csa.count, cfg->current_bss->dtim_period);
+		csa.reg = wlc_get_regclass(wlc->cmi, csa.chspec);
+		csa.frame_type = CSA_BROADCAST_ACTION_FRAME;
+		wlc_dfs_csa_each_up_ap(wlc, &csa, FALSE);
+	} /* AP_ENAB() */
+#ifdef SLAVE_RADAR
+	else {
+		/* Slave detected radar */
+		wlc_disassociate_client(wlc->cfg, FALSE);
+		wlc_roamscan_start(wlc->cfg, WLC_E_REASON_RADAR_DETECTED);
 	}
-	csa.mode = DOT11_CSA_MODE_NO_TX;
-	csa.count = MAX((WLC_DFS_CSA_MSEC/cfg->current_bss->beacon_period), WLC_DFS_CSA_BEACONS);
-	/* ensure count is at least DTIM of this AP */
-	csa.count = MAX(csa.count, cfg->current_bss->dtim_period);
-	csa.reg = wlc_get_regclass(wlc->cmi, csa.chspec);
-	csa.frame_type = CSA_BROADCAST_ACTION_FRAME;
-	wlc_dfs_csa_each_up_ap(wlc, &csa, FALSE);
-
-	wlc_dfs_cac_state_change(dfs, WL_DFS_CACSTATE_CSA);        /* next state */
+#endif /* SLAVE_RADAR */
+	if (WL11H_AP_ENAB(wlc))
+		wlc_dfs_cac_state_change(dfs, WL_DFS_CACSTATE_CSA);        /* next state */
+#ifdef SLAVE_RADAR
+	else
+	/*
+	 * Thats what we want to do for a Slave, as we don't decide our
+	 * own chanspec
+	 */
+		wlc_dfs_cac_state_change(dfs, WL_DFS_CACSTATE_IDLE);        /* next state */
+#endif /* SLAVE_RADAR */
 
 	WL_DFS(("wl%d: dfs : state to %s chanspec current %s next %s at %dms, starting CSA"
 		" process\n",
-		wlc->pub->unit, wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+		wlc->pub->unit, wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 		wf_chspec_ntoa_ex(WLC_BAND_PI_RADIO_CHANSPEC, chanbuf1),
 		wf_chspec_ntoa_ex(csa.chspec, chanbuf2),
 		(dfs->dfs_cac.cactime -
@@ -2735,7 +3011,7 @@ wlc_dfs_cacstate_csa(wlc_dfs_info_t *dfs)
 			wlc_dfs_cac_state_change(dfs, WL_DFS_CACSTATE_POSTISM_CAC);
 			WL_DFS(("wl%d: dfs : state to %s at %dms\n",
 				wlc->pub->unit,
-				wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+				wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 			        (dfs->dfs_cac.cactime - dfs->dfs_cac.duration) *
 			        WLC_DFS_RADAR_CHECK_INTERVAL));
 
@@ -2751,9 +3027,10 @@ wlc_dfs_cacstate_csa(wlc_dfs_info_t *dfs)
 	else {
 		wlc_dfs_cacstate_idle_set(dfs);
 	}
-
-	wlc_update_beacon(wlc);
-	wlc_update_probe_resp(wlc, TRUE);
+	if (AP_ENAB(wlc->pub)) {
+		wlc_update_beacon(wlc);
+		wlc_update_probe_resp(wlc, TRUE);
+	}
 }
 
 
@@ -2767,7 +3044,7 @@ wlc_dfs_cacstate_ooc(wlc_dfs_info_t *dfs)
 	wlc_info_t *wlc = dfs->wlc;
 	uint    current_time;
 	wlc_bsscfg_t *cfg = dfs->cfg;
-#if defined(WLMSG_DFS)
+#if defined(BCMDBG) || defined(WLMSG_DFS)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -2800,7 +3077,7 @@ wlc_dfs_cacstate_ooc(wlc_dfs_info_t *dfs)
 
 			WL_DFS(("wl%d: dfs : state to %s chanspec %s at %dms\n",
 				wlc->pub->unit,
-				wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+				wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 				wf_chspec_ntoa_ex(WLC_BAND_PI_RADIO_CHANSPEC, chanbuf),
 				current_time));
 		} else {
@@ -2843,7 +3120,11 @@ wlc_dfs_cacstate_init(wlc_dfs_info_t *dfs)
 	chanspec_t chspec = WLC_BAND_PI_RADIO_CHANSPEC;
 	char chanbuf[CHANSPEC_STR_LEN];
 
+#ifdef SLAVE_RADAR
+	ASSERT(WL11H_AP_ENAB(wlc) || WL11H_STA_ENAB(wlc));
+#else
 	ASSERT(WL11H_AP_ENAB(wlc));
+#endif /* SLAVE_RADAR */
 
 	BCM_REFERENCE(chanbuf);
 
@@ -2880,7 +3161,7 @@ wlc_dfs_cacstate_init(wlc_dfs_info_t *dfs)
 		wlc_radar_detected(dfs, TRUE); /* refresh detector */
 		WL_REGULATORY(("wl%d: %s: state to %s chanspec %s BGDFS\n",
 				wlc->pub->unit, __FUNCTION__,
-				wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+				wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 				wf_chspec_ntoa_ex(chspec, chanbuf)));
 		return;
 	}
@@ -2929,7 +3210,7 @@ wlc_dfs_cacstate_init(wlc_dfs_info_t *dfs)
 
 	WL_REGULATORY(("wl%d: %s: state to %s chanspec %s NOT BGDFS\n",
 		wlc->pub->unit, __FUNCTION__,
-		wlc_dfs_cacstate_str[dfs->dfs_cac.status.state],
+		wlc_dfs_cacstate_str(dfs->dfs_cac.status.state),
 		wf_chspec_ntoa_ex(chspec, chanbuf)));
 }
 
@@ -2939,9 +3220,6 @@ wlc_set_dfs_cacstate(wlc_dfs_info_t *dfs, int state, wlc_bsscfg_t *cfg)
 	wlc_info_t *wlc = dfs->wlc;
 
 	(void)wlc;
-
-	if (!AP_ENAB(wlc->pub))
-		return;
 
 	if (cfg != NULL) {
 		dfs->cfg = cfg; /* update DFS bsscfg */
@@ -3003,6 +3281,7 @@ void
 wlc_dfs_reset_all(wlc_dfs_info_t *dfs)
 {
 	bzero(dfs->chan_blocked, sizeof(dfs->chan_blocked));
+	bzero(dfs->chan_cac_pending, sizeof(dfs->chan_cac_pending));
 }
 
 int
@@ -3102,5 +3381,12 @@ wlc_dfs_get_radar(wlc_dfs_info_t *dfs)
 }
 
 #ifdef STA
+#ifdef BCMDBG
+static int
+wlc_dfs_bcn_parse_ibss_dfs_ie(void *ctx, wlc_iem_parse_data_t *data)
+{
+	return BCME_OK;
+}
+#endif /* BCMDBG */
 #endif /* STA */
 #endif /* WLDFS */

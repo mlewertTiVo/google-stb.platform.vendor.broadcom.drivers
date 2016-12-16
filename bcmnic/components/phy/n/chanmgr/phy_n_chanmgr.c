@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_chanmgr.c 610412 2016-01-06 23:43:14Z vyass $
+ * $Id: phy_n_chanmgr.c 658200 2016-09-07 01:03:02Z $
  */
 
 #include <typedefs.h>
@@ -38,10 +38,12 @@ struct phy_n_chanmgr_info {
 	phy_chanmgr_info_t *chanmgri;
 };
 
-/* local functions */
+/* Functions called using callback from Common layer */
 static int phy_n_chanmgr_get_chanspec_bandrange(phy_type_chanmgr_ctx_t *ctx, chanspec_t chanspec);
 static void phy_n_chanmgr_chanspec_set(phy_type_chanmgr_ctx_t *ctx, chanspec_t chanspec);
 static void phy_n_chanmgr_upd_interf_mode(phy_type_chanmgr_ctx_t *ctx, chanspec_t chanspec);
+static uint8 phy_n_set_chanspec_sr_vsdb(phy_type_chanmgr_ctx_t *ctx,
+		chanspec_t chanspec, uint8 *last_chan_saved);
 
 /* Register/unregister NPHY specific implementation to common layer */
 phy_n_chanmgr_info_t *
@@ -68,6 +70,8 @@ BCMATTACHFN(phy_n_chanmgr_register_impl)(phy_info_t *pi, phy_n_info_t *ni,
 	fns.get_bandrange = phy_n_chanmgr_get_chanspec_bandrange;
 	fns.chanspec_set = phy_n_chanmgr_chanspec_set;
 	fns.interfmode_upd = phy_n_chanmgr_upd_interf_mode;
+	fns.set_chanspec_sr_vsdb = phy_n_set_chanspec_sr_vsdb;
+
 	fns.ctx = info;
 
 	if (phy_chanmgr_register_impl(chanmgri, &fns) != BCME_OK) {
@@ -128,4 +132,71 @@ phy_n_chanmgr_upd_interf_mode(phy_type_chanmgr_ctx_t *ctx, chanspec_t chanspec)
 			        pi->sh->interference_mode_5G;
 		}
 	}
+}
+
+/**
+ * Attempts to switch to the caller supplied chanspec using hardware assisted band switching. There
+ * are conditions that determine whether such as hardware switch is possible, if it is not possible
+ * (or there was an other problem preventing the channel switch) the function will return FALSE,
+ * giving the caller an opportunity to invoke a subsequent non-SRVSDB assisted channel switch.
+ *
+ * Output argument 'last_chan_saved' is set to 'TRUE' when the context of the 'old' channel was
+ * saved by hardware, and can even be set to 'TRUE' when the channel switch itself failed.
+ *
+ * Note: the *caller* should set *last_chan_saved to 'FALSE' before calling this function.
+ */
+static uint8
+phy_n_set_chanspec_sr_vsdb(phy_type_chanmgr_ctx_t *ctx,
+		chanspec_t chanspec, uint8 * last_chan_saved)
+{
+	uint8 switch_done = FALSE;
+#ifdef WLSRVSDB
+	phy_n_chanmgr_info_t *info = (phy_n_chanmgr_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+
+	/* check if malloc for SW backup structures have failed */
+	if (SRVSDSB_MEM_ALLOC_FAIL(pi))  {
+		printf("SRVSDB : Mem alloc fail \n");
+		ASSERT(0);
+		goto exit;
+	}
+
+	/* While coming out of roam, its fresh start. Make status = 0 */
+	if (ROAM_SRVSDB_RESET(pi)) {
+		phy_reset_srvsdb_engine((wlc_phy_t*)pi);
+	}
+
+	/* reset fifo, disable stall */
+	wlc_phy_srvsdb_prepare(pi, ENTER);
+
+	/* If channel pattern matches, enter HW VSDB */
+	if (sr_vsdb_switch_allowed(pi, chanspec)) {
+		if (!wlc_set_chanspec_vsdb_phy(pi, chanspec)) {
+			goto exit;
+		}
+		*last_chan_saved = TRUE;
+		/*
+		 * vsdb_trig_cnt tracks hardware state: the first two times the SR engine is
+		 * triggered, it will save and restore (in one operation) the same context, so it
+		 * will not switch context.
+		 */
+		if (pi->srvsdb_state->vsdb_trig_cnt > 1)
+			switch_done =  TRUE;
+	} else {
+		switch_done = FALSE;
+		goto exit;
+	}
+
+	/* to restore radio state */
+	wlc_phy_resetcca_nphy(pi);
+	wlc_20671_vco_cal(pi, TRUE);
+
+exit:
+	wlc_phy_srvsdb_prepare(pi, EXIT);
+
+	/* store present chanspec */
+	pi->srvsdb_state->prev_chanspec = chanspec;
+#endif /* WLSRVSDB */
+
+	return switch_done;
 }

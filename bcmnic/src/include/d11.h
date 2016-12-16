@@ -13,14 +13,21 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: d11.h 653755 2016-08-09 22:40:17Z $
+ * $Id: d11.h 669400 2016-11-09 10:52:51Z $
  */
 
 #ifndef	_D11_H
 #define	_D11_H
 
+/*
+ * Notes:
+ * 1. pre40/pre rev40: corerev < 40
+ * 2. pre80/pre rev80: 40 <= corerev < 80
+ * 3. rev40/D11AC: 80 > corerev >= 40
+ * 4. rev80: 128 > corerev >= 80
+ */
+
 #include <typedefs.h>
-#include <bcmutils.h>
 #include <hndsoc.h>
 #include <sbhndpio.h>
 #include <sbhnddma.h>
@@ -72,7 +79,7 @@ typedef struct {
 #define	TX_BCMC_FIFO		4	/**< Broadcast/Multicast TX FIFO */
 #define	TX_ATIM_FIFO		5	/**< TX fifo for ATIM window info */
 
-/* TX FIFO numbers for trigger queues for 11AX STA only chips (i.e
+/* TX FIFO numbers for trigger queues for HE STA only chips (i.e
  * This is valid only for 4369 or similar STA chips that supports
  * a single HE STA connection.
  */
@@ -170,6 +177,10 @@ typedef struct {
 #define MCMD_BCNREL		(1 << 8 )	/**< release anybuffered bcns from ucode  */
 #define MCMD_TOF		(1 << 9) /**< wifi ranging processing in ucode for rxd frames */
 #define MCMD_TSYNC		(1 << 10) /**< start timestamp sync process in ucode */
+
+/* maccommand_x register */
+#define	MCMDX_SND		(1 <<  0)
+#define	MCMDX_CLR_MUBF		(1 <<  1)
 
 /* macintstatus/macintmask */
 #define	MI_MACSSPNDD     (1 <<  0)	/**< MAC has gracefully suspended */
@@ -339,10 +350,6 @@ typedef struct {
 #define CCS_ERSRC_REQ_PHYPLL	0x00000200	/**< PHY pll request */
 #define CCS_ERSRC_AVAIL_D11PLL	0x01000000	/**< d11 core pll available */
 #define CCS_ERSRC_AVAIL_PHYPLL	0x02000000	/**< PHY pll available */
-
-/* HT Cloclk Ctrl and Clock Avail for 4313 */
-#define CCS_ERSRC_REQ_HT    0x00000010		/**< HT avail request */
-#define CCS_ERSRC_AVAIL_HT  0x00020000		/**< HT clock available */
 
 /* d11_pwrctl, corerev16 only */
 #define D11_PHYPLL_AVAIL_REQ	0x000010000	/**< request PHY PLL resource */
@@ -524,7 +531,7 @@ BWL_PRE_PACKED_STRUCT struct cck_phy_hdr {
 #define D11AC_PHY_CCK_PLCP_OFFSET	6
 #define D11AC_PHY_BEACON_PLCP_OFFSET	0
 
-/** TX DMA buffer header */
+/** TX descriptor - pre40 */
 typedef struct d11txh d11txh_t;
 BWL_PRE_PACKED_STRUCT struct d11txh {
 	uint16	MacTxControlLow;		/* 0x0 */
@@ -758,7 +765,7 @@ BWL_PRE_PACKED_STRUCT struct d11txh {
 
 #define D11AC_TXH_NUM_RATES			4
 
-/** per rate info */
+/** per rate info - rev40 */
 typedef struct d11actxh_rate d11actxh_rate_t;
 BWL_PRE_PACKED_STRUCT struct d11actxh_rate {
 	uint16  PhyTxControlWord_0;             /* 0 - 1 */
@@ -807,9 +814,9 @@ BWL_PRE_PACKED_STRUCT struct d11pktinfo_common {
 	uint16  TxStatus;                       /* 18 */
 } BWL_POST_PACKED_STRUCT;
 
-/** Per cache info */
-typedef struct d11actxh_cache d11actxh_cache_t;
-BWL_PRE_PACKED_STRUCT struct d11actxh_cache {
+/* common cache info between rev40 and rev80 formats */
+typedef struct d11txh_cache_common d11txh_cache_common_t;
+BWL_PRE_PACKED_STRUCT struct d11txh_cache_common {
 	uint8   BssIdEncAlg;                    /* 0 */
 	uint8   KeyIdx;                         /* 1 */
 	uint8   PrimeMpduMax;                   /* 2 */
@@ -817,11 +824,17 @@ BWL_PRE_PACKED_STRUCT struct d11actxh_cache {
 	uint16  AmpduDur;                       /* 4 - 5 */
 	uint8   BAWin;                          /* 6 */
 	uint8   MaxAggLen;                      /* 7 */
+} BWL_POST_PACKED_STRUCT;
+
+/** Per cache info - rev40 */
+typedef struct d11actxh_cache d11actxh_cache_t;
+BWL_PRE_PACKED_STRUCT struct d11actxh_cache {
+	d11txh_cache_common_t common;		/*  0 -  7 */
 	uint8   TkipPH1Key[10];                 /*  8 - 17 */
 	uint8   TSCPN[6];                       /* 18 - 23 */
 } BWL_POST_PACKED_STRUCT;
 
-/** Long format tx descriptor */
+/** Long format tx descriptor - rev40 */
 typedef struct d11actxh d11actxh_t;
 BWL_PRE_PACKED_STRUCT struct d11actxh {
 	/* Per pkt info */
@@ -851,6 +864,8 @@ BWL_PRE_PACKED_STRUCT struct d11actxh {
 } BWL_POST_PACKED_STRUCT;
 
 #define D11AC_TXH_LEN		sizeof(d11actxh_t)	/* 124 bytes */
+
+#define D11AC_TXH_SFD_LEN	sizeof(d11actxh_pkt_t)	/* 20 bytes */
 
 /* Short format tx descriptor only has per packet info */
 #define D11AC_TXH_SHORT_LEN	sizeof(d11actxh_pkt_t)	/* 20 bytes */
@@ -1003,60 +1018,55 @@ BWL_PRE_PACKED_STRUCT struct d11actxh {
 #define D11AC_AMPDU_MAX_DUR_SHIFT	4
 
 /**
- * TX Descriptor definitions for supporting 11ax (HE)
+ * TX Descriptor definitions for supporting rev40 (HE)
  */
 /* Maximum number of TX fallback rates per packet */
-#define D11AX_TXH_NUM_RATES		4
-#define D11AX_TXH_PHYTXCTL_MIN_LENGTH	1
+#define D11_REV80_TXH_NUM_RATES			4
+#define D11_REV80_TXH_PHYTXCTL_MIN_LENGTH	1
 
-/** per rate info - fixed portion */
-typedef struct d11axtxh_rate_fixed d11axtxh_rate_fixed_t;
-BWL_PRE_PACKED_STRUCT struct d11axtxh_rate_fixed {
+/** per rate info - fixed portion - rev80 */
+typedef struct d11txh_rev80_rate_fixed d11txh_rev80_rate_fixed_t;
+BWL_PRE_PACKED_STRUCT struct d11txh_rev80_rate_fixed {
 	uint16	TxRate;			/* rate in 500Kbps */
 	uint16	RtsCtsControl;		/* RTS - CTS control */
 	uint8	plcp[D11_PHY_HDR_LEN];	/* 6 bytes */
 } BWL_POST_PACKED_STRUCT;
 
-/* 11ax specific per packet info fields */
-typedef struct d11pktinfo_ax d11pktinfo_ax_t;
-BWL_PRE_PACKED_STRUCT struct d11pktinfo_ax {
+/* rev80 specific per packet info fields */
+typedef struct d11pktinfo_rev80 d11pktinfo_rev80_t;
+BWL_PRE_PACKED_STRUCT struct d11pktinfo_rev80 {
 	uint16	HEModeControl;			/* 20 */
 	uint16  length;				/* 22 - length of txd in bytes */
 } BWL_POST_PACKED_STRUCT;
 
-/** Per cache info */
-typedef struct d11axtxh_cache d11axtxh_cache_t;
-BWL_PRE_PACKED_STRUCT struct d11axtxh_cache {
-	uint8   BssIdEncAlg;                    /* 0 */
-	uint8   KeyIdx;                         /* 1 */
-	uint8   PrimeMpduMax;                   /* 2 */
-	uint8   FallbackMpduMax;                /* 3 */
-	uint16  AmpduDur;                       /* 4 - 5 */
-	uint8   BAWin;                          /* 6 */
-	uint8   MaxAggLen;                      /* 7 */
-	uint8   TkipPH1Key[10];                 /*  8 - 17 */
-	uint8   TSCPN[6];                       /* 18 - 23 */
-	uint16	ampdu_mpdu_all;			/* 24 */
-	uint16	reserved;			/* 25 - for 4 byte alignement */
+/** Per cache info - rev80 */
+typedef struct d11txh_rev80_cache d11txh_rev80_cache_t;
+BWL_PRE_PACKED_STRUCT struct d11txh_rev80_cache {
+	d11txh_cache_common_t common;		/* 0 - 7 */
+	uint16	ampdu_mpdu_all;			/* 8 - 9 */
+	uint16	aggid;				/* 10 - 11 */
+	uint8	tkipph1_index;			/* 12 */
+	uint8	pktext;				/* 13 */
+	uint16	reserved;			/* 14 - 15 (for 4 byte alignement) */
 } BWL_POST_PACKED_STRUCT;
 
-/** Fixed size portion of TX descriptor */
-typedef struct d11axtxh d11axtxh_t;
-BWL_PRE_PACKED_STRUCT struct d11axtxh {
+/** Fixed size portion of TX descriptor - rev80 */
+typedef struct d11txh_rev80 d11txh_rev80_t;
+BWL_PRE_PACKED_STRUCT struct d11txh_rev80 {
 	/**
-	 * Per pkt info fields (common + ax specific)
+	 * Per pkt info fields (common + rev80 specific)
 	 *
 	 * Note : Ensure that PktInfo field is always the first member
-	 * of the d11axtxh struct (that is at OFFSET - 0)
+	 * of the d11txh_rev80 struct (that is at OFFSET - 0)
 	 */
 	d11pktinfo_common_t PktInfo;	/* 0 - 20 */
-	d11pktinfo_ax_t PktInfoExt;	/* 21-23 */
+	d11pktinfo_rev80_t PktInfoExt;	/* 21 - 23 */
 
 	/** Per cache info */
-	d11axtxh_cache_t CacheInfo;	/* 24 - 47 */
+	d11txh_rev80_cache_t CacheInfo;	/* 24 - 39 */
 
 	/**
-	 * D11AX_TXH_NUM_RATES number of Rate Info blocks
+	 * D11_REV80_TXH_NUM_RATES number of Rate Info blocks
 	 * contribute to the variable size portion of the TXD.
 	 * Each Rate Info element (block) is a funtion of
 	 * (N_PwrOffset, N_RU, N_User).
@@ -1064,114 +1074,117 @@ BWL_PRE_PACKED_STRUCT struct d11axtxh {
 	uint8 RateInfoBlock[1];
 } BWL_POST_PACKED_STRUCT;
 
-/* Short format tx descriptor only has per packet info (24 bytes) */
-#define D11AX_TXH_SHORT_LEN	(sizeof(d11pktinfo_common_t) + \
-				sizeof(d11pktinfo_ax_t))
-
 /**
-* Size of fixed size portion of TX descriptor : size of d11axtxh_t minus size of RateInfoBlock[1]
-*/
-#define D11AX_TXH_FIXED_LEN		(OFFSETOF(d11axtxh_t, RateInfoBlock))
+ * Size of fixed size portion of TX descriptor : size of
+ * d11txh_rev80_t minus size of RateInfoBlock[1]
+ */
+#define D11_REV80_TXH_FIXED_LEN	((uint)(uintptr)&((d11txh_rev80_t *)0)->RateInfoBlock)
+
+/* Short format tx descriptor only has per packet info (24 bytes) */
+#define D11_REV80_TXH_SHORT_LEN	(sizeof(d11pktinfo_common_t) + \
+				sizeof(d11pktinfo_rev80_t))
 
 /* Length of BFM0 field in RateInfo Blk */
-#define	D11AX_TXH_BFM0_FIXED_LEN(pwr_offs)	(pwr_offs)
+#define	D11_REV80_TXH_BFM0_FIXED_LEN(pwr_offs)		(pwr_offs)
 
 /**
  * Length of FBWInfo field in RateInfo Blk
  *
  * Note : for now return fixed length of 1 word
  */
-#define	D11AX_TXH_FBWINFO_FIXED_LEN(pwr_offs)	2
+#define	D11_REV80_TXH_FBWINFO_FIXED_LEN(pwr_offs)	2
 
-#define D11AX_TXH_FIXED_RATEINFO_LEN	sizeof(d11axtxh_rate_fixed_t)
+#define D11_REV80_TXH_FIXED_RATEINFO_LEN	sizeof(d11txh_rev80_rate_fixed_t)
 
 /**
  * Macros to find size of N-RUs field in the PhyTxCtlWord.
  */
-#define D11AX_TXH_TXC_N_RUs_FIELD_SIZE		1
-#define D11AX_TXH_TXC_PER_RU_INFO_SIZE		4
-#define D11AX_TXH_TXC_PER_RU_MIN_SIZE		2
+#define D11_REV80_TXH_TXC_N_RUs_FIELD_SIZE		1
+#define D11_REV80_TXH_TXC_PER_RU_INFO_SIZE		4
+#define D11_REV80_TXH_TXC_PER_RU_MIN_SIZE		2
 
-#define D11AX_TXH_TXC_RU_FIELD_SIZE(n_rus)	((n_rus == 1) ? \
-						(D11AX_TXH_TXC_PER_RU_MIN_SIZE) : \
-						((D11AX_TXH_TXC_N_RUs_FIELD_SIZE) + \
-						((n_rus) * D11AX_TXH_TXC_PER_RU_INFO_SIZE)))
+#define D11_REV80_TXH_TXC_RU_FIELD_SIZE(n_rus)	((n_rus == 1) ? \
+						(D11_REV80_TXH_TXC_PER_RU_MIN_SIZE) : \
+						((D11_REV80_TXH_TXC_N_RUs_FIELD_SIZE) + \
+						((n_rus) * D11_REV80_TXH_TXC_PER_RU_INFO_SIZE)))
 
 /**
  * Macros to find size of N-Users field in the TXCTL_EXT
  */
-#define D11AX_TXH_TXC_EXT_N_USERs_FIELD_SIZE	1
-#define D11AX_TXH_TXC_EXT_PER_USER_INFO_SIZE	4
+#define D11_REV80_TXH_TXC_EXT_N_USERs_FIELD_SIZE	1
+#define D11_REV80_TXH_TXC_EXT_PER_USER_INFO_SIZE	4
 
-#define D11AX_TXH_TXC_N_USERs_FIELD_SIZE(n_users)	((n_users) ? (((n_users) * \
-							(D11AX_TXH_TXC_EXT_PER_USER_INFO_SIZE)) + \
-							(D11AX_TXH_TXC_EXT_N_USERs_FIELD_SIZE)) : \
-							(n_users))
+#define D11_REV80_TXH_TXC_N_USERs_FIELD_SIZE(n_users) \
+	((n_users) ? \
+	 (((n_users) * \
+	   (D11_REV80_TXH_TXC_EXT_PER_USER_INFO_SIZE)) + \
+	  (D11_REV80_TXH_TXC_EXT_N_USERs_FIELD_SIZE)) :	\
+	 (n_users))
 
 /**
  * Size of each Tx Power Offset field in PhyTxCtlWord.
  */
-#define D11AX_TXH_TXC_PWR_OFFSET_SIZE		1
+#define D11_REV80_TXH_TXC_PWR_OFFSET_SIZE		1
 
 /**
  * Size of fixed / static fields in PhyTxCtlWord (all fields except N-RUs, N-Users and Pwr offsets)
  */
-#define D11AX_TXH_TXC_CONST_FIELDS_SIZE		6
+#define D11_REV80_TXH_TXC_CONST_FIELDS_SIZE		6
 
 /**
  * Macros used for filling PhyTxCtlWord
  */
 
 /* PhyTxCtl Byte 0 */
-#define D11AX_PHY_TXC_FT_MASK			0x0007
-#define D11AX_PHY_TXC_NON_SOUNDING		0x0040
-#define D11AX_PHY_TXC_SHORT_PREAMBLE		0x0080
-#define D11AX_PHY_TXC_STBC			0x0080
+#define D11_REV80_PHY_TXC_FT_MASK		0x0007
+#define D11_REV80_PHY_TXC_NON_SOUNDING		0x0040
+#define D11_REV80_PHY_TXC_SHORT_PREAMBLE	0x0080
+#define D11_REV80_PHY_TXC_STBC			0x0080
 
-/* D11AX_PHY_TXC_FT - Frame type */
-#define D11AX_PHY_TXC_FT_CCK			0x0000
-#define D11AX_PHY_TXC_FT_OFDM			0x0001
-#define D11AX_PHY_TXC_FT_11N			0x0002
-#define D11AX_PHY_TXC_FT_11AC			0x0003
-#define D11AX_PHY_TXC_FT_11AX			0x0004
+/* D11_REV80_PHY_TXC_FT - Frame type */
+#define D11_REV80_PHY_TXC_FT_CCK		0x0000
+#define D11_REV80_PHY_TXC_FT_OFDM		0x0001
+#define D11_REV80_PHY_TXC_FT_11N		0x0002
+#define D11_REV80_PHY_TXC_FT_11AC		0x0003
+#define D11_REV80_PHY_TXC_FT_11AX		0x0004
 
 /* PhyTxCtl Word 1 (Bytes 2 - 3) */
-#define D11AX_PHY_TXC_MU			0x8000
-#define D11AX_PHY_TXC_BW_20MHZ			0x0000
-#define D11AX_PHY_TXC_BW_40MHZ			0x0001
-#define D11AX_PHY_TXC_BW_80MHZ			0x0002
-#define D11AX_PHY_TXC_BW_160MHZ			0x0003
-#define D11AX_PHY_TXC_ANT_CORE_MASK		0x00ff
-#define D11AX_PHY_TXC_ANT_MASK			0x00f0
-#define D11AX_PHY_TXC_ANT_SHIFT			4
-#define D11AX_PHY_TXC_CORE_MASK			0x000f
+#define D11_REV80_PHY_TXC_MU			0x8000
+#define D11_REV80_PHY_TXC_BW_20MHZ		0x0000
+#define D11_REV80_PHY_TXC_BW_40MHZ		0x0001
+#define D11_REV80_PHY_TXC_BW_80MHZ		0x0002
+#define D11_REV80_PHY_TXC_BW_160MHZ		0x0003
+#define D11_REV80_PHY_TXC_ANT_CORE_MASK		0x00ff
+#define D11_REV80_PHY_TXC_ANT_MASK		0x00f0
+#define D11_REV80_PHY_TXC_ANT_SHIFT		4
+#define D11_REV80_PHY_TXC_CORE_MASK		0x000f
 
 /* PhyTxCtl BFM field */
-#define D11AX_PHY_TXC_BFM			0x80
+#define D11_REV80_PHY_TXC_BFM			0x80
 
 /* PhyTxCtl power offsets */
-#define D11AX_PHY_TXC_PWROFS0_BYTE_POS		6
+#define D11_REV80_PHY_TXC_PWROFS0_BYTE_POS	6
 
 /* Phytx Ctl Sub band location */
-#define D11AX_PHY_TXC_SB_SHIFT			2
-#define D11AX_PHY_TXC_SB_MASK			0x001C
+#define D11_REV80_PHY_TXC_SB_SHIFT		2
+#define D11_REV80_PHY_TXC_SB_MASK		0x001C
 
 /* 11n phy rate */
-#define D11AX_PHY_TXC_11N_MCS_MASK		0x003F
-#define D11AX_PHY_TXC_11N_PROP_MCS		0x0040 /* this represents bit mcs[6] */
+#define D11_REV80_PHY_TXC_11N_MCS_MASK		0x003F
+#define D11_REV80_PHY_TXC_11N_PROP_MCS		0x0040 /* this represents bit mcs[6] */
 
 /* 11ac phy rate */
-#define D11AX_PHY_TXC_11AC_NSS_SHIFT		4
+#define D11_REV80_PHY_TXC_11AC_NSS_SHIFT	4
 
 /* Tx method */
-#define D11AX_PHY_TXC_TX_MODE_MASK		0x03
-#define D11AX_PHY_TXC_EDCA			0x00
-#define D11AX_PHY_TXC_OFDMA_RA		0x01	/* Use Random Access Trigger for Tx */
-#define D11AX_PHY_TXC_OFDMA_DT		0x02	/* Use Directed Trigger for Tx */
-#define D11AX_PHY_TXC_OFDMA_ET		0x03	/* Use earliest Trigger Opportunity */
+#define D11_REV80_PHY_TXC_TX_MODE_MASK		0x03
+#define D11_REV80_PHY_TXC_EDCA			0x00
+#define D11_REV80_PHY_TXC_OFDMA_RA		0x01	/* Use Random Access Trigger for Tx */
+#define D11_REV80_PHY_TXC_OFDMA_DT		0x02	/* Use Directed Trigger for Tx */
+#define D11_REV80_PHY_TXC_OFDMA_ET		0x03	/* Use earliest Trigger Opportunity */
 
 #define IS_TRIGGERQ_TRAFFIC(a)		((a)->PktInfoExt.HEModeControl & \
-					D11AX_PHY_TXC_TX_MODE_MASK)
+					D11_REV80_PHY_TXC_TX_MODE_MASK)
 
 /**
  * Generic tx status packet for software use. This is independent of hardware
@@ -1213,10 +1226,13 @@ BWL_PRE_PACKED_STRUCT struct tx_status {
 	uint16 phyerr;
 	uint32 lasttxtime;
 	uint16 ackphyrxsh;
-	uint16 padding;
+	uint16 procflags;	/* tx status processing flags */
 	uint32 dequeuetime;
 	tx_status_macinfo_t status;
 } BWL_POST_PACKED_STRUCT;
+
+/* Bits in struct tx_status procflags */
+#define TXS_PROCFLAG_AMPDU_BA_PKG2_READ_REQD	0x1	/* AMPDU BA txs pkg2 read required */
 
 /* status field bit definitions */
 #define	TX_STATUS_FRM_RTX_MASK	0xF000
@@ -1263,12 +1279,16 @@ BWL_PRE_PACKED_STRUCT struct tx_status {
 	((s4 & TX_STATUS40_TXCNT_RATE0_MASK) >> TX_STATUS40_TXCNT_RATE0_SHIFT) + \
 	((s4 & TX_STATUS40_TXCNT_RATE1_MASK) >> TX_STATUS40_TXCNT_RATE1_SHIFT))
 
+#define TX_STATUS40_TXCNT_RT0(s3) \
+	((s3 & TX_STATUS40_TXCNT_RATE0_MASK) >> TX_STATUS40_TXCNT_RATE0_SHIFT)
+
 #define TX_STATUS40_TX_MEDIUM_DELAY(txs)    ((txs)->status.s8 & TX_STATUS40_MEDIUM_DELAY_MASK)
 
 /* chip rev 40 pkg 2 fields */
-#define TX_STATUS40_IMPBF_MASK		0x0000000C /**< implicit bf applied */
-#define TX_STATUS40_IMPBF_BAD_MASK	0x00000010 /* impl bf applied but acked frame has no bfm */
-#define TX_STATUS40_IMPBF_LOW_MASK	0x00000020 /**< ack received with low rssi */
+#define TX_STATUS40_IMPBF_MASK		0x0000000C	/* implicit bf applied */
+#define TX_STATUS40_IMPBF_BAD_MASK	0x00000010	/* impl bf applied but ack frm has no bfm */
+#define TX_STATUS40_IMPBF_LOW_MASK	0x00000020	/* ack received with low rssi */
+#define TX_STATUS40_BFTX		0x0040		/* Beamformed pkt TXed */
 /* pkt two status field bit definitions mac rev > 64 */
 #define TX_STATUS64_MUTX		0x0080
 
@@ -1276,6 +1296,53 @@ BWL_PRE_PACKED_STRUCT struct tx_status {
 #define TX_STATUS40_RTS_RTX_SHIFT	16
 #define TX_STATUS40_CTS_RRX_MASK	0xff000000
 #define TX_STATUS40_CTS_RRX_SHIFT	24
+
+/* MU group info txstatus field (s3 b[31:16]) */
+#define TX_STATUS64_MU_GID_MASK		0x003f0000
+#define TX_STATUS64_MU_GID_SHIFT	16
+#define TX_STATUS64_MU_BW_MASK		0x00c00000
+#define TX_STATUS64_MU_BW_SHIFT		22
+#define TX_STATUS64_MU_TXPWR_MASK	0x7f000000
+#define TX_STATUS64_MU_TXPWR_SHIFT	24
+#define TX_STATUS64_MU_SGI_MASK		0x80000080
+#define TX_STATUS64_MU_SGI_SHIFT	31
+#define TX_STATUS64_INTERM_MUTXCNT(s3) \
+	((s3 & TX_STATUS40_TXCNT_RATE0_MASK) >> TX_STATUS40_TXCNT_RATE0_SHIFT)
+
+#define TX_STATUS64_MU_GID(s3) ((s3 & TX_STATUS64_MU_GID_MASK) >> TX_STATUS64_MU_GID_SHIFT)
+#define TX_STATUS64_MU_BW(s3) ((s3 & TX_STATUS64_MU_BW_MASK) >> TX_STATUS64_MU_BW_SHIFT)
+#define TX_STATUS64_MU_TXPWR(s3) ((s3 & TX_STATUS64_MU_TXPWR_MASK) >> TX_STATUS64_MU_TXPWR_SHIFT)
+#define TX_STATUS64_MU_SGI(s3) ((s3 & TX_STATUS64_MU_SGI_MASK) >> TX_STATUS64_MU_SGI_SHIFT)
+
+/* MU user info0 txstatus field (s4 b[15:0]) */
+#define TX_STATUS64_MU_MCS_MASK		0x0000000f
+#define TX_STATUS64_MU_MCS_SHIFT	0
+#define TX_STATUS64_MU_NSS_MASK		0x00000070
+#define TX_STATUS64_MU_NSS_SHIFT	4
+#define TX_STATUS64_MU_SNR_MASK		0x0000ff00
+#define TX_STATUS64_MU_SNR_SHIFT	8
+
+#define TX_STATUS64_MU_MCS(s4) ((s4 & TX_STATUS64_MU_MCS_MASK) >> TX_STATUS64_MU_MCS_SHIFT)
+#define TX_STATUS64_MU_NSS(s4) ((s4 & TX_STATUS64_MU_NSS_MASK) >> TX_STATUS64_MU_NSS_SHIFT)
+#define TX_STATUS64_MU_SNR(s4) ((s4 & TX_STATUS64_MU_SNR_MASK) >> TX_STATUS64_MU_SNR_SHIFT)
+
+/* MU txstatus rspec field (NSS | MCS) */
+#define TX_STATUS64_MU_RSPEC_MASK	(TX_STATUS64_MU_NSS_MASK | TX_STATUS64_MU_MCS_MASK)
+#define TX_STATUS64_MU_RSPEC_SHIFT	0
+
+#define TX_STATUS64_MU_RSPEC(s4) ((s4 & TX_STATUS64_MU_RSPEC_MASK) >> TX_STATUS64_MU_RSPEC_SHIFT)
+
+/* MU user info0 txstatus field (s4 b[31:16]) */
+#define TX_STATUS64_MU_GBMP_MASK	0x000f0000
+#define TX_STATUS64_MU_GBMP_SHIFT	16
+#define TX_STATUS64_MU_GPOS_MASK	0x00300000
+#define TX_STATUS64_MU_GPOS_SHIFT	20
+#define TX_STATUS64_MU_TXCNT_MASK	0x0fc00000
+#define TX_STATUS64_MU_TXCNT_SHIFT	22
+
+#define TX_STATUS64_MU_GBMP(s4) ((s4 & TX_STATUS64_MU_GBMP_MASK) >> TX_STATUS64_MU_GBMP_SHIFT)
+#define TX_STATUS64_MU_GPOS(s4) ((s4 & TX_STATUS64_MU_GPOS_MASK) >> TX_STATUS64_MU_GPOS_SHIFT)
+#define TX_STATUS64_MU_TXCNT(s4) ((s4 & TX_STATUS64_MU_TXCNT_MASK) >> TX_STATUS64_MU_TXCNT_SHIFT)
 
 /* WARNING: Modifying suppress reason codes?
  * Update wlc_tx_status_t and TX_STS_REASON_STRINGS and
@@ -1326,7 +1393,8 @@ enum  {
  */
 #define TXS_SUPR_MAGG_DONE_MASK ((1 << TX_STATUS_SUPR_NONE) | \
 		(1 << TX_STATUS_SUPR_UF) |   \
-		(1 << TX_STATUS_SUPR_FRAG))
+		(1 << TX_STATUS_SUPR_FRAG) | \
+		(1 << TX_STATUS_SUPR_EXPTIME))
 #define TXS_SUPR_MAGG_DONE(suppr_ind) \
 		((1 << (suppr_ind)) & TXS_SUPR_MAGG_DONE_MASK)
 
@@ -1428,6 +1496,8 @@ enum  {
 
 #define PSM_CORE_CTL_LTR_BIT	9
 #define PSM_CORE_CTL_LTR_MASK	0x3
+
+#define M_PSM_SOFT_REGS_EXT  (0xc0*2) /* corerev >= 40 only */
 
 /* WEP Block */
 
@@ -1532,7 +1602,7 @@ enum  {
 #define	T_P2P_NULL_TPL_SIZE	(32)
 
 /* FCBS base addresses and sizes in BM */
-#define FCBS_DS0_BM_CMD_SZ		0x0200	/* 512 bytes */
+#define FCBS_DS0_BM_CMD_SZ		0x0240	/* 576 bytes */
 #define FCBS_DS0_BM_DAT_SZ		0x0200	/* 512 bytes */
 
 #define FCBS_DS0_BM_CMDPTR_BASE	0x0980
@@ -1694,25 +1764,24 @@ BWL_PRE_PACKED_STRUCT struct shm_acparams {
 
 /* Flags in M_HOST_FLAGS4 */
 #define MHF4_CISCOTKIP_WAR	0x0001	/**< Change WME timings under certain conditions */
-#define	MHF4_RCMTA_BSSID_EN	0x0002	/**< BTAMP: multiSta BSSIDs matching in RCMTA area */
+#define MHF4_RCMTA_BSSID_EN 0x0002  /**< BTAMP: multiSta BSSIDs matching in RCMTA area */
 #define	MHF4_BCN_ROT_RR		0x0004	/**< MBSSID: beacon rotate in round-robin fashion */
 #define	MHF4_OPT_SLEEP		0x0008	/**< enable opportunistic sleep */
 #define	MHF4_PROXY_STA		0x0010	/**< enable proxy-STA feature */
 #define MHF4_AGING		0x0020	/**< Enable aging threshold for RF awareness */
 #define MHF4_BPHY_2TXCORES	0x0040	/**< bphy Tx on both cores (negative logic) */
 #define MHF4_BPHY_TXCORE0	0x0080	/**< force bphy Tx on core 0 (board level WAR) */
-#define MHF4_BTAMP_TXLOWPWR	0x0100	/**< BTAMP, low tx-power mode */
+#define MHF4_NOPHYHANGWAR	0x0100  /**< disable ucode WAR for idletssi cal */
 #define MHF4_WMAC_ACKTMOUT	0x0200	/**< reserved for WMAC testing */
 #define MHF4_NAPPING_ENABLE	0x0400	/**< Napping enable */
 #define MHF4_IBSS_SEC		0x0800	/**< IBSS WPA2-PSK operating mode */
 #define MHF4_EXTPA_ENABLE	0x4000	/**< for 4313A0 FEM boards */
-#define MHF4_RSDB_CR1_MINIPMU_CAL_EN	0x8000		/* for 4349B0. JIRA:SW4349-1469 */
+#define MHF4_RSDB_CR1_MINIPMU_CAL_EN	0x8000
 #ifdef ACKSUPR_MAC_FILTER
 #define MHF4_EN_ACKSUPR_BITMAP 0x4000 /* for pre-11ac acksupr enable */
 #endif /* ACKSUPR_MAC_FILTER */
 
 /* Flags in M_HOST_FLAGS5 */
-#define MHF5_4313_BTCX_GPIOCTRL	0x0001	/**< Enable gpio for bt/wlan sel for 4313 */
 #define MHF5_4331_BTCX_LOWISOLATION     0x0001  /**< Turn off txpu due to low antenna isolation */
 #define MHF5_BTCX_LIGHT         0x0002	/**< light coex mode, off txpu only for critical BT */
 #define MHF5_BTCX_PARALLEL      0x0004	/**< BT and WLAN run in parallel. */
@@ -1728,6 +1797,13 @@ BWL_PRE_PACKED_STRUCT struct shm_acparams {
 #define MHF5_BTCX_GPIO_DEBUG   0x4000 /**< Enable gpio pins for btcoex ECI signals */
 #define MHF5_SUPPRESS_PRB_REQ  0x8000 /**< Suppress probe requests at ucode level */
 #define MHF5_TXLOFT_WAR         0x1000	/**< Enable TX LOFT supression war */
+
+/* MX_HOST_FLAGS */
+/* Flags for MX_HOST_FLAGS0 */
+#define MXHF0_RSV0		0x0001		/* ucode internal, not exposed yet */
+#define MXHF0_TXDRATE		0x0002		/* mu txrate to use rate from txd */
+#define MXHF0_CHKFID		0x0004		/* check if frameid->fifo matches hw txfifo idx */
+#define MXHF0_DISWAR		0x0008		/* disable some WAR. */
 
 /** Short version of receive frame status. Only used for non-last MSDU of AMSDU. */
 typedef struct d11rxhdrshort d11rxhdrshort_t;
@@ -1746,9 +1822,7 @@ BWL_PRE_PACKED_STRUCT struct d11rxhdrshort {
 	uint16 aux_status;  /**< DMA writes into this field. ucode treats as reserved. */
 } BWL_POST_PACKED_STRUCT;
 
-#define N_PRXS_REM	9	/* number of PhyRx status words remaining (post re-map) */
-
-/** Receive Frame Data Header for 802.11b DCF-only frames */
+/** Receive Frame Data Header - pre80 */
 typedef struct d11rxhdr_lt80 d11rxhdr_lt80_t;
 BWL_PRE_PACKED_STRUCT struct d11rxhdr_lt80 {
 	uint16 RxFrameSize;	/**< Actual byte length of the frame data received */
@@ -1770,11 +1844,7 @@ BWL_PRE_PACKED_STRUCT struct d11rxhdr_lt80 {
 	uint16 RxStatus2;	/**< extended MAC Rx status */
 
 	/**
-	 * For pre 11ax / HE cases (corerev < 80) :
 	 * - RxTSFTime time of first MAC symbol + M_PHY_PLCPRX_DLY
-	 *
-	 * For 11ax / HE cases (corerev >= 80) :
-	 * - Low 16 bits of Rx timestamp
 	 */
 	uint16 RxTSFTime;
 
@@ -1792,49 +1862,34 @@ BWL_PRE_PACKED_STRUCT struct d11rxhdr_lt80 {
 	 * MSDU and send out last MSDU status.
 	 */
 	uint16 errflags;
-
-#ifdef WL11AX
-	uint16 mrxs;		/**< MAC Rx Status 0 */
-	uint16 filtermap;	/**< 32 bit bitmap indicates which "Filters" have matched. */
-
-	/**
-	 * 16 bit bitmap is a result of Packet (or Flow ) Classification.
-	 *
-	 *	0	:	Flow ID Different
-	 *	1,2,3	:	A1, A2, A3 Different
-	 *	4	:	TID Different
-	 *	5, 6	:	DA, SA from AMSDU SubFrame Different
-	 *	7	:	FC Different
-	 *	8	:	AMPDU boundary
-	 *	9 - 15	:	Reserved
-	 */
-	uint16 pktclass;
-
-	uint16 flowid;		/**< result of Flow ID Look Up performed by the HW. */
-	uint16 RxTsfTimeH;	/**< Higher 16 bits of Rx timestamp */
-	uint16 phyrxs_rem[N_PRXS_REM];	/**< Remaining 9 bytes of phy rx status */
-#endif /* WL11AX */
 } BWL_POST_PACKED_STRUCT;
 
-#define N_PRXS	15	/* number of PhyRx status words */
+#define N_PRXS_GE80	16		/* Total number of PhyRx status words for (corerev >= 80) */
+#define N_PRXS_LT80	6		/* Total number of PhyRx status words for (corerev < 80) */
 
-/** RX status : HW Generated Status (20 Bytes) */
-typedef struct d11ax_hw_rxhdr d11ax_hw_rxhdr_t;
-BWL_PRE_PACKED_STRUCT struct d11ax_hw_rxhdr {
+/* number of PhyRx status words newly added for (corerev >= 80) */
+#define N_PRXS_REM	(N_PRXS_GE80 - N_PRXS_LT80)
+
+/** RX Hdr definition - rev80 */
+typedef struct d11rxhdr_ge80 d11rxhdr_ge80_t;
+BWL_PRE_PACKED_STRUCT struct d11rxhdr_ge80 {
+	/**
+	 * Even though rxhdr can be in short or long format, always declare it here
+	 * to be in long format. So the offsets for the other fields are always the same.
+	 */
+
+	/**< HW Generated Status (20 Bytes) */
 	uint16 RxFrameSize;	/**< Actual byte length of the frame data received */
-
 	/**
 	 * These two 8-bit fields remain in the same order regardless of
 	 * processor byte order.
 	 */
-	uint8 dma_flags;    /* bit 0 indicates short or long rx status. 1 == short. */
-	uint8 fifo;	    /* rx fifo number */
-
+	uint8 dma_flags;	/* bit 0 indicates short or long rx status. 1 == short. */
+	uint8 fifo;		/* rx fifo number */
 	uint16 mrxs;		/**< MAC Rx Status */
 	uint16 RxFameSize_0;	/**< size of rx-frame in fifo-0 in case frame is copied to fifo-1 */
 	uint16 HdrConvSt;	/**< hdr conversion status. Copy of ihr(RCV_HDR_CTLSTS). */
-	uint16 filtermap;	/**< 32 bit bitmap indicates which "Filters" have matched. */
-
+	uint32 filtermap;	/**< 32 bit bitmap indicates which "Filters" have matched. */
 	/**
 	 * 16 bit bitmap is a result of Packet (or Flow ) Classification.
 	 *
@@ -1847,9 +1902,7 @@ BWL_PRE_PACKED_STRUCT struct d11ax_hw_rxhdr {
 	 *	9 - 15	:	Reserved
 	 */
 	uint16 pktclass;
-
 	uint16 flowid;		/**< result of Flow ID Look Up performed by the HW. */
-
 	/**
 	 * These bits indicate specific errors detected by the HW on the Rx Path.
 	 * However, these will be relevant for Last MSDU Status only.
@@ -1858,76 +1911,56 @@ BWL_PRE_PACKED_STRUCT struct d11ax_hw_rxhdr {
 	 * MSDU and send out last MSDU status.
 	 */
 	uint16 errflags;
-} BWL_POST_PACKED_STRUCT;
 
-/** RX status : UCODE Generated Status (16 Bytes) */
-typedef struct d11ax_ucode_rxhdr d11ax_ucode_rxhdr_t;
-BWL_PRE_PACKED_STRUCT struct d11ax_ucode_rxhdr {
-	uint16 RxStatus1;	/**< MAC Rx Status */
-	uint16 RxStatus2;	/**< extended MAC Rx status */
-	uint16 RxChan;		/**< Rx channel info or chanspec */
-	uint16 AvbRxTimeL;	/**< AVB RX timestamp low16 */
-	uint16 AvbRxTimeH;	/**< AVB RX timestamp high16 */
-	uint16 RxTsfTimeL;	/**< Lower 16 bits of Rx timestamp */
-	uint16 RxTsfTimeH;	/**< Higher 16 bits of Rx timestamp */
-	uint16 MuRate;		/**< MU rate info (bit3:0 MCS, bit6:4 NSTS) */
-} BWL_POST_PACKED_STRUCT;
+	/**< Ucode Generated Status (16 Bytes) */
+	uint16 RxStatus1;		/**< MAC Rx Status */
+	uint16 RxStatus2;		/**< extended MAC Rx status */
+	uint16 RxChan;			/**< Rx channel info or chanspec */
+	uint16 AvbRxTimeL;		/**< AVB RX timestamp low16 */
+	uint16 AvbRxTimeH;		/**< AVB RX timestamp high16 */
+	uint16 RxTSFTime;		/**< Lower 16 bits of Rx timestamp */
+	uint16 RxTsfTimeH;		/**< Higher 16 bits of Rx timestamp */
+	uint16 MuRate;			/**< MU rate info (bit3:0 MCS, bit6:4 NSTS) */
 
-/** RX Hdr definition */
-typedef struct d11rxhdr_ge80 d11rxhdr_ge80_t;
-BWL_PRE_PACKED_STRUCT struct d11rxhdr_ge80 {
-	/**
-	 * Even though rxhdr can be in short or long format, always declare it here
-	 * to be in long format. So the offsets for the other fields are always the same.
-	 */
-	d11ax_hw_rxhdr_t hw_rxhdr;	/**< HW Generated Status (20 Bytes) */
-	d11ax_ucode_rxhdr_t uc_rxhdr;	/**< Ucode Generated Status (16 Bytes) */
-	uint16	phy_rxhdr[N_PRXS];	/**< PHY Generated Status (30 Bytes) */
+	/**< PHY Generated Status (32 Bytes) */
+	uint16 PhyRxStatus_0;		/**< PhyRxStatus 15:0 */
+	uint16 PhyRxStatus_1;		/**< PhyRxStatus 31:16 */
+	uint16 PhyRxStatus_2;		/**< PhyRxStatus 47:32 */
+	uint16 PhyRxStatus_3;		/**< PhyRxStatus 63:48 */
+	uint16 PhyRxStatus_4;		/**< PhyRxStatus 79:64 */
+	uint16 PhyRxStatus_5;		/**< PhyRxStatus 95:80 */
+	uint16 phyrxs_rem[N_PRXS_REM];	/**< 20 bytes of remaining prxs (corerev >= 80) */
 } BWL_POST_PACKED_STRUCT;
-
-/* TODO: remove after all components are enabled to use the new format */
-#define NEW_RXH_FMT
 
 typedef union d11rxhdr {
 	d11rxhdr_lt80_t lt80;
 	d11rxhdr_ge80_t ge80;
 } d11rxhdr_t;
 
-/* SW RXHDR */
-/* TODO: move it to a more suitable header file */
-typedef struct wlc_d11rxhdr wlc_d11rxhdr_t;
-BWL_PRE_PACKED_STRUCT struct wlc_d11rxhdr {
-	/* SW header */
-	uint32	tsf_l;		/**< TSF_L reading */
-	int8	rssi;		/**< computed instantaneous rssi */
-	int8	rssi_qdb;	/**< qdB portion of the computed rssi */
-	int8	do_rssi_ma;	/**< do per-pkt sampling for per-antenna ma in HIGH */
-	uint8	pad;
-	int8	rxpwr[ROUNDUP(WL_RSSI_ANT_MAX,2)];	/**< rssi for supported antennas */
-	/**
-	 * Even though rxhdr can be in short or long format, always declare it here
-	 * to be in long format. So the offsets for the other fields are always the same.
-	 */
-	d11rxhdr_t rxhdr;
-} BWL_POST_PACKED_STRUCT;
+/** For accessing members of d11rxhdr_t by reference (address of members) */
+#define D11RXHDR_ACCESS_REF(rxh, corerev, member)	((D11REV_GE(corerev, 80)) ? \
+							(&((rxh)->ge80).member) : \
+							(&((rxh)->lt80).member))
 
-#define WLC_RXHDR_LEN	OFFSETOF(wlc_d11rxhdr_t, rxhdr)
+/** For accessing members of d11rxhdr_t by value (only value stored inside members accessed) */
+#define D11RXHDR_ACCESS_VAL(rxh, corerev, member)	((D11REV_GE(corerev, 80)) ? \
+							(((rxh)->ge80).member) : \
+							(((rxh)->lt80).member))
 
-#define HW_RXHDR_LEN_REV_GE80	sizeof(d11ax_hw_rxhdr_t)	/**< size of HW rx hdr */
+#define HW_RXHDR_LEN_REV_GE80	20		/**< size of HW rx hdr */
 #define HW_RXHDR_LEN_REV_LT80	12		/**< sizeof d11rxhdrshort_t */
 
-#define	D11_RXHDR_LEN_REV_GE80	64		/**< sizeof d11rxhdr_ge80_t */
+#define	D11_RXHDR_LEN_REV_GE80	68		/**< sizeof d11rxhdr_ge80_t */
 #define	D11_RXHDR_LEN_REV_LT80	36		/**< sizeof d11rxhdr_lt80_t */
 
-#define	WL_RXHDR_LEN_REV_GE80	76		/**< sizeof wlc_d11rxhdr_t revid >= 80 */
+#define	WL_RXHDR_LEN_REV_GE80	80		/**< sizeof wlc_d11rxhdr_t revid >= 80 */
 #define	WL_RXHDR_LEN_REV_LT80	48		/**< sizeof wlc_d11rxhdr_t revid < 80 */
 
 #define HW_RXHDR_LEN(rev)  D11REV_GE(rev, 80) ? HW_RXHDR_LEN_REV_GE80 : HW_RXHDR_LEN_REV_LT80
 #define D11_RXHDR_LEN(rev) D11REV_GE(rev, 80) ? D11_RXHDR_LEN_REV_GE80 : D11_RXHDR_LEN_REV_LT80
 #define WL_RXHDR_LEN(rev)  D11REV_GE(rev, 80) ? WL_RXHDR_LEN_REV_GE80 : WL_RXHDR_LEN_REV_LT80
 
-#define	FRAMELEN(rev, rxh)	D11REV_GE(rev, 80) ? \
-	(rxh)->lt80.RxFrameSize : (rxh)->ge80.hw_rxhdr.RxFrameSize
+#define	FRAMELEN(rev, rxh)	D11RXHDR_ACCESS_VAL(rxh, rev, RxFrameSize)
 
 /* d11flags */
 #define WLC_D11FLAG_NORSSI	0x80000000	/**< disregard packet for rssi analysis */
@@ -1941,7 +1974,7 @@ BWL_PRE_PACKED_STRUCT struct wlc_d11rxhdr {
 #define HDRCONV_STATUS_VALID	0x8000
 
 /* PhyRxStatus_0: */
-#define	PRXS0_FT_MASK		0x0003	/**< NPHY only: CCK, OFDM, HT, VHT */
+#define	PRXS0_FT_MASK		0x0003	/**< [PRE-HE] NPHY only: CCK, OFDM, HT, VHT */
 #define	PRXS0_CLIP_MASK		0x000C	/**< NPHY only: clip count adjustment steps by AGC */
 #define	PRXS0_CLIP_SHIFT	2	/**< SHIFT bits for clip count adjustment */
 #define	PRXS0_UNSRATE		0x0010	/**< PHY received a frame with unsupported rate */
@@ -1954,7 +1987,7 @@ BWL_PRE_PACKED_STRUCT struct wlc_d11rxhdr {
 #define PRXS0_ANTSEL_MASK	0xF000	/**< NPHY: Antennas used for received frame, bitmask */
 #define PRXS0_ANTSEL_SHIFT	12	/**< SHIFT bits for Antennas used for received frame */
 
-/* subfield PRXS0_FT_MASK */
+/* subfield PRXS0_FT_MASK [PRXS0_PRE_HE_FT_MASK] */
 #define	PRXS0_CCK		0x0000
 #define	PRXS0_OFDM		0x0001	/**< valid only for G phy, use rxh->RxChan for A phy */
 #define	PRXS0_PREN		0x0002
@@ -2050,8 +2083,11 @@ BWL_PRE_PACKED_STRUCT struct wlc_d11rxhdr {
 #define PRXS1_ACPHY_BIT_HACK	0x0008
 #define PRXS1_ACPHY_ANTCFG	0x00F0	/* Antenna Config */
 #define PRXS1_ACPHY_COREMAP	0x000F	/**< Core enable bits for core0/1/2/3 */
-
+#define PRXS1_ACPHY_SUBBAND_MASK_GEN2 0xFF00  /**< FinalBWClassification:
+					 * lower byte Bitfield of sub-bands occupied by Rx frame
+					 */
 #define PRXS0_ACPHY_SUBBAND_SHIFT    12
+#define PRXS1_ACPHY_SUBBAND_SHIFT_GEN2    8
 
 /* acphy PhyRxStatus_3: */
 #define PRXS2_ACPHY_RXPWR_ANT0	0xFF00	/**< Rx power on core 1 */
@@ -2097,6 +2133,97 @@ BWL_PRE_PACKED_STRUCT struct wlc_d11rxhdr {
 #define D11N_MMPLCPLen(rxs)	((rxs)->lt80.PhyRxStatus_3 & PRXS3_nphy_MMPLCPLen_MASK)
 #define D11HT_MMPLCPLen(rxs) ((((rxs)->lt80.PhyRxStatus_1 & PRXS1_HTPHY_MMPLCPLenL_MASK) >> 8) | \
 			      (((rxs)->lt80.PhyRxStatus_2 & PRXS2_HTPHY_MMPLCPLenH_MASK) << 8))
+
+
+/* REV80 Defintions (corerev >= 80) */
+
+/* (FT Mask) PhyRxStatus_0: */
+#define PRXS0_FT_MASK_REV_LT80		PRXS0_FT_MASK	/**< (corerev < 80) frame type field mask */
+
+#define	PRXS0_FT_MASK_REV_GE80		0x000F		/**
+							 * (corerev >= 80) frame type field mask.
+							 *
+							 * 0 = CCK, 1 = 11a/g legacy OFDM,
+							 * 2 = HT, 3 = VHT, 4 = 11ah, 5 = HE,
+							 * 6-15 Rsvd.
+							 */
+
+/* PHY RX status "Frame Type" field mask. */
+#define PRXS_FT_MASK(corerev)		(D11REV_GE(corerev, 80) ? (PRXS0_FT_MASK_REV_GE80) : \
+					(PRXS0_FT_MASK_REV_LT80))
+
+/* subfield PRXS0_FT_MASK_REV_GE80 */
+#define	PRXS0_AH			0x0004	/**< 11AH frame type */
+#define	PRXS0_HE			0x0005	/**< HE frame type */
+
+/* (Corerev >= 80) PhyRxStatus_2: */
+#define PRXS2_RXPWR_ANT0_REV_GE80	0x00FF	/**< (corerev >= 80) Rx power on first antenna */
+#define PRXS2_RXPWR_ANT1_REV_GE80	0xFF00	/**< (corerev >= 80) Rx power on second antenna */
+
+/* (Corerev >= 80) PhyRxStatus_3: */
+#define PRXS3_RXPWR_ANT2_REV_GE80	0x00FF	/**< (corerev >= 80) Rx power on third antenna */
+#define PRXS3_RXPWR_ANT3_REV_GE80	0xFF00	/**
+						 * (corerev >= 80) Rx power on fourth antenna.
+						 *
+						 * Note: For PHY revs 3 and > 4, OCL Status
+						 * byte 0 will be reported if PHY register
+						 * OCL_RxStatus_Ctrl is set to 0x2 or 0x6.
+						 */
+
+/** Get Rx power on ANT 0 */
+#define RXPWR_ANT0_REV_GE80(rxs)		((rxs)->ge80.PhyRxStatus_2 & \
+						(PRXS2_RXPWR_ANT0_REV_GE80))
+
+#define PHY_RXPWR_ANT0(corerev, rxs)		(D11REV_GE(corerev, 80) ? \
+						(RXPWR_ANT0_REV_GE80(rxs)) : \
+						(ACPHY_RXPWR_ANT0(rxs)))
+
+/** Get Rx power on ANT 1 */
+#define RXPWR_ANT1_REV_GE80(rxs)		(((rxs)->ge80.PhyRxStatus_2 & \
+						(PRXS2_RXPWR_ANT1_REV_GE80)) >> 8)
+
+#define PHY_RXPWR_ANT1(corerev, rxs)		(D11REV_GE(corerev, 80) ? \
+						(RXPWR_ANT1_REV_GE80(rxs)) : \
+						(ACPHY_RXPWR_ANT1(rxs)))
+
+/** Get Rx power on ANT 2 */
+#define RXPWR_ANT2_REV_GE80(rxs)		((rxs)->ge80.PhyRxStatus_3 & \
+						(PRXS3_RXPWR_ANT2_REV_GE80))
+
+#define PHY_RXPWR_ANT2(corerev, rxs)		(D11REV_GE(corerev, 80) ? \
+						(RXPWR_ANT2_REV_GE80(rxs)) : \
+						(ACPHY_RXPWR_ANT2(rxs)))
+
+/** Get Rx power on ANT 3 */
+#define RXPWR_ANT3_REV_GE80(rxs)		(((rxs)->ge80.PhyRxStatus_3 & \
+						(PRXS3_RXPWR_ANT3_REV_GE80)) >> 8)
+
+#define PHY_RXPWR_ANT3(corerev, rxs)		(D11REV_GE(corerev, 80) ? \
+						(RXPWR_ANT3_REV_GE80(rxs)) : \
+						(ACPHY_RXPWR_ANT3(rxs)))
+
+/* HECAPPHY PhyRxStatus_4: */
+#define PRXS4_DYNBWINNONHT_MASK_REV_GE80	0x1000
+#define PRXS4_DYNBWINNONHT_REV_GE80(rxs)	((rxs)->ge80.PhyRxStatus_4 & \
+						PRXS4_DYNBWINNONHT_MASK_REV_GE80)
+
+#define PRXS_PHY_DYNBWINNONHT(corerev, rxs)	(D11REV_GE(corerev, 80) ? \
+						PRXS4_DYNBWINNONHT_REV_GE80(rxs) : \
+						PRXS5_ACPHY_DYNBWINNONHT(rxs))
+
+/* HECAPPHY PhyRxStatus_8 (part of phyrxs_rem[2]) : */
+#ifdef WL11AX
+#define PRXS8_CHBWINNONHT_MASK_REV_GE80		0x0100
+#define PRXS8_CHBWINNONHT_REV_GE80(rxs)		((rxs)->ge80.phyrxs_rem[2] & \
+						PRXS8_CHBWINNONHT_MASK_REV_GE80)
+
+#define PRXS_PHY_CHBWINNONHT(corerev, rxs)	(D11REV_GE(corerev, 80) ? \
+						PRXS8_CHBWINNONHT_REV_GE80(rxs) : \
+						PRXS5_ACPHY_CHBWINNONHT(rxs))
+#else /* !WL11AX */
+#define PRXS_PHY_CHBWINNONHT(corerev, rxs)	PRXS5_ACPHY_CHBWINNONHT(rxs)
+#endif /* WL11AX */
+
 
 /**
  * ACPHY PhyRxStatus0 SubBand (FinalBWClassification) bit defs
@@ -2285,6 +2412,19 @@ typedef enum
 #define	BTC_FW_SCO_GRANT_HOLD_RATIO_INIT_VAL	1500
 #define	BTC_FW_SCO_GRANT_HOLD_RATIO_HI_INIT_VAL	1000
 #define	BTC_FW_HOLDSCO_HI_THRESH_INIT_VAL	7400
+
+#ifdef GPIO_TXINHIBIT
+/* GPIO based TX_INHIBIT:SWWLAN-109270 */
+typedef enum shm_macintstatus_ext_e {
+	C_MISE_GPIO_TXINHIBIT_VAL_NBIT	= 0,
+	C_MISE_GPIO_TXINHIBIT_INT_NBIT	= 1
+} shm_macintstatus_ext_t;
+#define C_MISE_GPIO_TXINHIBIT_VAL_MASK (1 << C_MISE_GPIO_TXINHIBIT_VAL_NBIT)
+#define C_MISE_GPIO_TXINHIBIT_INT_MASK (1 << C_MISE_GPIO_TXINHIBIT_INT_NBIT)
+#define M_MACINTSTATUS_EXT (0x3b3*2)
+#define	M_PSM_SOFT_REGS	0x0
+#define M_GPIO_TX_INHIBIT_TOUT (M_PSM_SOFT_REGS + (0x3be * 2))
+#endif
 
 /** Scratch Reg defs */
 typedef enum
@@ -2587,9 +2727,6 @@ typedef enum {
 #define	SISF_5G_PHY		0x0002		/**< 5G capable phy (corerev >= 5) */
 #define	SISF_FCLKA		0x0004		/**< FastClkAvailable (corerev >= 5) */
 #define	SISF_DB_PHY		0x0008		/**< Dualband phy (corerev >= 11) */
-
-#define	SISF_MINORREV_SHIFT	16
-#define	SISF_MINORREV_MASK	0xF		/**< minor corerev (corerev == 61) */
 
 /* === End of MAC reg, Beginning of PHY(b/a/g/n) reg, radio and LPPHY regs are separated === */
 
@@ -2916,7 +3053,16 @@ extern uint16 aes_xtime9dbe[512];
 #define BMCCTL_RESETSTATS_SHIFT	1
 #define BMCCTL_TXBUFSIZE_SHIFT	2
 #define BMCCTL_LOOPBACK_SHIFT	5
+#define BMCCTL_TXBUFSZ_MASK	((1 << BMCCTL_LOOPBACK_SHIFT) - (1 << BMCCTL_TXBUFSIZE_SHIFT))
 #define BMCCTL_CLKGATEEN_SHIFT  8
+
+/* Bits in TXE_BMCConfig */
+#define BMCCONFIG_BUFCNT_SHIFT		1
+#define BMCCONFIG_DISCLKGATE_SHIFT	13
+#define BMCCONFIG_BUFCNT_MASK	((1 << BMCCONFIG_DISCLKGATE_SHIFT) - (1 << BMCCONFIG_BUFCNT_SHIFT))
+
+/* Bits in TXE_BMCStartAddr */
+#define BMCSTARTADDR_STRTADDR_MASK	0x3ff
 
 /* Bits in TXE_BMCDescrLen */
 #define BMCDescrLen_ShortLen_SHIFT	0
@@ -2935,6 +3081,8 @@ extern uint16 aes_xtime9dbe[512];
 #define BMCAllocCtl_AllocThreshold_SHIFT	8
 
 /* Bits in TXE_BMCCmd1 */
+#define BMCCMD1_TIDSEL_SHIFT		1
+#define BMCCMD1_RDSRC_SHIFT		6
 #define BMCCmd1_RXMapPassThru_SHIFT	12
 
 
@@ -2949,17 +3097,36 @@ extern uint16 aes_xtime9dbe[512];
 #define BMCCmd_UpdateRetryCount_SHIFT	10
 #define BMCCmd_DisableTID_SHIFT		11
 
+/* Bits in TXE_BMCCMD for rev >= 80 */
+#define BMCCmd_BQSelType_MASK_Rev80		0x00c0
+#define BMCCmd_BQSelType_SHIFT_Rev80	6
+#define BMCCmd_BQSelType_TX	0
+#define BMCCmd_BQSelType_RX	1
+#define BMCCmd_BQSelType_Templ	2
+#define BMCCmd_Enable_SHIFT_rev80	8
+#define BMCCmd_ReleasePreAllocAll_SHIFT_rev80	10
+
 /* Bits in TXE_BMCCmd1 */
 #define BMCCmd1_Minmaxappall_SHIFT	0
 #define BMCCmd1_Minmaxlden_SHIFT	5
 #define BMCCmd1_Minmaxffszlden_SHIFT	8
 #define BMCCmd_Core1_Sel_MASK		0x2000
 
+/* Bits in BMVpConfig */
+#define BMCVPConfig_SingleVpModePortA_SHIFT	4
+
+
 /* Bits in TXE_PsmMSDUAccess */
 #define PsmMSDUAccess_TIDSel_SHIFT	0
 #define PsmMSDUAccess_MSDUIdx_SHIFT	4
 #define PsmMSDUAccess_ReadBusy_SHIFT	14
 #define PsmMSDUAccess_WriteBusy_SHIFT	15
+
+/* Bits in TXE_PsmMSDUAccess for rev >= 80 */
+#define PsmMSDUAccess_BQSelType_SHIFT	5
+#define PsmMSDUAccess_MSDUIdx_SHIFT_rev80	7
+#define PsmMSDUAccess_BQSelType_Templ	2
+#define PsmMSDUAccess_BQSelType_TX	0
 
 #ifdef WLRSDB
 #define MAX_RSDB_MAC_NUM 2
@@ -2974,9 +3141,6 @@ extern uint16 aes_xtime9dbe[512];
 /* Supported phymodes / macmodes / opmodes */
 #define SINGLE_MAC_MODE				0x0 /**< only single mac is enabled */
 #define DUAL_MAC_MODE				0x1 /**< enables dual mac */
-/* (JIRA: CRDOT11ACPHY-652) Following two #defines support
- * exclusive reg access to core 0/1 in MIMO mode
- */
 #define SUPPORT_EXCLUSIVE_REG_ACCESS_CORE0	0x2
 #define SUPPORT_EXCLUSIVE_REG_ACCESS_CORE1	0x4 /**< not functional in 4349A0 */
 #define SUPPORT_CHANNEL_BONDING			0x8 /**< enables channel bonding,
@@ -3465,7 +3629,6 @@ enum {
 
 /** LTECX shares BTCX shmem block */
 #define M_LTECX_BLK_PTR(x)				M_BTCX_BLK_PTR(x)
-#define M_LTECX_FLAGS					(150*2)
 
 /* CORE0 MODE */
 #define CORE0_MODE_RSDB		0x0
@@ -3487,6 +3650,10 @@ enum {
 /* Ucode Crash debug block pointer rev23/29 */
 #define M_UDBG_CRASH_BLK_PTR_LE30       (M_PSM_SOFT_REGS + (0x35 * 2))
 
+#define M_HWACI_ST	(M_PSM_SOFT_REGS_EXT + 0x20) /* HWACI ucode sts */
+#define HWACI_HOST_FLAG_ADDR		(0x186)
+#define HWACI_SET_SW_MITIGATION_MODE	(0x0008)
+
 /* split RX war shm locations  */
 #define RXFIFO_0_OFFSET 0x1A0
 #define RXFIFO_1_OFFSET 0x19E
@@ -3496,8 +3663,6 @@ enum {
 /* Following are the offsets in M_DRVR_UCODE_IF_PTR block for P2P ucode.
  * Start address of M_DRVR_UCODE_IF_PTR block is present in M_DRVR_UCODE_IF_PTR.
  */
-#define M_FCBS_DS0_RADIO_PU_BLOCK			(0x1 * 2)
-#define M_FCBS_DS0_RADIO_PD_BLOCK			(0xe * 2)
 #define M_FCBS_DEBUG_P2P					(0x1b * 2)
 
 /* M_ULP_WAKEIND bits */
@@ -3524,6 +3689,36 @@ enum {
 
 #define M_WOWL_ULP_SW_DAT_BLK	(0xBFF * 2)	/* (0xFFF * 2) - 1024 */
 #define M_WOWL_ULP_SW_DAT_BLK_MAX_SZ	(0x400)	/* 1024 bytes */
+
+/* TOF Support */
+#define	M_TOF_PTR		(69*2)		/* TOF block pointer */
+
+#define	M_TOF_CMD		(0x0*2)		/* command txed from fw to ucode */
+#define	M_TOF_RSP		(0x1*2)		/* response from ucode to fw */
+#define	M_TOF_CHNSM_0		(0x2*2)		/* Channel smoothing 0 */
+#define	M_TOF_DOT11DUR		(0x3*2)		/* 802.11 reseved dur value */
+#define	M_TOF_PHYCTL0		(0x4*2)		/* PHYCTL0 value */
+#define	M_TOF_PHYCTL1		(0x5*2)		/* PHYCTL1 value */
+#define	M_TOF_PHYCTL2		(0x6*2)		/* PHYCTL2 value */
+#define	M_TOF_LSIG		(0x7*2)		/* LSIG value */
+#define	M_TOF_VHTA0		(0x8*2)		/* VHTA0 value */
+#define	M_TOF_VHTA1		(0x9*2)		/* VHTA1 value */
+#define	M_TOF_VHTA2		(0xa*2)		/* VHTA2 value */
+#define	M_TOF_VHTB0		(0xb*2)		/* VHTB0 value */
+#define	M_TOF_VHTB1		(0xc*2)		/* VHTB1 value */
+#define	M_TOF_AMPDU_CTL		(0xd*2)		/* AMPDU_CTL value */
+#define	M_TOF_AMPDU_DLIM	(0xe*2)		/* AMPDU_DLIM value */
+#define	M_TOF_AMPDU_LEN		(0xf*2)		/* AMPDU length */
+#define M_TOF_UCODE_SET         (0x35*2)        /* FLAG to set ucode */
+#define RX_INTR_FIFO_0		0x1		/* FIFO-0 interrupt */
+#define RX_INTR_FIFO_1		0x2		/* FIFO-1 interrupt */
+#define RX_INTR_FIFO_2		0x4		/* FIFO-2 interrupt */
+
+/* M_TOF_UCODE_SET bits */
+typedef enum {
+	TOF_RX_FTM_NBIT = 0,
+	TOF_SHARED_ANT	= 1
+} eTOFFlags;
 
 /* Following are the offsets in M_DRVR_UCODE_IF_PTR block. Start address of
  * M_DRVR_UCODE_IF_PTR block is present in M_DRVR_UCODE_IF_PTR.
@@ -3555,9 +3750,6 @@ enum {
 #define M_NOISE_CAL_CMD_OFFSET(x)			20
 #define M_NOISE_CAL_RSP_OFFSET(x)			21
 #define M_NOISE_CAL_DATA_OFFSET(x)			23
-
-/* Indicate ucode of HW-ACI status */
-#define M_HWACI_EN_IND  (M_PSM_SOFT_REGS_EXT + 0x32)
 
 /* Bit masks for ClkGateUcodeReq2: Ucode MAC Clock Request2 (IHR Address 0x375)  register */
 #define D11_FUNC16_MAC_CLOCKREQ_MASK (0x3)
@@ -3603,6 +3795,7 @@ enum {
 /* ClkGateStretch0 */
 #define CLKGTE_MAC_HT_CLOCK_STRETCH_SHIFT		0
 #define CLKGTE_MAC_ALP_CLOCK_STRETCH_SHIFT		8
+#define CLKGTE_MAC_HT_CLOCK_STRETCH_VAL			0x4
 
 /* ClkGateStretch1 */
 #define CLKGTE_MAC_PHY_CLOCK_STRETCH_SHIFT		13
@@ -3655,28 +3848,12 @@ enum {
 #define LHL_WL_ARMTIM0_ST_WL_ARMTIM_INT_ST	0x00000001
 
 #define AUTO_MEM_STBY_RET_SHIFT	4
+
 /* WiFi P2P TX stop timestamp block SHM's */
 #define M_P2P_TX_STOP_BLK_SZ	2	/* 2 SHM words */
 #define M_P2P_TX_STOP_BLK(b)	((0x67 * 2) + (M_P2P_TX_STOP_BLK_SZ * (b) * 2))
 #define M_P2P_TX_STOP_TS(b, w)	(M_P2P_TX_STOP_BLK(b) + (w) * 2)
-/* MIMO SISO stats */
-//ToDo: Ucode review??
-#define M_CCA_SISO_MIMO_STATS_BLK_OFFSET     (0x14*2)
-/* Offsets */
-/* Note-counts SISO frames only when in MIMO mode and when one-core beacon reception is enabled */
-#define M_SISO_RXDUR_L      (0*2)   /* 32-bit SISO CCA rx duration counter (in us) */
-#define M_SISO_RXDUR_H      (1*2)
-#define M_SISO_TXOP_L       (2*2)   /* 32-bit SISO CCA idel slot counter (in slots) */
-#define M_SISO_TXOP_H       (3*2)
-#define M_MIMO_RXDUR_L      (4*2)   /* 32-bit MIMO CCA rx duration counter (in us) */
-#define M_MIMO_RXDUR_H      (5*2)
-#define M_MIMO_TXOP_L       (6*2)   /* 32-bit MIMO CCA idel slot counter (in slots) */
-#define M_MIMO_TXOP_H       (7*2)
-#define M_1CHAIN_TXDUR_L    (8*2)   /* 32-bit 1-chain tx duration (in us) */
-#define M_1CHAIN_TXDUR_H    (9*2)
-#define M_2CHAIN_TXDUR_L    (10*2)  /* 32-bit 2-chain tx duration (in us) */
-#define M_2CHAIN_TXDUR_H    (11*2)
-#define M_3CHAIN_TXDUR_L    (12*2)  /* 32-bit 3-chain tx duration (in us) */
-#define M_3CHAIN_TXDUR_H    (13*2)
 
+#define D11TXHDR_RATEINFO_ACCESS_VAL(txh, corerev, member) \
+	(((((txh)->u).corerev).RateInfo[3]).member)
 #endif	/* _D11_H */

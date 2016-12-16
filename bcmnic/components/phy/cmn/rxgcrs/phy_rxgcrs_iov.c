@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rxgcrs_iov.c 644994 2016-06-22 06:23:44Z vyass $
+ * $Id: phy_rxgcrs_iov.c 666266 2016-10-20 11:18:34Z $
  */
 
 #include <phy_rxgcrs.h>
@@ -37,17 +37,18 @@ static const bcm_iovar_t phy_rxgcrs_iovars[] = {
 #if defined(RXDESENS_EN)
 	{"phy_rxdesens", IOV_PHY_RXDESENS, IOVF_GET_UP, 0, IOVT_INT32, 0},
 #endif /* defined(RXDESENS_EN) */
-#ifndef ATE_BUILD
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 	{"phy_forcecal_noise", IOV_PHY_FORCECAL_NOISE,
 	(IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, sizeof(uint16)
 	},
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
-#endif /* !ATE_BUILD */
+#endif 
 	{NULL, 0, 0, 0, 0, 0}
 };
 
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
 #include <wlc_patch.h>
 
 static int
@@ -75,10 +76,7 @@ phy_rxgcrs_doiovar(void *ctx, uint32 aid, void *p, uint plen, void *a, uint alen
 		err = phy_rxgcrs_set_rxdesens(pi, int_val);
 		break;
 #endif /* defined(RXDESENS_EN) */
-#ifndef ATE_BUILD
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-	/* JIRA:SWWLAN-32606, RB: 12975 */
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 	case IOV_GVAL(IOV_PHY_FORCECAL_NOISE): /* Get crsminpwr for core 0 & core 1 */
 		err = wlc_phy_iovar_forcecal_noise(pi, a, FALSE);
 		break;
@@ -86,8 +84,7 @@ phy_rxgcrs_doiovar(void *ctx, uint32 aid, void *p, uint plen, void *a, uint alen
 	case IOV_SVAL(IOV_PHY_FORCECAL_NOISE): /* do only Noise Cal */
 		err = wlc_phy_iovar_forcecal_noise(pi, a, TRUE);
 		break;
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
-#endif /* !ATE_BUILD */
+#endif 
 	default:
 		err = BCME_UNSUPPORTED;
 		break;
@@ -103,10 +100,10 @@ BCMATTACHFN(phy_rxgcrs_register_iovt)(phy_info_t *pi, wlc_iocv_info_t *ii)
 	wlc_iovt_desc_t iovd;
 #if defined(WLC_PATCH_IOCTL)
 	wlc_iov_disp_fn_t disp_fn = IOV_PATCH_FN;
-	bcm_iovar_t *patch_table = IOV_PATCH_TBL;
+	const bcm_iovar_t *patch_table = IOV_PATCH_TBL;
 #else
 	wlc_iov_disp_fn_t disp_fn = NULL;
-	bcm_iovar_t* patch_table = NULL;
+	const bcm_iovar_t* patch_table = NULL;
 #endif /* WLC_PATCH_IOCTL */
 
 	ASSERT(ii != NULL);

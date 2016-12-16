@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_disp.c 630390 2016-04-08 18:21:46Z lut $
+ * $Id: phy_type_disp.c 661662 2016-09-27 00:14:43Z $
  */
 
 #include <typedefs.h>
@@ -41,9 +41,6 @@
 #if HTCONF
 #include "phy_type_ht.h"
 #endif
-#if LCN40CONF
-#include "phy_type_lcn40.h"
-#endif
 #if LCN20CONF
 #include "phy_type_lcn20.h"
 #endif
@@ -64,9 +61,6 @@ static phy_type_reg_t BCMATTACHDATA(phy_type_reg_tbl)[] = {
 #endif
 #if HTCONF
 	{PHY_TYPE_HT, phy_ht_attach, phy_ht_detach},
-#endif
-#if LCN40CONF
-	{PHY_TYPE_LCN40, phy_lcn40_attach, phy_lcn40_detach},
 #endif
 #if LCN20CONF
 	{PHY_TYPE_LCN20, phy_lcn20_attach, phy_lcn20_detach},
@@ -293,8 +287,8 @@ BCMATTACHFN(phy_type_register_ioct)(phy_type_disp_t *disp, wlc_iocv_info_t *ii)
 	return BCME_OK;
 }
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 /* read phy type specific phy register */
 uint16
 phy_type_read_phyreg(phy_type_disp_t *disp, uint addr)
@@ -328,4 +322,4 @@ phy_type_dump_phyregs(phy_type_disp_t *disp, struct bcmstrbuf *b)
 
 	return ret;
 }
-#endif /* ((BCMDBG || BCMDBG_DUMP) && (BCMINTERNAL || DBG_PHY_IOV)) || BCMDBG_PHYDUMP */
+#endif 

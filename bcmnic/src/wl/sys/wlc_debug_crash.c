@@ -44,6 +44,8 @@
 #include <wlc_bmac.h>
 #include <bcmutils.h>
 #include <d11.h>
+#include <phy_dbg_api.h>
+#include <phy_hc_api.h>
 
 struct wlc_debug_crash_info {
 	wlc_info_t *wlc;
@@ -82,18 +84,18 @@ enum
 static crash_info_t crash_action[] =
 	/* REG			WRITE	CLK	PWR	TRAP/HANG			  */
 	{{0x12345678,		FALSE, FALSE, FALSE, FALSE},  /* 0 - Read random	  */
-	{SI_ENUM_BASE + 0xF000, FALSE, FALSE, FALSE, FALSE},  /* 1 - RD INV CORE	  */
-	{SI_ENUM_BASE + 0xF000, TRUE,  FALSE, FALSE, FALSE},  /* 2 - WR INV CORE	  */
-	{SI_WRAP_BASE + 0xF000, FALSE, FALSE, FALSE, FALSE},  /* 3 - RD INV WRAP	  */
-	{SI_WRAP_BASE + 0xF000, TRUE,  FALSE, FALSE, FALSE},  /* 6 - WR INV WRAP	  */
-	{SI_ENUM_BASE + 0x1000, FALSE, FALSE, FALSE, FALSE},  /* 5 - RD RES CORE	  */
-	{SI_ENUM_BASE + 0x1000, TRUE,  FALSE, FALSE, FALSE},  /* 6 - WR RES CORE	  */
-	{SI_WRAP_BASE + 0x0008, FALSE, FALSE, FALSE, FALSE},  /* 7 - RD RES WRAP	  */
-	{SI_WRAP_BASE + 0x0008, TRUE,  FALSE, FALSE, FALSE},  /* 8 - WR RES WRAP	  */
-	{SI_ENUM_BASE + 0x1120, FALSE, TRUE,  FALSE, FALSE},  /* 9 - RD CORE - NO CLK     */
-	{SI_ENUM_BASE + 0x1120, TRUE,  TRUE,  FALSE, FALSE},  /* A - WR CORE - NO CLK     */
-	{SI_ENUM_BASE + 0x1120, FALSE, FALSE, TRUE,  FALSE},  /* B - RD CORE - NO PWR     */
-	{SI_ENUM_BASE + 0x1120, TRUE,  FALSE, TRUE,  FALSE},  /* C - WR CORE - NO PWR     */
+	{0xF000, FALSE, FALSE, FALSE, FALSE},  /* 1 - RD INV CORE	  */
+	{0xF000, TRUE,  FALSE, FALSE, FALSE},  /* 2 - WR INV CORE	  */
+	{0xF000, FALSE, FALSE, FALSE, FALSE},  /* 3 - RD INV WRAP	  */
+	{0xF000, TRUE,  FALSE, FALSE, FALSE},  /* 6 - WR INV WRAP	  */
+	{0x1000, FALSE, FALSE, FALSE, FALSE},  /* 5 - RD RES CORE	  */
+	{0x1000, TRUE,  FALSE, FALSE, FALSE},  /* 6 - WR RES CORE	  */
+	{0x0008, FALSE, FALSE, FALSE, FALSE},  /* 7 - RD RES WRAP	  */
+	{0x0008, TRUE,  FALSE, FALSE, FALSE},  /* 8 - WR RES WRAP	  */
+	{0x1120, FALSE, TRUE,  FALSE, FALSE},  /* 9 - RD CORE - NO CLK     */
+	{0x1120, TRUE,  TRUE,  FALSE, FALSE},  /* A - WR CORE - NO CLK     */
+	{0x1120, FALSE, FALSE, TRUE,  FALSE},  /* B - RD CORE - NO PWR     */
+	{0x1120, TRUE,  FALSE, TRUE,  FALSE},  /* C - WR CORE - NO PWR     */
 	/* D - Generate PCIe   AER  */
 	{0x12345678,			FALSE, FALSE, FALSE, FALSE},
 	/* E - Trap  */
@@ -109,6 +111,34 @@ static crash_info_t crash_action[] =
 	/* 0x13 - Invalid Phy reg write */
 	{0x0002,				TRUE,  FALSE, FALSE, FALSE}};
 
+
+/**
+ * New(er) chips started using other backplane addresses than 0x18000000 for the chipcommon core.
+ * The same NIC or DHD driver binary is required to support both old(er) and new(er) chips.
+ * Table crash_action[] contains adresses in different domains. This functions returns, for
+ * addresses in the backplane domain, the appropriate chip specific backplane address offset.
+ */
+static uint32 wlc_debug_crash_reg_offset(si_t *sih, uint32 type)
+{
+	switch (type) {
+		case DBG_CRSH_TYPE_RD_INV_CORE:
+		case DBG_CRSH_TYPE_WR_INV_CORE:
+		case DBG_CRSH_TYPE_RD_RES_CORE:
+		case DBG_CRSH_TYPE_WR_RES_CORE:
+		case DBG_CRSH_TYPE_RD_CORE_NO_CLK:
+		case DBG_CRSH_TYPE_WR_CORE_NO_CLK:
+		case DBG_CRSH_TYPE_RD_CORE_NO_PWR:
+		case DBG_CRSH_TYPE_WR_CORE_NO_PWR:
+			return SI_ENUM_BASE(sih);
+		case DBG_CRSH_TYPE_RD_INV_WRAP:
+		case DBG_CRSH_TYPE_WR_INV_WRAP:
+		case DBG_CRSH_TYPE_RD_RES_WRAP:
+		case DBG_CRSH_TYPE_WR_RES_WRAP:
+			return SI_WRAP_BASE(sih);
+	}
+
+	return 0;
+}
 
 /* **** Private Functions Prototypes *** */
 #define DBG_CRASH_SRC(x) ((x>>16)&0xFFFF)
@@ -147,19 +177,53 @@ uint32 wlc_debug_crash_execute_crash(wlc_info_t* wlc, uint32 type, uint32 delay,
 #endif 
 	} else if (type == DBG_CRSH_TYPE_HANG) {
 		while (1);
+	} else if ((type >= DBG_CRSH_TYPE_RADIO_HEALTHCHECK_START) &&
+			(type <= DBG_CRSH_TYPE_RADIO_HEALTHCHECK_LAST)) {
+#ifdef RADIO_HEALTH_CHECK
+		phy_crash_reason_t dc;
+		phy_healthcheck_type_t hc;
+		switch (type) {
+			case DBG_CRSH_TYPE_DESENSE_LIMITS:
+				dc = PHY_RC_DESENSE_LIMITS;
+				hc = PHY_HC_RX;
+				break;
+			case DBG_CRSH_TYPE_BASEINDEX_LIMITS:
+				dc = PHY_RC_BASEINDEX_LIMITS;
+				hc = PHY_HC_TX;
+				break;
+			case DBG_CRSH_TYPE_TXCHAIN_INVALID:
+				dc = PHY_RC_TXCHAIN_INVALID;
+				hc = PHY_HC_TX;
+				break;
+			default:
+				return (*err = BCME_BADARG);
+		}
+		if (dc == PHY_RC_TXCHAIN_INVALID) {
+			/* Override the values without going through the arbitrator */
+			wlc->stf->txchain = 0x3;
+			wlc->stf->rxchain = 0x1;
+		} else {
+			if ((*err = phy_hc_debugcrash_forcefail(wlc->hw->band->pi, dc)) != BCME_OK)
+				return (*err);
+		}
+		*err = phy_hc_debugcrash_health_check(wlc->hw->band->pi, hc);
+		return (*err);
+#else
+		return (*err = BCME_UNSUPPORTED);
+#endif /* DISABLE_RADIO_HEALTH_CHECK */
 	} else if (type == DBG_CRSH_TYPE_DUMP_STATE) {
 		/* Debuggability :
 		 * Take a core capture and dump only the driver state.
 		 */
 		wl_log_system_state(wlc->wl, "DumpDriverState", TRUE);
 	} else if (type < (sizeof(crash_action)/sizeof(crash_info_t))) {
+		uint32 reg;
 		if (crash_action[type].clk) {
 			/* Turn off the core clock */
 			si_core_cflags(wlc->hw->sih, SICF_CLOCK_EN, 0);
 		}
-
-		return si_raw_reg(wlc->hw->sih, crash_action[type].reg,
-			0, crash_action[type].write);
+		reg = crash_action[type].reg + wlc_debug_crash_reg_offset(wlc->hw->sih, type);
+		return si_raw_reg(wlc->hw->sih, reg, 0, crash_action[type].write);
 	} else {
 		return (*err = BCME_BADARG);
 	}
@@ -222,7 +286,7 @@ wlc_debug_crash_ucode(wlc_info_t* wlc, uint32 type, uint32 delay, int * err)
 	} else {
 		cmd = crash_action[type].write ?
 			E_UCRASH_CMD_WRITE : E_UCRASH_CMD_READ;
-		addr = crash_action[type].reg;
+		addr = crash_action[type].reg + wlc_debug_crash_reg_offset(wlc->hw->sih, type);
 		data = 1;
 	}
 

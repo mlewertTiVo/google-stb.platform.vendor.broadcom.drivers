@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: nvram_ro.c 657844 2016-09-02 20:52:35Z $
+ * $Id: nvram_ro.c 673044 2016-11-30 19:43:34Z $
  */
 
 #include <typedefs.h>
@@ -29,7 +29,11 @@
 #include <sflash.h>
 #include <hndsoc.h>
 
+#ifdef BCMDBG_ERR
+#define NVR_MSG(x) printf x
+#else
 #define NVR_MSG(x)
+#endif	/* BCMDBG_ERR */
 
 #define NUM_VSIZES 16
 typedef struct _vars {
@@ -51,6 +55,7 @@ static vars_t *vars = NULL;
 
 #ifdef NVRAM_FILE
 static int nvram_file_init(void* sih);
+static int initvars_file(si_t *sih, osl_t *osh, char **nvramp, int *nvraml);
 #endif
 
 static char *findvar(char *vars_arg, char *lim, const char *name);
@@ -60,7 +65,11 @@ static char *nvram_get_internal(const char *name);
 static int nvram_getall_internal(char *buf, int count);
 
 static void
+#if defined(BCMDBG_DUMP)
+sortvars(si_t *sih, vars_t *new)
+#else
 	BCMATTACHFN(sortvars)(si_t *sih, vars_t *new)
+#endif
 {
 	osl_t *osh = si_osh(sih);
 	char *s = new->vars;
@@ -360,8 +369,8 @@ exit:
 }
 
 /** NVRAM file read for pcie NIC's */
-int
-initvars_file(void *sih, void *osh, char **nvramp, int *nvraml)
+static int
+initvars_file(si_t *sih, osl_t *osh, char **nvramp, int *nvraml)
 {
 #if defined(BCMDRIVER)
 	/* Init nvram from nvram file if they exist */
@@ -369,11 +378,11 @@ initvars_file(void *sih, void *osh, char **nvramp, int *nvraml)
 	void	*nvram_fp = NULL;
 	int ret = 0, len = 0;
 
-#if (defined(OEM_ANDROID) && defined(BCM7271))
-	nvram_fp = (void*)osl_os_open_image("/hwcfg/nvm.txt");
+#if (defined(OEM_ANDROID) && defined(STB_SOC_WIFI))
+	nvram_fp = (void*)osl_os_open_image("/system/vendor/broadcom/nvrams/nvram.txt");
 #else
 	nvram_fp = (void*)osl_os_open_image("nvram.txt");
-#endif /* OEM_ANDROID && BCM7271 */
+#endif /* OEM_ANDROID && STB_SOC_WIFI */
 	if (nvram_fp != NULL) {
 		if (!(len = osl_os_get_image_block(nvram_buf, MAXSZ_NVRAM_VARS, nvram_fp))) {
 			NVR_MSG(("Could not read nvram.txt file\n"));

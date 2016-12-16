@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: saverestore.h 617810 2016-02-08 14:24:39Z $
+ * $Id: saverestore.h 662295 2016-09-29 03:29:10Z $
  */
 
 #ifndef _SAVERESTORE_H
@@ -69,6 +69,11 @@
 #define SR_HOST 0
 #define SR_ENGINE 1
 
+#define SRENG0		0
+#define SRENG1		1
+#define SRENG2		2
+#define SRENGMAX	3
+
 /* BANK size is calculated in the units of 32bit WORDS */
 #define SRCTL_BANK_SIZE(sr_cntrl) ((((sr_cntrl & 0x7F0) >> 4) + 1) << 8)
 #define SRCTL_BANK_NUM(sr_cntrl) (sr_cntrl & 0xF)
@@ -83,18 +88,18 @@ uint32 sr_chipcontrol4(si_t *si_h, uint32 mask, uint32 val);
 uint32 sr_chipcontrol5(si_t *si_h, uint32 mask, uint32 val);
 uint32 sr_chipcontrol6(si_t *si_h, uint32 mask, uint32 val);
 uint32 sr_regcontrol4(si_t *si_h, uint32 mask, uint32 val);
-uint32 sr_get_cur_minresmask(si_t *sih);
 
 /* Minimal functionality required to operate SR engine */
 #if defined(SR_ESSENTIALS)
 void sr_download_firmware(si_t *si_h);
-int sr_engine_enable(si_t *si_h, bool oper, bool enable);
+int sr_engine_enable(si_t *si_h, int sr_core, bool oper, bool enable);
 void sr_save_restore_init(si_t *si_h);
 bool sr_cap(si_t *sih);
-void sr_get_source_code_array(si_t *sih, uint32 **sr_source_code, uint32 *sr_source_codesz);
+void
+sr_get_source_code_array(si_t *sih, int sr_core, uint32 **sr_source_code, uint32 *sr_source_codesz);
 #else
 #define sr_download_firmware(a)	do { } while (0)
-#define sr_engine_enable(a, b, c)	(0)
+#define sr_engine_enable(a, b, c, d)	(0)
 #define sr_cap(a)	(FALSE)
 #endif /* SR_ESSENTIALS */
 
@@ -105,8 +110,8 @@ error:define SR_ESSENTIALS as well!
 #endif
 uint32 sr_mem_access(si_t *sih, int op, uint32 addr, uint32 data);
 bool sr_isenab(si_t *sih);
-void sr_engine_enable_post_dnld(si_t *sih, bool enable);
-CONST uint32* sr_get_sr_params(si_t *sih, uint32 *arrsz, uint32 *offset);
+void sr_engine_enable_post_dnld(si_t *sih, int sr_core, bool enable);
+CONST uint32* sr_get_sr_params(si_t *sih, int sr_core, uint32 *arrsz, uint32 *offset);
 uint32 sr_register_save(si_t *sih, sr_save_callback_t cb, void *arg);
 uint32 sr_register_restore(si_t *sih, sr_restore_callback_t cb, void *arg);
 void sr_process_save(si_t *sih);
@@ -124,7 +129,9 @@ typedef volatile struct {
 	uint32	sr_control0;		/* 0x004 */
 	uint32	sr_control1;		/* 0x008 */
 	uint32	gpio_control;		/* 0x00C */
-	uint32	status0;			/* 0x010 */
+	uint32	status0;		/* 0x010 */
 } srregs_t;
+
+#define VASIP_MEM_BANK_SIZE	(64 * 1024)
 
 #endif /* _SAVERESTORE_H */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_reg.h 650727 2016-07-22 08:48:56Z mvermeid $
+ * $Id: phy_utils_reg.h 660552 2016-09-21 01:45:12Z $
  */
 
 #ifndef _phy_utils_reg_h_
@@ -21,8 +21,10 @@
 #include <typedefs.h>
 #include <bcmdevs.h>
 #include <bcmdefs.h>
+#include <d11.h>
 
-#include <wlc_phy_types.h>
+#include <phy_api.h>
+#include <phy_types.h>
 
 #define RADIO_REG_READ_FAIL 0xffff
 
@@ -89,8 +91,6 @@
  * and radios, bit 12 or 14 (MAC rev >= 64) is used for ACPHY_REG_BROADCAST.
  * Bit 15 can be used to indicate PHY or RADIO type, bit 14 and 13 can be
  * used to indicate access type (MOD/WRITE/AND/OR).
- * Unfortunately, the 2062 RADIO also uses bit 14 for its register space,
- * so we need to make an exception for dongles with 2062 radio
  */
 #define PHY_RADIO_REG_MASK_TYPE		0xE000
 #define RADIO_REG_TYPE			0x8000
@@ -99,11 +99,7 @@
 #define PHY_REG_AND_TYPE		0x2000
 #define PHY_REG_OR_TYPE			0x6000
 
-#if defined(DONGLEBUILD)
-#define PHY_RADIO_ACCESS_ADDR(type, addr) ((type) | (addr))
-#else
 #define PHY_RADIO_ACCESS_ADDR(type, addr) (type), (addr)
-#endif
 
 #define PHY_REG_LIST_START \
 	{ static const uint16 write_phy_reg_table[] = {
@@ -203,6 +199,9 @@ void phy_utils_mod_phyreg(phy_info_t *pi, uint16 addr, uint16 mask, uint16 val);
 void phy_utils_gen_phyreg(phy_info_t *pi, uint16 addr, uint16 mask, uint16 val,
 	uint16* orig_reg_addr, uint16* orig_reg_data,
 	uint16* updated_reg_addr, uint16* updated_reg_data);
+
+uint16 phy_utils_read_phyreg_nopi(prephy_info_t *pi, d11regs_t *regs, uint16 addr);
+void phy_utils_write_phyreg_nopi(prephy_info_t *pi, d11regs_t *regs, uint16 addr, uint16 val);
 
 #if defined(BCMDBG_PHYREGS_TRACE)
 extern uint16 phy_utils_read_phyreg_debug(phy_info_t *pi, uint16 addr, const char *reg_name);

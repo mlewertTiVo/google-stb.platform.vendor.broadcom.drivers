@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_info.h 650803 2016-07-22 13:50:37Z luka $
+ * $Id: phy_ac_info.h 669455 2016-11-09 14:26:01Z $
  */
 
 #ifndef _phy_ac_info_h_
@@ -59,7 +59,9 @@
 #include "phy_ac_ocl.h"
 #include "phy_ac_txpwrcap.h"
 #include "phy_ac_hecap.h"
-
+#include "phy_ac_hc.h"
+#include "phy_ac_vasip.h"
+#include "phy_ac_stf.h"
 
 /*
  * ACPHY Core REV info and mapping to (Major/Minor)
@@ -109,6 +111,9 @@
 #define ACMAJORREV_36(phy_rev) \
 	(ACREV_IS(phy_rev, 36))
 
+#define ACMAJORREV_GE36(phy_rev) \
+	(ACREV_GE(phy_rev, 36))
+
 #define ACMAJORREV_33(phy_rev) \
 	(ACREV_IS(phy_rev, 33))
 
@@ -120,6 +125,10 @@
 
 #define ACMAJORREV_GE33(phy_rev) \
 	(ACREV_GE(phy_rev, 33))
+
+#define ACMAJORREV_GE37(phy_rev) \
+	(ACREV_GE(phy_rev, 37))
+
 
 #define ACMAJORREV_25(phy_rev) \
 	(ACREV_IS(phy_rev, 25))
@@ -244,15 +253,10 @@
 
 #define RSDB_FAMILY(pi)	ACMAJORREV_4((pi)->pubpi->phy_rev)
 
-#ifndef DONGLEBUILD
 	#define ROUTER_4349(pi) \
 		(ACMAJORREV_4((pi)->pubpi->phy_rev) && (ACMINORREV_1(pi) || \
 		ACMINORREV_3(pi)))
 	#define IS_ACR(pi) ((((pi)->sh->boardrev >> 12) & 0xF) == 2)
-#else
-	#define ROUTER_4349(pi) (0)
-	#define IS_ACR(pi) (0)
-#endif /* !DONGLEBUILD */
 
 #define IS_4364_1x1(pi) (ACMAJORREV_3((pi)->pubpi->phy_rev) && ACMINORREV_6(pi))
 #define IS_4364_3x3(pi) (ACMAJORREV_5((pi)->pubpi->phy_rev) && ACMINORREV_2(pi))
@@ -265,6 +269,9 @@
 #define PHY_AS_80P80(pi, chanspec) \
 	(ACMAJORREV_33(pi->pubpi->phy_rev) && \
 	(CHSPEC_IS160(chanspec) || CHSPEC_IS8080(chanspec)))
+
+#define PHY_AS_80P80_CAP(pi) \
+	(ACMAJORREV_33(pi->pubpi->phy_rev))
 
 #define PHY_SUPPORT_SCANCORE(pi) \
 	(ACMAJORREV_32(pi->pubpi->phy_rev) || \
@@ -328,14 +335,19 @@
 #define ACPHY_GAIN_DELTA_ROUT_1 2
 #define ACPHY_GAIN_DELTA_ROUT_2 3
 
+/* REV40:Midgain cal/comp */
+#define ACPHY_GAIN_DELTA_GainIndex_3 2
+#define ACPHY_GAIN_DELTA_GainIndex_2 3
+#define ACPHY_MIDGAIN_OFFSET_LIMIT 4
+/* Define the number of calibration point */
+/* Set default to 2 (GI1/4 cal) */
+#define NUM_RSSI_CAL_GI_2G  2
+#define NUM_RSSI_CAL_GI_5G  2
+
+
 #define ACPHY_GAIN_DELTA_5G_PARAMS_EXT 4
 #define ACPHY_GAIN_DELTA_5G_PARAMS 2
-#ifdef UNRELEASEDCHIP
-#define ACPHY_RCAL_OFFSET (((RADIOID_IS(pi->pubpi->radioid, BCM20693_ID)) || \
-	(CHIPID(pi->sh->chip) == BCM4355_CHIP_ID)) ? 0x14 : 0x10)
-#else
 #define ACPHY_RCAL_OFFSET  0x10  /* otp offset for Wlan RCAL code */
-#endif
 #define ACPHY_RCAL_VAL_1X1 0xa  /* hard coded rcal_trim val for 1X1 chips */
 #define ACPHY_RCAL_VAL_2X2 0x9  /* hard coded rcal_trim val for 2X2 chips */
 
@@ -547,6 +559,27 @@
 
 /* 4365C0 specific PHY tables */
 #define ACPHY_TBL_ID_PHASETRACKTBL_B          11
+#define ACPHY_TBL_ID_LNAROUTLUTACI            57
+#define ACPHY_TBL_ID_GAINLIMITACI0            324
+#define ACPHY_TBL_ID_GAINACI0                 325
+#define ACPHY_TBL_ID_GAINBITSACI0             326
+#define ACPHY_TBL_ID_RSSICLIPGAINACI0         327
+#define ACPHY_TBL_ID_MCLPAGCCLIP2TBLACI0      328
+#define ACPHY_TBL_ID_GAINLIMITACI1            356
+#define ACPHY_TBL_ID_GAINACI1                 357
+#define ACPHY_TBL_ID_GAINBITSACI1             358
+#define ACPHY_TBL_ID_RSSICLIPGAINACI1         359
+#define ACPHY_TBL_ID_MCLPAGCCLIP2TBLACI1      360
+#define ACPHY_TBL_ID_GAINLIMITACI2            388
+#define ACPHY_TBL_ID_GAINACI2                 389
+#define ACPHY_TBL_ID_GAINBITSACI2             390
+#define ACPHY_TBL_ID_RSSICLIPGAINACI2         391
+#define ACPHY_TBL_ID_MCLPAGCCLIP2TBLACI2      392
+#define ACPHY_TBL_ID_GAINLIMITACI3            420
+#define ACPHY_TBL_ID_GAINACI3                 421
+#define ACPHY_TBL_ID_GAINBITSACI3             422
+#define ACPHY_TBL_ID_RSSICLIPGAINACI3         423
+#define ACPHY_TBL_ID_MCLPAGCCLIP2TBLACI3      424
 
 #define ACPHY_NUM_DIG_FILT_COEFFS 				15
 #define ACPHY_TBL_LEN_NVNOISESHAPINGTBL         256
@@ -596,6 +629,9 @@
 #define PHY_SW_HIRSSI_W1_RES_REG  ACPHY_W2W1ClipCnt1(rev)
 #define PHY_SW_HIRSSI_W1_RES_CNT  31
 
+#define VASIPREGISTERS_RESET            0xe4
+#define VASIPREGISTERS_SET              0xe0
+
 #define ACPHY_TBL_ID_ESTPWRLUTS(core)	\
 	(((core == 0) ? ACPHY_TBL_ID_ESTPWRLUTS0 : \
 	((core == 1) ? ACPHY_TBL_ID_ESTPWRLUTS1 : \
@@ -637,10 +673,6 @@
 	(((core == 0) ? ACPHY_TBL_ID_FDSS_SCALEFACTORSDELTATBL0 : \
 	  ACPHY_TBL_ID_FDSS_SCALEFACTORSDELTATBL1))
 
-/* This implements a WAR for bug in 4349A0 RTL where 5G lnaRoutLUT locations
- * and lna2 locations are not accessible. For more details refer the
- * 4349 Phy cheatsheet and JIRA:SW4349-243
- */
 #define ACPHY_LNAROUT_BAND_OFFSET(pi, chanspec) \
 	(CHSPEC_IS5G(chanspec) ? 8 : 0)
 
@@ -680,7 +712,10 @@
 #define ACPHY_NUM_CHANS                 123
 #define ACPHY_NUM_BW_2G                 2
 
-#define ACPHY_ClassifierCtrl_classifierSel_MASK 0x7
+#define ACPHY_ClassifierCtrl_classifierSel_MASK(rev) \
+			(ACPHY_ClassifierCtrl_classifierSel0_MASK(rev) | \
+			 ACPHY_ClassifierCtrl_classifierSel1_MASK(rev) | \
+			 ACPHY_ClassifierCtrl_classifierSel2_MASK(rev))
 
 #define ACPHY_RFSEQEXT_TBL_WIDTH	60
 #define ACPHY_GAINLMT_TBL_WIDTH		8
@@ -837,10 +872,10 @@
 
 /* When the broadcast bit is set in the PHY reg address
  * it writes to the corresponding registers in all the cores
- * See the defintion of the PhyRegAddr (Offset 0x3FC) MAC register
  */
-#define ACPHY_REG_BROADCAST(pi) \
-	(D11REV_GE(pi->sh->corerev, 64) ? 0x4000: ((ACREV0 || ACREV3) ? 0x1000 : 0))
+#define ACPHY_REG_BROADCAST(phy_rev) \
+	((ACREV32 || ACMAJORREV_37(phy_rev) || ACMAJORREV_40(phy_rev)) ? 0x4000: \
+	 ((ACREV0 || ACREV3) ? 0x1000 : 0))
 
 #define WRITE_PHYREG(pi, reg, value)					\
 	_PHY_REG_WRITE(pi, ACPHY_##reg(pi->pubpi->phy_rev), (value))
@@ -970,7 +1005,6 @@ field3, value3, field4, value4, field5, value5) \
 		& ACPHY_REG_FIELD_MASKXE(pi, reg, field, core)) \
 		>> ACPHY_REG_FIELD_SHIFTXE(pi, reg, field, core))
 
-
 #ifdef WLRSDB
 #define ACPHYREG_BCAST(pi, reg, val) \
 {\
@@ -981,13 +1015,13 @@ field3, value3, field4, value4, field5, value5) \
 		_PHY_REG_WRITE(pi, ACPHY_##reg(pi->pubpi->phy_rev), val); \
 	} else {\
 		_PHY_REG_WRITE(pi, ACPHY_##reg(pi->pubpi->phy_rev) | \
-			ACPHY_REG_BROADCAST(pi), val); \
+			ACPHY_REG_BROADCAST(pi->pubpi->phy_rev), val); \
 	}\
 }
 #else
 #define ACPHYREG_BCAST(pi, reg, val) \
 	_PHY_REG_WRITE(pi, ACPHY_##reg(pi->pubpi->phy_rev) | \
-		ACPHY_REG_BROADCAST(pi), val)
+		ACPHY_REG_BROADCAST(pi->pubpi->phy_rev), val)
 #endif /* WLRSDB */
 
 /* BCAST for rsdb family of chips */
@@ -1388,90 +1422,6 @@ field3, value3, field4, value4, field5, value5) \
 #define ACPHY_ENABLE_STALL(pi, stall_val) MOD_PHYREG(pi, RxFeCtrl1, disable_stalls, stall_val)
 
 /* Table driven register access for dongle memory optimizations */
-#if (defined(BCMRADIOREV) || defined(BCMRADIO20691REV) || defined(BCMRADIOREV20693REV) \
-	|| defined(BCMRADIOREV2096REV)) && defined(DONGLEBUILD) && !IS_MULTI_REV(ACCONF) && \
-	defined(BCMCHIPID)
-#define ACPHY_REG_LIST_START						\
-	{ static const uint16 write_phy_reg_table[] = {
-#define ACPHY_REG_LIST_EXECUTE(pi)					\
-	};								\
-	phy_utils_write_phyreg_array(pi, write_phy_reg_table,		\
-	sizeof(write_phy_reg_table)/sizeof(write_phy_reg_table[0])); }
-
-#define ACPHYREG_BCAST_ENTRY(pi, reg, val)				\
-	PHY_REG_WRITE_RAW_ENTRY(ACPHY_REG(pi, reg) | ACPHY_REG_BROADCAST(pi), val)
-#define ACPHY_DISABLE_STALL_ENTRY(pi)					\
-	MOD_PHYREG_ENTRY(pi, RxFeCtrl1, disable_stalls, 1)
-
-#define WRITE_PHYREG_ENTRY(pi, reg, value)				\
-	PHY_REG_WRITE_RAW_ENTRY(ACPHY_REG(pi, reg), (value))
-#define MOD_PHYREG_RAW_ENTRY(pi, reg, mask, value)			\
-	PHY_REG_MOD_RAW_ENTRY(reg, mask, value)
-#define MOD_PHYREG_ENTRY(pi, reg, field, value)				\
-	PHY_REG_MOD_RAW_ENTRY(ACPHY_REG(pi, reg),			\
-		ACPHY_##reg##_##field##_MASK(pi->pubpi->phy_rev),	\
-		((value) << ACPHY_##reg##_##field##_##SHIFT(pi->pubpi->phy_rev)))
-#define MOD_PHYREGCE_ENTRY(pi, reg, core, field, value)			\
-	PHY_REG_MOD_RAW_ENTRY(ACPHYREGCE(pi, reg, core),		\
-		ACPHY_REG_FIELD_MASKE(pi, reg, core, field),		\
-		((value) << ACPHY_REG_FIELD_SHIFTE(pi, reg, core, field)))
-
-#define MOD_RADIO_REGC_ENTRY(pi, regnm, core, fldname, value)		\
-	RADIO_REG_MOD_ENTRY(RF_2069_##regnm(core),			\
-		RF_2069_##regnm##_##fldname##_MASK,			\
-		((value) << RF_2069_##regnm##_##fldname##_SHIFT))
-
-#define MOD_RADIO_REG_ENTRY(pi, regpfx, regnm, fldname, value)		\
-	RADIO_REG_MOD_ENTRY(regpfx##_2069_##regnm,			\
-		RF_2069_##regnm##_##fldname##_MASK,			\
-		((value) << RF_2069_##regnm##_##fldname##_SHIFT))
-#define WRITE_RADIO_REG_ENTRY(pi, reg, val)				\
-	RADIO_REG_WRITE_ENTRY(reg, val)
-
-#define MOD_RADIO_REG_2069X_ENTRY(pi, id, regnm, core, fldname, value)	\
-	RADIO_REG_MOD_ENTRY(RADIO_REG_##id(pi, regnm, core),		\
-		RF_##id##_##regnm##_##fldname##_MASK(pi->pubpi.radiorev), \
-		((value) << RF_##id##_##regnm##_##fldname##_SHIFT(pi->pubpi.radiorev)))
-#define MOD_RADIO_REG_20691_ENTRY(pi, regnm, core, fldname, value)	\
-	MOD_RADIO_REG_2069X_ENTRY(pi, 20691, regnm, core, fldname, value)
-#define MOD_RADIO_REG_20693_ENTRY(pi, regnm, core, fldname, value)	\
-	MOD_RADIO_REG_2069X_ENTRY(pi, 20693, regnm, core, fldname, value)
-
-#define MOD_RADIO_REG_20694_ENTRY(pi, regpfx, regnm, core, fldname, value) \
-	RADIO_REG_MOD_ENTRY(RADIO_REG_20694(pi, regpfx, regnm, core),		\
-		RF_##20694##_##regnm##_##fldname##_MASK(pi->pubpi.radiorev), \
-		((value) << RF_##20694##_##regnm##_##fldname##_SHIFT(pi->pubpi.radiorev)))
-
-#define MOD_RADIO_REG_20695_ENTRY(pi, regpfx, regnm, core, fldname, value) \
-	RADIO_REG_MOD_ENTRY(RADIO_REG_20695(pi, regpfx, regnm, core),		\
-		RF_##20695##_##regnm##_##fldname##_MASK(pi->pubpi.radiorev), \
-		((value) << RF_##20695##_##regnm##_##fldname##_SHIFT(pi->pubpi.radiorev)))
-
-#define WRITE_RADIO_REG_20695_ENTRY(pi, regpfx, regnm, core, value) \
-		 RADIO_REG_WRITE_ENTRY(RADIO_REG_20695(pi, regpfx, regnm, core), value)
-#if BCMRADIOID == BCM20695_ID
-	#define MOD_RADIO_REG_28NM_ENTRY(pi, regpfx, regnm, core, fldname, value)	\
-		MOD_RADIO_REG_20695_ENTRY(pi, regpfx, regnm, core, fldname, value)
-	#define WRITE_RADIO_REG_28NM_ENTRY(pi, regpfx, regnm, core, value)	\
-		WRITE_RADIO_REG_20695_ENTRY(pi, regpfx, regnm, core, value)
-#else /* BCMRADIOID Just adding if else logic to add other radio ids following 28NM later */
-	#define MOD_RADIO_REG_28NM_ENTRY(pi, regpfx, regnm, core, fldname, value)	\
-		MOD_RADIO_REG_20695_ENTRY(pi, regpfx, regnm, core, fldname, value)
-	#define WRITE_RADIO_REG_28NM_ENTRY(pi, regpfx, regnm, core, value)	\
-		WRITE_RADIO_REG_20695_ENTRY(pi, regpfx, regnm, core, value)
-#endif /* BCMRADIOID */
-#if BCMRADIOID == BCM20691_ID
-	#define MOD_RADIO_REG_TINY_ENTRY(pi, regnm, core, fldname, value)	\
-		MOD_RADIO_REG_20691_ENTRY(pi, regnm, core, fldname, value)
-#elif BCMRADIOID == BCM20693_ID
-	#define MOD_RADIO_REG_TINY_ENTRY(pi, regnm, core, fldname, value)	\
-		MOD_RADIO_REG_20693_ENTRY(pi, regnm, core, fldname, value)
-#else /* BCMRADIOID */
-	#define MOD_RADIO_REG_TINY_ENTRY(pi, regnm, core, fldname, value)	\
-		MOD_RADIO_REG_20691_ENTRY(pi, regnm, core, fldname, value)
-#endif /* BCMRADIOID */
-
-#else /* RADIOREV && DONGLEBUILD && !IS_MULTI_REV && BCMCHIPID */
 #define ACPHY_REG_LIST_START
 #define ACPHY_REG_LIST_EXECUTE(pi)
 #define ACPHYREG_BCAST_ENTRY(pi, reg, val)				\
@@ -1504,8 +1454,6 @@ field3, value3, field4, value4, field5, value5) \
 	MOD_RADIO_REG_20695(pi, regpfx, regnm, core, fldname, value);
 #define MOD_RADIO_REG_28NM_ENTRY(pi, regpfx, regnm, core, fldname, value)	\
 		MOD_RADIO_REG_28NM(pi, regpfx, regnm, core, fldname, value);
-
-#endif /* RADIOREV && DONGLEBUILD && !IS_MULTI_REV && BCMCHIPID */
 /* Force use of ACPHY specific REG_LIST_xxx macros instead of generic ones */
 #undef PHY_REG_LIST_START
 #undef PHY_REG_LIST_EXECUTE
@@ -1525,12 +1473,24 @@ field3, value3, field4, value4, field5, value5) \
 
 #define HWACI_OFDM_DESENSE	(ACPHY_LO_NF_MODE_ELNA_TINY(pi) ? 18 : 9)
 #define HWACI_BPHY_DESENSE	(ACPHY_LO_NF_MODE_ELNA_TINY(pi) ? 21 : 12)
-#define HWACI_LNA1_DESENSE		1
+#define HWACI_LNA1_DESENSE	(ACMAJORREV_40(pi->pubpi->phy_rev) ? 2 : 1)
 #define HWACI_LNA2_DESENSE      2
 #define HWACI_CLIP_INIT_DESENSE	(ACPHY_LO_NF_MODE_ELNA_TINY(pi) ? 9 : 12)
 #define HWACI_CLIP_HIGH_DESENSE (ACPHY_LO_NF_MODE_ELNA_TINY(pi) ? 12 : 0)
 #define HWACI_CLIP_MED_DESENSE	(ACPHY_LO_NF_MODE_ELNA_TINY(pi) ? 12 : 0)
 #define HWACI_CLIP_LO_DESENSE	(ACPHY_LO_NF_MODE_ELNA_TINY(pi) ? 9 : 0)
+
+// Currently it is tuned for -34dBm for normal mode and -36dBm for aci
+// (11dB = 9dB loss in LNA1 + 2dB margin)
+// th1 : 1dB corresponds to ~  120 ticks
+// th2 : 1dB corresponds to ~ 1100 ticks
+// th3 : 1dB corresponds to ~ 1000 ticks
+#define HWACI_DET_TH1_NOR	(1600)
+#define HWACI_DET_TH2_NOR	(0)
+#define HWACI_DET_TH3_NOR	(-5000)
+#define HWACI_DET_TH1_ACI	(400)
+#define HWACI_DET_TH2_ACI	(0)
+#define HWACI_DET_TH3_ACI	(-3000)
 
 /* ********************************************************************* */
 /* The following definitions shared between attach, radio, rxiqcal and phytbl ... */
@@ -1723,6 +1683,8 @@ typedef struct {
 typedef struct {
 	uint32 map_2g[DUAL_MAC_SLICES][PHY_CORE_MAX];
 	uint32 map_5g[DUAL_MAC_SLICES][PHY_CORE_MAX];
+	uint8  btc_prisel_ant_mask;
+	uint8  btc_prisel_mask;
 } acphy_nvram_femctrl_clb_t;
 
 typedef struct {
@@ -1806,13 +1768,16 @@ typedef struct {
 	uint8 avvmid_set_from_nvram[PHY_MAX_CORES][NUM_SUBBANDS_FOR_AVVMID][2];
 	uint8 oob_gaint;
 	acphy_nvram_femctrl_clb_t nvram_femctrl_clb;
+	uint8	srom_low_adc_rate_en;	/* to toggle the low ADC rate mode  */
+	uint8 hwaci_sw_mitigation;
+	uint16  rpcal2g;
+	uint16  rpcal5gb0;
+	uint16  rpcal5gb1;
+	uint16  rpcal5gb2;
+	uint16  rpcal5gb3;
+	uint8 num_rssi_cal_gi_2g;
+	uint8 num_rssi_cal_gi_5g;
 } acphy_srom_info_t;
-
-typedef struct acphy_lpfCT_phyregs {
-	bool   is_orig;
-	uint16 RfctrlOverrideLpfCT[PHY_CORE_MAX];
-	uint16 RfctrlCoreLpfCT[PHY_CORE_MAX];
-} acphy_lpfCT_phyregs_t;
 
 struct phy_param_info {
 	uint8	mfcrs_th_bw20;
@@ -1869,11 +1834,15 @@ struct phy_info_acphy
 	phy_ac_dsi_info_t	*dsii;
 	phy_ac_mu_info_t	*mui;
 	phy_ac_dbg_info_t	*dbgi;
-	phy_ac_dccal_info_t *dccali;
+	phy_ac_dccal_info_t	*dccali;
 	phy_ac_tof_info_t	*tofi;
 	phy_ac_hirssi_info_t	*hirssii;
-	phy_ac_ocl_info_t *ocli;
-	phy_ac_hecap_info_t *hecapi;
+	phy_ac_ocl_info_t	*ocli;
+	phy_ac_hecap_info_t	*hecapi;
+	phy_ac_hc_info_t	*hci;
+	phy_ac_nap_info_t *napi;
+	phy_ac_vasip_info_t	*vasipi;
+	phy_ac_stf_info_t *stfi;
 
 	/* ************************************************************************************ */
 	/* [PHY_REARCH] Do not add any variables here. Add them to the individual modules */
@@ -1881,130 +1850,29 @@ struct phy_info_acphy
 
 	acphy_rxcal_phyregs_t	*ac_rxcal_phyregs_orig;
 	acphy_srom_info_t	*sromi;
-	acphy_lpfCT_phyregs_t *ac_lpfCT_phyregs_orig;
-
-	/* ************************************************************************************ */
-
-	chan_info_tx_farrow(*tx_farrow)[ACPHY_NUM_CHANS];
-	chan_info_rx_farrow(*rx_farrow)[ACPHY_NUM_CHANS];
 
 	/* ************************************************************************************ */
 
 	int8	txpwrindex[PHY_CORE_MAX];		/* index if hwpwrctrl if OFF */
-	int8	phy_noise_all_core[PHY_CORE_MAX];	/* noise power in dB for all cores */
-	int8	phy_noise_in_crs_min[PHY_CORE_MAX];	/* noise power in dB for all cores */
-	int8	phy_noise_pwr_array[PHY_SIZE_NOISE_ARRAY][PHY_CORE_MAX];
-	uint8	acphy_txpwr_idx_2G[PHY_CORE_MAX]; 	/* txpwr index for 2G band */
-	uint8	acphy_txpwr_idx_5G[PHY_CORE_MAX]; 	/* txpwr index for 2G band */
-	uint8   core_freq_mapping[PHY_CORE_MAX];
 
 	/* ************************************************************************************ */
 
-	uint8	dac_mode;
-	uint16	deaf_count;
-	int8 	phy_noise_counter;		/* Dummy variable for noise averaging */
-	uint8 	phy_debug_crscal_counter;
-	uint8 	phy_debug_crscal_channel;
 	uint32	phy_caps;		/* Capabilities queried from the registers */
 	uint32	phy_caps1;		/* Additional Capabilities queried from the registers */
 	bool	init;
 	uint32	curr_bw;
-	uint8	radar_cal_active;		/* to mask radar detect during cal's tone-play */
-	bool	trigger_crsmin_cal;
-
-	/* ************************************************************************************ */
-	/* ************************************************************************************ */
-	uint8	band2g_init_done;
-	uint8	band5g_init_done;
-
-	/* ************************************************************************************ */
-	/* ************************************************************************************ */
-	uint8	curr_subband;
-	bool	acphy_papd_kill_switch_en;	/* indicate if lna kill switch is enabled */
-	bool	acphy_force_papd_cal;
-	uint	acphy_papd_last_cal;		/* time of last papd cal */
-	uint32	acphy_papd_recal_counter;
-	bool	acphy_papdcomp;
-	uint8	txpwrindex_hw_save_cck[PHY_CORE_MAX]; /* txpwr start index for cck hwpwrctrl */
-	bool	logenmode43;
-	int8	cckfilttype;
-	int8	ofdm_filt;
-	int8	ofdm_filt_2g;
-	bool	limit_desense_on_rssi;
 
 	/* ************************************************************************************ */
 
-	uint8	papdmode;
-	bool	poll_adc_WAR;
-	uint16	rfldo;
-	uint8	acphy_force_lpvco_2G;
-	uint8 	acphy_lp_status;
-	uint8 	acphy_4335_radio_pd_status;
-	void	*chan_tuning;
-	uint32	chan_tuning_tbl_len;
-	int8	pa_mode;			/* Modes: High Efficiency, High Linearity */
-	bool	mdgain_trtx_allowed;
-	bool	rxgaincal_rssical;		/* 0 = rxgain error cal and 1 = RSSI error cal */
-	bool	rssi_cal_rev;			/* 0 = OLD ad 1 = NEW */
-	uint16	*gaintbl_2g;
-	uint16 	*gaintbl_5g;
-	bool	hw_aci_status;
 	uint16	phy_minor_rev;
 	uint8	CCTrace;			/* Chanspec Call Trace */
-	int	fc; 				/* Center Freq */
-
-	/* ------------------------------------------------------------------------------------ */
-	/*                        Variables in acphy info (with cflags)                         */
-	/* ------------------------------------------------------------------------------------ */
-
-	/* #ifdef WL_PROXDETECT */
-	bool	tof_active;
-	bool	tof_smth_forced;
-	/* #endif */
+	uint8	radar_cal_active;	/* to mask radar detect during cal's tone-play */
 
 	/* ************************************************************************************ */
 	/* [PHY_REARCH] Do not add any variables here. Add them to the individual modules */
 	/* ************************************************************************************ */
 
-
-	/* Parameter which determines the DAC frequency on 43012A0 */
-	uint8	ulp_tx_mode;
-	/* Parameter which determines the ADC frequency on 43012A0 */
-	uint8	ulp_adc_mode;
-
 	phy_param_info_t	*paramsi; /* phytype specific */
-
-	/* Parameter to enable Napping feature in DS1 */
-	int8	ds1_napping_enable;
-
-	/* Parameter to indicate PLL used */
-	radio_pll_sel_t pll_sel;
-
-	uint16 gain_idx_forced;
-	bool both_txchain_rxchain_eq_1;
-	bool current_preemption_status;
-
-	/* Flag to indicate X14 */
-	uint8 rx5ggainwar;
-
-	uint8 cbuck_out;
-
-	/* Nap info structure */
-	phy_ac_nap_info_t *napi;
-	bool enIndxCap;
-
-	uint16 ocl_disable_reqs;
-	uint8 ocl_en;
-	uint8 ocl_coremask;
-	bool is_p25TxGainTbl;
-	uint16 pktabortctl;
-
-	/* lesi */
-	bool lesi;
-	bool tia_idx_max_eq_init;
-
-	/* Flag for enabling auto lesiscale cal */
-	bool lesiscalecal_enable;
 
 	/* ************************************************************************************ */
 	/* [PHY_REARCH] Do not add any variables here. Add them to the individual modules */
@@ -2050,6 +1918,10 @@ typedef enum {
 #define CAL_COEFF_WRITE_BIQ2BYP   2
 #define MPHASE_TXCAL_CMDS_PER_PHASE  2 /* number of tx iqlo cal commands per phase in mphase cal */
 #define ACPHY_RXCAL_TONEAMP 181
+
+/* This number is picked based on 4355 TPC performance at nominal uisng longSeqTxCal. */
+#define PHY_TXPWR_MIN_ACPHY_EPA_2G	-10	/* for 4349 & 4364 acphy devices */
+#define PHY_TXPWR_MIN_ACPHY_EPA_5G	-5	/* for 5G 4349 & 4364 acphy devices */
 
 extern void phy_ac_rfseq_mode_set(phy_info_t *pi, bool cal_mode);
 extern void wlc_phy_tx_farrow_mu_setup(phy_info_t *pi, uint16 MuDelta_l, uint16 MuDelta_u,

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_tpc.h 639978 2016-05-25 16:03:11Z vyass $
+ * $Id: phy_lcn20_tpc.h 639978 2016-05-25 16:03:11Z $
  */
 
 #ifndef _phy_lcn20_tpc_h_

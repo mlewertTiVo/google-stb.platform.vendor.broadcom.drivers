@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rxgcrs.c 644994 2016-06-22 06:23:44Z vyass $
+ * $Id: phy_rxgcrs.c 658925 2016-09-11 16:42:42Z $
  */
 
 #include <phy_cfg.h>
@@ -22,10 +22,12 @@
 #include <bcmendian.h>
 #include <phy_dbg.h>
 #include <phy_mem.h>
+#include <phy_utils_reg.h>
 #include <phy_rxgcrs_api.h>
 #include "phy_type_rxgcrs.h"
 #include <phy_rstr.h>
 #include <phy_rxgcrs.h>
+#include <phy_stf.h>
 
 /* forward declaration */
 typedef struct phy_rxgcrs_mem phy_rxgcrs_mem_t;
@@ -77,6 +79,14 @@ BCMATTACHFN(phy_rxgcrs_attach)(phy_info_t *pi)
 		PHY_ERROR(("%s: phy_init_add_init_fn failed\n", __FUNCTION__));
 		goto fail;
 	}
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	phy_dbg_add_dump_fn(pi, "phychanest", phy_rxgcrs_dump_chanest, cmn_info);
+#if defined(DBG_BCN_LOSS)
+	phy_dbg_add_dump_fn(pi, "phycalrxmin", phy_rxgcrs_dump_phycal_rx_min, cmn_info);
+#endif
+#endif /* BCMDBG || BCMDBG_DUMP */
+
 
 	return cmn_info;
 
@@ -259,12 +269,71 @@ wlc_phy_get_rx_gainindex(phy_info_t *pi, int32 *gain_idx)
 	}
 }
 
-#ifndef ATE_BUILD
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-/* JIRA: SWWLAN-32606, RB: 12975: function to do only Noise cal & read crsmin power of
- * core 0 & core 1
-*/
+void
+phy_rxgcrs_stay_in_carriersearch(void *ctx, bool enable)
+{
+	phy_rxgcrs_info_t *rxgcrsi = (phy_rxgcrs_info_t *)ctx;
+	phy_type_rxgcrs_fns_t *fns = rxgcrsi->fns;
+
+	if (fns->stay_in_carriersearch != NULL)
+		(fns->stay_in_carriersearch)(fns->ctx, enable);
+}
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+int
+phy_rxgcrs_dump_chanest(void *ctx, struct bcmstrbuf *b)
+{
+	phy_rxgcrs_info_t *rxgcrsi = (phy_rxgcrs_info_t *)ctx;
+	phy_type_rxgcrs_fns_t *fns = rxgcrsi->fns;
+	phy_info_t *pi = rxgcrsi->pi;
+
+	if (fns->phydump_chanest == NULL)
+		return BCME_UNSUPPORTED;
+
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+	phy_utils_phyreg_enter(pi);
+
+	/* Go deaf to prevent PHY channel writes while doing reads */
+	phy_rxgcrs_stay_in_carriersearch(rxgcrsi, TRUE);
+
+	if (fns->phydump_chanest != NULL) {
+		(fns->phydump_chanest)(fns->ctx, b);
+	}
+
+	/* Return from deaf */
+	phy_rxgcrs_stay_in_carriersearch(rxgcrsi, FALSE);
+
+	phy_utils_phyreg_exit(pi);
+	wlapi_enable_mac(pi->sh->physhim);
+
+	return BCME_OK;
+}
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
+
+
+#if defined(DBG_BCN_LOSS)
+int
+phy_rxgcrs_dump_phycal_rx_min(void *ctx, struct bcmstrbuf *b)
+{
+	phy_rxgcrs_info_t *rxgcrsi = (phy_rxgcrs_info_t *)ctx;
+	phy_type_rxgcrs_fns_t *fns = rxgcrsi->fns;
+	phy_info_t *pi = rxgcrsi->pi;
+
+	if (fns->phydump_phycal_rxmin == NULL) {
+		return BCME_UNSUPPORTED;
+	}
+
+	if (!pi->sh->up) {
+		PHY_ERROR(("wl%d: %s: Not up, cannot dump \n", pi->sh->unit, __FUNCTION__));
+		return BCME_NOTUP;
+	}
+
+	return (fns->phydump_phycal_rxmin)(fns->ctx, b);
+}
+#endif /* DBG_BCN_LOSS */
+
+
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 int
 wlc_phy_iovar_forcecal_noise(phy_info_t *pi, void *a, bool set)
 {
@@ -278,5 +347,17 @@ wlc_phy_iovar_forcecal_noise(phy_info_t *pi, void *a, bool set)
 		return BCME_UNSUPPORTED;
 	}
 }
-#endif /* BCMINTERNAL || WLTEST || ATE_BUILD */
-#endif /* !ATE_BUILD */
+#endif 
+
+uint16 phy_rxgcrs_sel_classifier(phy_info_t *pi, uint16 class_mask)
+{
+	phy_type_rxgcrs_fns_t *fns = pi->rxgcrsi->fns;
+	ASSERT(pi != NULL);
+	PHY_TRACE(("%s\n", __FUNCTION__));
+
+	if (fns->sel_classifier != NULL) {
+		return (fns->sel_classifier)(fns->ctx, class_mask);
+	}
+
+	return BCME_OK;
+}

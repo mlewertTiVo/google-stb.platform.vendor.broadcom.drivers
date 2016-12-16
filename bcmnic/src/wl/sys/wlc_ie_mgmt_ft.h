@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt_ft.h 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_ie_mgmt_ft.h 656864 2016-08-30 06:55:08Z $
  */
 
 #ifndef _wlc_ie_mgmt_ft_h_
@@ -110,6 +110,12 @@ union wlc_iem_ft_cbparm {
 		uint8 rde_id;	/* RDE Identifier from station */
 		uint16 status;	/* status code for each TSPEC. AP Mode only */
 	} fbtric;
+	/* for NAN Data path Setup frames */
+	struct {
+		bool ht_op_ie;		/* HT Operation IE */
+		bool vht_op_ie;		/* VHT Operation IE */
+		bool dual_band;		/* support dual band (2G&5G) */
+	} nan;
 };
 
 /*

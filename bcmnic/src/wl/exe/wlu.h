@@ -18,7 +18,7 @@
  * duplicated in any form, in whole or in part, without the prior written
  * permission of Broadcom Corporation.
  *
- * $Id: wlu.h 645600 2016-06-24 19:13:41Z $
+ * $Id: wlu.h 665062 2016-10-14 19:27:17Z $
  */
 
 #ifndef _wlu_h_
@@ -88,6 +88,9 @@ extern void wl_hexdump(uchar *buf, uint nbytes);
 
 /* check driver version */
 extern int wl_check(void *wl);
+
+/* returns major version from "wlc_ver" command */
+extern int wlc_ver_major(void * wl);
 
 extern int wlu_bssiovar_setbuf(void* wl, const char *iovar, int bssidx,
 	void *param, int paramlen, void *bufptr, int buflen);
@@ -198,7 +201,6 @@ extern void wluc_led_module_init(void);
 extern void wluc_interfere_module_init(void);
 extern void wluc_ltecx_module_init(void);
 extern void wluc_extlog_module_init(void);
-extern void wluc_bta_module_init(void);
 extern void wluc_pkt_filter_module_init(void);
 extern void wluc_mfp_module_init(void);
 extern void wluc_ota_module_init(void);
@@ -229,6 +231,12 @@ extern void wluc_natoe_module_init(void);
 extern void wluc_rsdb_module_init(void);
 extern void wluc_he_module_init(void);
 extern void wluc_mbo_module_init(void);
+extern void wluc_hoffload_module_init(void);
+
+extern void wluc_ecounters_module_init(void);
+extern int hexstrtobitvec(const char *cp, uchar *bitvec, int veclen);
+
+extern void wluc_leakyapstats_module_init(void);
 
 extern int get_counter_offset(char *name, uint32 *offset, uint8 counter_ver);
 extern int print_counter_help(uint8 counter_ver);
@@ -252,13 +260,15 @@ extern void wl_printlasterror(void *wl);
 extern bool wc_cmd_check(const char *cmd);
 
 #if defined(WL_NAN)
-extern int wl_nan_do_get_ioctl(void *wl, void *nanioc, uint16 iocsz);
+extern int wl_nan_do_ioctl(void *wl, void *nanioc, uint16 iocsz, uint8 is_set);
 #endif
 
 #define WL_IOV_BATCH_DELIMITER		"+"
 
 
 /* functions for downloading firmware to a device via serial or other transport */
+
+extern void wluc_adps_module_init(void);
 
 #ifdef BCMDLL
 #ifdef LOCAL
@@ -307,7 +317,7 @@ extern void raw_puts(const char *buf, void *dll_fd_out);
 #define WL_DUMP_BUF_LEN (4 * 1024)
 #else
 #define WL_DUMP_BUF_LEN (127 * 1024)
-#endif 
+#endif /* BWL_SMALL_WLU_DUMP_BUF */
 #endif /* WL_DUMP_BUF_LEN */
 
 #define ESCAN_EVENTS_BUFFER_SIZE 2048

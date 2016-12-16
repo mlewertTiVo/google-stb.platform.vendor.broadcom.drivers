@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_rxiqcal.h 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_rxiqcal.h 657664 2016-09-02 04:57:54Z $
  */
 
 #ifndef _phy_ac_rxiqcal_h_
@@ -95,12 +95,6 @@ typedef struct _acphy_rxcal_phyregs {
 	uint16 spur_can_en[PHY_CORE_MAX];
 } acphy_rxcal_phyregs_t;
 
-typedef struct acphy_fdiqi_struct {
-	int8 freq;
-	int32 angle[PHY_CORE_MAX];
-	int32 mag[PHY_CORE_MAX];
-} acphy_fdiqi_t;
-
 int32 phy_ac_rxiqcal_get_fdiqi_slope(phy_ac_rxiqcal_info_t *rxiqcali, uint8 core);
 void phy_ac_rxiqcal_set_fdiqi_slope(phy_ac_rxiqcal_info_t *rxiqcali, uint8 core, int32 slope);
 bool phy_ac_rxiqcal_is_fdiqi_enabled(phy_ac_rxiqcal_info_t *rxiqcali);
@@ -110,17 +104,19 @@ extern void wlc_phy_rx_iq_comp_acphy(phy_info_t *pi, uint8 write,
 	phy_iq_comp_t *pcomp, uint8 rx_core);
 extern void wlc_phy_rx_fdiqi_comp_acphy(phy_info_t *pi, bool enable);
 extern int  wlc_phy_cal_rx_fdiqi_acphy(phy_info_t *pi);
+extern void wlc_phy_turnon_rxlogen_20694(phy_info_t *pi, uint8 *sr_reg);
+extern void wlc_phy_turnoff_rxlogen_20694(phy_info_t *pi, uint8 *sr_reg);
 extern void wlc_phy_rx_iq_est_acphy(phy_info_t *pi, phy_iq_est_t *est, uint16 num_samps,
 	uint8 wait_time, uint8 wait_for_crs, bool rxiq_cal);
 #if defined(BCMDBG)
 extern void wlc_phy_force_fdiqi_acphy(phy_info_t *pi, uint16 int_val);
 #endif
 extern void wlc_phy_dig_lpf_override_acphy(phy_info_t *pi, uint8 dig_lpf_ht);
-extern void wlc_phy_fdiqi_lin_reg_acphy(phy_info_t *pi, acphy_fdiqi_t *freq_ang_mag,
-	uint16 num_data, int fdiq_data_valid, bool TX);
 void wlc_phy_rxcal_coeffs_upd(phy_info_t *pi, rxcal_coeffs_t *rxcal_cache);
 void phy_ac_rxiqcal(phy_info_t *pi);
-#if !defined(PHYCAL_CACHING)
+#ifdef PHYCAL_CACHING
+void phy_ac_rxiqcal_save_cache(phy_ac_rxiqcal_info_t *rxiqcali, ch_calcache_t *ctx);
+#else
 void wlc_phy_scanroam_cache_rxcal_acphy(void *ctx, bool set);
 #endif
 #endif /* _phy_ac_rxiqcal_h_ */

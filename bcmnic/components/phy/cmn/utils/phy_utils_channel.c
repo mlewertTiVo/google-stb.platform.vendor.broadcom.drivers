@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_channel.c 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_utils_channel.c 583048 2015-08-31 16:43:34Z $
  */
 
 #include <typedefs.h>
@@ -209,7 +209,6 @@ phy_utils_chanspec_band_validch(phy_info_t *pi, uint band, chanvec_t *channels)
 		if ((channel == 144) && (!ISACPHY(pi)))
 			continue;
 
-		/* Jira: SWWLAN-27852: channels 34, 38, 42 and 46 are not supported in 43242 */
 		if (CHIPID_4324X_MEDIA_FAMILY(pi) &&
 			((channel == 34) || (channel == 38) || (channel == 42) || (channel == 46)))
 			continue;

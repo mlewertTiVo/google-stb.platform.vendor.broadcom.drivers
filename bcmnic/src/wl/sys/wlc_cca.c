@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_cca.c 657816 2016-09-02 18:09:04Z $
+ * $Id: wlc_cca.c 658301 2016-09-07 11:19:12Z $
  */
 
 /**
@@ -78,6 +78,9 @@ static int cca_chanspec_to_index(cca_info_t *cca, chanspec_t chanspec);
 static int cca_reset_stats(void *ctx);
 static void cca_stats_watchdog(void *ctx);
 static int cca_get_stats(cca_info_t *cca, void *input, int buf_len, void *output);
+#if defined(BCMDBG_DUMP)
+static int wlc_cca_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 static void wlc_cca_chan_qual_event_timeout(void *arg);
 
@@ -104,6 +107,12 @@ struct cca_chan_qual {
 	bool	is_cca_event_timer_active;	/**< flag to indicate timer active */
 	uint8 level[WL_CHAN_QUAL_TOTAL];
 };
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 cca_info_t *
 BCMATTACHFN(wlc_cca_attach)(wlc_info_t *wlc)
@@ -138,6 +147,13 @@ BCMATTACHFN(wlc_cca_attach)(wlc_info_t *wlc)
 	for (i = 0; i < CCA_POOL_MAX; i++)
 		cca->cca_pool[i].congest_ibss = CCA_FREE_BUF;
 
+#if defined(BCMDBG_DUMP)
+	if (wlc_dump_register(wlc->pub, CCA_MODULE_NAME, wlc_cca_dump, cca) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif
 
 	if (wlc_module_register(wlc->pub, wlc_cca_iovars, CCA_MODULE_NAME,
 	    (void *)cca, wlc_cca_doiovar, cca_stats_watchdog, cca_reset_stats,
@@ -146,6 +162,7 @@ BCMATTACHFN(wlc_cca_attach)(wlc_info_t *wlc)
 		wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	};
+	wlc->pub->_cca_stats = TRUE;
 	return cca;
 fail:
 	if (wlc->cca_chan_qual != NULL)
@@ -256,6 +273,11 @@ cca_alloc_pool(cca_info_t *cca, int ch_idx, int second)
 		cca->alloc_fail++;
 		return;
 	}
+#ifdef BCMDBG
+	if (cca->cca_pool[i].congest_ibss != CCA_FREE_BUF)
+		WL_ERROR(("%s:  NULL IDX but not CCA_FREE_BUF ch_idx = %d, dur = 0x%x\n",
+			__FUNCTION__, i, cca->cca_pool[i].congest_ibss));
+#endif
 	bzero(&cca->cca_pool[i], sizeof(wlc_congest_t));
 	CCA_POOL_IDX(cca, ch_idx, second) = (cca_idx_t)i & 0xffff;
 	return;
@@ -266,6 +288,10 @@ static void
 cca_free_pool(cca_info_t *cca, int ch_idx, int second)
 {
 	cca_idx_t pool_index = CCA_POOL_IDX(cca, ch_idx, second);
+#ifdef BCMDBG
+	if (cca->cca_pool[pool_index].congest_ibss == CCA_FREE_BUF)
+		WL_ERROR(("%s: Freeing a free buffer\n", __FUNCTION__));
+#endif
 	cca->cca_pool[pool_index].congest_ibss = CCA_FREE_BUF;
 	CCA_POOL_IDX(cca, ch_idx, second) = 0;
 }
@@ -281,6 +307,57 @@ cca_chanspec_to_index(cca_info_t *cca, chanspec_t chanspec)
 	return (-1);
 }
 
+#if defined(BCMDBG_DUMP)
+static int
+wlc_cca_dump(void *ctx, struct bcmstrbuf *b)
+{
+	int chanspec, second;
+	char smallbuf[32];
+	wlc_congest_t *stats;
+	int i, num_free, num_alloced;
+	cca_info_t *cca = (cca_info_t *)ctx;
+
+	if (!cca)
+		return -1;
+
+	/* Dump the last completed second */
+	second = MODDEC(cca->cca_second, cca->cca_second_max);
+
+	num_free = 0;
+	num_alloced = 1; /* Count the spare, NULL buffer at index 0 */
+	for (i = 1; i < CCA_POOL_MAX; i++) {
+		if (cca->cca_pool[i].congest_ibss == CCA_FREE_BUF)
+			num_free++;
+		if (cca->cca_pool[i].congest_ibss != CCA_FREE_BUF)
+			num_alloced++;
+	}
+
+	bcm_bprintf(b, "CCA Stats: second %d\n", second);
+	bcm_bprintf(b, "  total bufs %d  free %d  alloced %d failures %d\n",
+		CCA_POOL_MAX, num_free, num_alloced, cca->alloc_fail);
+	bcm_bprintf(b, "chan      ibss          obss         interfere        ts     duration\n");
+
+	for (chanspec = 0; chanspec < CCA_CHANNELS_NUM; chanspec++) {
+		if (CCA_POOL_IDX(cca, chanspec, second) == 0)
+			continue;
+		stats = CCA_POOL_DATA(cca, chanspec, second);
+		if (stats->congest_ibss == CCA_FREE_BUF)
+			WL_ERROR(("%s: Should not be CCA_FREE_BUF\n", __FUNCTION__));
+		if (stats->duration) {
+			bcm_bprintf(b, "%-4s %10u %2d%% %10u %2d%% %10u %2d%%      %d     %u \n",
+				wf_chspec_ntoa(cca->chan_stats[chanspec].chanspec, smallbuf),
+				stats->congest_ibss,
+				(stats->congest_ibss * 100)/stats->duration,
+				stats->congest_obss,
+				(stats->congest_obss * 100)/stats->duration,
+				stats->interference,
+				(stats->interference * 100)/stats->duration,
+				stats->timestamp, stats->duration);
+		}
+	}
+	return BCME_OK;
+}
+#endif 
 
 chanspec_t
 wlc_cca_get_chanspec(wlc_info_t *wlc, int index)

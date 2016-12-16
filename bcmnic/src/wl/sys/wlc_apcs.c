@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_apcs.c 625224 2016-03-15 22:06:35Z $
+ * $Id: wlc_apcs.c 663790 2016-10-07 00:29:50Z $
  */
 
 /**
@@ -126,8 +126,7 @@ typedef struct {
  * the scan channel can see if it wants to see.
  */
 #define WLC_CS_ESOVLP_CHANS(band, phy)	(BAND_5G(band) ? 0 : \
-	BAND_2G(band) ? (((phy) == PHY_TYPE_N || \
-	(phy) == PHY_TYPE_LCN || (phy) == PHY_TYPE_AC) ? 0 : 2) :  2)
+	BAND_2G(band) ? (((phy) == PHY_TYPE_N || (phy) == PHY_TYPE_AC) ? 0 : 2) :  2)
 
 /* min # of channels between any two adjacent scan channels */
 #define WLC_CS_SCAN_APART(band, phy)	(WLC_CS_ESOVLP_CHANS(band, phy) * 2)
@@ -170,6 +169,12 @@ static void wlc_cs_watchdog(void *arg);
 static int wlc_cs_ioctl(void *hdl, uint cmd, void *arg, uint len, struct wlc_if *wlcif);
 
 static void wlc_cs_scan_timer(wlc_bsscfg_t *cfg);
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 #ifdef WL11N
 /* Find backwards the scan channel info whose channel # is the <N>th
@@ -1013,22 +1018,8 @@ sel:	chan = 0;
 			break;
 		}
 
-	case PHY_TYPE_LCN:
-		CASECHECK(PHYTYPE, PHY_TYPE_LCN);
-
-		/* Reuse PHY_TYPE_N channel selection algorithm */
-		phy_type = PHY_TYPE_N;
-		goto sel;
-
 	case PHY_TYPE_LCN20:
 		CASECHECK(PHYTYPE, PHY_TYPE_LCN20);
-
-		/* Reuse PHY_TYPE_N channel selection algorithm */
-		phy_type = PHY_TYPE_N;
-		goto sel;
-
-	case PHY_TYPE_LCN40:
-		CASECHECK(PHYTYPE, PHY_TYPE_LCN40);
 
 		/* Reuse PHY_TYPE_N channel selection algorithm */
 		phy_type = PHY_TYPE_N;
@@ -1081,7 +1072,34 @@ wlc_cs_parse_scanresults(cs_info_t *cs, wlc_cs_chan_info_t *ci, int *ncis,
 	wlc_bss_info_t *bi;
 	int band = cs->band;
 	int phy = phy_type;
+#ifdef BCMDBG
+	char ssidbuf[SSID_FMT_BUF_LEN];
+	char chanbuf[CHANSPEC_STR_LEN];
+#endif
 
+#ifdef BCMDBG
+	/* dump all scan results */
+	for (b = 0; b < wlc->scan_results->count; b ++) {
+		bi = wlc->scan_results->ptrs[b];
+		wlc_format_ssid(ssidbuf, bi->SSID, bi->SSID_len);
+		WL_INFORM(("wl%d: %s: chspec %s bw %s ht %s ctl %s\n",
+		           wlc->pub->unit, ssidbuf,
+		           wf_chspec_ntoa_ex(bi->chanspec, chanbuf),
+		           CHSPEC_IS40(bi->chanspec) ?
+		           "40MHz" :
+		           "20MHz",
+		           (bi->flags & WLC_BSS_HT) ?
+		           "yes" :
+		           "no",
+		           (bi->flags & WLC_BSS_HT) ?
+		           (CHSPEC_SB_LOWER(bi->chanspec) ?
+		            "lower" :
+		            CHSPEC_SB_UPPER(bi->chanspec) ?
+		            "upper" :
+		            "none") :
+		           "n/a"));
+	}
+#endif /* BCMDBG */
 
 	/* walk thru all scan channels to collect needed channel info */
 	for (c = 0; c < count && c < *ncis; c ++) {
@@ -1137,6 +1155,25 @@ wlc_cs_parse_scanresults(cs_info_t *cs, wlc_cs_chan_info_t *ci, int *ncis,
 			...
 #endif
 
+#ifdef BCMDBG
+			wlc_format_ssid(ssidbuf, bi->SSID, bi->SSID_len);
+			WL_INFORM(("wl%d: %s: chspec %s bw %s ht %s ctl %s\n",
+			           wlc->pub->unit, ssidbuf,
+			           wf_chspec_ntoa_ex(bss_chanspec, chanbuf),
+			           CHSPEC_IS40(bss_chanspec) ?
+			           "40MHz" :
+			           "20MHz",
+			           (bi->flags & WLC_BSS_HT) ?
+			           "yes" :
+			           "no",
+			           (bi->flags & WLC_BSS_HT) ?
+			           (CHSPEC_SB_LOWER(bss_chanspec) ?
+			            "lower" :
+			            CHSPEC_SB_UPPER(bss_chanspec) ?
+			            "upper" :
+			            "none") :
+			           "n/a"));
+#endif /* BCMDBG */
 
 			/* count 11n ctl sidebands */
 			if ((bi->flags & WLC_BSS_HT) && channel >= low && channel <= high) {
@@ -2263,6 +2300,9 @@ wlc_cs_scan_start(wlc_bsscfg_t *cfg, wl_uint32_list_t *request, bool bw40, bool 
 	wlc_ssid_t req_ssid;
 	cs_info_t *cs = wlc->cs;
 	int status;
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	char chanbuf[CHANSPEC_STR_LEN];
+#endif
 
 #ifdef WL11N_20MHZONLY
 	ASSERT(!bw40);

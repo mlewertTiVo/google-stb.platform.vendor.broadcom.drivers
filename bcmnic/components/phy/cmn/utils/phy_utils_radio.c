@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_radio.c 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_utils_radio.c 659938 2016-09-16 16:47:54Z $
  */
 
 #include <phy_cfg.h>
@@ -21,6 +21,7 @@
 #include <bcmutils.h>
 #include <phy_api.h>
 #include <phy_utils_radio.h>
+#include <phy_radio_api.h>
 
 #include <wlc_phy_hal.h>
 #include <wlc_phy_int.h>
@@ -32,12 +33,6 @@ phy_utils_parse_idcode(phy_info_t *pi, uint32 idcode)
 	pi->pubpi->radiorev = (idcode & IDCODE_REV_MASK) >> IDCODE_REV_SHIFT;
 	pi->pubpi->radiover = (idcode & IDCODE_VER_MASK) >> IDCODE_VER_SHIFT;
 
-#if defined(DSLCPE) && defined(CONFIG_BCM963268)
-	if (CHIPID(pi->sh->chip) == BCM6362_CHIP_ID) {
-		/* overriding radiover to 8 */
-		pi->pubpi->radiorev = 8;
-	}
-#endif /* defined(DSLCPE) && defined(CONFIG_BCM963268) */
 }
 
 int
@@ -52,11 +47,24 @@ phy_utils_valid_radio(phy_info_t *pi)
 		ASSERT(pi->pubpi->radioid == BCMRADIOID);
 #endif
 #ifdef BCMRADIOREV
-		if (pi->pubpi->radiorev != BCMRADIOREV)
+#ifdef BCMRADIOREV2
+		if (PI_INSTANCE(pi) == 0 && pi->pubpi->radiorev != BCMRADIOREV) {
 			PHY_ERROR(("%s: Chip's radiorev=%d, BCMRADIOREV=%d\n",
 			           __FUNCTION__, pi->pubpi->radiorev, BCMRADIOREV));
-		ASSERT(pi->pubpi->radiorev == BCMRADIOREV);
-#endif
+			ASSERT(pi->pubpi->radiorev == BCMRADIOREV);
+		} else if (PI_INSTANCE(pi) == 1 && pi->pubpi->radiorev != BCMRADIOREV2) {
+			PHY_ERROR(("%s: Chip's radiorev=%d, BCMRADIOREV2=%d\n",
+			           __FUNCTION__, pi->pubpi->radiorev, BCMRADIOREV2));
+			ASSERT(pi->pubpi->radiorev == BCMRADIOREV2);
+		}
+#else
+		if (pi->pubpi->radiorev != BCMRADIOREV) {
+			PHY_ERROR(("%s: Chip's radiorev=%d, BCMRADIOREV=%d\n",
+			           __FUNCTION__, pi->pubpi->radiorev, BCMRADIOREV));
+			ASSERT(pi->pubpi->radiorev == BCMRADIOREV);
+		}
+#endif /* BCMRADIOREV2 */
+#endif /* BCMRADIOREV */
 		return BCME_OK;
 	} else {
 		PHY_ERROR(("wl%d: %s: Unknown radio ID: 0x%x rev 0x%x phy %d, phyrev %d\n",

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_antdiv.h 644039 2016-06-17 01:06:20Z kentryu $
+ * $Id: phy_ac_antdiv.h 653304 2016-08-06 03:05:00Z $
  */
 
 #ifndef _phy_ac_antdiv_h_
@@ -51,5 +51,7 @@ void phy_ac_swdiv_txpwrcap_shmem_set(phy_type_antdiv_ctx_t *ctx,
 #endif /* WLC_TXPWRCAP */
 #endif /* WLC_SW_DIVERSITY */
 void wlc_phy_write_regtbl_fc_from_nvram(phy_info_t *pi);
+void phy_ac_antdiv_chanspec(phy_ac_antdiv_info_t * antdivi);
+void phy_ac_antdiv_regtbl_fc_from_nvram(phy_ac_antdiv_info_t *antdivi);
 
 #endif /* _phy_ac_antdiv_h_ */

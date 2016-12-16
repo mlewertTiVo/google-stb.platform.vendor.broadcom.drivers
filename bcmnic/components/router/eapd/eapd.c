@@ -36,7 +36,11 @@
 #include <security_ipc.h>
 
 uint eapd_msg_level =
+#ifdef BCMDBG
+	EAPD_ERROR_VAL;
+#else
 	0;
+#endif /* BCMDBG */
 
 #define EAPD_WKSP_MAX_EAP_USER_IDENT	32
 #define EAPD_WKSP_EAP_USER_NUM			2
@@ -66,6 +70,45 @@ static bool eapd_add_interface(eapd_wksp_t *nwksp, char *ifname, eapd_app_mode_t
                                eapd_cb_t **cbp);
 static bool eapd_valid_eapol_start(eapd_wksp_t *nwksp, eapd_brcm_socket_t *from, char *ifname);
 
+#ifdef BCMDBG
+/* #define HEXDUMP */
+#ifdef  HEXDUMP
+extern int isprint(char i);
+static void eapd_hexdump_ascii(const char *title, const unsigned char *buf,
+	unsigned int len)
+{
+	int i, llen;
+	const unsigned char *pos = buf;
+	const int line_len = 16;
+
+	EAPD_PRINT("%s - (data len=%lu):\n", title, (unsigned long) len);
+	while (len) {
+		llen = len > line_len ? line_len : len;
+		EAPD_PRINT("    ");
+		for (i = 0; i < llen; i++)
+			EAPD_PRINT(" %02x", pos[i]);
+		for (i = llen; i < line_len; i++)
+			EAPD_PRINT("   ");
+		EAPD_PRINT("   ");
+		for (i = 0; i < llen; i++) {
+			if (isprint(pos[i]))
+				EAPD_PRINT("%c", pos[i]);
+			else
+				EAPD_PRINT("*");
+		}
+		for (i = llen; i < line_len; i++)
+			EAPD_PRINT(" ");
+		EAPD_PRINT("\n");
+		pos += llen;
+		len -= llen;
+	}
+}
+
+#define HEXDUMP_ASCII(title, buf, len)		eapd_hexdump_ascii(title, buf, len)
+#else
+#define HEXDUMP_ASCII(title, buf, len)
+#endif /* HEXDUMP */
+#endif /* BCMDBG */
 
 #ifdef EAPDDUMP
 /* dump brcm and preauth socket information */
@@ -416,6 +459,29 @@ eapd_dump(eapd_wksp_t *nwksp)
 }
 #endif /* EAPDDUMP */
 
+#ifdef BCMDBG
+void
+eapd_wksp_display_usage(void)
+{
+	EAPD_PRINT("\nUsage: eapd [options]\n\n");
+	EAPD_PRINT("\n-wps ifname(s)\n");
+	EAPD_PRINT("\n-nas ifname(s)\n");
+#ifdef BCM_DCS
+	EAPD_PRINT("\n-dcs ifname(s)\n");
+#endif /* BCM_DCS */
+#ifdef BCM_BSD
+	EAPD_PRINT("\n-bsd ifname(s)\n");
+#endif /* BCM_BSD */
+#ifdef BCM_DRSDBD
+	EAPD_PRINT("\n-drsdbd ifname(s)\n");
+#endif /* BCM_DRSDBD */
+#ifdef BCM_ASPMD
+	EAPD_PRINT("\n-asp ifname(s)\n");
+#endif /* BCM_ASPMD */
+
+	EAPD_PRINT("\n\n");
+};
+#endif	/* BCMDBG */
 
 #ifdef EAPD_WKSP_AUTO_CONFIG
 int
@@ -1325,6 +1391,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 			if (bytes > ETHER_HDR_LEN) {
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from WPS app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1345,6 +1414,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 				char *ifname = (char *) pkt;
 				uint32 event;
 
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from hotplug", pkt, bytes);
+#endif
 				event = *(uint32 *)(ifname + IFNAMSIZ);
 				if (event == 0)
 					eapd_add_dif(nwksp, ifname);
@@ -1361,6 +1433,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
 
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from NAS app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1385,6 +1460,10 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 				 */
 				bytes = eapd_message_read(preauthSocket->drvSocket, pkt, len);
 				if (bytes > 0) {
+#ifdef BCMDBG
+					HEXDUMP_ASCII("EAPD:: data from PREAUTH Driver",
+						pkt, bytes);
+#endif
 					/* call preauth recv handler */
 					eapd_preauth_recv_handler(nwksp, cb->ifname,
 						pkt, &bytes);
@@ -1403,6 +1482,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 			if (bytes > ETHER_HDR_LEN) {
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from DCS app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1423,6 +1505,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 			if (bytes > ETHER_HDR_LEN) {
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from MEVENT app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1443,6 +1528,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 			if (bytes > ETHER_HDR_LEN) {
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from DCS app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1463,6 +1551,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 			if (bytes > ETHER_HDR_LEN) {
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from DCS app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1483,6 +1574,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 			if (bytes > ETHER_HDR_LEN) {
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from SSD app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1503,6 +1597,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 			if (bytes > ETHER_HDR_LEN) {
 				char *ifname = (char *) pkt;
 				struct ether_header *eth;
+#ifdef BCMDBG
+				HEXDUMP_ASCII("EAPD:: data from ASPM app", pkt, bytes);
+#endif
 				/* ether header */
 				eth = (struct ether_header*)(ifname + IFNAMSIZ);
 				bytes -= IFNAMSIZ;
@@ -1525,6 +1622,9 @@ eapd_wksp_dispatch(eapd_wksp_t *nwksp)
 				if (bytes > ETHER_HDR_LEN) {
 					char *ifname = (char *) pkt;
 					struct ether_header *eth;
+#ifdef BCMDBG
+					HEXDUMP_ASCII("EAPD::data from visdcoll app", pkt, bytes);
+#endif
 					/* ether header */
 					eth = (struct ether_header*)(ifname + IFNAMSIZ);
 					bytes -= IFNAMSIZ;
@@ -1770,6 +1870,9 @@ eapd_eapol_dispatch(eapd_wksp_t *nwksp, eapd_brcm_socket_t *from, uint8 *pData, 
 		return;
 	}
 
+#ifdef BCMDBG
+	HEXDUMP_ASCII("EAPD:: eapol data from BRCM driver", pData, *pLen);
+#endif
 
 	/* incoming ifname */
 	ifname = (char *) pData;
@@ -1817,6 +1920,9 @@ eapd_eapol_dispatch(eapd_wksp_t *nwksp, eapd_brcm_socket_t *from, uint8 *pData, 
 				if (eap->code == EAP_FAILURE || eap->code == EAP_SUCCESS) {
 					sta_remove(nwksp, sta);
 				}
+#ifdef BCMDBG
+				HEXDUMP_ASCII("Receive, EAP Request", pData, *pLen);
+#endif
 				wps_app_monitor_sendup(nwksp, pData, *pLen, from->ifname);
 			}
 			else
@@ -1857,6 +1963,10 @@ eapd_eapol_dispatch(eapd_wksp_t *nwksp, eapd_brcm_socket_t *from, uint8 *pData, 
 			case EAP_IDENTITY:
 				EAPD_INFO("Receive , eap code=%d, id = %d, length=%d, type=%d\n",
 					eap->code, eap->id, ntohs(eap->length), eap->type);
+#ifdef BCMDBG
+				HEXDUMP_ASCII("Receive, EAP Identity", eap->data,
+					ntohs(eap->length) - EAP_HEADER_LEN - 1);
+#endif
 				/* Store which interface sta come from */
 				memcpy(&sta->bssid, &eapol->eth.ether_dhost, ETHER_ADDR_LEN);
 				memcpy(&sta->ifname, ifname, IFNAMSIZ);
@@ -2453,6 +2563,27 @@ event_init(eapd_wksp_t *nwksp)
 			EAPD_ERROR("Set event_msg error %d on %s[%s]\n", ret, name, os_name);
 		}
 		else {
+#ifdef BCMDBG
+			int j, flag;
+			if (eapd_msg_level) {
+				flag = 1;
+				for (i = 0; i < EAPD_WL_EVENTING_MASK_LEN; i++) {
+				for (j = 0; j < 8; j++) {
+					if (isset(&bitvec[i], j)) {
+						if (flag) {
+							EAPD_PRINT("Set event_msg bitvec [%d",
+								(i*8+j));
+							flag = 0;
+						}
+						else {
+							EAPD_PRINT(" %d", (i*8+j));
+						}
+					}
+				}
+				}
+				EAPD_PRINT("] on %s[%s]\n", name, os_name);
+			}
+#endif /* BCMDBG */
 		}
 	}
 

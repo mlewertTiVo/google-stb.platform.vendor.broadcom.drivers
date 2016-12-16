@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_iocv_patch.h 623137 2016-03-05 00:20:57Z $
+ * $Id: wlc_iocv_patch.h 662053 2016-09-28 06:00:04Z $
  */
 
 #ifndef _wlc_iocv_patch_h_
@@ -31,8 +31,9 @@ int wlc_ioctl_patchmod(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if
 /* Defaultly all patches will be defined to 'NULL', But this will be overridden by
  * actual patch generated during ROM OFFLOAD build from respective modules patch files.
  */
-#define ROM_AUTO_IOCTL_PATCH_DOIOVAR NULL
-#define ROM_AUTO_IOCTL_PATCH_IOVARS NULL
+#define ROM_AUTO_PATCH_DOIOCTL NULL
+#define ROM_AUTO_PATCH_DOIOVAR NULL
+#define ROM_AUTO_PATCH_IOVARS NULL
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file. It must be
  * included after the prototypes above. The name of the included source file (WLC_PATCH_IOCTL_FILE)
@@ -41,6 +42,9 @@ int wlc_ioctl_patchmod(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if
 #if defined(WLC_PATCH_IOCTL_FILE)
 	#include WLC_PATCH_IOCTL_FILE
 #endif
+
+#define PATCH_IOCTL_FUNC_EXP(X)     X##_ioc_patch_func
+#define PATCH_IOCTL_FUNC(X)         PATCH_IOCTL_FUNC_EXP(X)
 
 #define PATCH_IOVAR_FUNC_EXP(X)     X##_patch_func
 #define PATCH_IOVAR_FUNC(X)         PATCH_IOVAR_FUNC_EXP(X)
@@ -54,15 +58,19 @@ int wlc_ioctl_patchmod(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if
  */
 #undef IOV_PATCH_TBL
 #undef IOV_PATCH_FN
+#undef IOC_PATCH_FN
 #if defined(ROM_AUTO_IOCTL_PATCH_GLOBAL_PTRS)
+	#define IOC_PATCH_FN	PATCH_IOCTL_FUNC(__FILENAME_NOEXTN__)
 	#define IOV_PATCH_FN	PATCH_IOVAR_FUNC(__FILENAME_NOEXTN__)
 	#define IOV_PATCH_TBL	PATCH_IOVAR_TABLE(__FILENAME_NOEXTN__)
 
-	wlc_iov_disp_fn_t IOV_PATCH_FN = ROM_AUTO_IOCTL_PATCH_DOIOVAR;
-	bcm_iovar_t *IOV_PATCH_TBL = (bcm_iovar_t *)ROM_AUTO_IOCTL_PATCH_IOVARS;
+	wlc_ioc_disp_fn_t IOC_PATCH_FN = ROM_AUTO_PATCH_DOIOCTL;
+	wlc_iov_disp_fn_t IOV_PATCH_FN = ROM_AUTO_PATCH_DOIOVAR;
+	bcm_iovar_t *IOV_PATCH_TBL = (bcm_iovar_t *)ROM_AUTO_PATCH_IOVARS;
 #else /* !ROM_AUTO_IOCTL_PATCH_GLOBAL_PTRS */
-	#define IOV_PATCH_FN	ROM_AUTO_IOCTL_PATCH_DOIOVAR
-	#define IOV_PATCH_TBL	ROM_AUTO_IOCTL_PATCH_IOVARS
+	#define IOC_PATCH_FN	ROM_AUTO_PATCH_DOIOCTL
+	#define IOV_PATCH_FN	ROM_AUTO_PATCH_DOIOVAR
+	#define IOV_PATCH_TBL	ROM_AUTO_PATCH_IOVARS
 #endif /* ROM_AUTO_IOCTL_PATCH_GLOBAL_PTRS */
 
 #endif /* WLC_PATCH_IOCTL */

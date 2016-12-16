@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_radar_utils.h 601782 2015-11-24 06:04:42Z chihap $
+ * $Id: phy_radar_utils.h 601782 2015-11-24 06:04:42Z $
  */
 
 #ifndef _phy_radar_utils_h_

@@ -10,10 +10,13 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_key_tkip.c 643153 2016-06-13 16:09:35Z $
+ * $Id: km_key_tkip.c 656165 2016-08-25 11:38:27Z $
  */
 
 #include "km_key_pvt.h"
+#ifdef BCM_SFD
+#include <wlc_sfd.h>
+#endif
 
 #include <bcmcrypto/rc4.h>
 #include <bcmcrypto/tkmic.h>
@@ -132,7 +135,19 @@ struct tkip_mic_ctx {
 
 typedef struct tkip_mic_ctx tkip_mic_ctx_t;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int tkip_dump(const wlc_key_t *key, struct bcmstrbuf *b);
+#define TKIP_DUMP tkip_dump
+
+/*
+ * debugging support, disabled 'coz not typically needed
+ *	#define KM_TKIP_DUMP_KEYS_ON_MICERR
+ *
+*/
+
+#else
 #define TKIP_DUMP NULL
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static void
 tkip_mic_init(tkip_mic_ctx_t *ctx, uint32 l, uint32 r)
@@ -545,6 +560,14 @@ tkip_rx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 		goto done;
 	}
 
+#ifdef BCMDBG
+	/* check wep seed */
+	if (!TKIP_BODY_WEP_SEED_OKAY(body)) {
+		KEY_LOG(("wl%d: %s: incorrect wep seed for tkip pkt, key idx %d\n",
+			KEY_WLUNIT(key), __FUNCTION__, key->info.key_idx));
+		/* allow it */
+	}
+#endif /* BCMDBG */
 
 	/* check for replay */
 
@@ -667,6 +690,11 @@ tkip_tx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 
 	tkip_key = (tkip_key_t *)key->algo_impl.ctx;
 
+#ifdef BCMDBG
+	if (key->info.flags & WLC_KEY_FLAG_GEN_REPLAY) {
+		key->info.flags &= ~WLC_KEY_FLAG_GEN_REPLAY;
+	} else
+#endif /* BCMDBG */
 	{
 		if (KEY_SEQ_IS_MAX(tkip_key->tx_seq)) { /* rollover */
 			err = BCME_BADKEYIDX;
@@ -744,20 +772,30 @@ tkip_tx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 			d11actxh_t *txh = (d11actxh_t *)&txd->txd;
 			d11actxh_cache_t	*cache_info;
 
-			cache_info = WLC_TXD_CACHE_INFO_GET(txh, KEY_PUB(key)->corerev);
+#ifdef BCM_SFD
+			if (SFD_ENAB(key->wlc->pub) && PKTISSFDFRAME(key->wlc->osh, pkt)) {
+				cache_info = wlc_sfd_get_cache_info(key->wlc->sfd, txh);
+			} else
+#endif
+			{
+				cache_info = WLC_TXD_CACHE_INFO_GET(txh, KEY_PUB(key)->corerev);
+			}
+
 			ph1 = cache_info->TkipPH1Key;
 			pn = cache_info->TSCPN;
 			if (hwmic)
 				txh->PktInfo.MacTxControlLow =
 					htol16(ltoh16(txh->PktInfo.MacTxControlLow) |
 					D11AC_TXC_AMIC);
-		} else {
+		} else if (!KEY_USE_REV80_TXD(key)) {
 			d11txh_t *txh = (d11txh_t *)&txd->d11txh;
 			ph1 = txh->IV;
 			pn = &txh->IV[TKHASH_P1_KEY_SIZE];
 			if (hwmic)
 				txh->MacTxControlLow =
 					htol16(ltoh16(txh->MacTxControlLow) | TXC_AMIC);
+		} else {
+			goto done;
 		}
 
 		for (i = 0, j = 0; i < TKHASH_P1_KEY_SIZE / 2; ++i) {
@@ -931,6 +969,12 @@ tkip_tx_msdu(wlc_key_t *key, void *pkt, struct ether_header *hdr,
 
 	tkip_get_mic_key(key, pkt, tkip_key, TRUE, &micl, &micr);
 
+#ifdef BCMDBG
+	if (key->info.flags & WLC_KEY_FLAG_GEN_MIC_ERR) {
+		micl++;
+		key->info.flags &= ~WLC_KEY_FLAG_GEN_MIC_ERR;
+	}
+#endif
 
 	tkip_mic_init(&mic_ctx, micl, micr);
 	tkip_mic_update(&mic_ctx, (uint8 *)hdr, (ETHER_ADDR_LEN << 1));
@@ -958,6 +1002,81 @@ done:
 	return BCME_OK;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+tkip_dump(const wlc_key_t *key, struct bcmstrbuf *b)
+{
+	tkip_key_t *tkip_key;
+	size_t i, j;
+
+	KM_DBG_ASSERT(TKIP_KEY_VALID(key));
+
+	tkip_key = (tkip_key_t *)key->algo_impl.ctx;
+	bcm_bprintf(b, "\ttkip key: ");
+	for (i = 0; i < TKIP_KEY_TK_SIZE; ++i)
+		bcm_bprintf(b, "%02x", tkip_key->key[i]);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\ttkip mic key from_ds: ");
+	for (i = 0; i < TKIP_KEY_MIC_KEY_SIZE; ++i)
+		bcm_bprintf(b, "%02x", tkip_key->mic_keys.from_ds[i]);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\ttkip mic key to ds: ");
+	for (i = 0; i < TKIP_KEY_MIC_KEY_SIZE; ++i)
+		bcm_bprintf(b, "%02x", tkip_key->mic_keys.to_ds[i]);
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "\ttkip tx seq: 0x");
+	for (i = TKIP_KEY_SEQ_SIZE; i > 0; --i)
+		bcm_bprintf(b, "%02x", tkip_key->tx_seq[i-1]);
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "\ttkip rx seq:\n");
+	for (i = 0; i < (size_t)KEY_NUM_RX_SEQ(key); ++i) {
+		bcm_bprintf(b, "\t\t%d: 0x", i);
+		for (j = TKIP_KEY_SEQ_SIZE; j > 0; --j)
+			bcm_bprintf(b, "%02x", tkip_key->rx_seq[i][j-1]);
+		bcm_bprintf(b, "\n");
+	}
+
+	bcm_bprintf(b, "\ttkip tx state:\n");
+	bcm_bprintf(b, "\t\tphase1 key: ");
+	for (i = 0; i < TKHASH_P1_KEY_SIZE/sizeof(uint16); ++i) {
+		uint16 x = htol16(tkip_key->tx_state.phase1_key[i]);
+		bcm_bprintf(b, "%02x%02x", (x & 0xff), (x >> 8 & 0xff));
+	}
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\t\tfrag_length: %d\n", tkip_key->tx_state.frag_length);
+	bcm_bprintf(b, "\t\tmic_off: %d\n", tkip_key->tx_state.mic_off);
+	bcm_bprintf(b, "\t\tmic: ");
+	bcm_bprintf(b, "%08x%08x",  ltoh32_ua(tkip_key->tx_state.mic),
+		ltoh32_ua(tkip_key->tx_state.mic + sizeof(uint32)));
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "\ttkip rx state:\n");
+	bcm_bprintf(b, "\t\tcur phase1 key: ");
+	for (i = 0; i < TKHASH_P1_KEY_SIZE/sizeof(uint16); ++i) {
+		uint16 x = htol16(tkip_key->rx_state.cur_phase1_key[i]);
+		bcm_bprintf(b, "%02x%02x", (x & 0xff), (x >> 8 & 0xff));
+	}
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\t\tcur seq id: %d\n", tkip_key->rx_state.cur_seq_id);
+
+	bcm_bprintf(b, "\t\tnext p1k seq id: %d\n", tkip_key->rx_state.next_p1k_seq_id);
+	bcm_bprintf(b, "\t\tnext phase1 key: ");
+	for (i = 0; i < TKHASH_P1_KEY_SIZE/sizeof(uint16); ++i) {
+		uint16 x = htol16(tkip_key->rx_state.next_phase1_key[i]);
+		bcm_bprintf(b, "%02x%02x", (x & 0xff), (x >> 8 & 0xff));
+	}
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "\t\tnext seq: 0x");
+	for (j = TKIP_KEY_SEQ_SIZE; j > 0; --j)
+		bcm_bprintf(b, "%02x", tkip_key->rx_state.next_seq[j-1]);
+	bcm_bprintf(b, "\n");
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static const key_algo_callbacks_t key_tkip_callbacks = {
     tkip_destroy,	/* destroy */

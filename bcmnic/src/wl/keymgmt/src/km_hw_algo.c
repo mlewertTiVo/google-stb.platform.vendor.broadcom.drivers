@@ -65,7 +65,7 @@ km_hw_algo_write_key(km_hw_t *hw, shm_addr_t addr, const uint8 *data, size_t dat
 		KM_HW_UNIT(hw), __FUNCTION__, addr, addr, (unsigned long)data_len));
 }
 
-#if defined(BCMDBUG_DUMP) || defined(WOWL)
+#if defined(BCMDBG) || defined(BCMDBUG_DUMP) || defined(WOWL)
 #define HW_READCB(_cb) _cb
 
 static int
@@ -291,7 +291,7 @@ done:
 
 #else
 #define HW_READCB(_cb) NULL
-#endif 
+#endif /* BCMDBG || BCMDBUG_DUMP || WOWL */
 
 /* wep support, no support for seq/rxiv */
 static const km_hw_dt_mask_t wep_dt_mask = KM_HW_DT_MASK(WLC_KEY_DATA_TYPE_KEY);

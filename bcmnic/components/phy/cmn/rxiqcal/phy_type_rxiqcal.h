@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_rxiqcal.h 639978 2016-05-25 16:03:11Z vyass $
+ * $Id: phy_type_rxiqcal.h 666526 2016-10-21 18:13:48Z $
  */
 
 #ifndef _phy_type_rxiqcal_h_
@@ -45,9 +45,11 @@ typedef void phy_type_rxiqcal_ctx_t;
 typedef int (*phy_type_rxiqcal_init_fn_t)(phy_type_rxiqcal_ctx_t *ctx);
 typedef void (*phy_type_rxiqcal_scanroam_cache_fn_t)(phy_type_rxiqcal_ctx_t *ctx, bool set);
 typedef int (*phy_type_rxiqcal_dump_fn_t)(phy_type_rxiqcal_ctx_t *ctx, struct bcmstrbuf *b);
+typedef int (*phy_type_rxiqmismatch_dump_fn_t)(phy_type_rxiqcal_ctx_t *ctx, struct bcmstrbuf *b);
 typedef struct {
 	phy_type_rxiqcal_scanroam_cache_fn_t scanroam_cache;
 	phy_type_rxiqcal_ctx_t *ctx;
+	phy_type_rxiqmismatch_dump_fn_t rxiq_mismatch_dump;
 } phy_type_rxiqcal_fns_t;
 
 /*

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_txiqlocal.h 633369 2016-04-22 08:36:32Z changbo $
+ * $Id: phy_ac_txiqlocal.h 656741 2016-08-29 23:22:11Z $
  */
 
 #ifndef _phy_ac_txiqlocal_h_
@@ -60,14 +60,19 @@ extern void wlc_phy_precal_txgain_acphy(phy_info_t *pi, txgain_setting_t *target
 extern int wlc_phy_cal_txiqlo_acphy(phy_info_t *pi, uint8 searchmode, uint8 mphase, uint8 Biq2byp);
 uint8 wlc_phy_get_tbl_id_iqlocal(phy_info_t *pi, uint16 core);
 extern void wlc_phy_txcal_phy_setup_acphy_core_sd_adc(phy_info_t *pi, uint8 core,
-uint16 sdadc_config);
+	uint16 sdadc_config);
+extern void wlc_phy_poll_samps_acphy(phy_info_t *pi, int16 *samp, bool is_tssi,
+	uint8 log2_nsamps, bool init_adc_inside,
+	uint16 core);
 #ifdef WLC_TXFDIQ
 extern void wlc_phy_tx_fdiqi_comp_acphy(phy_info_t *pi, bool enable, int fdiq_data_valid);
 #endif
 void phy_ac_txiqlocal(phy_info_t *pi, uint8 phase_id, uint8 searchmode);
 void phy_ac_txiqlocal_prerx(phy_info_t *pi, uint8 searchmode);
 void wlc_phy_txcal_coeffs_upd(phy_info_t *pi, txcal_coeffs_t *txcal_cache);
-#if !defined(PHYCAL_CACHING)
+#ifdef PHYCAL_CACHING
+void phy_ac_txiqlocal_save_cache(phy_ac_txiqlocal_info_t *txiqlocali, ch_calcache_t *ctx);
+#else
 void wlc_phy_scanroam_cache_txcal_acphy(void *ctx, bool set);
 #endif
 #endif /* _phy_ac_txiqlocal_h_ */

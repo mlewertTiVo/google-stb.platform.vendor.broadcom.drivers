@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ltecx.h 619689 2016-02-17 23:57:15Z $
+ * $Id: wlc_ltecx.h 664328 2016-10-12 06:05:06Z $
  */
 
 
@@ -66,7 +66,6 @@
 
 #define LTECX_MIN_CH_MASK		0xF
 
-#define LTECX_MAX_NUM_PERIOD_TYPES		3
 #define LTECX_FRAME_DOWNLINK_TYPE		1
 #define LTECX_FRAME_GAURDPERIOD_TYPE	2
 #define LTECX_FRAME_UPLINK_TYPE			3
@@ -132,8 +131,8 @@ typedef enum {
 	C_LTECX_ST_PROT_REQ_CTS,		/* 1: LTECX Protection Requested CTS2SELF */
 	C_LTECX_ST_RESEND_GCI_BITS = 8,	/* 1: Indicate the status to the MWS. */
 	C_LTECX_ST_TYPE3_INFINITE_STATE,	/* 1: TYPE 3 MSG with infinite duration. */
-	C_LTECX_ST_CRTI_DEBUG_MODE,		/* 1: CRTI DEBUG MODE Enabled */
-	C_LTECX_ST_CRTI_DEBUG_MODE_TMP,
+	C_LTECX_ST_AVAILABLE1,
+	C_LTECX_ST_AVAILABLE2,
 	C_LTECX_ST_TX_IND = 12,
 	C_LTECX_ST_LTE_ACTIVE		/* Needed for TxPwrCap selection */
 } shm_ltecx_state_t;
@@ -148,7 +147,8 @@ typedef enum {
 	C_LTECX_FLAGS_WCI2_4TXPWRCAP	= 5,
 	C_LTECX_FLAGS_MWS_TYPE7_CELL_TX_ANT	= 6,
 	C_LTECX_FLAGS_TSCOEX_EN = 7,
-	C_LTECX_FLAGS_FS_INTR = 8
+	C_LTECX_FLAGS_FS_INTR = 8,
+	C_LTECX_FLAGS_CRTI_DEBUG_MODE = 9	/* 1: CRTI DEBUG MODE Enabled */
 } shm_ltecx_flags_t;
 
 /* LTE coex definitions */
@@ -196,6 +196,12 @@ typedef struct wlc_ltecx_cmn_info {
 	mws_scanreq_bms_t	*mws_scanreq_bms;
 } wlc_ltecx_cmn_info_t;
 
+typedef struct {
+	uint16 wlan_txmap2g;
+	uint16 wlan_txmap5g;
+	uint16 wlan_rxmap2g;
+	uint16 wlan_rxmap5g;
+} mws_wlan_ant_map_t;
 
 struct wlc_ltecx_info {
 	wlc_info_t	*wlc;
@@ -309,6 +315,7 @@ void wlc_stf_ocl_lte(wlc_info_t *wlc, bool disable);
 #ifdef WLRSDB
 extern void wlc_ltecx_update_coex_iomask(wlc_ltecx_info_t *ltecx);
 #endif /* WLRSDB */
+extern void wlc_ltecx_update_wci2_config(wlc_ltecx_info_t *ltecx);
 #endif /* BCMLTECOEX */
 extern bool wlc_ltecx_rx_agg_off(wlc_info_t *wlc);
 extern bool wlc_ltecx_tx_agg_off(wlc_info_t *wlc);

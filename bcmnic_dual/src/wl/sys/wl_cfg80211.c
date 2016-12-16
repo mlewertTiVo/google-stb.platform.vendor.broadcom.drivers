@@ -15,7 +15,7 @@
  * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- * $Id: wl_cfg80211.c 671000 2016-11-18 12:06:12Z $
+ * $Id: wl_cfg80211.c 672294 2016-11-25 11:54:37Z $
  */
 /* */
 #include <typedefs.h>
@@ -9788,20 +9788,12 @@ wl_cfg80211_netdev_notifier_call(struct notifier_block * nb,
 /* To make sure we won't register the same notifier twice, otherwise a loop is likely to be
  * created in kernel notifier link list (with 'next' pointing to itself)
  */
-static struct bcmcfg_cfg80211_netdev_notifier bcmcfg_netdev_notifier[WDEV_INSTANCE_MAX] =
+static struct bcmcfg_cfg80211_netdev_notifier bcmcfg_netdev_notifier =
 {
-	{
 	{
 	.notifier_call = wl_cfg80211_netdev_notifier_call,
 	},
 	.notifier_registered = FALSE,
-	},
-	{
-	{
-	.notifier_call = wl_cfg80211_netdev_notifier_call,
-	},
-	.notifier_registered = FALSE
-	}
 };
 
 static void wl_cfg80211_scan_abort(struct bcm_cfg80211 *cfg)
@@ -10463,7 +10455,7 @@ static s32 wl_init_priv(struct bcm_cfg80211 *cfg)
 
 static void wl_deinit_priv(struct bcm_cfg80211 *cfg)
 {
-	int idx;
+	int err;
 	DNGL_FUNC(dhd_cfg80211_deinit, (cfg));
 	wl_destroy_event_handler(cfg);
 	wl_flush_eq(cfg);
@@ -10471,12 +10463,11 @@ static void wl_deinit_priv(struct bcm_cfg80211 *cfg)
 	del_timer_sync(&cfg->scan_timeout);
 	wl_deinit_priv_mem(cfg);
 
-	for (idx = 0; idx < WDEV_INSTANCE_MAX; ++idx) {
-		if (bcmcfg_netdev_notifier[idx].notifier_registered) {
-			bcmcfg_netdev_notifier[idx].notifier_registered = FALSE;
-			unregister_netdevice_notifier(
-				&bcmcfg_netdev_notifier[idx].netdev_notifier);
-		}
+	if (bcmcfg_netdev_notifier.notifier_registered) {
+		err = unregister_netdevice_notifier(
+			&bcmcfg_netdev_notifier.netdev_notifier);
+		if(err == 0)
+			bcmcfg_netdev_notifier.notifier_registered = FALSE;
 	}
 }
 
@@ -10666,15 +10657,14 @@ s32 wl_cfg80211_attach(struct net_device *ndev, void *context)
 	}
 #endif
 
-	if (!bcmcfg_netdev_notifier[wdev_instance-1].notifier_registered) {
-		bcmcfg_netdev_notifier[wdev_instance-1].notifier_registered = TRUE;
+	if (!bcmcfg_netdev_notifier.notifier_registered) {
 		err = register_netdevice_notifier(
-				&bcmcfg_netdev_notifier[wdev_instance-1].netdev_notifier);
+				&bcmcfg_netdev_notifier.netdev_notifier);
 		if (err) {
-			bcmcfg_netdev_notifier[wdev_instance-1].notifier_registered = FALSE;
 			WL_ERR(("Failed to register notifier%d %d\n", wdev_instance, err));
 			goto cfg80211_attach_out;
 		}
+		bcmcfg_netdev_notifier.notifier_registered = TRUE;
 	}
 
 #if defined(BCM_STA_ANDROID) && defined(COEX_DHCP)
@@ -10797,8 +10787,11 @@ static int wl_is_p2p_event(struct wl_event_q *e)
 				(uint32) e->emsg.addr.octet[4], (uint32) e->emsg.addr.octet[5]));
 
 			if (wl_get_p2p_status(cfg, IF_ADDING)) {
-				WL_DBG(("Clearing p2p status IF_ADDING \n"));
-				wl_clr_p2p_status(cfg, IF_ADDING);
+				WL_DBG(("p2p status IF_ADDING \n"));
+				/* Do not clear p2p status as we don't have confirmation whether netdev
+				  * is created or not. We will clear status once we got NETDEV_REGISTER
+				  * notification.
+				  */
 			}
 			else if (wl_get_p2p_status(cfg, IF_DELETING)) {
 				WL_DBG(("Clearing p2p status IF_DELETING \n"));
@@ -11867,6 +11860,11 @@ s32 wl_cfg80211_up(void *para)
 #endif /* BCMDONGLEHOST */
 
 	WL_DBG(("In\n"));
+
+	if(bcmcfg_to_prmry_ndev(cfg) != dev) {
+		WL_ERR(("cfg80211 is not intializing for virtual interface\n"));
+		return 0;
+	}
 
 	if ((err = wldev_ioctl(bcmcfg_to_prmry_ndev(cfg), WLC_GET_VERSION, &val,
 		sizeof(int), false) < 0)) {

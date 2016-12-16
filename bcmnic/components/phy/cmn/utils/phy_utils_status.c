@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_status.c 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_utils_status.c 583048 2015-08-31 16:43:34Z $
  */
 
 #include <phy_cfg.h>

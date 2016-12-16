@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_extended_n.h 617851 2016-02-08 20:16:34Z vyass $
+ * $Id: wlc_phy_extended_n.h 660552 2016-09-21 01:45:12Z $
  */
 
 #ifndef _wlc_phy_extended_n_h_
@@ -23,11 +23,12 @@
 #include <siutils.h>
 #include <wlc_phy_hal.h>
 #include <wlc_phy_int.h>
-#include <wlc_phy_types.h>
 
 /* ------------------- */
 /*  MACRO definitions  */
 /* ------------------- */
+
+#define ENABLE_FDS
 
 #define NPHY_INTF_RSSI_ENAB(pi)	((CHIPID_43236X_FAMILY(pi)) || \
 	(CHIPID(pi->sh->chip) == BCM43239_CHIP_ID))
@@ -335,8 +336,7 @@
 
 extern bool wlc_phy_chan2freq_nphy(phy_info_t *pi, uint channel, int *f,
 	chan_info_nphy_radio2057_t **t0, chan_info_nphy_radio205x_t **t1,
-	chan_info_nphy_radio2057_rev5_t **t2, chan_info_nphy_2055_t **t3,
-	chan_info_nphy_radio20671_t **t4);
+	chan_info_nphy_radio2057_rev5_t **t2, chan_info_nphy_radio20671_t **t4);
 #ifdef ENABLE_FDS
 extern void wlc_phy_4324x_fds_nphy(phy_info_t *pi, bool enable);
 #endif

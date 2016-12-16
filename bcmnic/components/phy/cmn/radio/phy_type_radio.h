@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_radio.h 612953 2016-01-15 19:26:02Z vyass $
+ * $Id: phy_type_radio.h 656120 2016-08-25 08:17:57Z $
  */
 
 #ifndef _phy_type_radio_h_
@@ -38,6 +38,8 @@ typedef uint32 (*phy_type_radio_id_fn_t)(phy_type_radio_ctx_t *ctx);
 typedef int (*phy_type_radio_getlistandsize_fn_t)(phy_type_radio_ctx_t *ctx,
 	phyradregs_list_t **phyreglist, uint16 *phyreglist_sz);
 typedef int (*phy_type_radio_dump_fn_t)(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b);
+typedef bool (*phy_type_radio_check_pll_lock)(phy_type_radio_ctx_t *ctx);
+
 typedef struct {
 	/* switch radio on/off */
 	phy_type_radio_switch_fn_t ctrl;
@@ -53,6 +55,8 @@ typedef struct {
 	phy_type_radio_getlistandsize_fn_t getlistandsize;
 	/* dump */
 	phy_type_radio_dump_fn_t dump;
+	/* check pll lock */
+	phy_type_radio_check_pll_lock pll_lock;
 	/* context */
 	phy_type_radio_ctx_t *ctx;
 } phy_type_radio_fns_t;

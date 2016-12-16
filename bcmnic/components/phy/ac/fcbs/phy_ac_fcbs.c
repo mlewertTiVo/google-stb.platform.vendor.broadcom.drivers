@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_fcbs.c 633216 2016-04-21 20:17:37Z vyass $
+ * $Id: phy_ac_fcbs.c 659153 2016-09-13 00:42:37Z $
  */
 
 #include <phy_cfg.h>
@@ -62,6 +62,10 @@ static bool phy_ac_fcbs_fcbs(phy_type_fcbs_ctx_t *ctx, int chanidx);
 static bool phy_ac_fcbs_postfcbs(phy_type_fcbs_ctx_t *ctx, int chanidx);
 static bool phy_ac_fcbs_prefcbs(phy_type_fcbs_ctx_t *ctx, int chanidx);
 static uint16 phy_ac_fcbs_channelindicator_obtain(phy_type_fcbs_ctx_t *ctx);
+static int phy_ac_fcbs_iov_set(phy_type_fcbs_ctx_t *ctx, bool val);
+static int phy_ac_fcbs_iov_get(phy_type_fcbs_ctx_t *ctx, int32 *fcbs);
+static int phy_ac_fcbs_iov_arm_get(phy_type_fcbs_ctx_t *ctx, chanspec_t chanspec, int chanidx);
+static int phy_ac_fcbs_iov_exit(phy_type_fcbs_ctx_t *ctx);
 #endif /* ENABLE_FCBS */
 
 /* register phy type specific implementation */
@@ -109,6 +113,10 @@ BCMATTACHFN(phy_ac_fcbs_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 		}
 	}
 	fns.channelindicator_obtain = phy_ac_fcbs_channelindicator_obtain;
+	fns.iov_set = phy_ac_fcbs_iov_set;
+	fns.iov_get = phy_ac_fcbs_iov_get;
+	fns.iov_arm_get = phy_ac_fcbs_iov_arm_get;
+	fns.iov_exit = phy_ac_fcbs_iov_exit;
 #else
 	pi->HW_FCBS = FALSE;
 #endif /* ENABLE_FCBS */
@@ -537,6 +545,47 @@ phy_ac_fcbs_channelindicator_obtain(phy_type_fcbs_ctx_t *ctx)
 
 	return READ_PHYREGFLD(pi, ChannelSwitch, ChannelIndicator);
 }
+
+static int
+phy_ac_fcbs_iov_set(phy_type_fcbs_ctx_t *ctx, bool val)
+{
+	phy_ac_fcbs_info_t *info = (phy_ac_fcbs_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+
+	pi->FCBS = val;
+	return BCME_OK;
+}
+
+static int
+phy_ac_fcbs_iov_get(phy_type_fcbs_ctx_t *ctx, int32 *fcbs)
+{
+	phy_ac_fcbs_info_t *info = (phy_ac_fcbs_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+
+	*fcbs = pi->FCBS;
+	return BCME_OK;
+}
+
+static int
+phy_ac_fcbs_iov_arm_get(phy_type_fcbs_ctx_t *ctx, chanspec_t chanspec, int chanidx)
+{
+	phy_ac_fcbs_info_t *info = (phy_ac_fcbs_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+
+	wlc_phy_fcbs_arm((wlc_phy_t*)pi, chanspec, chanidx);
+	return BCME_OK;
+}
+
+static int
+phy_ac_fcbs_iov_exit(phy_type_fcbs_ctx_t *ctx)
+{
+	phy_ac_fcbs_info_t *info = (phy_ac_fcbs_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+
+	wlc_phy_fcbs_exit((wlc_phy_t*)pi);
+	return BCME_OK;
+}
+
 /* ********************************************* */
 /*				External Definitions					*/
 /* ********************************************* */

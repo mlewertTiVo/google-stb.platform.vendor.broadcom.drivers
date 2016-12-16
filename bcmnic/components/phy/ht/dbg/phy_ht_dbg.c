@@ -12,13 +12,12 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_dbg.c 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: phy_ht_dbg.c 658374 2016-09-07 19:38:20Z $
  */
 
 #include <phy_cfg.h>
 #include <typedefs.h>
 #include <bcmdefs.h>
-#include <phy_dbg.h>
 #include <phy_mem.h>
 #include "phy_type_dbg.h"
 #include <phy_ht.h>
@@ -28,6 +27,9 @@
 /* Modules used by this module */
 /* *************************** */
 #include <wlc_phyreg_ht.h>
+#if defined(BCMDBG)
+#include <bcmdevs.h>
+#endif
 
 /* module private states */
 struct phy_ht_dbg_info {
@@ -47,6 +49,14 @@ static void phy_ht_dbg_gpio_out_enab(phy_type_dbg_ctx_t *ctx, bool enab);
 #else
 #define phy_ht_dbg_gpio_out_enab NULL
 #endif
+
+#if defined(BCMDBG)
+static int phy_ht_dbg_test_evm(phy_type_dbg_ctx_t *ctx, int channel, uint rate, int txpwr);
+static int phy_ht_dbg_test_carrier_suppress(phy_type_dbg_ctx_t *ctx, int channel);
+#else
+#define phy_ht_dbg_test_evm NULL
+#define phy_ht_dbg_test_carrier_suppress NULL
+#endif 
 
 /* register phy type specific implementation */
 phy_ht_dbg_info_t *
@@ -72,6 +82,8 @@ BCMATTACHFN(phy_ht_dbg_register_impl)(phy_info_t *pi, phy_ht_info_t *hti,
 	fns.ctx = di;
 	fns.txerr_dump = wlc_htphy_txerr_dump;
 	fns.gpio_out_enab = phy_ht_dbg_gpio_out_enab;
+	fns.test_evm = phy_ht_dbg_test_evm;
+	fns.test_carrier_suppress = phy_ht_dbg_test_carrier_suppress;
 
 	if (phy_dbg_register_impl(info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_dbg_register_impl failed\n", __FUNCTION__));
@@ -150,3 +162,77 @@ phy_ht_dbg_gpio_out_enab(phy_type_dbg_ctx_t *ctx, bool enab)
 	}
 }
 #endif /* WL_MACDBG */
+
+#if defined(BCMDBG)
+static int
+phy_ht_dbg_test_evm(phy_type_dbg_ctx_t *ctx, int channel, uint rate, int txpwr)
+{
+	phy_ht_dbg_info_t *di = (phy_ht_dbg_info_t *)ctx;
+	phy_info_t *pi = di->pi;
+	d11regs_t *regs = pi->regs;
+	uint16 reg = 0;
+	int bcmerror = 0;
+
+	/* stop any test in progress */
+	wlc_phy_test_stop(pi);
+
+	/* channel 0 means restore original contents and end the test */
+	if (channel == 0) {
+		wlc_phy_bphy_testpattern_htphy(pi, HTPHY_TESTPATTERN_BPHY_EVM, reg, FALSE);
+
+		pi->evm_phytest = 0;
+
+		if (BOARDFLAGS(GENERIC_PHY_INFO(pi)->boardflags) & BFL_PACTRL) {
+			W_REG(pi->sh->osh, &pi->regs->psm_gpio_out, pi->evm_o);
+			W_REG(pi->sh->osh, &pi->regs->psm_gpio_oe, pi->evm_oe);
+			OSL_DELAY(1000);
+		}
+		return 0;
+	}
+
+	phy_dbg_test_evm_init(pi);
+
+	if ((bcmerror = wlc_phy_test_init(pi, channel, TRUE)))
+		return bcmerror;
+
+	reg = phy_dbg_test_evm_reg(rate);
+
+	PHY_INFORM(("wlc_evm: rate = %d, reg = 0x%x\n", rate, reg));
+
+	/* Save original contents */
+	if (pi->evm_phytest == 0 && !ISHTPHY(pi)) {
+		pi->evm_phytest = R_REG(pi->sh->osh, &regs->phytest);
+	}
+
+	/* Set EVM test mode */
+	wlc_phy_bphy_testpattern_htphy(pi, NPHY_TESTPATTERN_BPHY_EVM, reg, TRUE);
+	return BCME_OK;
+}
+
+static int
+phy_ht_dbg_test_carrier_suppress(phy_type_dbg_ctx_t *ctx, int channel)
+{
+	phy_ht_dbg_info_t *di = (phy_ht_dbg_info_t *)ctx;
+	phy_info_t *pi = di->pi;
+	int bcmerror = 0;
+
+	/* stop any test in progress */
+	wlc_phy_test_stop(pi);
+
+	/* channel 0 means restore original contents and end the test */
+	if (channel == 0) {
+		wlc_phy_bphy_testpattern_htphy(pi, HTPHY_TESTPATTERN_BPHY_RFCS, 0, FALSE);
+
+		pi->car_sup_phytest = 0;
+		return 0;
+	}
+
+	if ((bcmerror = wlc_phy_test_init(pi, channel, TRUE)))
+		return bcmerror;
+
+	/* set carrier suppression test mode */
+	wlc_phy_bphy_testpattern_htphy(pi, HTPHY_TESTPATTERN_BPHY_RFCS, 0, TRUE);
+
+	return BCME_OK;
+}
+#endif 

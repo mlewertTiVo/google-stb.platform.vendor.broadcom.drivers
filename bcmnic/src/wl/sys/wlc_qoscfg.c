@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_qoscfg.c 636000 2016-05-06 04:05:27Z $
+ * $Id: wlc_qoscfg.c 663073 2016-10-04 01:33:08Z $
  */
 
 #include <wlc_cfg.h>
@@ -39,7 +39,7 @@
 #include <wlc_wlfc.h>
 #endif
 /* iovar table */
-enum {
+enum wlc_qoscfg_iov {
 	IOV_WME = 1,
 	IOV_WME_BSS_DISABLE = 2,
 	IOV_WME_NOACK = 3,
@@ -987,7 +987,144 @@ wlc_qos_doiovar(void *ctx, uint32 actionid,
 	return err;
 } /* wlc_qos_doiovar */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/** Print out the AC Params in an IE */
+static void
+wlc_dump_edcf_acp(wlc_info_t *wlc, struct bcmstrbuf *b, edcf_acparam_t *acp_ie, const char *desc)
+{
+	int ac;
+	BCM_REFERENCE(wlc);
+	bcm_bprintf(b, "\nEDCF params for %s\n", desc);
+
+	for (ac = 0; ac < AC_COUNT; ac++, acp_ie++) {
+		bcm_bprintf(b,
+		               "%s: ACI 0x%02x ECW 0x%02x "
+		               "(aci %d acm %d aifsn %d ecwmin %d ecwmax %d txop 0x%x)\n",
+		               aci_names[ac],
+		               acp_ie->ACI, acp_ie->ECW,
+		               (acp_ie->ACI & EDCF_ACI_MASK) >> EDCF_ACI_SHIFT,
+		               (acp_ie->ACI & EDCF_ACM_MASK) ? 1 : 0,
+		               acp_ie->ACI & EDCF_AIFSN_MASK,
+		               acp_ie->ECW & EDCF_ECWMIN_MASK,
+		               (acp_ie->ECW & EDCF_ECWMAX_MASK) >> EDCF_ECWMAX_SHIFT,
+		               ltoh16(acp_ie->TXOP));
+	}
+
+	bcm_bprintf(b, "\n");
+}
+
+/** Print out the AC Params in use by ucode */
+static void
+wlc_dump_wme_shm(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	int ac;
+
+	bcm_bprintf(b, "\nEDCF params in shared memory\n");
+
+	for (ac = 0; ac < AC_COUNT; ac++) {
+		shm_acparams_t shm_acp;
+		uint16 *element;
+		int j;
+
+		element = (uint16 *)&shm_acp;
+
+		/* fill in the ac param element from the shm locations */
+		for (j = 0; j < (int)sizeof(shm_acparams_t); j += 2) {
+			uint offset = M_EDCF_BLKS(wlc) + wme_shmemacindex(ac) *
+				M_EDCF_QLEN(wlc) + j;
+			*element++ = wlc_read_shm(wlc, offset);
+		}
+
+		bcm_bprintf(b, "%s: txop 0x%x cwmin 0x%x cwmax 0x%x cwcur 0x%x\n"
+		               "       aifs 0x%x bslots 0x%x reggap 0x%x status 0x%x\n",
+		               aci_names[ac],
+		               shm_acp.txop, shm_acp.cwmin, shm_acp.cwmax, shm_acp.cwcur,
+		               shm_acp.aifs, shm_acp.bslots, shm_acp.reggap, shm_acp.status);
+	}
+
+	bcm_bprintf(b, "\n");
+}
+
+static void
+wlc_qos_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_qos_info_t *qosi = (wlc_qos_info_t *)ctx;
+	wlc_info_t *wlc = qosi->wlc;
+	wlc_wme_t *wme = cfg->wme;
+	uint8 qi;
+
+	qi = wme->wme_param_ie.qosinfo;
+
+	bcm_bprintf(b, "\ncfg %d WME %d apsd %d count %d admctl 0x%x\n",
+	            WLC_BSSCFG_IDX(cfg), BSS_WME_ENAB(wlc, cfg),
+	            (qi & WME_QI_AP_APSD_MASK) >> WME_QI_AP_APSD_SHIFT,
+	            (qi & WME_QI_AP_COUNT_MASK) >> WME_QI_AP_COUNT_SHIFT,
+	            wme->wme_admctl);
+
+	wlc_dump_edcf_acp(wlc, b, wme->wme_param_ie.acparam,
+	                  BSSCFG_AP(cfg) ? "AP" : "STA");
+
+	if (BSSCFG_AP(cfg)) {
+		wlc_dump_edcf_acp(wlc, b, wme->wme_param_ie_ad->acparam, "BCN/PRBRSP");
+	}
+}
+
+static int
+wlc_dump_wme(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	d11regs_t *regs = wlc->regs;
+	uint32 cwcur, cwmin, cwmax, fifordy;
+	osl_t *osh;
+	int idx;
+	wlc_bsscfg_t *bsscfg;
+
+	bcm_bprintf(b, "up %d EDCF %d WME %d dp 0x%x\n",
+	            wlc->pub->up, EDCF_ENAB(wlc->pub), WME_ENAB(wlc->pub), wlc->wme_dp);
+
+	FOREACH_BSS(wlc, idx, bsscfg) {
+		wlc_qos_bss_dump(wlc->qosi, bsscfg, b);
+	}
+
+	if (!EDCF_ENAB(wlc->pub))
+		return BCME_OK;
+
+	if (!wlc->pub->up)
+		return BCME_OK;
+
+	wlc_dump_wme_shm(wlc, b);
+
+	osh = wlc->osh;
+
+	/* read current cwcur, cwmin, cwmax */
+	wlc_bmac_copyfrom_objmem(wlc->hw, S_DOT11_CWMIN << 2, &cwmin,
+		sizeof(cwmin), OBJADDR_SCR_SEL);
+	wlc_bmac_copyfrom_objmem(wlc->hw, S_DOT11_CWMAX << 2, &cwmax,
+		sizeof(cwmax), OBJADDR_SCR_SEL);
+	wlc_bmac_copyfrom_objmem(wlc->hw, S_DOT11_CWCUR << 2, &cwcur,
+		sizeof(cwcur), OBJADDR_SCR_SEL);
+
+	if (D11REV_GE(wlc->pub->corerev, 64)) {
+		fifordy = R_REG(osh, &regs->u.d11acregs.AQMFifoRdy_L);
+		fifordy = fifordy | (R_REG(osh, &regs->u.d11acregs.AQMFifoRdy_H) << 16);
+	} else if (D11REV_GE(wlc->pub->corerev, 40)) {
+		fifordy = R_REG(osh, &regs->u.d11acregs.u0.lt64.AQMFifoReady);
+	} else {
+		fifordy = R_REG(osh, &regs->u.d11regs.xmtfifordy);
+	}
+
+	bcm_bprintf(b, "xfifordy 0x%x psm_b0 0x%x txf_cur_idx 0x%x\n", fifordy,
+		R_REG(osh, (D11REV_GE(wlc->pub->corerev, 64) ?
+			&regs->u.d11acregs.psm_base[0] : &regs->psm_base_lt64[0])),
+		wlc_read_shm(wlc, M_CUR_TXF_INDEX(wlc)));
+	bcm_bprintf(b, "cwcur 0x%x cwmin 0x%x cwmax 0x%x\n", cwcur, cwmin, cwmax);
+
+	bcm_bprintf(b, "\n");
+
+	return BCME_OK;
+} /* wlc_dump_wme */
+#else
 #define wlc_qos_bss_dump NULL
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static int
 wlc_qos_bss_init(void *ctx, wlc_bsscfg_t *cfg)
@@ -1182,11 +1319,29 @@ wlc_bss_parse_wme_ie(void *ctx, wlc_iem_parse_data_t *data)
 	wlc_wme_t *wme = cfg->wme;
 
 	scb = wlc_iem_parse_get_assoc_bcn_scb(data);
+	ASSERT(scb != NULL);
+
+	/* Do not parse IE if TLV length doesn't matches the size of the structure */
+	if (wme_ie != NULL && (wme_ie->len != sizeof(wme_param_ie_t)) &&
+		(wme_ie->len != sizeof(wme_ie_t))) {
+		WL_ERROR(("%s Incorrect TLV - IE len: %d instead of WME IE len: %d "
+			"or WME param IE len: %d\n", __FUNCTION__, wme_ie->len,
+			(uint)sizeof(wme_ie_t), (uint)sizeof(wme_param_ie_t)));
+		if (BSS_WME_ENAB(wlc, cfg)) {
+			/* clear WME flags */
+			scb->flags &= ~(SCB_WMECAP | SCB_APSDCAP);
+			cfg->flags &= ~WLC_BSSCFG_WME_ASSOC;
+
+			/* Clear Qos Info by default */
+			wlc_qosinfo_update(scb, 0, TRUE);
+		}
+		return BCME_OK;
+	}
+
 	switch (data->ft) {
 #ifdef AP
 	case FC_ASSOC_REQ:
 	case FC_REASSOC_REQ:
-		ASSERT(scb != NULL);
 
 		/* Handle WME association */
 		scb->flags &= ~(SCB_WMECAP | SCB_APSDCAP);
@@ -1215,8 +1370,6 @@ wlc_bss_parse_wme_ie(void *ctx, wlc_iem_parse_data_t *data)
 	case FC_REASSOC_RESP: {
 		wlc_pm_st_t *pm = cfg->pm;
 		bool upd_trig_delv;
-
-		ASSERT(scb != NULL);
 
 		/* If WME is enabled, check if response indicates WME association */
 		scb->flags &= ~SCB_WMECAP;
@@ -1389,6 +1542,9 @@ BCMATTACHFN(wlc_qos_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "wme", (dump_fn_t)wlc_dump_wme, (void *)wlc);
+#endif
 
 	return qosi;
 

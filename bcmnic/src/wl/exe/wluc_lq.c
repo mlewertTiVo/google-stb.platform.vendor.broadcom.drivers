@@ -40,11 +40,8 @@
 
 static cmd_func_t wl_rssi_event, wl_chan_qual_event;
 static cmd_func_t wl_chanim_state, wl_chanim_mode;
-static cmd_func_t wl_dump_lq;
-static cmd_func_t wl_monitor_lq;
 static cmd_func_t wl_chanim_acs_record;
 static cmd_func_t wl_chanim_stats;
-static int _wl_dump_lq(void *wl);
 
 static cmd_t wl_lq_cmds[] = {
 	{ "rssi_event", wl_rssi_event, WLC_GET_VAR, WLC_SET_VAR,
@@ -83,11 +80,6 @@ static cmd_t wl_lq_cmds[] = {
 	"get chanim stats \n"
 	"\t Usage: wl chanim_stats"
 	},
-	{ "monitor_lq", wl_monitor_lq, WLC_GET_VAR, WLC_SET_VAR,
-	"Start/Stop monitoring link quality metrics - RSSI and SNR\n"
-	"\tUsage: wl monitor_lq <0: turn off / 1: turn on"},
-	{ "monitor_lq_status", wl_dump_lq, WLC_GET_VAR, -1 /* Set not reqd */,
-	"Returns averaged link quality metrics - RSSI and SNR values"},
 	{ NULL, NULL, 0, 0, NULL }
 };
 
@@ -327,94 +319,6 @@ wl_chanim_mode(void *wl, cmd_t *cmd, char **argv)
 		return wlu_iovar_setint(wl, cmd->name, mode);
 	}
 }
-
-static int
-_wl_dump_lq(void *wl)
-{
-	int ret = BCME_OK, noise = 0;
-	wl_lq_t *plq = NULL;
-	void *ptr = NULL;
-
-	memset(buf, 0, sizeof(wl_lq_t));
-
-	/* Display stats when disabled */
-	if ((ret = wlu_get(wl, WLC_GET_PHY_NOISE, &noise, sizeof(int))) < 0) {
-		printf("wlc_get noise failed with retcode:%d\n", ret);
-		return ret;
-	}
-
-	if ((ret = wlu_var_getbuf_sm (wl, "monitor_lq_status", NULL, 0, &ptr)) < 0) {
-		printf("wlc_get lq_status failed with retcode:%d\n", ret);
-		return ret;
-	}
-
-	plq = (wl_lq_t *)ptr;
-
-	if (!plq->isvalid) {
-		printf("Stats collection currently disabled"
-	               "['wl monitor_lq 1' to enable statistics collection]\n");
-		return ret;
-	}
-
-	noise = dtoh32(noise);
-	plq->rssi[LQ_IDX_MIN] = dtoh32(plq->rssi[LQ_IDX_MIN]);
-	plq->rssi[LQ_IDX_MAX] = dtoh32(plq->rssi[LQ_IDX_MAX]);
-	plq->rssi[LQ_IDX_AVG] = dtoh32(plq->rssi[LQ_IDX_AVG]);
-
-	printf("rss: %d, %d, %d\nsnr: %d, %d, %d\n",
-		plq->rssi[LQ_IDX_MIN],
-		plq->rssi[LQ_IDX_AVG],
-		plq->rssi[LQ_IDX_MAX],
-		plq->rssi[LQ_IDX_MIN]-noise,
-		plq->rssi[LQ_IDX_AVG]-noise,
-		plq->rssi[LQ_IDX_MAX]-noise);
-
-	return ret;
-} /* _wl_dump_lq */
-
-static int
-wl_dump_lq(void *wl, cmd_t *cmd, char **argv)
-{
-	int ret = BCME_OK;
-
-	UNUSED_PARAMETER(cmd);
-
-	if (!*++argv)
-		ret = _wl_dump_lq(wl);
-
-	return ret;
-} /* wl_dump_lq */
-
-static int
-wl_monitor_lq(void *wl, cmd_t *cmd, char **argv)
-{
-	int ret = BCME_OK;
-	char *endptr = NULL;
-	char **startptr = argv;
-
-	if (!*++startptr) { /* Get */
-		ret = wl_varint(wl, cmd, argv);
-	}
-	else {
-		int val = *startptr[0];
-		val = strtol(*startptr, &endptr, 0);
-
-		if (*endptr != '\0') {
-			return BCME_USAGE_ERROR;
-		}
-
-		val = htod32(val);
-
-		if (val == LQ_STOP_MONITOR) {
-			if ((ret = _wl_dump_lq(wl)))
-				return ret;
-		}
-
-		ret = wl_varint(wl, cmd, argv); /* Standard set call after getting stats */
-	}
-
-	return ret;
-} /* wl_monitor_lq */
 
 static int
 wl_chanim_acs_record(void *wl, cmd_t *cmd, char **argv)

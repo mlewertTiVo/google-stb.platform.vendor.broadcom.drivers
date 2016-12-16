@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_iocv.c 633551 2016-04-22 22:51:06Z $
+ * $Id: wlc_iocv.c 661109 2016-09-23 07:54:52Z $
  */
 
 #include <wlc_cfg.h>
@@ -52,6 +52,12 @@
 static int wlc_iocv_doioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif);
 static int wlc_iovar_ext(wlc_info_t *wlc, const char *name,
 	void *p, int plen, void *a, int alen, uint flags, bool set, struct wlc_if *wlcif);
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 /* ==== attach/detach ==== */
 
@@ -168,6 +174,9 @@ BCMATTACHFN(wlc_iocv_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "iocv", (dump_fn_t)wlc_iocv_high_dump, iocvi);
+#endif
 
 	return iocvi;
 
@@ -196,7 +205,7 @@ wlc_ioctl_filter(wlc_info_t *wlc, int cmd, void *arg, int len)
 	BCM_REFERENCE(arg);
 	BCM_REFERENCE(cmd);
 
-#if defined(OPENSRC_IOV_IOCTL)
+#if defined(OPENSRC_IOV_IOCTL) && !defined(BCMDBG)
 	/* List of commands supported by linux sta hybrid module */
 	switch (cmd) {
 	case WLC_SET_DTIMPRD:
@@ -218,7 +227,7 @@ wlc_ioctl_filter(wlc_info_t *wlc, int cmd, void *arg, int len)
 	case WLC_SET_SPECT_MANAGMENT:
 		return BCME_UNSUPPORTED;
 	}
-#endif 
+#endif /* OPENSRC_IOV_IOCTL && !BCMDBG */
 
 #ifdef WLTEST_DISABLED
 	/* ioctls encapsulated by WLTEST */
@@ -249,6 +258,20 @@ wlc_ioctl_filter(wlc_info_t *wlc, int cmd, void *arg, int len)
 	}
 #endif /* WLTEST_DISABLED */
 
+#if defined(BCMDBG)
+	switch (cmd) {
+	case WLC_EVM: {
+		/* EVM is only defined for CCK rates */
+		ratespec_t *rspec = (((uint *)arg) + 1);
+
+		if (!rspec || !RSPEC_ISCCK(*rspec)) {
+			return BCME_BADARG;
+		}
+
+		break;
+	}
+	}
+#endif 
 
 	return BCME_OK;
 } /* wlc_ioctl_filter */
@@ -309,7 +332,7 @@ wlc_module_ioctl_check(wlc_info_t *wlc, const wlc_ioctl_cmd_t *ci,
 	else if ((flags & WLC_IOCF_CORE_CLK) && !wlc->clk)
 		err = BCME_NOCLK;
 
-#if defined(OPENSRC_IOV_IOCTL)
+#if defined(OPENSRC_IOV_IOCTL) && !defined(BCMDBG)
 	else if ((flags & IOVF_OPEN_ALLOW) == 0)
 		err = BCME_UNSUPPORTED;
 #endif
@@ -320,11 +343,11 @@ wlc_module_ioctl_check(wlc_info_t *wlc, const wlc_ioctl_cmd_t *ci,
 #endif
 
 	else if ((flags & (WLC_IOCF_BSSCFG_STA_ONLY | WLC_IOCF_BSSCFG_AP_ONLY)) != 0) {
-		wlc_bsscfg_t *cfg;
-		if ((cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif)) == NULL)
-			err = BCME_NOTFOUND;
+		wlc_bsscfg_t *cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+		BCM_REFERENCE(cfg);
+		ASSERT(cfg != NULL);
 
-		else if ((flags & WLC_IOCF_BSSCFG_STA_ONLY) && !BSSCFG_STA(cfg))
+		if ((flags & WLC_IOCF_BSSCFG_STA_ONLY) && !BSSCFG_STA(cfg))
 			err = BCME_NOTSTA;
 		else if ((flags & WLC_IOCF_BSSCFG_AP_ONLY) && !BSSCFG_AP(cfg))
 			err = BCME_NOTAP;
@@ -622,7 +645,7 @@ wlc_iovar_check(wlc_info_t *wlc, const bcm_iovar_t *vi, void *arg, int len, bool
 		}
 	}
 
-#if defined(OPENSRC_IOV_IOCTL)
+#if defined(OPENSRC_IOV_IOCTL) && !defined(BCMDBG)
 	if ((vi->flags & IOVF_OPEN_ALLOW) == 0)
 		err = BCME_UNSUPPORTED;
 #endif
@@ -635,11 +658,9 @@ wlc_iovar_check(wlc_info_t *wlc, const bcm_iovar_t *vi, void *arg, int len, bool
 
 	if ((flags = (vi->flags & (IOVF_BSSCFG_STA_ONLY | IOVF_BSSCFG_AP_ONLY |
 		IOVF_BSS_SET_DOWN))) != 0) {
-		wlc_bsscfg_t *cfg;
-		if ((cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif)) == NULL) {
-			err = BCME_NOTFOUND;
-			goto exit;
-		}
+		wlc_bsscfg_t *cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+		ASSERT(cfg != NULL);
+
 		if (set && ((flags & IOVF_BSS_SET_DOWN) != 0) && cfg->up) {
 			err = BCME_NOTDOWN;
 			goto exit;

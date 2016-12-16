@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_obss_dynbw.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_obss_dynbw.c 662085 2016-09-28 07:48:19Z $
  */
 
 /**
@@ -42,7 +42,9 @@
 #include <wlc_lq.h>
 #include <wlc_obss_util.h>
 #include <wlc_obss_dynbw.h>
-#include <wlc_ulb.h>
+#ifdef WLCSA
+#include <wlc_csa.h>
+#endif
 
 #define OBSS_DYNBW_DELTASTATS(result, curr, prev) \
 	result = (curr - prev);
@@ -90,6 +92,11 @@ struct wlc_obss_dynbw {
 	wlc_bmac_obss_counts_t *curr_stats;
 	/* Cummulative stat counters */
 	wlc_bmac_obss_counts_t *total_stats;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* For diagnostic measurements */
+	wlc_bmac_obss_counts_t *msrmnt_stored;
+	cca_stats_n_flags *results;
+#endif 
 };
 
 #define WLC_OBSS_DYNBW_SIZE (sizeof(wlc_obss_dynbw_t))
@@ -97,6 +104,10 @@ struct wlc_obss_dynbw {
 #define WLC_OBSS_DYNBW_STATIC_SIZE (sizeof(wlc_obss_dynbwsw_config_t)\
 		+  3 * sizeof(wlc_bmac_obss_counts_t))
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define WLC_OBSS_DYNBW_DEBUG_SIZE (sizeof(wlc_bmac_obss_counts_t)\
+		+ sizeof(cca_stats_n_flags))
+#endif 
 
 /* Private cubby struct for protOBSS */
 typedef struct {
@@ -125,6 +136,7 @@ typedef struct {
 	bool is_obss_modesw_call; /* To identify if DBS issued modesw calls. Used to
 		* decide if callbacks from modesw need to processed by DBS
 		*/
+	bool is_csa_lock;
 } dynbw_bsscfg_cubby_t;
 
 typedef struct wlc_dynbw_cb_ctx {
@@ -170,6 +182,11 @@ static const bcm_iovar_t wlc_obss_dynbw_iovars[] = {
 	{"dyn_bwsw_params", IOV_OBSS_DYN_BWSW_PARAMS,
 	(0), 0, IOVT_BUFFER, sizeof(obss_config_params_t),
 	},
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	{"dump_obss_dyn_bwsw", IOV_OBSS_DYN_BWSW_DUMP,
+	(IOVF_GET_UP), 0, IOVT_BUFFER, WLC_IOCTL_MAXLEN,
+	},
+#endif 
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -190,17 +207,26 @@ static int wlc_obss_dynbw_doiovar(void *hdl,
 	uint32 actionid, void *p, uint plen, void *a,
 	uint alen, uint val_size, struct wlc_if *wlcif);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_obss_dynbw_dump(wlc_obss_dynbw_t *prot, void *input, int buf_len, void *output,
+	wlc_bsscfg_t *bsscfg);
+static int wlc_obss_dynbw_dump_statscb(wlc_info_t *wlc, void *ctx,
+	uint32 elapsed_time, void *vstats);
+#endif 
 
 static int wlc_obss_dynbw_init(void *cntxt);
 static void wlc_obss_dynbw_watchdog(void *cntxt);
 static INLINE bool wlc_obss_dynbw_prim_interf_detection_logic(uint32 sample_dur,
 	uint32 crs_prim, uint32 ibss, uint8 thresh_seconds);
-static void wlc_obss_dynbw_restore_defaults(wlc_obss_dynbw_t *prot, wlc_bsscfg_t *bsscfg);
+static void wlc_obss_dynbw_restore_defaults(wlc_obss_dynbw_t *prot, wlc_bsscfg_t *bsscfg,
+	chanspec_t chspec);
 static INLINE bool wlc_obss_dynbw_sec_interf_detection_logic(uint32 sample_dur,
 	uint32 crs_total, uint8 thresh_seconds);
 static INLINE bool wlc_obss_dynbw_txop_detection_logic(uint32 sample_dur,
 	uint32 slot_time_txop, uint32 txopp_stats, uint32 txdur, uint32 ibss, uint8 txop_threshold);
-
+#ifdef WLCSA
+static void wlc_obss_dynbw_csa_cb(void *ctx, wlc_csa_notif_cb_data_t *notif_data);
+#endif
 /* static inline function for  TXOP stats update */
 static INLINE bool
 wlc_obss_dynbw_txop_detection_logic(uint32 sample_dur,
@@ -346,6 +372,81 @@ wlc_obss_dynbw_watchdog(void *cntxt)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+
+static int
+wlc_obss_dynbw_dump_statscb(wlc_info_t *wlc, void *ctx,
+		uint32 elapsed_time, void *vstats)
+{
+	wlc_obss_dynbw_t *prot = (wlc_obss_dynbw_t *) wlc->obss_dynbw;
+	wlc_bmac_obss_counts_t *delta = (wlc_bmac_obss_counts_t *)vstats;
+
+	if (vstats == NULL) {
+		/* if vstats is NULL, it implies that it was not able
+		* to complete the measurement of stats. As a result,
+		* msrmnt_done is still 0
+		*/
+		return 0;
+	}
+
+	memcpy(prot->msrmnt_stored, delta, sizeof(*delta));
+
+	/* since, it was able to complete the measurement, set
+	* msrmnt_done to 1 to reflect that the results can be displayed
+	*/
+	prot->results->msrmnt_done = 1;
+	return 0;
+}
+
+static int
+wlc_obss_dynbw_dump(wlc_obss_dynbw_t *prot, void *input, int buf_len, void *output,
+		wlc_bsscfg_t *bsscfg)
+{
+	cca_msrmnt_query *q = (cca_msrmnt_query *) input;
+	cca_stats_n_flags *results;
+	wlc_info_t *wlc = prot->wlc;
+
+	if (!q->msrmnt_query) {
+		prot->results->msrmnt_done = 0;
+		wlc_lq_register_dynbw_stats_cb(wlc,
+			q->time_req, wlc_obss_dynbw_dump_statscb, bsscfg->ID, NULL);
+		bzero(output, buf_len);
+	} else {
+		char *buf_ptr;
+		struct bcmstrbuf b;
+		wlc_bsscfg_t *cfg;
+		int idx;
+
+		results = (cca_stats_n_flags *) output;
+		buf_ptr = results->buf;
+		buf_len = buf_len - OFFSETOF(cca_stats_n_flags, buf);
+		buf_len = (buf_len > 0) ? buf_len : 0;
+
+		results->msrmnt_time = prot->results->msrmnt_time;
+		results->msrmnt_done = prot->results->msrmnt_done;
+		bcm_binit(&b, buf_ptr, buf_len);
+
+		if (results->msrmnt_done) {
+			wlc_obss_util_stats(prot->wlc, prot->msrmnt_stored, prot->prev_stats,
+				prot->curr_stats, q->report_opt, &b);
+		}
+		FOREACH_AS_BSS(wlc, idx, cfg) {
+			dynbw_bsscfg_cubby_t *po_bss = DYNBW_BSSCFG_CUBBY(prot, cfg);
+
+			bcm_bprintf(&b, "\n\nInterface ID=%d\n", cfg->ID);
+			bcm_bprintf(&b, "Obss_activity=%d\n", po_bss->obss_activity);
+			bcm_bprintf(&b, "pseudo states=%d\n", po_bss->bwswpsd_state);
+			bcm_bprintf(&b, "tx overridden cspec=%x\n", po_bss->bwswpsd_cspec_for_tx);
+			bcm_bprintf(&b, "# of secs of OBSS inactivity for bwswitch=%d\n",
+				po_bss->obss_bwsw_no_activity_cfm_count);
+			bcm_bprintf(&b, "# of secs of OBSS activity for bwswitch=%d\n",
+				po_bss->obss_bwsw_activity_cfm_count);
+		}
+
+	}
+	return 0;
+}
+#endif 
 
 /* macro for dyn_bwsw_params */
 #define DYNBWSW_CONFIG_PARAMS(field, mask, cfg_flag, rst_flag, val, def) \
@@ -455,6 +556,15 @@ wlc_obss_dynbw_doiovar(void *hdl, uint32 actionid,
 			update_dynbwsw_config_params(params, config);
 			break;
 		}
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+		case IOV_GVAL(IOV_OBSS_DYN_BWSW_DUMP): {
+			wlc_info_t *wlc = prot->wlc;
+			wlc_bsscfg_t *cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+			ASSERT(cfg != NULL);
+			err = wlc_obss_dynbw_dump(prot, p, alen, a, cfg);
+			break;
+		}
+#endif 
 		default:
 			err = BCME_UNSUPPORTED;
 			break;
@@ -467,8 +577,13 @@ BCMATTACHFN(wlc_obss_dynbw_attach)(wlc_info_t *wlc)
 {
 	wlc_obss_dynbw_t *prot;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	prot = (wlc_obss_dynbw_t *) MALLOCZ(wlc->osh, (WLC_OBSS_DYNBW_SIZE
+			+ WLC_OBSS_DYNBW_STATIC_SIZE + WLC_OBSS_DYNBW_DEBUG_SIZE));
+#else
 	prot = (wlc_obss_dynbw_t *) MALLOCZ(wlc->osh, (WLC_OBSS_DYNBW_SIZE
 			+ WLC_OBSS_DYNBW_STATIC_SIZE));
+#endif 
 
 	if (prot == NULL) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
@@ -485,6 +600,10 @@ BCMATTACHFN(wlc_obss_dynbw_attach)(wlc_info_t *wlc)
 	prot->curr_stats = (wlc_bmac_obss_counts_t *) (prot->prev_stats + 1);
 	prot->total_stats = (wlc_bmac_obss_counts_t *) (prot->curr_stats + 1);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	prot->msrmnt_stored = (wlc_bmac_obss_counts_t *) (prot->total_stats + 1);
+	prot->results = (cca_stats_n_flags *) (prot->msrmnt_stored + 1);
+#endif 
 
 	if (D11REV_GE(wlc->pub->corerev, 40)) {
 		wlc->pub->_obss_dynbw = TRUE;
@@ -548,6 +667,16 @@ BCMATTACHFN(wlc_obss_dynbw_attach)(wlc_info_t *wlc)
 	{
 		prot->dyn_bwsw_enabled = OBSS_DYN_BWSW_DISABLE;
 	}
+#ifdef WLCSA
+	if (wlc->csa) {
+	    if (wlc_csa_obss_dynbw_notif_cb_register(
+			wlc->csa, wlc_obss_dynbw_csa_cb, prot) != BCME_OK) {
+		WL_ERROR(("%s: csa notif callbk failed, but continuing\n",
+			__FUNCTION__));
+		goto fail;
+	    }
+	}
+#endif
 	return prot;
 fail:
 	MODULE_DETACH(prot, wlc_obss_dynbw_detach);
@@ -584,7 +713,21 @@ BCMATTACHFN(wlc_obss_dynbw_detach)(wlc_obss_dynbw_t *prot)
 				wlc->pub->unit, __FUNCTION__));
 		}
 	}
+#ifdef WLCSA
+	if (wlc->csa) {
+	    if (wlc_csa_obss_dynbw_notif_cb_unregister(
+			wlc->csa, wlc_obss_dynbw_csa_cb, prot) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_csa_notif_cb_unregister() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+	    }
+	}
+#endif /* WLCSA */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	MFREE(wlc->osh, prot, (WLC_OBSS_DYNBW_SIZE + WLC_OBSS_DYNBW_STATIC_SIZE
+			+ WLC_OBSS_DYNBW_DEBUG_SIZE));
+#else
 	MFREE(wlc->osh, prot, (WLC_OBSS_DYNBW_SIZE + WLC_OBSS_DYNBW_STATIC_SIZE));
+#endif 
 }
 
 static int
@@ -670,6 +813,20 @@ wlc_obss_dynbw_manage_bw_switch(wlc_obss_dynbw_t *prot)
 			po_bss = DYNBW_BSSCFG_CUBBY(prot, cfg);
 			WL_MODE_SWITCH(("cfg:%p, bwswpsd:%d\n", OSL_OBFUSCATE_BUF(cfg),
 				po_bss->bwswpsd_state));
+			if (WL11H_ENAB(wlc) &&
+				wlc_radar_chanspec(wlc->cmi, cfg->current_bss->chanspec) &&
+				!wlc_is_edcrs_eu(wlc)) {
+				continue;
+			}
+
+			if (po_bss->is_csa_lock) {
+				/* Since channel change is  in progress
+				* we donot run OBSS_DBS on old channel
+				*/
+				continue;
+			}
+			if (po_bss->is_obss_modesw_call == TRUE)
+					continue;
 
 			if (po_bss->bwswpsd_state == BWSW_PSEUDOUPGD_NOTACTIVE)
 			{
@@ -714,7 +871,7 @@ wlc_obss_dynbw_manage_bw_switch(wlc_obss_dynbw_t *prot)
 
 			po_bss->obss_bwsw_no_activity_cfm_count = 0;
 
-			if (err == BCME_OK) {
+			if ((err == BCME_OK) && (po_bss->obss_activity == OBSS_INACTIVE)) {
 				/* If this is the first downg, store the orig BW
 				* for use later.
 				*/
@@ -722,12 +879,11 @@ wlc_obss_dynbw_manage_bw_switch(wlc_obss_dynbw_t *prot)
 					prot->main_chanspec = original_chspec;
 				}
 
-				if (po_bss->obss_activity == OBSS_INACTIVE) {
-					po_bss->orig_chanspec = original_chspec;
-					po_bss->obss_bwsw_no_activity_cfm_count_max =
-						prot->cfg_dbs->obss_bwsw_no_activity_cfm_count_cfg;
-				}
-			} else {
+				po_bss->orig_chanspec = prot->main_chanspec;
+				po_bss->obss_bwsw_no_activity_cfm_count_max =
+					prot->cfg_dbs->obss_bwsw_no_activity_cfm_count_cfg;
+			}
+			if (err != BCME_OK) {
 				po_bss->is_obss_modesw_call = FALSE;
 			}
 			po_bss->obss_bwsw_activity_cfm_count = 0;
@@ -757,6 +913,8 @@ wlc_obss_dynbw_manage_bw_switch(wlc_obss_dynbw_t *prot)
 					po_bss->obss_bwsw_no_activity_cfm_count_max) {
 				continue;
 			}
+			if (po_bss->is_obss_modesw_call == TRUE)
+				continue;
 
 			if (po_bss->bwswpsd_state ==
 					BWSW_PSEUDOUPGD_NOTACTIVE) {
@@ -773,6 +931,9 @@ wlc_obss_dynbw_manage_bw_switch(wlc_obss_dynbw_t *prot)
 						MODESW_CTRL_HANDLE_ALL_CFGS;
 					}
 					po_bss->is_obss_modesw_call = TRUE;
+					/* save prsnt cspec to come bk if req */
+					po_bss->bwswpsd_cspec_for_tx =
+						prsnt_chspec;
 					err = wlc_modesw_bw_switch(wlc->modesw,
 						cfg->current_bss->chanspec,
 						BW_SWITCH_TYPE_UPGRADE, cfg,
@@ -781,9 +942,7 @@ wlc_obss_dynbw_manage_bw_switch(wlc_obss_dynbw_t *prot)
 				else
 					err = BCME_UNSUPPORTED;
 				if (err == BCME_OK) {
-					/* save prsnt cspec to come bk if req */
-					po_bss->bwswpsd_cspec_for_tx =
-						prsnt_chspec;
+
 					WL_MODE_SWITCH(("pseudo:UP:txchanSpec:x%x!,"
 						"pNOTACTIVE->pPENDING\n",
 						po_bss->bwswpsd_cspec_for_tx));
@@ -797,6 +956,7 @@ wlc_obss_dynbw_manage_bw_switch(wlc_obss_dynbw_t *prot)
 					po_bss->obss_bwsw_no_activity_cfm_count_max =
 						prot->cfg_dbs->obss_bwsw_no_activity_cfm_count_cfg;
 					po_bss->is_obss_modesw_call = FALSE;
+					po_bss->bwswpsd_cspec_for_tx = INVCHANSPEC;
 				}
 			}
 			po_bss->obss_bwsw_no_activity_cfm_count = 0;
@@ -859,6 +1019,8 @@ wlc_obss_dynbw_bwswpsd_statscb(wlc_info_t *wlc, void *ctx,
 		/* just return */
 		goto fail;
 	}
+	if (po_bss->is_obss_modesw_call == TRUE)
+		goto fail;
 	/* is interference still present in higher BW's? */
 	if (wlc_obss_dynbw_interference_detected_for_bwsw(prot, stats)) {
 		uint32 ctrl_flags = MODESW_CTRL_DN_SILENT_DNGRADE;
@@ -871,11 +1033,10 @@ wlc_obss_dynbw_bwswpsd_statscb(wlc_info_t *wlc, void *ctx,
 		/* interference still present... silently dngrade */
 		po_bss->bwswpsd_state = BWSW_PSEUDOUPGD_PENDING;
 		po_bss->is_obss_modesw_call = TRUE;
-		if ((err = wlc_modesw_bw_switch(wlc->modesw,
-				po_bss->bwswpsd_cspec_for_tx,
-				BW_SWITCH_TYPE_DNGRADE, bsscfg,
-				ctrl_flags)) ==
-				BCME_OK) {
+		err = wlc_modesw_bw_switch(wlc->modesw,
+			po_bss->bwswpsd_cspec_for_tx, BW_SWITCH_TYPE_DNGRADE, bsscfg,
+			ctrl_flags);
+		if ((err == BCME_OK) || (err == BCME_BUSY)) {
 			WL_MODE_SWITCH(("pseudo:statscb:INTF_STILL_PRESENT!so,"
 				"DN:txchanSpec:x%x!, pACTIVE->pPENDING\n",
 				po_bss->bwswpsd_cspec_for_tx));
@@ -899,9 +1060,10 @@ wlc_obss_dynbw_bwswpsd_statscb(wlc_info_t *wlc, void *ctx,
 			po_bss->bwswpsd_cspec_for_tx = INVCHANSPEC;
 		}
 		po_bss->is_obss_modesw_call = TRUE;
-		if ((err = wlc_modesw_bw_switch(wlc->modesw,
+		err = wlc_modesw_bw_switch(wlc->modesw,
 			bsscfg->current_bss->chanspec, BW_SWITCH_TYPE_UPGRADE, bsscfg,
-			ctrl_flags)) ==	BCME_OK) {
+			ctrl_flags);
+		if (err == BCME_OK) {
 			WL_MODE_SWITCH(("pseudo:statscb:INTF_GONE!so,UP:txchanSpec:"
 					"x%x! actionsending!\n",
 					po_bss->bwswpsd_cspec_for_tx));
@@ -976,7 +1138,9 @@ wlc_obss_dynbw_modesw_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data)
 		return;
 	}
 	WL_MODE_SWITCH(("%s: signal:%d\n", __FUNCTION__, notif_data->signal));
-
+	if (po_bss->is_obss_modesw_call) {
+		po_bss->is_obss_modesw_call = FALSE;
+	}
 	switch (notif_data->signal) {
 	case (MODESW_PHY_UP_COMPLETE):
 		WL_MODE_SWITCH(("Got the PHY_UP status\n"));
@@ -1027,9 +1191,6 @@ wlc_obss_dynbw_modesw_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data)
 				po_bss);
 			prot->obss_active_cnt++;
 		}
-		if (po_bss->is_obss_modesw_call) {
-			po_bss->is_obss_modesw_call = FALSE;
-		}
 		break;
 	case (MODESW_ACTION_FAILURE):
 		/* The flag MODESW_CTRL_NO_ACK_DISASSOC will ensure
@@ -1060,10 +1221,9 @@ wlc_obss_dynbw_modesw_cb(void *ctx, wlc_modesw_notif_cb_data_t *notif_data)
 		/* reset counter which used to detect that obss is gone */
 		po_bss->obss_bwsw_no_activity_cfm_count_max =
 			prot->cfg_dbs->obss_bwsw_no_activity_cfm_count_cfg;
-		if (po_bss->is_obss_modesw_call) {
-			po_bss->is_obss_modesw_call = FALSE;
-		}
 		break;
+	default:
+		po_bss->is_obss_modesw_call = TRUE;
 	}
 }
 
@@ -1079,11 +1239,7 @@ wlc_obss_dynbw_ht_chanspec_override(wlc_obss_dynbw_t *prot,
 	/* When ULB operations are enabled no processing is needed based on BSS`s operating
 	 * mode as expectation is beacon_chanspec is < 20MHz.
 	 */
-	if (WLC_MODESW_ENAB(prot->wlc->pub) &&
-#ifdef WL11ULB
-		!BSSCFG_ULB_ENAB(prot->wlc, bsscfg) &&
-#endif /* WL11ULB */
-		TRUE) {
+	if (WLC_MODESW_ENAB(prot->wlc->pub)) {
 		if (po_bss->obss_activity == OBSS_ACTIVE_HT) {
 			bw = wlc_modesw_get_bw_from_opermode(bsscfg->oper_mode, bw_bcn);
 			bw = MIN(bw, bw_bcn);
@@ -1104,12 +1260,16 @@ wlc_obss_dynbw_ht_chanspec_override(wlc_obss_dynbw_t *prot,
 * default values
 */
 static void
-wlc_obss_dynbw_restore_defaults(wlc_obss_dynbw_t *prot, wlc_bsscfg_t *bsscfg)
+wlc_obss_dynbw_restore_defaults(wlc_obss_dynbw_t *prot, wlc_bsscfg_t *bsscfg,
+		chanspec_t chspec)
 {
-	wlc_info_t *wlc = prot->wlc;
 	dynbw_bsscfg_cubby_t *po_bss = DYNBW_BSSCFG_CUBBY(prot, bsscfg);
 
-	wlc_update_bandwidth(wlc, bsscfg, po_bss->orig_chanspec);
+	if (prot->dyn_bwsw_enabled == OBSS_DYN_BWSW_DISABLE) {
+		return;
+	}
+
+	po_bss->orig_chanspec = chspec;
 	WL_MODE_SWITCH(("Orig chanspec = %x\n", po_bss->orig_chanspec));
 
 	po_bss->obss_activity = OBSS_INACTIVE;
@@ -1143,7 +1303,9 @@ wlc_obss_dynbw_assoc_cxt_cb(void *ctx, bss_assoc_state_data_t *notif_data)
 
 	if (BSSCFG_AP(bsscfg))
 		return;
-	wlc_obss_dynbw_restore_defaults(prot, bsscfg);
+
+	wlc_obss_dynbw_restore_defaults(prot, bsscfg,
+			bsscfg->current_bss->chanspec);
 }
 
 /* Callback from wldown. This Function will reset
@@ -1164,7 +1326,8 @@ wlc_obss_dynbw_updown_cb(void *ctx, bsscfg_up_down_event_data_t *updown_data)
 	WL_MODE_SWITCH(("%s:got callback from updown. intf up resetting prot_obss\n",
 		__FUNCTION__));
 
-	wlc_obss_dynbw_restore_defaults(prot, bsscfg);
+	wlc_obss_dynbw_restore_defaults(prot, bsscfg,
+			bsscfg->current_bss->chanspec);
 }
 
 /* Update Chanspec to Original Chanspec if Pseudo State is in Progress.
@@ -1187,5 +1350,35 @@ wlc_obss_dynbw_beacon_chanspec_override(wlc_obss_dynbw_t *prot,
 			*chanspec));
 	}
 }
+#ifdef WLCSA
+static void
+wlc_obss_dynbw_csa_cb(void *ctx, wlc_csa_notif_cb_data_t *notif_data)
+{
+	wlc_obss_dynbw_t *prot = (wlc_obss_dynbw_t *)ctx;
+	wlc_bsscfg_t *bsscfg = notif_data->cfg;
+	dynbw_bsscfg_cubby_t *po_bss = DYNBW_BSSCFG_CUBBY(prot, bsscfg);
 
+	ASSERT(notif_data->cfg != NULL);
+	ASSERT(ctx != NULL);
+
+	switch (notif_data->signal) {
+		case CSA_CHANNEL_CHANGE_START:
+			if (!po_bss->is_csa_lock) {
+				/* csa started */
+				po_bss->is_csa_lock = TRUE;
+				WL_MODE_SWITCH(("%s:Got Callback from CSA,"
+				    "resetting prot_obss to", __FUNCTION__));
+				WL_MODE_SWITCH(("0x%x\n", notif_data->chanspec));
+				wlc_obss_dynbw_restore_defaults(prot, bsscfg, notif_data->chanspec);
+			}
+			break;
+		case CSA_CHANNEL_CHANGE_END:
+			/* csa done */
+			WL_MODE_SWITCH(("%s:Got Callback from CSA,"
+			   " CSA switch end\n", __FUNCTION__));
+			po_bss->is_csa_lock = FALSE;
+			break;
+	}
+}
+#endif /* WLCSA */
 /* end of file */

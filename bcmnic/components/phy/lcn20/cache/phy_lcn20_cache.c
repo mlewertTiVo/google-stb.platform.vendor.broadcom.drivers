@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_cache.c 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: phy_lcn20_cache.c 606042 2015-12-14 06:21:23Z $
  */
 
 #include <phy_cfg.h>
@@ -36,8 +36,7 @@ struct phy_lcn20_cache_info {
 };
 
 /* local functions */
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP) || \
-	defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
 /** dump calibration regs/info */
 static void
 wlc_phy_cal_dump_lcn20phy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b);
@@ -66,8 +65,7 @@ BCMATTACHFN(phy_lcn20_cache_register_impl)(phy_info_t *pi, phy_lcn20_info_t *lcn
 	/* register PHY type specific implementation */
 	bzero(&fns, sizeof(fns));
 	fns.ctx = info;
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP) || \
-	defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
 	fns.dump_cal = wlc_phy_cal_dump_lcn20phy;
 #endif
 
@@ -99,8 +97,7 @@ BCMATTACHFN(phy_lcn20_cache_unregister_impl)(phy_lcn20_cache_info_t *info)
 	phy_mfree(pi, info, sizeof(phy_lcn20_cache_info_t));
 }
 
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP) || \
-	defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
 /* dump calibration regs/info */
 static void
 wlc_phy_cal_dump_lcn20phy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
@@ -121,4 +118,4 @@ wlc_phy_cal_dump_lcn20phy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 	phy_utils_phyreg_exit(pi);
 	wlapi_enable_mac(pi->sh->physhim);
 }
-#endif  /* defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST) */
+#endif  

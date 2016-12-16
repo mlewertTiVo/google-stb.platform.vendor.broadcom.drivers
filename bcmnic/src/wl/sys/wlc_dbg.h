@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlc_dbg.h 624017 2016-03-10 02:12:25Z $
+ * $Id: wlc_dbg.h 656016 2016-08-24 23:36:28Z $
  */
 
 #ifndef _wlc_dbg_h_
@@ -34,18 +34,19 @@
 #define WL_CHANSW(args)
 #endif
 
-#if defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC)
 extern void
 wlc_print_bcn_prb(uint8 *frame, int len);
 #endif
 
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || \
+	defined(WLMSG_ASSOC)
 void
 wlc_print_dot11_mac_hdr(uint8* buf, int len);
 
 #endif
 
-#if defined(WLMSG_PRHDRS) || defined(ENABLE_CORECAPTURE)
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(ENABLE_CORECAPTURE)
 void
 wlc_print_txdesc_ac(wlc_info_t *wlc, void* hdrsBegin);
 void
@@ -58,19 +59,23 @@ wlc_print_hdrs(wlc_info_t *wlc, const char *prefix, uint8 *frame,
 
 #endif
 
-#if defined(WLTINYDUMP) || defined(WLMSG_ASSOC) || defined(WLMSG_PRPKT) || \
-	defined(WLMSG_OID) || defined(WLMSG_INFORM) || defined(WLMSG_WSEC) || defined(WLEXTLOG) \
-	|| defined(DNG_DBGDUMP)
+#if defined(WLTINYDUMP) || defined(BCMDBG) || defined(WLMSG_ASSOC) || \
+	defined(WLMSG_PRPKT) || defined(WLMSG_OID) || defined(BCMDBG_DUMP) || \
+	defined(WLMSG_INFORM) || defined(WLMSG_WSEC) || defined(WLEXTLOG) || \
+	defined(BCMDBG_ERR) || defined(DNG_DBGDUMP) || defined(BCMDBG_RSDB)
 int
 wlc_format_ssid(char* buf, const uchar ssid[], uint ssid_len);
 #endif
-#if defined(WLMSG_PRPKT)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT)
 void
 wlc_print_assoc(wlc_info_t *wlc, struct dot11_management_header *mng, int len);
 #endif
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void wlc_dump_ie(wlc_info_t *wlc, bcm_tlv_t *ie, struct bcmstrbuf *b);
+#endif
 
-#if defined(WLMSG_PRPKT)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT)
 void wlc_print_ies(wlc_info_t *wlc, uint8 *ies, uint ies_len);
 #endif
 

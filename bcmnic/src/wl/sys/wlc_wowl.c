@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_wowl.c 662800 2016-09-30 18:55:49Z $
+ * $Id: wlc_wowl.c 665675 2016-10-18 20:26:52Z $
  */
 
 /**
@@ -77,8 +77,8 @@
 
 #include <wlc_tx.h>
 #ifdef BCMULP
-#include <wlc_ulp.h>
 #include <ulp.h>
+#include <wlc_ulp.h>
 #include <fcbsdata.h>
 #endif
 #include <wlc_addrmatch.h>
@@ -94,6 +94,25 @@
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
 #include <pcicfg.h>
+
+#ifdef WOWL_OS_OFFLOADS
+
+#if defined(BCMULP)
+
+#define WOWL_OFFLOAD_ENABLED(wlc) \
+	((CHIPID(wlc->pub->sih->chip) == BCM4360_CHIP_ID) || \
+	WLEXTSTA_ENAB(wlc->pub) || BCMULP_ENAB())
+
+#else  /* BCMULP */
+
+#define WOWL_OFFLOAD_ENABLED(wlc) \
+	((CHIPID(wlc->pub->sih->chip) == BCM4360_CHIP_ID) || \
+	WLEXTSTA_ENAB(wlc->pub))
+
+#endif /* BCMULP */
+
+#endif /* WOWL_OS_OFFLOADS */
+
 
 /** iovar table */
 enum {
@@ -246,6 +265,10 @@ struct wowl_info {
 	bool	wowl_force;
 };
 
+#ifdef BCMDBG
+static void wlc_print_wowlpattern(wl_wowl_pattern_t *pattern);
+static int wlc_wowl_dump(wowl_info_t *wowl, struct bcmstrbuf *b);
+#endif	/* BCMDBG */
 
 static int wlc_wowl_doiovar(void *hdl, uint32 actionid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
@@ -298,6 +321,12 @@ static int wlc_wowl_wake_reason_process_by_cfgid(wowl_info_t *wowl,
 /* antenna swap threshold */
 #define	ANTCNT			10	/**< vanilla M_MAX_ANTCNT value */
 
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
+
 /** only called once during firmware lifetime */
 wowl_info_t *
 BCMATTACHFN(wlc_wowl_attach)(wlc_info_t *wlc)
@@ -338,6 +367,9 @@ BCMATTACHFN(wlc_wowl_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#ifdef BCMDBG
+	wlc_dump_register(wlc->pub, "wowl", (dump_fn_t)wlc_wowl_dump, (void *)wowl);
+#endif	/* BCMDBG */
 
 	shm->net_pat_num = M_NETPAT_NUM(wlc);
 	shm->aid_nbit = M_AID_NBIT(wlc);
@@ -367,6 +399,68 @@ fail:
 	return NULL;
 }
 
+#ifdef BCMDBG
+static int
+wlc_wowl_dump(wowl_info_t *wowl, struct bcmstrbuf *b)
+{
+	uint32 wakeind = wowl->wakeind;
+	uint32 flags_prev = wowl->flags_prev;
+
+	bcm_bprintf(b, "Status of last wakeup:\n");
+	bcm_bprintf(b, "\tflags:0x%x\n", flags_prev);
+
+	if (flags_prev & WL_WOWL_KEYROT)
+		bcm_bprintf(b, "\t\tKey Rotation enabled\n");
+	if (flags_prev & WL_WOWL_BCN)
+		bcm_bprintf(b, "\t\tWake-on-Loss-of-Beacons enabled\n");
+	if (flags_prev & WL_WOWL_MAGIC)
+		bcm_bprintf(b, "\t\tWake-on-Magic frame enabled\n");
+	if (flags_prev & WL_WOWL_NET)
+		bcm_bprintf(b, "\t\tWake-on-Net pattern enabled\n");
+	if (flags_prev & WL_WOWL_DIS)
+		bcm_bprintf(b, "\t\tWake-on-Deauth enabled\n");
+	if (flags_prev & WL_WOWL_M1)
+		bcm_bprintf(b, "\t\tWake-on-M1 (PTK rekey) enabled\n");
+	if (flags_prev & WL_WOWL_EAPID)
+		bcm_bprintf(b, "\t\tWake-on-EAP-ID enabled\n");
+	if (flags_prev & WL_WOWL_RETR)
+		bcm_bprintf(b, "\t\tRetrograde TSF enabled\n");
+	if (flags_prev & WL_WOWL_TST)
+		bcm_bprintf(b, "\t\tTest-mode enabled\n");
+
+	bcm_bprintf(b, "\n");
+	if (wowl->pci_wakeind)
+		bcm_bprintf(b, "\tPCI Indication set\n");
+
+	if ((wakeind & WL_WOWL_MAGIC) == WL_WOWL_MAGIC)
+		bcm_bprintf(b, "\t\tMAGIC packet received\n");
+	if ((wakeind & WL_WOWL_NET) == WL_WOWL_NET)
+		bcm_bprintf(b, "\t\tPacket received with Netpattern\n");
+	if ((wakeind & WL_WOWL_DIS) == WL_WOWL_DIS)
+		bcm_bprintf(b, "\t\tDisassociation/Deauth received\n");
+	if ((wakeind & WL_WOWL_RETR) == WL_WOWL_RETR)
+		bcm_bprintf(b, "\t\tRetrograde TSF detected\n");
+	if ((wakeind & WL_WOWL_BCN) == WL_WOWL_BCN)
+		bcm_bprintf(b, "\t\tBeacons Lost\n");
+	if ((wakeind & WL_WOWL_TST) == WL_WOWL_TST)
+		bcm_bprintf(b, "\t\tTest Mode\n");
+	if ((wakeind & (WL_WOWL_NET | WL_WOWL_MAGIC))) {
+		if ((wakeind & WL_WOWL_BCAST) == WL_WOWL_BCAST)
+			bcm_bprintf(b, "\t\t\tBroadcast/Mcast frame received\n");
+		else
+			bcm_bprintf(b, "\t\t\tUnicast frame received\n");
+	}
+	if ((wakeind & WL_WOWL_M1) == WL_WOWL_M1)
+		bcm_bprintf(b, "\t\tM1 (PTK refresh) detected\n");
+	if ((wakeind & WL_WOWL_EAPID) == WL_WOWL_EAPID)
+		bcm_bprintf(b, "\t\tWake-on-EAP-ID enabled\n");
+
+	if (!wowl->pci_wakeind && wakeind == 0)
+		bcm_bprintf(b, "\tNo wakeup indication set\n");
+
+	return 0;
+}
+#endif	/* BCMDBG */
 
 /** only called once during firmware lifetime */
 void
@@ -427,11 +521,7 @@ wlc_wowl_doiovar(void *hdl, uint32 actionid,
 	ASSERT(wowl == wlc->wowl);
 
 	bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
-	if (!bsscfg) {
-		WL_ERROR(("%s: cfg null\n", __FUNCTION__));
-		err = BCME_ERROR;
-		goto done;
-	}
+	ASSERT(bsscfg != NULL);
 
 	switch (actionid) {
 	case IOV_GVAL(IOV_WOWL):
@@ -514,15 +604,15 @@ wlc_wowl_doiovar(void *hdl, uint32 actionid,
 		wl_wowl_wakeind_t *wake = (wl_wowl_wakeind_t *)arg;
 		wake->pci_wakeind = wowl->pci_wakeind;
 #if defined(BCMDONGLEHOST) || defined(BCMEMBEDIMAGE) || defined(BCM_DNGL_EMBEDIMAGE) || \
-	defined(BCM7271)
+	defined(STB_SOC_WIFI)
 		if (wlc->clk != TRUE) {
 			err = BCME_NOCLK;
 			break;
 		}
 		wake->ucode_wakeind = wlc_read_shm(wlc, M_WAKEEVENT_IND(wlc));
-#else /* !(BCMEMBEDIMAGE) || defined(BCM_DNGL_EMBEDIMAGE ) */
+#else /* BCMDONGLEHOST || BCMEMBEDIMAGE || BCM_DNGL_EMBEDIMAGE || STB_SOC_WIFI */
 		wake->ucode_wakeind = wowl->wakeind;
-#endif /* !(BCMEMBEDIMAGE) || defined(BCM_DNGL_EMBEDIMAGE ) */
+#endif /* BCMDONGLEHOST || BCMEMBEDIMAGE || BCM_DNGL_EMBEDIMAGE || STB_SOC_WIFI */
 		break;
 	}
 
@@ -606,6 +696,15 @@ wlc_wowl_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
+#ifdef BCMDBG
+		/* Prepare the pattern */
+		if (WL_WOWL_ON()) {
+			WL_WOWL(("wl%d: %s %d action:%s \n", wlc->pub->unit, __FUNCTION__, __LINE__,
+			         (char*)arg));
+			if (strncmp(arg, "clr", 3))
+				wlc_print_wowlpattern(wl_pattern);
+		}
+#endif
 
 		/* update data pattern list */
 		err = wlc_wowl_upd_pattern_list(wowl, wl_pattern, size, arg);
@@ -663,6 +762,10 @@ wlc_wowl_doiovar(void *hdl, uint32 actionid,
 		bcopy(arg, wowl->extended_magic_pattern, sizeof(wowl->extended_magic_pattern));
 
 		wowl->extended_magic = !ETHER_ISNULLADDR(arg);
+#ifdef BCMDBG
+		prhex("set extended magic pattern: ", wowl->extended_magic_pattern,
+			sizeof(wowl->extended_magic_pattern));
+#endif /* BCMDBG */
 		break;
 	}
 
@@ -697,6 +800,9 @@ wlc_wowl_doiovar(void *hdl, uint32 actionid,
 			wlc->pub->unit, __FUNCTION__, ka->keep_alive_id, ka->period_msec,
 			ka->len_bytes));
 
+#ifdef BCMDBG
+		prhex("keepalive packet: ", ka->data, ka->len_bytes);
+#endif /* BCMDBG */
 		break;
 	}
 
@@ -764,7 +870,7 @@ wlc_wowl_doiovar(void *hdl, uint32 actionid,
 	default:
 		err = BCME_UNSUPPORTED;
 	}
-done:
+
 	return err;
 }
 
@@ -778,7 +884,6 @@ wlc_wowl_cap(wlc_info_t *wlc)
 			D11REV_IS(wlc->pub->corerev, 26) ||
 			D11REV_IS(wlc->pub->corerev, 29) ||
 			D11REV_IS(wlc->pub->corerev, 30) ||
-			D11REV_IS(wlc->pub->corerev, 33) ||
 			D11REV_GE(wlc->pub->corerev, 42)) &&
 #ifdef WOWL_GPIO
 			(BUSTYPE(wlc->pub->sih->bustype) == PCI_BUS)) {
@@ -791,14 +896,10 @@ wlc_wowl_cap(wlc_info_t *wlc)
 			D11REV_IS(wlc->pub->corerev, 24)) &&
 			(BUSTYPE(wlc->pub->sih->bustype) == RPC_BUS)) {
 				return TRUE;
-#ifdef BCM7271
-		}  else if ((D11REV_GE(wlc->pub->corerev, 42)) &&
-			(BUSTYPE(wlc->pub->sih->bustype) == SI_BUS)) {
-				return TRUE;
-#endif /* BCM7271 */
 		} else if (D11REV_IS(wlc->pub->corerev, 46) ||
 			D11REV_IS(wlc->pub->corerev, 60) ||
-			D11REV_IS(wlc->pub->corerev, 62)) {
+			D11REV_IS(wlc->pub->corerev, 62) ||
+			D11REV_IS(wlc->pub->corerev, 66)) {
 			return TRUE;
 		} else {
 				WL_ERROR(("%s: Wowl support not present for core %d\n",
@@ -933,7 +1034,8 @@ wlc_wowl_pspoll_setup(wowl_info_t *wowl_info, wlc_bsscfg_t *cfg)
 		WLC_BAND_2G : WLC_BAND_5G, TRUE));
 
 	/* Fill PLCP (6 bytes) */
-	wlc_compute_plcp(wlc, rspec, DOT11_PS_POLL_LEN + DOT11_FCS_LEN, fcs, (uint8*)plcp);
+	wlc_compute_plcp(wlc, cfg, rspec, DOT11_PS_POLL_LEN + DOT11_FCS_LEN,
+		fcs, (uint8*)plcp);
 	if (D11REV_LT(wlc->pub->corerev, 40)) {
 		bcopy((uint8*)plcp, (uint8*)pspoll, D11_PHY_HDR_LEN);
 	} else {
@@ -1235,6 +1337,16 @@ wlc_wowl_write_ucode_templates(wowl_info_t *wowl, int offset, void *pkt, wlc_bss
 	WL_WOWL(("%s: write %d byte of wowl template at offset 0x%x\n",
 		__FUNCTION__, (D11REV_LT(wlc->pub->corerev, 40)) ? totlen : (totlen+12), offset));
 
+#ifdef BCMDBG
+	if (WL_WOWL_ON()) {
+		if (D11REV_LT(wlc->pub->corerev, 40))
+			prhex("packet dump ", plcp, totlen);
+		else {
+			prhex("plcp", plcpBuf, (D11AC_PHY_HDR_LEN));
+			prhex("packet dump ", payloadPtr, (totlen));
+		}
+	}
+#endif /* BCMDBG */
 
 	return totlen;
 }
@@ -1508,10 +1620,7 @@ wlc_wowl_ucode_init(wlc_info_t *wlc, struct scb *scb)
 
 	/* Download the relevant ucode */
 	if (scb && (key_info.hw_algo == WSEC_ALGO_AES)) {
-		if (D11REV_IS(wlc->pub->corerev, 23) && WLCISLCNPHY(wlc->band))
-			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11aeswakeucode16_mimo,
-			d11aeswakeucode16_mimosz, d11waken0initvals16, d11waken0bsinitvals16);
-		else if (D11REV_IS(wlc->pub->corerev, 24) && WLCISNPHY(wlc->band))
+		if (D11REV_IS(wlc->pub->corerev, 24) && WLCISNPHY(wlc->band))
 			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11aeswakeucode24_lcn,
 			d11aeswakeucode24_lcnsz, d11wakelcn0initvals24, d11wakelcn0bsinitvals24);
 		else if (D11REV_IS(wlc->pub->corerev, 24) && WLCISNPHY(wlc->band))
@@ -1524,10 +1633,6 @@ wlc_wowl_ucode_init(wlc_info_t *wlc, struct scb *scb)
 		else if (D11REV_IS(wlc->pub->corerev, 30) && WLCISNPHY(wlc->band))
 			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11aeswakeucode30_mimo,
 			d11aeswakeucode30_mimosz, d11waken0initvals30, d11waken0bsinitvals30);
-		else if (D11REV_IS(wlc->pub->corerev, 66) && WLCISACPHY(wlc->band)) {
-			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11aeswakeucode66,
-			d11aeswakeucode66sz, d11wakeac33initvals66, d11wakeac33bsinitvals66);
-		}
 		else if (D11REV_IS(wlc->pub->corerev, 46)) {
 #if defined(BCMULP)
 			if (BCMULP_ENAB()) {
@@ -1582,13 +1687,13 @@ wlc_wowl_ucode_init(wlc_info_t *wlc, struct scb *scb)
 			ret = BCME_ERROR;
 #endif /* BCMULP */
 		}
+		else if (D11REV_IS(wlc->pub->corerev, 66) && WLCISACPHY(wlc->band)) {
+			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11aeswakeucode66,
+			d11aeswakeucode66sz, d11wakeac33initvals66, d11wakeac33bsinitvals66);
+		}
 		else if (D11REV_GE(wlc->pub->corerev, 42)) {
 			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11aeswakeucode42,
 			d11aeswakeucode42sz, d11wakeac1initvals42, d11wakeac1bsinitvals42);
-		} else if (D11REV_IS(wlc->pub->corerev, 33) && WLCISLCN40PHY(wlc->band)) {
-			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11aeswakeucode33_lcn40,
-			d11aeswakeucode33_lcn40sz, d11wakelcn403initvals33,
-			d11wakelcn403bsinitvals33);
 		} else {
 			WL_ERROR(("wl: %s:WOWL ucode unavailable\n",  __FUNCTION__));
 			ret = BCME_ERROR;
@@ -1597,9 +1702,6 @@ wlc_wowl_ucode_init(wlc_info_t *wlc, struct scb *scb)
 		if (D11REV_IS(wlc->pub->corerev, 23) && WLCISNPHY(wlc->band))
 			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl16_mimo,
 			d11ucode_wowl16_mimosz, d11waken0initvals16, d11waken0bsinitvals16);
-		else if (D11REV_IS(wlc->pub->corerev, 24) && WLCISLCNPHY(wlc->band))
-			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl24_lcn,
-			d11ucode_wowl24_lcnsz, d11wakelcn0initvals24, d11wakelcn0bsinitvals24);
 		else if (D11REV_IS(wlc->pub->corerev, 24) && WLCISNPHY(wlc->band))
 			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl24_mimo,
 				d11ucode_wowl24_mimosz, d11waken0initvals24, d11waken0bsinitvals24);
@@ -1611,9 +1713,6 @@ wlc_wowl_ucode_init(wlc_info_t *wlc, struct scb *scb)
 		         WLCISNPHY(wlc->band))
 			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl30_mimo,
 				d11ucode_wowl30_mimosz, d11waken0initvals30, d11waken0bsinitvals30);
-		else if (D11REV_IS(wlc->pub->corerev, 66) && WLCISACPHY(wlc->band))
-			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl66, d11ucode_wowl66sz,
-				d11wakeac33initvals66, d11wakeac33bsinitvals66);
 		else if (D11REV_IS(wlc->pub->corerev, 46)) {
 #if defined(BCMULP)
 			if (BCMULP_ENAB()) {
@@ -1664,13 +1763,12 @@ wlc_wowl_ucode_init(wlc_info_t *wlc, struct scb *scb)
 			ret = BCME_ERROR;
 #endif /* BCMULP */
 
+		} else if (D11REV_IS(wlc->pub->corerev, 66) && WLCISACPHY(wlc->band)) {
+			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl66, d11ucode_wowl66sz,
+				d11wakeac33initvals66, d11wakeac33bsinitvals66);
 		} else if (D11REV_GE(wlc->pub->corerev, 42)) {
 			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl42, d11ucode_wowl42sz,
 				d11wakeac1initvals42, d11wakeac1bsinitvals42);
-		} else if (D11REV_IS(wlc->pub->corerev, 33) && WLCISLCN40PHY(wlc->band)) {
-			ret = wlc_wowl_dnld_ucode_inits(wlc_hw, d11ucode_wowl33_lcn40,
-			d11ucode_wowl33_lcn40sz, d11wakelcn403initvals33,
-			d11wakelcn403bsinitvals33);
 		} else {
 			WL_ERROR(("wl: %s:WOWL ucode unavailable\n",  __FUNCTION__));
 			ret = BCME_ERROR;
@@ -1730,6 +1828,20 @@ wlc_wowl_enable(wowl_info_t *wowl)
 {
 	return wlc_wowl_enable_by_cfgid(wowl, wowl->wlc->cfg->ID);
 }
+
+#ifdef BCMULP
+/** return true if transition from pm2 to pm1 while going to DS1 */
+bool
+wlc_wowl_pm2_to_pm1(wowl_info_t *wowl)
+{
+	bool pm2_to_pm1 = FALSE;
+	if (wowl->wowl_pm_mode == AUTO) {
+		if (wowl->pmstate_prev == PM_FAST)
+			pm2_to_pm1 = TRUE;
+	}
+	return pm2_to_pm1;
+}
+#endif /* BCMULP */
 
 static bool
 wlc_wowl_enable_by_cfgid(wowl_info_t *wowl, uint16 id)
@@ -2138,6 +2250,10 @@ wlc_wowl_enable_ucode(wowl_info_t *wowl, uint32 wowl_flags, struct scb *scb)
 			ASSERT(node);
 			pattern = node->pattern;
 
+#ifdef BCMDBG
+			if (WL_WOWL_ON())
+				wlc_print_wowlpattern(pattern);
+#endif
 
 			if (pattern->type == wowl_pattern_type_arp) {
 				WL_WOWL(("wl%d: Programming ipv4 ARP offload pattern...\n",
@@ -3094,6 +3210,14 @@ wlc_wowl_add_offload_ipv6_ns(wowl_info_t *wowl, uint32 offload_id,
 	_ipv6_ns_params*ns = NULL;
 	int status;
 
+#ifdef BCMDBG
+	if (WL_WOWL_ON()) {
+		prhex("RemoteIPv6Address ", RemoteIPv6Address, 16);
+		prhex("SolicitedNodeIPv6Address ", SolicitedNodeIPv6Address, 16);
+		prhex("TargetIPv6Addresses[0] ", TargetIPv6Address1, 16);
+		prhex("TargetIPv6Addresses[1] ", TargetIPv6Address2, 16);
+	}
+#endif
 
 	/*
 	 * We support MAX_WOWL_IPV6_NS_OFFLOADS NS offloads,
@@ -3194,6 +3318,17 @@ wlc_wowl_set_key_info(wowl_info_t *wowl,  uint32 offload_id,
 	offloads->type = WOWL_DOT11_RSN_REKEY_TYPE;
 
 
+#ifdef BCMDBG
+	if (WL_WSEC_ON()) {
+		WL_WSEC(("wl%d: %s: offloads->type=%d, rekey->replay_counter=%d, "
+		         "offloads->id=%d\n",
+		         wowl->wlc->pub->unit, __FUNCTION__, offloads->type,
+		         *(uint*)rekey->replay_counter, offloads->id));
+	}
+	prhex("replay count ", rekey->replay_counter, replay_counter_len);
+	prhex("kek ", rekey->kek, kek_len);
+	prhex("kck ", rekey->kck, kck_len);
+#endif /* BCMDBG */
 
 	return BCME_OK;
 } /* wlc_wowl_set_key_info */
@@ -4039,6 +4174,39 @@ wlc_write_chksum_to_shmem(wlc_info_t *wlc, uint8 *frame)
 
 #endif /* WOWL_OS_OFFLOADS */
 
+#ifdef BCMDBG
+static void
+wlc_print_wowlpattern(wl_wowl_pattern_t *wl_pattern)
+{
+	uint8 *pattern;
+	uint i;
+	WL_WOWL(("masksize:%d offset:%d patternsize:%d, id 0x%x\n",
+		wl_pattern->masksize, wl_pattern->offset,
+		wl_pattern->patternsize, wl_pattern->id));
+	pattern = ((uint8 *)wl_pattern + sizeof(wl_wowl_pattern_t));
+
+	WL_WOWL(("Mask:\n"));
+	for (i = 0; i < wl_pattern->masksize; i++) {
+		WL_WOWL(("%02x", pattern[i]));
+
+		if (((i + 1) % 16) == 0)
+			WL_WOWL(("\n"));
+	}
+
+	WL_WOWL(("\nPattern:\n"));
+
+	/* Go to end to find pattern */
+	pattern = ((uint8*)wl_pattern + wl_pattern->patternoffset);
+	for (i = 0; i < wl_pattern->patternsize; i++) {
+		WL_WOWL(("%02x", pattern[i]));
+
+		if (((i + 1) % 16) == 0)
+			WL_WOWL(("\n"));
+	}
+
+	WL_WOWL(("\n"));
+}
+#endif /* BCMDBG */
 
 
 int

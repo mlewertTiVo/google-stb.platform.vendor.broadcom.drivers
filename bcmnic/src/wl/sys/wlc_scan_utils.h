@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scan_utils.h 617632 2016-02-06 01:37:47Z $
+ * $Id: wlc_scan_utils.h 658917 2016-09-11 08:36:30Z $
  */
 
 #ifndef _wlc_scan_utils_h_
@@ -43,6 +43,7 @@ typedef struct scan_utl_scan_data {
 } scan_utl_scan_data_t;
 
 typedef void (*scan_utl_rx_scan_data_fn_t)(void *ctx, scan_utl_scan_data_t *data);
+typedef void (*scan_utl_scan_start_fn_t)(void *ctx);
 
 #define wlc_scan_request(wlc, bss_type, bssid, nssid, ssid, scan_type, nprobes, \
 		active_time, passive_time, home_time, chanspec_list, chanspec_num, \
@@ -77,6 +78,9 @@ void wlc_scan_utils_set_syncid(wlc_info_t *wlc, uint16 syncid);
 
 int wlc_scan_utils_rx_scan_register(wlc_info_t *wlc, scan_utl_rx_scan_data_fn_t fn, void *arg);
 int wlc_scan_utils_rx_scan_unregister(wlc_info_t *wlc, scan_utl_rx_scan_data_fn_t fn, void *arg);
+
+int wlc_scan_utils_scan_start_register(wlc_info_t *wlc, scan_utl_scan_start_fn_t fn, void *arg);
+int wlc_scan_utils_scan_start_unregister(wlc_info_t *wlc, scan_utl_scan_start_fn_t fn, void *arg);
 
 #ifdef WLRSDB
 void wlc_scan_utils_scan_complete(wlc_info_t *wlc, wlc_bsscfg_t *scan_cfg);

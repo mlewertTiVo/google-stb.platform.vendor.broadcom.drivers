@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_tpc.c 643596 2016-06-15 07:54:36Z $
+ * $Id: wlc_tpc.c 659395 2016-09-14 03:09:14Z $
  */
 
 
@@ -47,6 +47,7 @@
 #include <wlc_iocv.h>
 #include <phy_tpc_api.h>
 #include <phy_tssical_api.h>
+#include <wlc_event_utils.h>
 
 /* IOVar table */
 /* No ordering is imposed */
@@ -97,12 +98,16 @@ struct wlc_tpc_info {
 	int8 txpwr_local_max;		/* regulatory local txpwr max */
 	uint8 txpwr_local_constraint;	/* local power contraint in dB */
 	uint8 pwr_constraint;
+	int8 txpwr_cap_min;		/* Min Txpower advertised in the 11h power cap IE */
 };
 
 /* local functions */
 static int wlc_tpc_doiovar(void *ctx, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
 static void wlc_tpc_watchdog(void *ctx);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_tpc_dump(void *ctx, struct bcmstrbuf *b);
+#endif /* BCMDBG || BCMDBG_DUMP */
 static int wlc_tpc_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif);
 
 #ifdef WL_AP_TPC
@@ -112,8 +117,13 @@ static int wlc_ap_tpc_bsscfg_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_ap_tpc_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_ap_tpc_req(wlc_tpc_info_t *tpc);
 static int wlc_ap_bss_tpc_get(wlc_tpc_info_t *tpc, wlc_bsscfg_t *cfg);
+#ifdef BCMDBG
+static void wlc_ap_tpc_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+static void wlc_ap_tpc_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_ap_tpc_scb_dump NULL
 #define wlc_ap_tpc_bsscfg_dump NULL
+#endif
 #endif /* WL_AP_TPC */
 
 #ifdef WL_AP_TPC
@@ -152,6 +162,9 @@ static uint wlc_tpc_calc_brcm_ie_len(void *ctx, wlc_iem_calc_data_t *data);
 static int wlc_tpc_write_brcm_ie(void *ctx, wlc_iem_build_data_t *data);
 #ifdef STA
 static int wlc_tpc_bcn_parse_pwr_const_ie(void *ctx, wlc_iem_parse_data_t *data);
+#ifdef BCMDBG
+static int wlc_tpc_bcn_parse_rpt_ie(void *ctx, wlc_iem_parse_data_t *data);
+#endif
 #endif /* STA */
 
 #ifdef WL_AP_TPC
@@ -245,8 +258,23 @@ BCMATTACHFN(wlc_tpc_attach)(wlc_info_t *wlc)
 		          wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
+#ifdef BCMDBG
+	if (wlc_iem_add_parse_fn(wlc->iemi, FC_BEACON, DOT11_MNG_TPC_REPORT_ID,
+	                         wlc_tpc_bcn_parse_rpt_ie, tpc) != BCME_OK) {
+		WL_ERROR(("wl%d: %s wlc_iem_add_parse_fn failed, tpc rpt in bcn\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif
 #endif /* STA */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	if (wlc_dump_register(wlc->pub, "tpc", wlc_tpc_dump, tpc) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	if (wlc_module_register(wlc->pub, wlc_tpc_iovars, "tpc", tpc, wlc_tpc_doiovar,
 	                        wlc_tpc_watchdog, NULL, NULL) != BCME_OK) {
@@ -261,6 +289,8 @@ BCMATTACHFN(wlc_tpc_attach)(wlc_info_t *wlc)
 		          wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
+
+	tpc->txpwr_cap_min = WL_RATE_DISABLED;
 
 	return tpc;
 
@@ -310,31 +340,11 @@ wlc_tpc_get_txpwr_max(wlc_info_t *wlc,
 	chanspec = params->txpwr[0].chanspec;
 	WL_INFORM(("input: chanspec: %x\n", chanspec));
 	if (chanspec == 0) {
-#ifdef WL11ULB
-		if (ULB_ENAB(wlc->pub)) {
-			wlc_get_valid_chanspecs(wlc->cmi, list,
-				WL_CHANSPEC_BW_2P5, TRUE, abbrev);
-			wlc_get_valid_chanspecs(wlc->cmi, list,
-				WL_CHANSPEC_BW_5, TRUE, abbrev);
-			wlc_get_valid_chanspecs(wlc->cmi, list,
-				WL_CHANSPEC_BW_10, TRUE, abbrev);
-		}
-#endif /* WL11ULB */
 		wlc_get_valid_chanspecs(wlc->cmi, list,
 			WL_CHANSPEC_BW_20, TRUE, abbrev);
 		wlc_get_valid_chanspecs(wlc->cmi, list,
 			WL_CHANSPEC_BW_40, TRUE, abbrev);
 
-#ifdef WL11ULB
-		if (ULB_ENAB(wlc->pub)) {
-			wlc_get_valid_chanspecs(wlc->cmi, list,
-				WL_CHANSPEC_BW_2P5, TRUE, abbrev);
-			wlc_get_valid_chanspecs(wlc->cmi, list,
-				WL_CHANSPEC_BW_5, TRUE, abbrev);
-			wlc_get_valid_chanspecs(wlc->cmi, list,
-				WL_CHANSPEC_BW_10, TRUE, abbrev);
-		}
-#endif /* WL11ULB */
 		wlc_get_valid_chanspecs(wlc->cmi, list,
 			WL_CHANSPEC_BW_20, FALSE, abbrev);
 		wlc_get_valid_chanspecs(wlc->cmi, list,
@@ -557,6 +567,23 @@ wlc_tpc_watchdog(void *ctx)
 #endif
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_tpc_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_tpc_info_t *tpc = (wlc_tpc_info_t *)ctx;
+
+
+#ifdef WL_AP_TPC
+	bcm_bprintf(b, "ap_tpc: %d ap_tpc_interval: %d\n", tpc->ap_tpc, tpc->ap_tpc_interval);
+#endif
+
+	bcm_bprintf(b, "pwr_constraint %u txpwr_local_max %d txpwr_local_constraint %u\n",
+	            tpc->pwr_constraint, tpc->txpwr_local_max, tpc->txpwr_local_constraint);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static const struct {
 	int8 rate;
@@ -624,6 +651,19 @@ wlc_ap_tpc_scb_deinit(void *ctx, struct scb *scb)
 	wlc_ap_tpc_assoc_reset(tpc, scb);
 }
 
+#ifdef BCMDBG
+static void
+wlc_ap_tpc_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_tpc_info_t *tpc = (wlc_tpc_info_t *)ctx;
+	ap_tpc_scb_cubby_t *tpc_scb = AP_TPC_SCB_CUBBY(tpc, scb);
+
+	ASSERT(tpc_scb != NULL);
+
+	bcm_bprintf(b, "     ap_link_margin: %d sta_link_margin: %d\n",
+	            tpc_scb->ap_link_margin, tpc_scb->sta_link_margin);
+}
+#endif
 
 /* bsscfg cubby */
 static int
@@ -644,6 +684,19 @@ wlc_ap_tpc_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	(void)tpc;
 }
 
+#ifdef BCMDBG
+static void
+wlc_ap_tpc_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_tpc_info_t *tpc = (wlc_tpc_info_t *)ctx;
+	ap_tpc_bsscfg_cubby_t *tpc_cfg = AP_TPC_BSSCFG_CUBBY(tpc, cfg);
+
+	ASSERT(tpc_cfg != NULL);
+
+	bcm_bprintf(b, "\tap_link_margin: %d sta_link_margin: %d\n",
+	            tpc_cfg->ap_link_margin, tpc_cfg->sta_link_margin);
+}
+#endif
 
 void
 wlc_ap_tpc_assoc_reset(wlc_tpc_info_t *tpc, struct scb *scb)
@@ -930,7 +983,7 @@ wlc_ap_tpc_rpt_upd(wlc_tpc_info_t *tpc, wlc_bsscfg_t *cfg, struct dot11_manageme
 
 	reg_chan_pwr = wlc_get_reg_max_power_for_channel(wlc->cmi, cur_chan, TRUE);
 
-	target_pwr = wlc_phy_txpower_get_target_max((wlc_phy_t *)WLC_PI(wlc));
+	target_pwr = phy_tpc_get_target_max((wlc_phy_t *)WLC_PI(wlc));
 
 	if (wlc_channel_locale_flags(wlc->cmi) & WLC_EIRP)
 		txpwr_max = (target_pwr + wlc->band->antgain) / WLC_TXPWR_DB_FACTOR;
@@ -972,7 +1025,7 @@ wlc_recv_tpc_request(wlc_tpc_info_t *tpc, wlc_bsscfg_t *cfg, struct dot11_manage
 	wlc_info_t *wlc = tpc->wlc;
 	struct dot11_action_measure * action_hdr;
 	struct ether_addr *ea = &hdr->sa;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG_ERR) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 
@@ -1001,11 +1054,11 @@ wlc_recv_tpc_report(wlc_tpc_info_t *tpc, wlc_bsscfg_t *cfg, struct dot11_managem
 	struct dot11_action_measure * action_hdr;
 	int len;
 	dot11_tpc_rep_t* rep_ie;
-#if (defined(BCMCONDITIONAL_LOGGING) && defined(WLMSG_DFS))
+#if defined(BCMDBG) || (defined(BCMCONDITIONAL_LOGGING) && defined(WLMSG_DFS))
 	char da[ETHER_ADDR_STR_LEN];
 	char sa[ETHER_ADDR_STR_LEN];
 	char bssid[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_DFS */
 
 	(void)wlc;
 
@@ -1075,9 +1128,9 @@ wlc_send_tpc_request(wlc_tpc_info_t *tpc, wlc_bsscfg_t *cfg, struct ether_addr *
 	uint body_len;
 	struct dot11_action_measure * action_hdr;
 	struct scb *scb = NULL;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 	WL_INFORM(("wl%d: %s: sending TPC Request to %s\n",
 	           wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(da, eabuf)));
@@ -1125,9 +1178,9 @@ wlc_send_tpc_report(wlc_tpc_info_t *tpc, wlc_bsscfg_t *cfg, struct ether_addr *d
 	uint8* pbody;
 	uint body_len;
 	struct dot11_action_measure * action_hdr;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 	WL_INFORM(("wl%d: %s: sending TPC Report to %s\n",
 	           wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(da, eabuf)));
@@ -1166,9 +1219,9 @@ wlc_tpc_rep_build(wlc_info_t *wlc, int8 rssi, ratespec_t rspec, dot11_tpc_rep_t 
 	uint8 target_pwr;
 	uint8 txpwr_backoff = 0;
 
-	target_pwr = wlc_phy_txpower_get_target_max((wlc_phy_t *)WLC_PI(wlc));
+	target_pwr = phy_tpc_get_target_max((wlc_phy_t *)WLC_PI(wlc));
 
-	txpwr_backoff = wlc_phy_get_txpwr_backoff((wlc_phy_t *)WLC_PI(wlc));
+	txpwr_backoff = phy_tpc_get_power_backoff((wlc_phy_t *)WLC_PI(wlc));
 	/* tx power for the outgoing frame will be our current txpwr setting
 	 * include the antenna gain value to get radiated power only for EIRP locales.
 	 * Adjust from internal units to dbm.
@@ -1199,14 +1252,44 @@ wlc_tpc_rep_build(wlc_info_t *wlc, int8 rssi, ratespec_t rspec, dot11_tpc_rep_t 
 		wlc->pub->unit, txpwr, link_margin));
 }
 
+void
+wlc_tpc_set_pwr_cap_min(wlc_tpc_info_t *tpc, int8 min)
+{
+	tpc->txpwr_cap_min = min;
+}
+
+int8
+wlc_tpc_get_pwr_cap_min(wlc_tpc_info_t *tpc)
+{
+	return tpc->txpwr_cap_min;
+}
+
 #ifdef STA
+#ifdef BCMDBG
+static void
+wlc_tpc_report(wlc_tpc_info_t *tpc, dot11_tpc_rep_t *ie)
+{
+	wlc_info_t *wlc = tpc->wlc;
+
+	(void)wlc;
+
+	if (ie->len < 2) {
+		WL_ERROR(("wl%d: wlc_tpc_report: TPC Report IE len %d too short, expected 2.\n",
+			wlc->pub->unit, ie->len));
+		return;
+	}
+
+	WL_NONE(("wl%d: wlc_tpc_report: TPC Report TX Pwr %d dBm, Link Margin %d dB.\n",
+		wlc->pub->unit, (int)ie->tx_pwr, (int)ie->margin));
+}
+#endif /* BCMDBG */
 
 /* STA: Handle Power Constraint IE */
 static void
 wlc_tpc_set_local_constraint(wlc_tpc_info_t *tpc, dot11_power_cnst_t *pwr)
 {
 	wlc_info_t *wlc = tpc->wlc;
-	uint8 local;
+	uint8 local, old_constraint;
 
 	if (pwr->len < 1)
 		return;
@@ -1216,22 +1299,45 @@ wlc_tpc_set_local_constraint(wlc_tpc_info_t *tpc, dot11_power_cnst_t *pwr)
 	if (local == tpc->txpwr_local_constraint)
 		return;
 
-	WL_REGULATORY(("wl%d: adjusting local power constraint from %d to %d dBm\n",
-		wlc->pub->unit, tpc->txpwr_local_constraint, local));
-
-	tpc->txpwr_local_constraint = local;
-
 	/* only update power targets if we are up and on the BSS home channel */
 	if (wlc->pub->up && wlc->pub->associated &&
-	    (wlc->chanspec == wlc->home_chanspec)) {
+		(wlc->chanspec == wlc->home_chanspec)) {
 		uint8 constraint;
+		old_constraint = tpc->txpwr_local_constraint;
+
+		WL_REGULATORY(("wl%d: adjusting local power constraint from %d to %d dBm\n",
+				wlc->pub->unit, tpc->txpwr_local_constraint, local));
+
+		tpc->txpwr_local_constraint = local;
 
 		/* Set the power limits for this locale after computing
 		 * any 11h local tx power constraints.
 		 */
 		constraint = wlc_tpc_get_local_constraint_qdbm(tpc);
-		wlc_channel_set_txpower_limit(wlc->cmi, constraint);
-
+		if (wlc_channel_set_txpower_limit(wlc->cmi, constraint) == BCME_RANGE) {
+			wl_invalid_ie_event_t *wrong_ie_event;
+			int eventlen;
+			/* Send WLC_E_INVALID_IE event */
+			struct invalid_pwer_ie_event {
+				wl_invalid_ie_event_t event;
+				dot11_power_cnst_t value;
+			} wrong_power_ie_event;
+			wrong_ie_event = (wl_invalid_ie_event_t *)&wrong_power_ie_event;
+			eventlen = sizeof(wrong_power_ie_event);
+			tpc->txpwr_local_constraint = old_constraint;
+			wrong_ie_event->version = WL_INVALID_IE_EVENT_VERSION;
+			/* Set event type to FC_BEACON because the constraint can only come
+			 * from beacon after associated.
+			 */
+			wrong_ie_event->type = FC_BEACON;
+			wrong_ie_event->error = IE_ERROR_OUT_OF_RANGE;
+			wrong_ie_event->len = sizeof(dot11_power_cnst_t);
+			memcpy(wrong_ie_event->ie, (int8*)pwr, sizeof(dot11_power_cnst_t));
+			WL_ERROR(("wl%d: %s: invalid power constrain %x\n", wlc->pub->unit,
+					__FUNCTION__, pwr->power));
+			wlc_mac_event(wlc, WLC_E_INVALID_IE, NULL, 0, WLC_E_STATUS_ERROR, 0,
+				wrong_ie_event, eventlen);
+		}
 		/* wlc_phy_cal_txpower_recalc_sw(WLC_PI(wlc)); */
 	}
 }
@@ -1267,21 +1373,25 @@ wlc_tpc_get_local_constraint_qdbm(wlc_tpc_info_t *tpc)
 	wlc_info_t *wlc = tpc->wlc;
 	uint8 local;
 	int16 local_max;
+	int8 tx_min_cap;
 
 	local = WLC_TXPWR_MAX;
 	if ((tpc->txpwr_local_max != WL_RATE_DISABLED) && wlc->pub->associated &&
 		(wf_chspec_ctlchan(wlc->chanspec) == wf_chspec_ctlchan(wlc->home_chanspec))) {
-
 		/* get the local power constraint if we are on the AP's
 		 * channel [802.11h, 7.3.2.13]
 		 */
-		/* Clamp the value between 0 and WLC_TXPWR_MAX w/o overflowing the target */
+		/* Clamp the value between txpwr_cap_min and WLC_TXPWR_MAX w/o overflowing
+		 * the target.
+		 */
+		tx_min_cap = (tpc->txpwr_cap_min == WL_RATE_DISABLED ?
+			wlc_phy_maxtxpwr_lowlimit(WLC_PI(wlc)) : tpc->txpwr_cap_min);
 		local_max = tpc->txpwr_local_max * WLC_TXPWR_DB_FACTOR;
 		local_max -= tpc->txpwr_local_constraint * WLC_TXPWR_DB_FACTOR;
-		if (local_max > 0 && local_max < WLC_TXPWR_MAX)
+		if (local_max >= tx_min_cap && local_max < WLC_TXPWR_MAX)
 			return (uint8)local_max;
-		if (local_max < 0)
-			return 0;
+		if (local_max < tx_min_cap)
+			return tx_min_cap;
 	}
 
 	return local;
@@ -1357,7 +1467,7 @@ wlc_tpc_write_rpt_ie(void *ctx, wlc_iem_build_data_t *data)
 		int8 tpc_report[DOT11_MNG_IE_TPC_REPORT_LEN];
 		uint8 target_pwr;
 
-		target_pwr = wlc_phy_txpower_get_target_max((wlc_phy_t *)WLC_PI(wlc));
+		target_pwr = phy_tpc_get_target_max((wlc_phy_t *)WLC_PI(wlc));
 
 		/* 802.11H Sec 7.3.2.18 */
 		/* Current target + ant_gain converted to dbm */
@@ -1377,6 +1487,18 @@ wlc_tpc_write_rpt_ie(void *ctx, wlc_iem_build_data_t *data)
 #endif /* AP */
 
 #ifdef STA
+#ifdef BCMDBG
+static int
+wlc_tpc_bcn_parse_rpt_ie(void *ctx, wlc_iem_parse_data_t *data)
+{
+	wlc_tpc_info_t *tpc = (wlc_tpc_info_t *)ctx;
+
+	if (data->ie != NULL)
+		wlc_tpc_report(tpc, (dot11_tpc_rep_t *)data->ie);
+
+	return BCME_OK;
+}
+#endif
 #endif /* STA */
 
 static uint
@@ -1399,7 +1521,7 @@ wlc_tpc_write_brcm_ie(void *ctx, wlc_iem_build_data_t *data)
 	wlc_info_t *wlc = tpc->wlc;
 
 	if (WL11K_ENAB(wlc->pub)) {
-		uint8 target_pwr = wlc_phy_txpower_get_target_max((wlc_phy_t *)WLC_PI(wlc));
+		uint8 target_pwr = phy_tpc_get_target_max((wlc_phy_t *)WLC_PI(wlc));
 		uint8 *cp = data->buf;
 
 		*cp++ = DOT11_MNG_VS_ID;
@@ -1540,17 +1662,6 @@ wlc_tpc_clmbw_to_curpwrbw(clm_bandwidth_t clmbw)
 		ret = WL_BW_8080MHZ;
 		break;
 #endif
-#ifdef WL11ULB
-	case CLM_BW_2_5:
-		ret = WL_BW_2P5MHZ;
-		break;
-	case CLM_BW_5:
-		ret = WL_BW_5MHZ;
-		break;
-	case CLM_BW_10:
-		ret = WL_BW_10MHZ;
-		break;
-#endif
 	default:
 		ASSERT(0);
 	}
@@ -1593,17 +1704,6 @@ wlc_tpc_get_current(wlc_tpc_info_t *tpc, void *pwr, uint len, wlc_bsscfg_t *bssc
 		bw = CLM_BW_160;
 	else if (CHSPEC_IS8080(chanspec))
 		bw = CLM_BW_80_80;
-#endif
-#ifdef WL11ULB
-	else if (ULB_ENAB(wlc->pub)) {
-		if (CHSPEC_IS2P5(chanspec)) {
-			bw = CLM_BW_2_5;
-		} else if (CHSPEC_IS5(chanspec)) {
-			bw = CLM_BW_5;
-		} else if (CHSPEC_IS10(chanspec)) {
-			bw = CLM_BW_10;
-		}
-	}
 #endif
 	BCM_REFERENCE(chanspec);
 

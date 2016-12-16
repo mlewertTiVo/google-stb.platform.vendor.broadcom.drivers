@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_math.h 635757 2016-05-05 05:18:39Z vyass $
+ * $Id: phy_utils_math.h 659421 2016-09-14 06:45:22Z $
  */
 
 #ifndef _phy_utils_math_h_
@@ -40,4 +40,5 @@ void phy_utils_mat_mult(int64 *a, int64 *b, int64 *c, int m, int n, int r);
 void phy_utils_mat_inv_prod_det(int64 *a, int64 *b);
 void phy_utils_mat_det(int64 *a, int64 *det);
 void phy_utils_angle_to_phasor_lut(uint16 angle, uint16* packed_word);
+uint32 phy_utils_mat_gcd(uint32 bigger, uint32 smaller);
 #endif /* _phy_utils_math_h_ */

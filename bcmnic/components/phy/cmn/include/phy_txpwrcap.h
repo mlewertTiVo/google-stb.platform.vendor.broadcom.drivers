@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_txpwrcap.h 630712 2016-04-11 19:05:53Z kentryu $
+ * $Id: phy_txpwrcap.h 652728 2016-08-03 07:25:22Z $
  */
 
 #ifndef _phy_txpwrcap_h_
@@ -35,12 +35,18 @@ typedef struct phy_txpwrcap_info phy_txpwrcap_info_t;
 #define TXPWRCAP_CELLSTATUS_WCI2_NBIT 4
 #define TXPWRCAP_CELLSTATUS_WCI2_MASK (1<<TXPWRCAP_CELLSTATUS_WCI2_NBIT)
 
+#define TXPOWERCAP_MAX_QDB	(127)
+#define TXPOWERCAP_MAX_ANT_PER_CORE	(2)
+
+
 /* attach/detach */
 phy_txpwrcap_info_t *phy_txpwrcap_attach(phy_info_t *pi);
 void phy_txpwrcap_detach(phy_txpwrcap_info_t *ri);
 
-/* ******** interface for TPC module ******** */
-uint32 wlc_phy_get_txpwrcap_inuse(phy_info_t *pi);
+/* ******** interface for Txpowercap module ******** */
+uint32 phy_txpwrcap_get_caps_inuse(phy_info_t *pi);
+int8 phy_txpwrcap_tbl_get_max_percore(phy_info_t *pi, uint8 core);
+
 #ifdef WLC_SW_DIVERSITY
 void wlc_phy_txpwrcap_to_shm(wlc_phy_t *pih, uint16 tx_ant, uint16 rx_ant);
 #endif /* WLC_SW_DIVERSITY */

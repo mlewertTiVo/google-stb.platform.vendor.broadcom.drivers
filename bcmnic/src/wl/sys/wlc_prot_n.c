@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_prot_n.c 643797 2016-06-16 01:46:23Z $
+ * $Id: wlc_prot_n.c 659250 2016-09-13 12:08:30Z $
  */
 
 
@@ -43,7 +43,6 @@
 
 #include <wlc_ht.h>
 #include <wlc_obss.h>
-#include <wlc_ulb.h>
 #include <wlc_dump.h>
 #include <wlc_stf.h>
 
@@ -64,6 +63,9 @@ static const bcm_iovar_t prot_n_iovars[] = {
 	{"nmode_protection", IOV_N_PROTECTION, (IOVF_OPEN_ALLOW), 0, IOVT_UINT8, 0},
 	{"nmode_protection_override", IOV_N_PROTECTION_OVERRIDE, (IOVF_OPEN_ALLOW), 0,
 	IOVT_INT32, 0},
+#ifdef BCMDBG
+	{"ofdm_present", IOV_OFDM_ASSOC, (0), 0, IOVT_BOOL, 0},
+#endif
 	{"intol40_det", IOV_40_INTOLERANT_DET, (IOVF_OPEN_ALLOW), 0, IOVT_BOOL, 0},
 	{"gf_protection", IOV_GF_PROTECTION, (IOVF_OPEN_ALLOW), 0, IOVT_UINT8, 0},
 	{"gf_protection_override", IOV_GF_PROTECTION_OVERRIDE, (IOVF_OPEN_ALLOW), 0, IOVT_INT32, 0},
@@ -155,11 +157,18 @@ typedef struct {
 static int wlc_prot_n_doiovar(void *ctx, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
 static void wlc_prot_n_watchdog(void *ctx);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_prot_n_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* bsscfg cubby */
 static int wlc_prot_n_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_prot_n_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_prot_n_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_prot_n_bss_dump NULL
+#endif
 
 /* update configuration */
 static void wlc_prot_n_cfg_upd(wlc_prot_n_info_t *prot, wlc_bsscfg_t *cfg, uint idx, int val);
@@ -245,13 +254,16 @@ BCMATTACHFN(wlc_prot_n_attach)(wlc_info_t *wlc)
 		goto fail;
 	};
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "prot_n", wlc_prot_n_dump, (void *)prot);
+#endif
 
 	/* default configurations */
 	for (j = 0; j < NBANDS(wlc); j++) {
 		wlcband_t *band;
 
 		/* Use band 1 for single band 11a */
-		if (IS_SINGLEBAND_5G(wlc->deviceid))
+		if (IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap))
 			j = BAND_5G_INDEX;
 
 		band = wlc->bandstate[j];
@@ -405,6 +417,11 @@ wlc_prot_n_doiovar(void *ctx, uint32 actionid,
 		}
 		break;
 
+#ifdef BCMDBG
+	case IOV_GVAL(IOV_OFDM_ASSOC):
+		*ret_int_ptr = pnd->ofdm_assoc ? 1 : 0;
+		break;
+#endif
 
 	case IOV_GVAL(IOV_40_INTOLERANT_DET):
 		*ret_int_ptr = (WLC_INTOL40_DET(wlc, cfg) | pnd->ht40intolerant_assoc) ? 1 : 0;
@@ -493,6 +510,28 @@ wlc_prot_n_watchdog(void *ctx)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_prot_n_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_prot_n_info_t *prot = (wlc_prot_n_info_t *)ctx;
+	wlc_prot_n_info_priv_t *priv = WLC_PROT_N_INFO_PRIV(prot);
+	wlc_info_t *wlc = priv->wlc;
+	int idx;
+	wlc_bsscfg_t *cfg;
+
+	bcm_bprintf(b, "prot_n: priv_offset %d cfgh %d nmode_user %d n_pam_override %d\n",
+	            wlc_prot_n_info_priv_offset, prot->cfgh,
+	            priv->nmode_user, prot->n_pam_override);
+
+	FOREACH_AS_BSS(wlc, idx, cfg) {
+		bcm_bprintf(b, "bsscfg %d >\n", WLC_BSSCFG_IDX(cfg));
+	        wlc_prot_n_bss_dump(prot, cfg, b);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* bsscfg cubby */
 static int
@@ -545,6 +584,57 @@ wlc_prot_n_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	*ppn = NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_prot_n_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_prot_n_info_t *prot = (wlc_prot_n_info_t *)ctx;
+	wlc_prot_n_info_priv_t *priv = WLC_PROT_N_INFO_PRIV(prot);
+	wlc_prot_n_cfg_t *wpnc;
+	bss_prot_n_cfg_t *pnc;
+	bss_prot_n_cond_t *pnd;
+	bss_prot_n_to_t *pnt;
+
+	ASSERT(cfg != NULL);
+
+	wpnc = WLC_PROT_N_CFG(prot, cfg);
+	ASSERT(wpnc != NULL);
+
+	pnc = BSS_PROT_N_CFG(prot, cfg);
+	ASSERT(pnc != NULL);
+
+	pnd = BSS_PROT_N_COND(prot, cfg);
+	ASSERT(pnd != NULL);
+
+	pnt = BSS_PROT_N_TO(prot, cfg);
+	ASSERT(pnt != NULL);
+
+	bcm_bprintf(b, "\tcfg_offset %d cond_offset %d to_offset %d\n",
+	            priv->cfg_offset, priv->cond_offset, priv->to_offset);
+	bcm_bprintf(b, "\tn_cfg %d n_cfg_ovrrd %d "
+	            "nongf %d nongf_ovrrd %d obss_nonht_sta %d\n",
+	            wpnc->n_cfg, pnc->n_cfg_override,
+	            wpnc->nongf, pnc->nongf_override, pnc->n_obss);
+
+	bcm_bprintf(b, "\tofdm_assoc %d "
+	            "ht20in40_assoc %d non_gf_assoc %d ht20intolerant_assoc %d "
+	            "non11n_apsd_assoc %d wme_apsd_assoc %d\n",
+	            pnd->ofdm_assoc,
+	            pnd->ht20in40_assoc, pnd->non_gf_assoc, pnd->ht40intolerant_assoc,
+	            pnd->non11n_apsd_assoc, pnd->wme_apsd_assoc);
+
+	bcm_bprintf(b, "\tofdm_ovlp_timeout %d ofdm_ibss_timeout %d "
+	            "n_prot_ibss_detect_timeout %d "
+	            "ht20in40_ovlp_timeout %d ht20in40_ibss_timeout %d "
+	            "non_gf_ibss_timeout %d\n",
+	            pnt->ofdm_ovlp_timeout,
+	            pnt->ofdm_ibss_timeout,
+	            pnt->n_ibss_timeout,
+	            pnt->ht20in40_ovlp_timeout,
+	            pnt->ht20in40_ibss_timeout,
+	            pnt->non_gf_ibss_timeout);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* centralized protection config change function to simplify debugging, no consistency checking
  * this should be called only on changes to avoid overhead in periodic function
@@ -985,7 +1075,7 @@ wlc_prot_n_build_add_ie(wlc_prot_n_info_t *prot, wlc_bsscfg_t *cfg, ht_add_ie_t 
 	/* Set up the HT IE according to the primary 40MHz channel
 	 * for wider bandwidth channels
 	 */
-	if (!WLC_ULB_CHSPEC_ISLE20(wlc, chanspec) && !CHSPEC_IS40(chanspec)) {
+	if (!CHSPEC_IS20(chanspec) && !CHSPEC_IS40(chanspec)) {
 		chanspec = wf_chspec_primary40_chspec(chanspec);
 	}
 #endif /* WL11AC */

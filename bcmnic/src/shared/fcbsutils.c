@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: fcbsutils.c 615664 2016-01-28 08:21:07Z $
+ * $Id: fcbsutils.c 652010 2016-07-29 07:33:59Z $
  */
 
 #ifdef FCBS_ROM_BUILD
@@ -624,12 +624,12 @@ fcbs_create_tuples(void *osh, fcbs_input_data_t *data)
 	fcbs_tuples_t *ret = NULL;
 
 	if (!data) {
-		FCBS_DBG(("%s: data is NULL\n", __FUNCTION__));
+		FCBS_ERR(("%s: data is NULL\n", __FUNCTION__));
 		goto ret;
 	}
 
 	if (!data->data) {
-		FCBS_DBG(("%s: data->data is NULL\n", __FUNCTION__));
+		FCBS_ERR(("%s: data->data is NULL\n", __FUNCTION__));
 		goto ret;
 	}
 
@@ -638,7 +638,7 @@ fcbs_create_tuples(void *osh, fcbs_input_data_t *data)
 
 #ifndef FCBS_ROM_BUILD
 	if (!osh) {
-		FCBS_DBG(("%s: osh is NULL\n", __FUNCTION__));
+		FCBS_ERR(("%s: osh is NULL\n", __FUNCTION__));
 		goto ret;
 	}
 #endif
@@ -701,6 +701,16 @@ fcbs_create_tuples(void *osh, fcbs_input_data_t *data)
 	}
 
 ret:
+	if (ret == NULL) {
+		FCBS_ERR(("%s: Pointer is NULL invalid data/pointer/malloc failed \n",
+			__FUNCTION__));
+#ifndef FCBS_ROM_BUILD
+		/* FCBS_ROM_BUILD case will include only basic libraries and doesnot have assert
+		*support
+		*/
+		ROMMABLE_ASSERT(0);
+#endif
+	}
 	return ret;
 }
 

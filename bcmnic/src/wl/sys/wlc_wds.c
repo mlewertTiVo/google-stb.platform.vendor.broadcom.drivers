@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_wds.c 626655 2016-03-22 10:37:44Z $
+ * $Id: wlc_wds.c 663073 2016-10-04 01:33:08Z $
  */
 
 /**
@@ -64,16 +64,19 @@
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
 
+#ifndef IFNAMSIZ
+#define IFNAMSIZ		16
+#endif /* IFNAMSIZ */
+
 /* IOVar table */
 enum {
-	IOV_WDS_WPA_ROLE,
-	IOV_WDSTIMEOUT,
-	IOV_WDS_ENABLE,	/* enable/disable wds link events */
-#ifdef DWDS
-	IOV_DWDS,
-	IOV_DWDS_CONFIG,
-#endif
-	IOV_WDS_TYPE,
+	IOV_WDS_WPA_ROLE = 1,
+	IOV_WDSTIMEOUT = 2,
+	IOV_WDS_ENABLE = 3,	/* enable/disable wds link events */
+	IOV_DWDS = 4,
+	IOV_DWDS_CONFIG = 5,
+	IOV_WDS_TYPE = 6,
+	IOV_WDS_AP_IFNAME = 7,
 	IOV_LAST
 };
 
@@ -94,6 +97,7 @@ static const bcm_iovar_t wlc_wds_iovars[] = {
 	{"wds_type", IOV_WDS_TYPE,
 	(0), 0, IOVT_UINT32, 0
 	},
+	{"wds_ap_ifname", IOV_WDS_AP_IFNAME, (0), 0, IOVT_BUFFER, 0},
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -123,6 +127,9 @@ static void wlc_dwds_mode_enable(wlc_info_t *wlc, struct scb *scb,
 	wlc_bsscfg_t *bsscfg, bool enable);
 #endif /* defined (DPSTA) || defined (DWDS) */
 
+#ifdef BCMDBG
+static int wlc_dump_wds(wlc_wds_info_t *mwds, struct bcmstrbuf *b);
+#endif /* BCMDBG */
 
 /* module */
 static int wlc_wds_doiovar(void *ctx, uint32 actionid,
@@ -137,6 +144,14 @@ static int wlc_wds_bcn_parse_wme_ie(void *ctx, wlc_iem_parse_data_t *data);
 #if defined(DWDS)
 static int wlc_dwds_parse_brcm_ie(void *ctx, wlc_iem_parse_data_t *data);
 #endif
+#ifdef PSPRETEND
+#include <wlc_apps.h>
+#endif /* PSPRETEND */
+
+/* PS listen interval (no of beacon intervals) for WDS SCB.
+ * Used for PS pretend probing timeout also.
+ */
+#define WDS_SCB_LISTEN_INT	20
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -161,6 +176,9 @@ BCMATTACHFN(wlc_wds_attach)(wlc_info_t *wlc)
 	mwds->wlc = wlc;
 	mwds->pub = pub;
 
+#ifdef BCMDBG
+	wlc_dump_register(pub, "wds", (dump_fn_t)wlc_dump_wds, (void *)mwds);
+#endif
 
 	if (wlc_module_register(pub, wlc_wds_iovars, "wds", mwds, wlc_wds_doiovar,
 	                        wlc_wds_watchdog, NULL, NULL) != BCME_OK) {
@@ -355,6 +373,15 @@ wlc_wds_doiovar(void *ctx, uint32 actionid,
 				WL_WDSIFTYPE_DWDS : WL_WDSIFTYPE_WDS;
 		break;
 	 }
+
+	case IOV_GVAL(IOV_WDS_AP_IFNAME): {
+		 if ((wlcif->type == WLC_IFTYPE_WDS) && BSSCFG_AP(bsscfg)) {
+			strncpy(arg, wl_ifname(wlc->wl, bsscfg->wlcif->wlif), IFNAMSIZ);
+			break;
+		 }
+		 err = BCME_UNSUPPORTED;
+		 break;
+	}
 
 	default:
 		err = BCME_UNSUPPORTED;
@@ -560,12 +587,30 @@ wlc_wds_watchdog(void *arg)
 	}
 }
 
+#ifdef BCMDBG
+static int
+wlc_dump_wds(wlc_wds_info_t *mwds, struct bcmstrbuf *b)
+{
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "lazywds %d\n", mwds->lazywds);
+
+	return 0;
+}
+#endif /* BCMDBG */
 
 int
 wlc_wds_create(wlc_info_t *wlc, struct scb *scb, uint flags)
 {
-	ASSERT(scb != NULL);
+#ifdef PSPRETEND
+	wlc_bss_info_t *current_bss;
+	ASSERT((scb != NULL) && (scb->bsscfg != NULL));
 
+	current_bss = scb->bsscfg->current_bss;
+	ASSERT(current_bss);
+#else
+	ASSERT(scb != NULL);
+#endif /* PSPRETEND */
 	/* honor the existing WDS link */
 	if (scb->wds != NULL) {
 		if (!(flags & WDS_DYNAMIC))
@@ -574,6 +619,11 @@ wlc_wds_create(wlc_info_t *wlc, struct scb *scb, uint flags)
 	}
 
 	if (!(flags & WDS_INFRA_BSS) && SCB_ISMYAP(scb)) {
+#ifdef BCMDBG_ERR
+		char eabuf[ETHER_ADDR_STR_LEN];
+		WL_ERROR(("wl%d: rejecting WDS %s, associated to it as our AP\n",
+		          wlc->pub->unit, bcm_ether_ntoa(&scb->ea, eabuf)));
+#endif /* BCMDBG_ERR */
 		return BCME_ERROR;
 	}
 
@@ -585,6 +635,7 @@ wlc_wds_create(wlc_info_t *wlc, struct scb *scb, uint flags)
 		return BCME_NOMEM;
 	}
 	scb->wds->u.scb = scb;
+	scb->if_stats = scb->wds->_cnt;
 
 #ifdef AP
 	/* create an upper-edge interface */
@@ -612,7 +663,14 @@ wlc_wds_create(wlc_info_t *wlc, struct scb *scb, uint flags)
 
 		scb->permanent = TRUE;
 		scb->flags &= ~SCB_MYAP;
-
+#ifdef PSPRETEND
+		/* scb->listen is used by the AP for timing out PS pkts,
+		 * ensure pkts are held for at least one dtim period
+		 * Setting listen interval here as there is no assoc req for WDS links
+		 */
+		wlc_apps_set_listen_prd(wlc, scb, MAX(current_bss->dtim_period,
+			WDS_SCB_LISTEN_INT));
+#endif /* PSPRETEND */
 		/* legacy WDS does 4-addr nulldata and 8021X frames */
 		scb->flags3 |= SCB3_A4_NULLDATA;
 		scb->flags3 |= SCB3_A4_8021X;
@@ -683,10 +741,11 @@ wlc_ap_wds_timeout(wlc_wds_info_t *mwds)
 		/* mark the WDS link up if we have had recent traffic,
 		 * or probe the WDS link if we have not.
 		 */
-		if (((scb_activity_time = wlc_ap_get_activity_time(wlc->ap)) != 0 &&
+		if ((((scb_activity_time = wlc_ap_get_activity_time(wlc->ap)) != 0 &&
 		     (wlc->pub->now - scb->used) >= scb_activity_time) ||
-		    !(scb->flags & SCB_WDS_LINKUP))
+		    !(scb->flags & SCB_WDS_LINKUP)) && !(scb->flags & SCB_PENDING_PROBE)) {
 			wlc_ap_wds_probe(mwds, scb);
+		}
 	}
 }
 
@@ -711,21 +770,62 @@ wlc_ap_wds_probe(wlc_wds_info_t *mwds, struct scb *scb)
 	ASSERT(VALID_RATE(wlc, rate_override));
 
 	if (!wlc_sendnulldata(wlc, scb->bsscfg, &scb->ea, rate_override,
-		SCB_PS_PRETEND(scb) ? WLF_PSDONTQ : 0, PRIO_8021D_BE,
+		SCB_PS_PRETEND(scb) ? WLF_PSDONTQ : 0,
+		SCB_PS_PRETEND(scb) ? PRIO_8021D_VO : PRIO_8021D_BE,
 		wlc_ap_sendnulldata_cb, NULL))
 		WL_ERROR(("wl%d: %s: wlc_sendnulldata failed\n",
 		          wlc->pub->unit, __FUNCTION__));
+
+	scb->flags |= SCB_PENDING_PROBE;
 }
 
 /*  Check for ack, if there is no ack, reset the rssi value */
 void
 wlc_ap_wds_probe_complete(wlc_info_t *wlc, uint txstatus, struct scb *scb)
 {
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 
 	ASSERT(scb != NULL);
+
+	scb->flags &= ~SCB_PENDING_PROBE;
+
+#ifdef PSPRETEND
+	if (SCB_PS_PRETEND_PROBING(scb)) {
+		if ((txstatus & TX_STATUS_MASK) == TX_STATUS_ACK_RCV) {
+			/* probe response OK - exit PS Pretend state */
+			WL_PS(("wl%d.%d: received ACK to wds ps pretend probe "MACF"\n",
+			        wlc->pub->unit, WLC_BSSCFG_IDX(SCB_BSSCFG(scb)),
+			        ETHER_TO_MACF(scb->ea)));
+
+			/* Assert check that the fifo was cleared before exiting ps mode */
+			if (SCB_PS_PRETEND_BLOCKED(scb)) {
+				WL_ERROR(("wl%d.%d: %s: SCB_PS_PRETEND_BLOCKED, "
+				          "expected to see PMQ PPS entry\n", wlc->pub->unit,
+				          WLC_BSSCFG_IDX(SCB_BSSCFG(scb)), __FUNCTION__));
+			}
+
+			if (!(wlc->block_datafifo & DATA_BLOCK_PS)) {
+				wlc_apps_scb_ps_off(wlc, scb, FALSE);
+			} else {
+				WL_ERROR(("wl%d.%d: %s: annother PS flush in progress, "
+				          "unable to resume\n", wlc->pub->unit,
+				          WLC_BSSCFG_IDX(SCB_BSSCFG(scb)), __FUNCTION__));
+			}
+		} else {
+			WL_PS(("wl%d.%d: no response to WDS ps pretend probe "MACF"\n",
+			        wlc->pub->unit, WLC_BSSCFG_IDX(SCB_BSSCFG(scb)),
+			        ETHER_TO_MACF(scb->ea)));
+
+			/* we re-probe using ps pretend probe timer if not stalled,
+			 * so return from here
+			 */
+			return;
+
+		}
+	}
+#endif /* PSPRETEND */
 
 	/* ack indicates the sta is there */
 	if (txstatus & TX_STATUS_MASK) {
@@ -851,6 +951,9 @@ wlc_dwds_config(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, wlc_dwds_config_t *dwds)
 	int idx;
 	wlc_bsscfg_t *cfg = NULL;
 	struct ether_addr *peer;
+#ifdef BCMDBG_ERR
+	char addr[32];
+#endif
 	/* use mode not bsscfg since the wds create
 	 * ioctl is issued on the main interface.  if we are a first hop extender our main
 	 * interface is in sta mode and we end up looking up the wrong peer

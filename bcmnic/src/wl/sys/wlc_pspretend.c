@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_pspretend.c 636000 2016-05-06 04:05:27Z $
+ * $Id: wlc_pspretend.c 658301 2016-09-07 11:19:12Z $
  */
 
 /* Define wlc_cfg.h to be the first header file included as some builds
@@ -55,6 +55,11 @@ typedef struct {
 	uint32 ps_pretend_count;
 	uint8  ps_pretend_succ_count;
 	uint8  ps_pretend_failed_ack_count;
+#ifdef BCMDBG
+	uint32 ps_pretend_total_time_in_pps;
+	uint32 ps_pretend_suppress_count;
+	uint32 ps_pretend_suppress_index;
+#endif /* BCMDBG */
 } scb_pps_info_t;
 
 #define SCB_PPSINFO_LOC(pps, scb) (scb_pps_info_t **)SCB_CUBBY(scb, (pps)->scb_handle)
@@ -83,11 +88,21 @@ static int wlc_pspretend_doiovar(void *hdl, uint32 aid,
 static int wlc_pspretend_scb_init(void *ctx, struct scb *scb);
 static void wlc_pspretend_scb_deinit(void *ctx, struct scb *scb);
 static uint wlc_pspretend_scb_secsz(void *ctx, struct scb *scb);
+#ifdef BCMDBG
+static void wlc_pspretend_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_pspretend_scb_dump NULL
+#endif
 
 /* others */
 static bool wlc_pspretend_doprobe(wlc_pps_info_t *pps, struct scb *scb, uint32 elapsed_time);
 static void wlc_pspretend_probe(void *arg);
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 /* attach/detach */
 wlc_pps_info_t *
@@ -289,6 +304,22 @@ wlc_pspretend_scb_secsz(void *ctx, struct scb *scb)
 	return (uint)sizeof(*pps_scb);
 }
 
+#ifdef BCMDBG
+static void
+wlc_pspretend_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_pps_info_t *pps = (wlc_pps_info_t *)ctx;
+	scb_pps_info_t *pps_scb = SCB_PPSINFO(pps, scb);
+
+	if (pps_scb == NULL)
+		return;
+
+	bcm_bprintf(b, " scb-PS pretend is %s (0x%x) count %d nack %d time_in_pps %d ms\n",
+	            SCB_PS_PRETEND(scb) ? "on" : "off", scb->ps_pretend,
+	            pps_scb->ps_pretend_count, pps_scb->ps_pretend_failed_ack_count,
+	            (pps_scb->ps_pretend_total_time_in_pps + 500)/1000);
+}
+#endif
 
 /* wlc_apps_process_pspretend_status runs at the end of every TX status. It operates
  * the logic of the ps pretend feature so that the ps pretend will operate during the
@@ -544,6 +575,9 @@ wlc_pspretend_doprobe(wlc_pps_info_t *pps, struct scb *scb, uint32 elapsed_time)
 	 * we return early if we decide to skip
 	 */
 	if ((elapsed_time >= listen_in_ms) &&
+#ifdef BCMDBG
+	    !(wlc->block_datafifo & DATA_BLOCK_PS) &&
+#endif
 	    TRUE) {
 		/* there's no more point to sending probes, the
 		 * destination has probably died. Note that the TIM
@@ -698,6 +732,39 @@ wlc_pspretend_pkt_relist(wlc_pps_info_t *pps, wlc_bsscfg_t *cfg, struct scb *scb
 	       !SCB_PS_PRETEND_NORMALPS(scb);
 }
 
+#ifdef BCMDBG
+void
+wlc_pspretend_supr_upd(wlc_pps_info_t *pps, wlc_bsscfg_t *cfg, struct scb *scb,
+	uint supr_status)
+{
+	wlc_info_t *wlc = pps->wlc;
+	scb_pps_info_t *pps_scb = SCB_PPSINFO(pps, scb);
+
+	if (supr_status == TX_STATUS_SUPR_PPS) {
+		/* if this is the first packet to be suppressed, record the
+		 * ps pretend instance where we start suppressing packets
+		 */
+		if (pps_scb->ps_pretend_suppress_count == 0) {
+			pps_scb->ps_pretend_suppress_index = pps_scb->ps_pretend_count;
+		}
+		/* increment packet suppression counter */
+		pps_scb->ps_pretend_suppress_count++;
+	} else if (supr_status) {
+		/* other suppression started while pspretend is still active */
+	} else if (pps_scb->ps_pretend_suppress_count > 0) {
+		if (SCB_PS_PRETEND(scb) && (wlc->block_datafifo & DATA_BLOCK_PS) &&
+		    (pps_scb->ps_pretend_suppress_index == pps_scb->ps_pretend_count)) {
+			WL_ERROR(("wl%d.%d: "MACF" packet not suppressed when fifo still draining "
+			          "(%d drained/%d remaining)%s\n", wlc->pub->unit,
+			          WLC_BSSCFG_IDX(cfg),
+			          ETHER_TO_MACF(scb->ea), pps_scb->ps_pretend_suppress_count,
+			          TXPKTPENDTOT(wlc),
+			          SCB_PS_PRETEND_BLOCKED(scb) ? "  BLOCKED":""));
+		}
+		pps_scb->ps_pretend_suppress_count = 0;
+	}
+}
+#endif /* BCMDBG */
 
 /* scb->ps_pretend_start contains the TSF time for when ps pretend was
  * last activated. In poor link conditions, there is a high chance that
@@ -753,6 +820,31 @@ wlc_pspretend_scb_ps_off(wlc_pps_info_t *pps, struct scb *scb)
 	pps_scb->ps_pretend_failed_ack_count = 0;
 }
 
+#ifdef BCMDBG
+void
+wlc_pspretend_scb_time_upd(wlc_pps_info_t *pps, struct scb *scb)
+{
+	scb_pps_info_t *pps_scb = SCB_PPSINFO(pps, scb);
+	wlc_info_t *wlc = pps->wlc;
+	uint32 time_in_pretend;
+
+	if (pps_scb == NULL)
+		return;
+
+	time_in_pretend = R_REG(wlc->osh, &wlc->regs->tsf_timerlow) - pps_scb->ps_pretend_start;
+	pps_scb->ps_pretend_total_time_in_pps += time_in_pretend;
+
+	WL_PS(("wl%d.%d: ps pretend state about to exit, %d ms in pretend state\n",
+	       wlc->pub->unit, WLC_BSSCFG_IDX(SCB_BSSCFG(scb)), (time_in_pretend + 500)/1000));
+}
+
+uint
+wlc_pspretend_scb_time_get(wlc_pps_info_t *pps, struct scb *scb)
+{
+	scb_pps_info_t *pps_scb = SCB_PPSINFO(pps, scb);
+	return pps_scb->ps_pretend_total_time_in_pps;
+}
+#endif /* BCMDBG */
 
 /* When sending the CSA, packets are going to be dropped somewhere in the process as
  * the radio channel changes and the packets in transit are still set up for the

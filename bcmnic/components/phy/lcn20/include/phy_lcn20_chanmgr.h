@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_chanmgr.h 610412 2016-01-06 23:43:14Z vyass $
+ * $Id: phy_lcn20_chanmgr.h 610412 2016-01-06 23:43:14Z $
  */
 
 #ifndef _phy_lcn20_chanmgr_h_

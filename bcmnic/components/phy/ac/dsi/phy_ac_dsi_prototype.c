@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_dsi_prototype.c 601517 2015-11-23 10:02:24Z nahegde $
+ * $Id: phy_ac_dsi_prototype.c 601517 2015-11-23 10:02:24Z $
  */
 
 #include <phy_cfg.h>

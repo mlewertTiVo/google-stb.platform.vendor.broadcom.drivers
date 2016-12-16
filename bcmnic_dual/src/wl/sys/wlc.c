@@ -11,7 +11,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom Corporation.
  *
- * $Id: wlc.c 668446 2016-11-03 09:00:38Z $
+ * $Id: wlc.c 671286 2016-11-21 12:26:10Z $
  */
 
 #include <wlc_cfg.h>
@@ -21058,6 +21058,7 @@ static const uint8 mcst_to_cnt_idx[MACSTAT_OFFSET_SZ] = {
 	IDX_IN_WL_CNT_T(rxdfrmmcast),
 	IDX_IN_WL_CNT_T(rxmfrmmcast),
 	IDX_IN_WL_CNT_T(rxcfrmmcast),
+	IDX_IN_WL_CNT_T(rxbeaconmbss),
 	IDX_IN_WL_CNT_T(rxdfrmucastobss),
 	IDX_IN_WL_CNT_T(rxbeaconobss),
 	IDX_IN_WL_CNT_T(rxrsptmout),

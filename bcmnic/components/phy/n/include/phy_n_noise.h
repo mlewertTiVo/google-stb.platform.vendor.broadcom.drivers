@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_noise.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_n_noise.h 659938 2016-09-16 16:47:54Z $
  */
 
 #ifndef _phy_n_noise_h_
@@ -21,6 +21,10 @@
 #include <phy_api.h>
 #include <phy_n.h>
 #include <phy_noise.h>
+
+/* Noise Cal related */
+#define NOISE_CAL_LCNXNPHY
+#define M_LCNXN_BLK_PTR         (71 * 2)
 
 /* forward declaration */
 typedef struct phy_n_noise_info phy_n_noise_info_t;

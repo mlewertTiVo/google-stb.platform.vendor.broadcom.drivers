@@ -29,6 +29,7 @@
 #include <wlc_phyreg_ac.h>
 #include <phy_rstr.h>
 #include <wlioctl.h>
+#include <phy_misc_api.h>
 
 /* Napping parameters */
 typedef struct {
@@ -75,6 +76,10 @@ static void* BCMRAMFN(phy_ac_get_nap_param_tbl)(phy_info_t *pi,
 static void phy_ac_set_nap_params(phy_info_t *pi);
 static void phy_ac_reset_nap_params(phy_info_t *pi);
 static void phy_ac_load_nap_sequencer_28nm_ulp(phy_info_t *pi);
+static uint8 phy_ac_nap_ed_thresh_scale(phy_info_t *pi, uint32 *lo_thresh, uint32 *hi_thresh,
+		uint8 strt_stage);
+static void phy_ac_compute_nap_ed_scale_factor(phy_info_t *pi, uint32 thresh, uint8 *scale_conf,
+		uint8 *scale_amt);
 #endif /* WL_NAP */
 
 /* local functions */
@@ -216,6 +221,22 @@ BCMATTACHFN(phy_ac_populate_nap_params)(phy_ac_nap_info_t *nap_info)
 
 		/* Start stage to do ED threshold cal */
 		nap_params->ed_thresh_cal_start_stage = 5;
+	} else if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		/* Nap ED threshold computation adjust factors */
+		memcpy(nap_params->nap_lo_th_adj,
+				phy_ac_get_nap_param_tbl(pi, NAP_LO_TH_ADJ_TBL),
+				sizeof(uint16) * 5);
+		memcpy(nap_params->nap_hi_th_adj,
+				phy_ac_get_nap_param_tbl(pi, NAP_HI_TH_ADJ_TBL),
+				sizeof(uint16) * 5);
+
+		nap_params->nap_wait_in_cs_len = 20;
+		nap_params->nap_len = 16;
+		nap_params->nap2cs_wait_in_reset = 2;
+		nap_params->pktprocResetLen = 112;
+
+		/* Start stage to do ED threshold cal */
+		nap_params->ed_thresh_cal_start_stage = 5;
 	}
 
 	/* setup ptr */
@@ -253,6 +274,17 @@ BCMRAMFN(phy_ac_get_nap_param_tbl)(phy_info_t *pi, phy_ac_nap_param_tbl_t tbl_id
 
 			case NAP_HI_TH_ADJ_TBL:
 				return nap_hi_th_adj_maj36;
+
+			default:
+				return NULL;
+		}
+	} else if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		switch (tbl_id) {
+			case NAP_LO_TH_ADJ_TBL:
+				return nap_lo_th_adj_maj40;
+
+			case NAP_HI_TH_ADJ_TBL:
+				return nap_hi_th_adj_maj40;
 
 			default:
 				return NULL;
@@ -356,6 +388,12 @@ phy_ac_config_napping_28nm_ulp(phy_info_t *pi)
 	phy_ac_nap_enable(pi, pi->u.pi_acphy->napi->nap_en, FALSE);
 }
 
+void
+phy_ac_config_napping_28nm(phy_info_t *pi)
+{
+	phy_ac_nap_enable(pi, pi->u.pi_acphy->napi->nap_en, FALSE);
+}
+
 /* proc acphy_set_nap_params */
 static void
 phy_ac_set_nap_params(phy_info_t *pi)
@@ -373,30 +411,56 @@ phy_ac_set_nap_params(phy_info_t *pi)
 	/* SW43012-1024 : Fix for tx turn around delay when napping enabled */
 	WRITE_PHYREG(pi, pktprocResetLen, nap_params->pktprocResetLen);
 
-	ACPHY_REG_LIST_START
-		/* Enable napping */
-		MOD_PHYREG_ENTRY(pi, NapCtrl, enAdcFERstonNap, 1)
-		MOD_PHYREG_ENTRY(pi, NapCtrl, disable_nap_on_aci_detect, 1)
-		MOD_PHYREG_ENTRY(pi, NapCtrl, enFineStrRstonNap, 1)
-		MOD_PHYREG_ENTRY(pi, NapCtrl, enFreqEstRstonNap, 1)
-		MOD_PHYREG_ENTRY(pi, NapCtrl, enFrontEndRstonNap, 0)
-		MOD_PHYREG_ENTRY(pi, NapCtrl, napCrsRstAccDis, 1)
-		MOD_PHYREG_ENTRY(pi, NapCtrl, nap_en, 1)
-		WRITE_PHYREG_ENTRY(pi, nap_rfctrl_prog_bits, 0x7)
 
-		/* Enable clock gating */
-		MOD_PHYREG_ENTRY(pi, NapCtrl, enAdcFEClkGateonNap, 0x1)
-		MOD_PHYREG_ENTRY(pi, NapCtrl, enFEClkGateonNap, 0x1)
+	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		ACPHY_REG_LIST_START
+			/* 4347 related settings */
+			WRITE_PHYREG_ENTRY(pi, nap_rfctrl_prog_bits, 0x8)
+			WRITE_PHYREG_ENTRY(pi, nap_wake_event_early_timeout_len, 0xC80)
+			WRITE_PHYREG_ENTRY(pi, nap_wake_event_timeout_len, 0xC80)
+			WRITE_PHYREG_ENTRY(pi, NapCtrl, 0x0235)
+			MOD_PHYREG_ENTRY(pi, RxFeCtrl1, resetsdFeInNonActvSt, 1)
+			MOD_PHYREG_ENTRY(pi, RxFeCtrl1, use_fr_reset, 1)
+			MOD_PHYREG_ENTRY(pi, advnapCtrl, nap_root_gating_en, 0)
 
-		/* Setting use_fr_reset to force only data reset and avoid resetting
-		 * the fifo pointers when nap is enabled.
-		 */
-		MOD_PHYREG_ENTRY(pi, RxFeCtrl1, use_fr_reset, 1)
+			/* hard-code 4347 thresholds temporarily */
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_lo_1, 0x0A)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_lo_2, 0x0A)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_lo_3, 0x0A)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_lo_4, 0x0A)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_lo_5, 0x0A)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_hi_1, 0x32)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_hi_2, 0x32)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_hi_3, 0x32)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_hi_4, 0x32)
+			WRITE_PHYREG_ENTRY(pi, nap_ed_thld_hi_5, 0x32)
+		ACPHY_REG_LIST_EXECUTE(pi);
+	} else {
+		ACPHY_REG_LIST_START
+			/* Enable napping */
+			MOD_PHYREG_ENTRY(pi, NapCtrl, enAdcFERstonNap, 1)
+			MOD_PHYREG_ENTRY(pi, NapCtrl, disable_nap_on_aci_detect, 1)
+			MOD_PHYREG_ENTRY(pi, NapCtrl, enFineStrRstonNap, 1)
+			MOD_PHYREG_ENTRY(pi, NapCtrl, enFreqEstRstonNap, 1)
+			MOD_PHYREG_ENTRY(pi, NapCtrl, enFrontEndRstonNap, 0)
+			MOD_PHYREG_ENTRY(pi, NapCtrl, napCrsRstAccDis, 1)
+			MOD_PHYREG_ENTRY(pi, NapCtrl, nap_en, 1)
+			WRITE_PHYREG_ENTRY(pi, nap_rfctrl_prog_bits, 0x7)
 
-		/* Disable bg_pulse in NAP2RX and RX2NAP */
-		MOD_PHYREG_ENTRY(pi, RfBiasControl, ocls_bg_pulse_val, 0)
-		MOD_PHYREG_ENTRY(pi, RfBiasControl, oclw_bg_pulse_val, 0)
-	ACPHY_REG_LIST_EXECUTE(pi);
+			/* Enable clock gating */
+			MOD_PHYREG_ENTRY(pi, NapCtrl, enAdcFEClkGateonNap, 0x1)
+			MOD_PHYREG_ENTRY(pi, NapCtrl, enFEClkGateonNap, 0x1)
+
+			/* Setting use_fr_reset to force only data reset and avoid resetting
+			* the fifo pointers when nap is enabled.
+			*/
+			MOD_PHYREG_ENTRY(pi, RxFeCtrl1, use_fr_reset, 1)
+
+			/* Disable bg_pulse in NAP2RX and RX2NAP */
+			MOD_PHYREG_ENTRY(pi, RfBiasControl, ocls_bg_pulse_val, 0)
+			MOD_PHYREG_ENTRY(pi, RfBiasControl, oclw_bg_pulse_val, 0)
+		ACPHY_REG_LIST_EXECUTE(pi);
+	}
 
 	if (ACMAJORREV_36(pi->pubpi->phy_rev) && (!ACMINORREV_0(pi))) {
 		/* Fix to pktproc stuck in nap state on nap disable : CRDOT11ACPHY-2102
@@ -417,14 +481,22 @@ static void
 phy_ac_reset_nap_params(phy_info_t *pi)
 {
 	/* Reset napping related registers */
-	ACPHY_REG_LIST_START
-		WRITE_PHYREG_ENTRY(pi, NapCtrl, 0)
-		WRITE_PHYREG_ENTRY(pi, nap_rfctrl_prog_bits, 0)
-		MOD_PHYREG_ENTRY(pi, RxFeCtrl1, use_fr_reset, 0)
-		MOD_PHYREG_ENTRY(pi, RfBiasControl, ocls_bg_pulse_val, 1)
-		MOD_PHYREG_ENTRY(pi, RfBiasControl, oclw_bg_pulse_val, 1)
-		WRITE_PHYREG_ENTRY(pi, pktprocResetLen, 112)
-	ACPHY_REG_LIST_EXECUTE(pi);
+	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		ACPHY_REG_LIST_START
+			WRITE_PHYREG_ENTRY(pi, NapCtrl, 0x0200)
+			WRITE_PHYREG_ENTRY(pi, nap_rfctrl_prog_bits, 0)
+			WRITE_PHYREG_ENTRY(pi, pktprocResetLen, 112)
+		ACPHY_REG_LIST_EXECUTE(pi);
+	} else {
+		ACPHY_REG_LIST_START
+			WRITE_PHYREG_ENTRY(pi, NapCtrl, 0)
+			WRITE_PHYREG_ENTRY(pi, nap_rfctrl_prog_bits, 0)
+			MOD_PHYREG_ENTRY(pi, RxFeCtrl1, use_fr_reset, 0)
+			MOD_PHYREG_ENTRY(pi, RfBiasControl, ocls_bg_pulse_val, 1)
+			MOD_PHYREG_ENTRY(pi, RfBiasControl, oclw_bg_pulse_val, 1)
+			WRITE_PHYREG_ENTRY(pi, pktprocResetLen, 112)
+		ACPHY_REG_LIST_EXECUTE(pi);
+	}
 }
 
 void
@@ -452,7 +524,11 @@ phy_ac_nap_enable(phy_info_t *pi, bool enable, bool agc_reconfig)
 	if (agc_reconfig) {
 		if (enable) {
 			/* Configure SSAGC */
-			phy_ac_agc_config(pi, SINGLE_SHOT_AGC);
+			if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
+				phy_ac_agc_config(pi, SINGLE_SHOT_AGC);
+			} else {
+				phy_ac_agc_config(pi, FAST_AGC);
+			}
 		} else {
 			/* Configure FastAGC */
 			phy_ac_agc_config(pi, FAST_AGC);
@@ -466,8 +542,8 @@ phy_ac_nap_enable(phy_info_t *pi, bool enable, bool agc_reconfig)
 void
 phy_ac_nap_ed_thresh_cal(phy_info_t *pi, int8 *cmplx_pwr_dBm)
 {
-	uint16 lo_thresh[] = {0x0, 0x0, 0x0, 0x0, 0x0};
-	uint16 hi_thresh[] = {0xffff, 0xffff, 0xffff, 0xffff, 0xffff};
+	uint32 lo_thresh[] = {0x0, 0x0, 0x0, 0x0, 0x0};
+	uint32 hi_thresh[] = {0xffff, 0xffff, 0xffff, 0xffff, 0xffff};
 	uint8 i, j, core;
 	uint16 stage_sig_energy, stage_noise_energy, min_sig_energy, max_noise_energy;
 	uint16 adj_fact;
@@ -547,10 +623,23 @@ phy_ac_nap_ed_thresh_cal(phy_info_t *pi, int8 *cmplx_pwr_dBm)
 	wlapi_suspend_mac_and_wait(pi->sh->physhim);
 	phy_utils_phyreg_enter(pi);
 
+	if (ACMAJORREV_36(pi->pubpi->phy_rev) && !ACMINORREV_0(pi)) {
+		uint8 scale_conf;
+		uint16 spare_reg;
+
+		/* Nap ED threshold scaling : CRDOT11ACPHY-2200 */
+		scale_conf = phy_ac_nap_ed_thresh_scale(pi, lo_thresh, hi_thresh,
+				nap_params->ed_thresh_cal_start_stage);
+
+		/* Configure scale config : SpareReg(13:12) */
+		spare_reg = (READ_PHYREG(pi, SpareReg) & 0xcfff) | (scale_conf << 12);
+		WRITE_PHYREG(pi, SpareReg, spare_reg);
+	}
+
 	/* Write thresholds to registers */
 	for (i = 0; i < 5; i++) {
-		phy_utils_write_phyreg(pi, lo_thresh_reg_addr[i], lo_thresh[i]);
-		phy_utils_write_phyreg(pi, hi_thresh_reg_addr[i], hi_thresh[i]);
+		phy_utils_write_phyreg(pi, lo_thresh_reg_addr[i], (uint16)lo_thresh[i]);
+		phy_utils_write_phyreg(pi, hi_thresh_reg_addr[i], (uint16)hi_thresh[i]);
 	}
 
 	/* resume mac */
@@ -565,18 +654,16 @@ phy_ac_nap_get_status(phy_type_nap_ctx_t *ctx, uint16 *reqs, bool *nap_en)
 	phy_info_t *pi = napi->pi;
 	bool suspend = FALSE;
 
-	if (ISACPHY(pi)) {
-		if (reqs != NULL) {
-			*reqs = napi->nap_disable_reqs;
-		}
+	if (reqs != NULL) {
+		*reqs = napi->nap_disable_reqs;
+	}
 
-		if (nap_en != NULL && pi->sh->clk) {
-			/* Suspend MAC if haven't done so */
-			wlc_phy_conditional_suspend(pi, &suspend);
-			*nap_en = (READ_PHYREGFLD(pi, NapCtrl, nap_en) == 1);
-			/* Resume MAC */
-			wlc_phy_conditional_resume(pi, &suspend);
-		}
+	if (nap_en != NULL && pi->sh->clk) {
+		/* Suspend MAC if haven't done so */
+		wlc_phy_conditional_suspend(pi, &suspend);
+		*nap_en = (READ_PHYREGFLD(pi, NapCtrl, nap_en) == 1);
+		/* Resume MAC */
+		wlc_phy_conditional_resume(pi, &suspend);
 	}
 }
 
@@ -595,6 +682,66 @@ phy_ac_nap_set_disable_req(phy_type_nap_ctx_t *ctx, uint16 req,
 
 	if (pi->sh->clk) {
 		phy_ac_nap_enable(pi, !napi->nap_disable_reqs, agc_reconfig);
+	}
+}
+
+static uint8
+phy_ac_nap_ed_thresh_scale(phy_info_t *pi, uint32 *lo_thresh, uint32 *hi_thresh, uint8 strt_stage)
+{
+	uint8 i;
+	uint8 scale_conf_max = 0, scale_amt_max = 0;
+	uint8 scale_conf, scale_amt;
+
+	/* Find the max scale required */
+	for (i = (strt_stage - 1); i < 5; i++) {
+		phy_ac_compute_nap_ed_scale_factor(pi, hi_thresh[i], &scale_conf, &scale_amt);
+
+		if (scale_conf > scale_conf_max) {
+			scale_conf_max = scale_conf;
+			scale_amt_max = scale_amt;
+		}
+
+		phy_ac_compute_nap_ed_scale_factor(pi, lo_thresh[i], &scale_conf, &scale_amt);
+
+		if (scale_conf > scale_conf_max) {
+			scale_conf_max = scale_conf;
+			scale_amt_max = scale_amt;
+		}
+	}
+
+	/* Do the scaling */
+	for (i = (strt_stage - 1); i < 5; i++) {
+		hi_thresh[i] = hi_thresh[i] >> scale_amt_max;
+		lo_thresh[i] = lo_thresh[i] >> scale_amt_max;
+	}
+
+	return scale_conf_max;
+}
+
+static void
+phy_ac_compute_nap_ed_scale_factor(phy_info_t *pi, uint32 thresh, uint8 *scale_conf,
+		uint8 *scale_amt)
+{
+	uint32 th_13bits = ((2 << 12) - 2);
+	uint32 th_15bits = ((2 << 14) - 2);
+	uint32 th_18bits = ((2 << 17) - 2);
+	uint32 th_21bits = ((2 << 20) - 2);
+
+	if (thresh <= th_13bits) {
+		*scale_conf = 0;
+		*scale_amt = 0;
+	} else if ((thresh > th_13bits) && (thresh <= th_15bits)) {
+		*scale_conf = 1;
+		*scale_amt = 2;
+	} else if ((thresh > th_15bits) && (thresh <= th_18bits)) {
+		*scale_conf = 2;
+		*scale_amt = 5;
+	} else if ((thresh > th_18bits) && (thresh <= th_21bits)) {
+		*scale_conf = 3;
+		*scale_amt = 8;
+	} else {
+		PHY_ERROR(("%s: Threshold %d is more than scalable value\n", __FUNCTION__, thresh));
+		ROMMABLE_ASSERT(0);
 	}
 }
 #endif /* WL_NAP */

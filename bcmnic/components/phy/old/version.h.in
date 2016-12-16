@@ -16,7 +16,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:.*>>
  *
- * $Id: version.h.in 532292 2015-02-05 13:59:45Z sudhirbs $
+ * $Id: version.h.in 532292 2015-02-05 13:59:45Z $
  *
 */
 
@@ -38,10 +38,6 @@
 #define	PHY_VERSION_NUM		@MOD_VERSION_NUM@
 
 /* Version String, ASCII, 32 chars max */
-#ifdef BCMINTERNAL
-#define	PHY_VERSION_STR		"@MOD_VERSION_STR@ (BCM INTERNAL)"
-#else
 #define	PHY_VERSION_STR		"@MOD_VERSION_STR@"
-#endif
 
 #endif /* phy_version_h_ */

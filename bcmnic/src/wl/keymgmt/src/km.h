@@ -11,7 +11,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km.h 631680 2016-04-15 07:57:11Z $
+ * $Id: km.h 660248 2016-09-19 21:45:03Z $
  */
 
 #ifndef _km_h_
@@ -63,19 +63,33 @@
 #define KM_PKT_WAPI_KEY_ID(_body) ((_body)[KM_PKT_WAPI_KEY_ID_BODY_OFFSET] & 0x1)
 #define KM_SWAP(_type, _x, _y) {_type _tmp; _tmp = (_x); (_x) = (_y); (_y) = _tmp;}
 
-#define KM_ERR(args) WL_ERROR(args)
+#define KM_REGST_ERR(args) WL_ERROR(args)
+#define KM_ALLOC_ERR(args) WL_ERROR(args)
 #define KM_LOG(args) WL_WSEC(args)	/* use WSEC for logging */
 #define KM_NONE(args) WL_NONE(args)
 #define KM_TRACE(args) WL_TRACE(args)
 #define KM_PRINTF(args) printf args
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 #define KM_LOG_DECL(stmt) stmt
 #else
 #define KM_LOG_DECL(stmt)
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 
+#if defined(BCMDBG_DUMP) || defined(BCMDBG)
+#define KM_LOG_DUMP(stmt) if (WL_WSEC_DUMP_ON()) { stmt; }
+#define KM_LOG_DUMP_PKT(_msg, _wlc, _pkt) if (WL_WSEC_DUMP_ON()) {\
+	void *__pkt_tmp = (_pkt); \
+	while (__pkt_tmp != NULL) {\
+		uchar *__pkt_tmp_data = PKTDATA((_wlc)->osh, __pkt_tmp); \
+		int __pkt_tmp_len = PKTLEN((_wlc)->osh, __pkt_tmp); \
+		KM_LOG_DUMP(prhex(_msg, __pkt_tmp_data, __pkt_tmp_len)); \
+		__pkt_tmp = PKTNEXT((_wlc)->osh, __pkt_tmp); \
+	}\
+}
+#else
 #define KM_LOG_DUMP(stmt)
 #define KM_LOG_DUMP_PKT(_msg, _wlc, _pkt)
+#endif /* BCMDBG_DUMP */
 
 #define KM_WEP_ALGO(_algo) ((_algo) == CRYPTO_ALGO_WEP1 ||\
 	 (_algo) == CRYPTO_ALGO_WEP128)
@@ -102,8 +116,17 @@
 #define KM_SCB_WPA_SUP(_scb) ((_scb)->flags & SCB_WPA_SUP)
 #define KM_WLC_BSSCFG(_wlc, _idx) WLC_BSSCFG(_wlc, _idx)
 
+#ifdef BCMDBG
+#define KM_DBG_ASSERT(_exp) ASSERT(_exp)
+#define KM_ASSERT(_exp) ASSERT(_exp)
+#else
 #define KM_DBG_ASSERT(_exp)
+#ifdef BCMDBG_ASSERT
+#define KM_ASSERT(_exp) ASSERT(_exp)
+#else
 #define KM_ASSERT(_exp)
+#endif /* BCMDBG_ASSERT */
+#endif /* BCMDBG */
 
 typedef uint8 km_amt_idx_t; /* index into AMT or rcmta */
 typedef uint16 km_amt_attr_t;
@@ -175,10 +198,10 @@ wlc_key_hw_index_t km_get_hw_idx(wlc_keymgmt_t *km, wlc_key_index_t key_idx);
 void km_get_alloc_key_info(wlc_keymgmt_t *km, wlc_key_index_t key_idx,
 	km_alloc_key_info_t *alloc_key_info);
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLMSG_WSEC)
 void km_get_hw_idx_key_info(wlc_keymgmt_t *km, wlc_key_hw_index_t hw_idx,
 	wlc_key_info_t *key_info);
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || WLMSG_WSEC */
 
 bool km_rxucdefkeys(wlc_keymgmt_t *km);
 

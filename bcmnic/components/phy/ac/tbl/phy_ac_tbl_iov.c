@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_tbl_iov.c 614654 2016-01-22 21:50:32Z jqliu $
+ * $Id: phy_ac_tbl_iov.c 658512 2016-09-08 07:03:22Z $
  */
 
 #include <phy_cfg.h>
@@ -25,36 +25,37 @@
 #include <wlc_iocv_reg.h>
 #include <phy_ac_info.h>
 
+static const bcm_iovar_t phy_ac_tbl_iovars[] = {
+#if defined(DBG_PHY_IOV)
+	{"phytable", IOV_PHYTABLE, IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG, 0, IOVT_BUFFER, 4*4},
+#endif
+	{NULL, 0, 0, 0, 0, 0}
+};
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
+
 static int
 phy_ac_tbl_doiovar(void *ctx, uint32 aid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
 {
-#if defined(BCMINTERNAL) || defined(WLTEST)
 	phy_info_t *pi = (phy_info_t *)ctx;
 	int err = BCME_OK;
 
-	switch (aid) {
-	case IOV_GVAL(IOV_PHYTABLE):
-		wlc_phy_table_read_acphy(pi, *(uint32 *)p, 1,
-		                         *((uint32 *)p + 1), *((uint32 *)p + 2),
-		                         (uint32 *)a);
-		break;
+	BCM_REFERENCE(pi);
 
-	case IOV_SVAL(IOV_PHYTABLE):
-		wlc_phy_table_write_acphy(pi, *(uint32 *)p, 1,
-		                          *((uint32 *)p + 1), *((uint32 *)p + 2),
-		                          (uint32 *)p + 3);
-		break;
+	switch (aid) {
 
 	default:
-		err = BCME_UNSUPPORTED;
+		err = BCME_OK;
+
 		break;
 	}
 
 	return err;
-#else
-	return BCME_UNSUPPORTED;
-#endif /* BCMINTERNAL || WLTEST */
 }
 
 /* register iovar table to the system */
@@ -62,12 +63,19 @@ int
 BCMATTACHFN(phy_ac_tbl_register_iovt)(phy_info_t *pi, wlc_iocv_info_t *ii)
 {
 	wlc_iovt_desc_t iovd;
+#if defined(WLC_PATCH_IOCTL)
+	wlc_iov_disp_fn_t disp_fn = IOV_PATCH_FN;
+	const bcm_iovar_t* patch_table = IOV_PATCH_TBL;
+#else
+	wlc_iov_disp_fn_t disp_fn = NULL;
+	bcm_iovar_t* patch_table = NULL;
+#endif /* WLC_PATCH_IOCTL */
 
 	ASSERT(ii != NULL);
 
-	wlc_iocv_init_iovd(phy_tbl_iovars,
+	wlc_iocv_init_iovd(phy_ac_tbl_iovars,
 	                   NULL, NULL,
-	                   phy_ac_tbl_doiovar, NULL, NULL, pi,
+	                   phy_ac_tbl_doiovar, disp_fn, patch_table, pi,
 	                   &iovd);
 
 	return wlc_iocv_register_iovt(ii, &iovd);

@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_test.h 630077 2016-04-07 08:30:58Z $
+ * $Id: wlc_test.h 657085 2016-08-31 01:19:55Z $
  */
 
 #ifndef _wlc_test_h_
@@ -27,7 +27,7 @@ void *wlc_tx_testframe(wlc_info_t *wlc, struct ether_addr *da,
 	struct ether_addr *sa, ratespec_t rate_override, int length);
 /* Create a test frame and enqueue into tx fifo */
 extern void *wlc_mutx_testframe(wlc_info_t *wlc, struct scb *scb, struct ether_addr *sa,
-                 ratespec_t rate_override, int fifo, int length, int seq);
+                 ratespec_t rate_override, int fifo, int length, uint16 seq);
 #endif
 
 #endif /* _wlc_test_h_ */

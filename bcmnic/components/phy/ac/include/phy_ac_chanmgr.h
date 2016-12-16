@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_chanmgr.h 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_chanmgr.h 666389 2016-10-21 02:13:47Z $
  */
 
 #ifndef _phy_ac_chanmgr_h_
@@ -37,7 +37,9 @@ typedef struct phy_ac_chanmgr_data {
 	uint8	curr_band2g;
 	uint8	vlin_txidx;
 	uint8	fast_adc_en;
+	uint8   core_freq_mapping[PHY_CORE_MAX];
 	bool	init_done;
+	bool	both_txchain_rxchain_eq_1;
 } phy_ac_chanmgr_data_t;
 
 /* register/unregister ACPHY specific implementations to/from common */
@@ -47,11 +49,12 @@ void phy_ac_chanmgr_unregister_impl(phy_ac_chanmgr_info_t *ac_info);
 
 /* inter-module data API */
 phy_ac_chanmgr_data_t *phy_ac_chanmgr_get_data(phy_ac_chanmgr_info_t *chmgri);
+void phy_ac_chanmgr_set_both_txchain_rxchain(phy_ac_chanmgr_info_t *chmgri,
+	uint8 rxchain, uint8 txchain);
 
 void wlc_phy_farrow_setup_tiny(phy_info_t *pi, chanspec_t chanspec);
 void wlc_phy_nvram_avvmid_read(phy_info_t *pi);
 void  wlc_phy_nvram_vlin_params_read(phy_info_t *pi);
-bool BCMATTACHFN(wlc_phy_attach_farrow)(phy_info_t *pi);
 void wlc_phy_mlua_adjust_acphy(phy_info_t *pi, bool btactive);
 #ifdef WL_PROXDETECT
 void phy_ac_chanmgr_save_smoothing(phy_ac_chanmgr_info_t *ci, uint8 *enable, uint8 *dump_mode);
@@ -71,9 +74,20 @@ void phy_ac_chanmgr_save_smoothing(phy_ac_chanmgr_info_t *ci, uint8 *enable, uin
 #define ALTCLKPLN_ENABLE            0x0
 #define ALTCLKPLN_ENABLE_ROUTER4349 0x1
 
+/* SMTH DUMP MODE */
+#define SMTH_NODUMP			0
+#define SMTH_FREQDUMP			2
+#define SMTH_FREQDUMP_AFTER_NW		3
+#define SMTH_FREQDUMP_AFTER_GD		4
+#define SMTH_FREQDUMP_AFTER_MTE		5
+#define SMTH_TIMEDUMP_AFTER_IFFT	6
+#define SMTH_TIMEDUMP_AFTER_WIN		7
+#define SMTH_FREQDUMP_AFTER_FFT		8
+
 #define PHYBW_20 20
 #define PHYBW_40 40
 #define PHYBW_80 80
+#define PHYBW_160 160
 
 #define ADC_DIV_FAST 1
 #define ADC_DIV_SLOW 2
@@ -398,7 +412,7 @@ typedef struct {
 		uint16 val;
 } sparse_array_entry_t;
 
-//extern void wlc_phy_apply_default_edthresh_acphy(phy_info_t *pi, chanspec_t chanspec);
+extern void wlc_phy_apply_default_edthresh_acphy(phy_info_t *pi, chanspec_t chanspec);
 extern void wlc_phy_chanspec_set_acphy(phy_info_t *pi, chanspec_t chanspec);
 extern void phy_ac_chanmgr_set_phymode(phy_info_t *pi, chanspec_t chanspec, chanspec_t chanspec_sc,
 	uint16 phymode);
@@ -416,7 +430,6 @@ extern uint8 phy_ac_chanmgr_get_chan_freq_range_srom12(phy_info_t *pi, chanspec_
 extern uint8 phy_ac_chanmgr_chan2freq_range_srom12(phy_info_t *pi,
 		chanspec_t chanspec, uint8 channel);
 extern void wlc_phy_smth(phy_info_t *pi, int8 enable_smth, int8 smth_dumpmode);
-extern void wlc_phy_preempt(phy_info_t *pi, bool enable_preempt, bool EnablePostRxFilter_Proc);
 extern void wlc_phy_preemption_abort_during_timing_search(phy_info_t *pi, bool enable);
 extern void wlc_phy_rxcore_setstate_acphy(wlc_phy_t *pih, uint8 rxcore_bitmask, uint8 phytxchain);
 extern void wlc_phy_update_rxchains(wlc_phy_t *pih, uint8 *rxcore_bitmask, uint8 *txcore_bitmask,
@@ -451,9 +464,9 @@ extern void wlc_phy_vlin_en_acphy(phy_info_t *pi);
 #ifdef WL11ULB
 extern void wlc_phy_ulb_mode(phy_info_t *pi, uint8 ulb_mode);
 #endif /* WL11ULB */
-extern void phy_ac_chanmgr_disable_core2core_sync_setup(phy_info_t *pi);
-extern void phy_ac_chanmgr_enable_core2core_sync_setup(phy_info_t *pi);
-extern void phy_ac_chanmgr_mutx_core2core_sync_war(phy_info_t *pi, bool enable);
+
+extern void phy_ac_chanmgr_core2core_sync_setup(phy_ac_chanmgr_info_t *chanmgri, bool enable);
+extern void phy_ac_chanmgr_hwobss(phy_ac_chanmgr_info_t *chanmgri, bool enable_hwobss);
 
 void phy_ac_chanmgr_cal_init(phy_info_t *pi, uint8 *enULB);
 void phy_ac_chanmgr_cal_reset(phy_info_t *pi);
@@ -466,7 +479,10 @@ extern int phy_ac_chanmgr_set_val_sc_chspec(phy_ac_chanmgr_info_t *chanmgri, int
 extern int phy_ac_chanmgr_get_val_sc_chspec(phy_ac_chanmgr_info_t *chanmgri, int32 *ret_val);
 extern int phy_ac_chanmgr_set_val_phymode(phy_ac_chanmgr_info_t *chanmgri, int32 set_val);
 extern int phy_ac_chanmgr_get_val_phymode(phy_ac_chanmgr_info_t *chanmgri, int32 *ret_val);
+extern int phy_ac_chanmgr_get_val_phy_vcore(phy_ac_chanmgr_info_t *chanmgri, int32 *ret_val);
+extern bool phy_ac_chanmgr_get_val_nonbf_logen_mode(phy_ac_chanmgr_info_t *chanmgri);
 
 /* WAR */
 extern void phy_ac_chanmgr_mutx_war(wlc_phy_t *pih, bool enable);
+extern void impbf_radio_ovrs_4347(phy_info_t *pi, bool ovr);
 #endif /* _phy_ac_chanmgr_h_ */

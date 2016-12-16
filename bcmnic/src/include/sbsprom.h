@@ -1,7 +1,7 @@
 /*
  * SPROM format definitions for the Broadcom 47xx and 43xx chip family.
  *
- * $Id: sbsprom.h 523133 2014-12-27 05:50:30Z $
+ * $Id: sbsprom.h 665717 2016-10-18 23:29:25Z $
  * Broadcom Proprietary and Confidential. Copyright (C) 2016,
  * All Rights Reserved.
  * 
@@ -48,7 +48,6 @@
 #define HW_CBM		0x0400
 #define HW_PIMSK	0xf000
 #define HW_PISHIFT	12
-#define HW_4301PISHIFT 13
 #define HW_PI4402	0x2
 #define HW_FUN4401	0x0001
 #define HW_FCLK4402	0x0000
@@ -89,7 +88,6 @@
 
 #define PME_4402_ENET	0
 #define PME_4402_CODEC	1
-#define PME_4301_WL	2
 #define PMEREP_4402_ENET	(PMERD3CV | PMERD3CA | PMERD3H | PMERD2 | PMERD1 | PMERD0 | PME)
 
 /* Word 4, Bar1 enable, pme reports */
@@ -134,15 +132,7 @@
 #define SROM_E1_MACMID	43
 #define SROM_E1_MACLO	44
 
-/* Words 42-44: wireless1 MAC address on 4309 */
-#define SROM_W1_MACHI	42
-#define SROM_W1_MACMID	43
-#define SROM_W1_MACLO	44
-
 #define SROM_EPHY	45
-
-/* Word 46: BdRev & Antennas0/1 & ccLock for 430x */
-#define SROM_REV_AA_LOCK	46
 
 /* Words 47-51 wl0 PA bx */
 #define SROM_WL0_PAB0	47
@@ -174,19 +164,6 @@
 
 #define BU4610_SSID	0x0403
 #define VSIM4610_SSID	0x0404
-
-#define BU4307_SSID	0x0405
-#define BCM94301CB_SSID	0x0406
-#define BCM94301MP_SSID	0x0407
-#define BCM94307MP_SSID	0x0408
-#define AP4307_SSID	0x0409
-
-#define BU4309_SSID	0x040a
-#define BCM94309CB_SSID	0x040b
-#define BCM94309MP_SSID	0x040c
-#define AP4309_SSID	0x040d
-
-#define BU4312_SSID	0x048a
 
 #define BU4402_SSID	0x4402
 
@@ -227,30 +204,6 @@
 #define MACMID_BU4610E0		0x4c25
 #define MACMID_BU4610E1		0x4c26
 
-#define MACMID_BU4307W		0x4c27
-#define MACMID_BU4307E		0x4c28
-
-#define MACMID_94301CB		0x4c29
-
-#define MACMID_94301MP		0x4c2a
-
-#define MACMID_94307MPW		0x4c2b
-#define MACMID_94307MPE		0x4c2c
-
-#define MACMID_AP4307W		0x4c2d
-#define MACMID_AP4307E		0x4c2e
-
-#define MACMID_BU4309W0		0x4c2f
-#define MACMID_BU4309W1		0x4c30
-#define MACMID_BU4309E		0x4c31
-
-#define MACMID_94309CBW0	0x4c32
-#define MACMID_94309CBW1	0x4c33
-
-#define MACMID_94309MPW0	0x4c34
-#define MACMID_94309MPW1	0x4c35
-#define MACMID_94309MPE		0x4c36
-
 #define MACMID_BU4401		0x4c37
 
 /* Enet phy settings one or two singles or a dual	*/
@@ -278,9 +231,6 @@
 
 /* 4402 uses an internal phy at phyaddr 1; want mdcport == coreunit == 0 */
 #define SROM_EPHY_INTERNAL 0x0001
-
-/* 4307 uses an external phy at phyaddr 0; want mdcport == coreunit == 0 */
-#define SROM_EPHY_ZERO	0x0000
 
 #define SROM_VERS	0x0001
 

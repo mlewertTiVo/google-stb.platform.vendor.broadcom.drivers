@@ -268,9 +268,15 @@ km_key_aes_tx_mmpdu_mcmfp(wlc_key_t *key, void *pkt, const struct dot11_header *
 	ie->len = ie_len - TLV_HDR_LEN;
 	htol16_ua_store((uint16)key->info.key_id, (uint8 *)&ie->key_id);
 
+#ifdef  BCMDBG
+	if (key->info.flags & WLC_KEY_FLAG_GEN_REPLAY) {
+		key->info.flags &= ~WLC_KEY_FLAG_GEN_REPLAY;
+	} else
+#else
 	{
 		KEY_SEQ_INCR(aes_igtk->seq, AES_KEY_SEQ_SIZE);
 	}
+#endif
 	memcpy(ie->ipn, aes_igtk->seq, AES_KEY_SEQ_SIZE);
 	memset(ie->mic, 0, key->info.icv_len);
 
@@ -286,6 +292,12 @@ km_key_aes_tx_mmpdu_mcmfp(wlc_key_t *key, void *pkt, const struct dot11_header *
 		PKTSETLEN(KEY_OSH(key), pkt, pkt_len);
 	}
 
+#ifdef BCMDBG
+	if (key->info.flags & (WLC_KEY_FLAG_GEN_ICV_ERR|WLC_KEY_FLAG_GEN_MIC_ERR)) {
+		ie->mic[0] =  ~ie->mic[0];
+		key->info.flags &= ~(WLC_KEY_FLAG_GEN_ICV_ERR|WLC_KEY_FLAG_GEN_MIC_ERR);
+	}
+#endif
 
 done:
 	return err;

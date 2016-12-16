@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_key_pvt.h 645630 2016-06-24 23:27:55Z $
+ * $Id: km_key_pvt.h 656165 2016-08-25 11:38:27Z $
  */
 
 #ifndef _km_key_pvt_h_
@@ -20,9 +20,15 @@
 #include "km_key.h"
 
 #define KEY_MAGIC 0x0077736B
+#ifdef BCMDBG
+#define KEY_MAGIC_DECL uint32 magic;
+#define KEY_MAGIC_INIT(_k)  (_k)->magic = KEY_MAGIC
+#define KEY_MAGIC_VALID(_k) ((_k)->magic == KEY_MAGIC)
+#else
 #define KEY_MAGIC_DECL
 #define KEY_MAGIC_INIT(_k)
 #define KEY_MAGIC_VALID(_k) TRUE
+#endif
 
 /* convenience typedefs */
 typedef wlc_keymgmt_t keymgmt_t;
@@ -183,10 +189,14 @@ struct wlc_key {
 #define KEY_WLCNINC(_key, _ctr) WLCNINC(KEY_PUB(_key)->_ctr)
 #define KEY_DEFAULT_BSSCFG(_key) KEY_WLC(_key)->cfg
 
-#define KEY_COREREV_GE40(_key) D11REV_GE(KEY_COREREV(_key), 40)
-#define KEY_USE_AC_TXD(_key) (((_key)->info.flags & WLC_KEY_FLAG_USE_AC_TXD) != 0)
+#define KEY_COREREV_GE40(_key) (D11REV_GE(KEY_COREREV(_key), 40))
+#define KEY_COREREV_LT80(_key) (D11REV_LT(KEY_COREREV(_key), 80))
+#define KEY_COREREV_GE80(_key) (D11REV_GE(KEY_COREREV(_key), 80))
 
-#define KEY_ERR(args) KM_ERR(args)
+#define KEY_USE_AC_TXD(_key) (((_key)->info.flags & WLC_KEY_FLAG_USE_AC_TXD) != 0)
+#define KEY_USE_REV80_TXD(_key) (((_key)->info.flags & WLC_KEY_FLAG_USE_REV80_TXD) != 0)
+
+#define KEY_ERR(args) WL_ERROR(args)
 #define KEY_LOG(args) KM_LOG(args)
 #define KEY_PRINTF(args) KM_PRINTF(args)
 #define KEY_LOG_DECL(stmt) KM_LOG_DECL(stmt)
@@ -200,7 +210,8 @@ struct wlc_key {
 /* whether to use sw/enc, dec - see km_util.c:km_needs_hw_key() */
 #define KEY_SW_ENC_DEC(_key, _pkt, _rxh) (\
 	!((_key)->info.flags & WLC_KEY_FLAG_IN_HW) ||\
-	!((_rxh)->lt80.RxStatus1 & RXS_DECATMPT))
+	!((D11RXHDR_ACCESS_VAL(_rxh, KEY_PUB(_key)->corerev, \
+	RxStatus1)) & RXS_DECATMPT))
 
 #define KEY_ID_BODY_OFFSET KM_PKT_KEY_ID_BODY_OFFSET
 
@@ -236,17 +247,18 @@ struct wlc_key {
 #define KM_KEY_PKT_DOT11_QOS_LEN(_fc) (\
 	KM_KEY_FC_TYPE_QOS_DATA(_fc) ?  DOT11_QOS_LEN : 0)
 
-#define KM_KEY_PKT_DOT11_HTC_PRESENT(_rxh, _fc) (((_rxh) && \
-	(((_rxh)->lt80.PhyRxStatus_0 & PRXS0_FT_MASK) == PRXS0_PREN) && \
+#define KM_KEY_PKT_DOT11_HTC_PRESENT(corerev, _rxh, _fc) (((_rxh) && \
+	(((D11RXHDR_ACCESS_VAL(_rxh, corerev, PhyRxStatus_0)) & \
+	PRXS_FT_MASK(corerev)) == PRXS0_PREN) && \
 	((_fc) & FC_ORDER) && (KM_KEY_FC_TYPE_QOS_DATA(_fc) || \
-		(FC_TYPE(_fc) == FC_TYPE_MNG))) != 0)
+	(FC_TYPE(_fc) == FC_TYPE_MNG))) != 0)
 
-#define KM_KEY_PKT_DOT11_HTC_LEN(_rxh, _fc) (KM_KEY_PKT_DOT11_HTC_PRESENT(_rxh, _fc) ? \
-	DOT11_HTC_LEN : 0)
+#define KM_KEY_PKT_DOT11_HTC_LEN(corerev, _rxh, _fc) \
+	(KM_KEY_PKT_DOT11_HTC_PRESENT(corerev, _rxh, _fc) ? DOT11_HTC_LEN : 0)
 
 /* incremental length if A4 is present - data frames only */
 #define KM_KEY_PKT_DOT11_A4_LEN(_fc) ((((_fc) & (FC_TODS|FC_FROMDS)) == \
 	(FC_TODS|FC_FROMDS) && \
-		(FC_TYPE(_fc) == FC_TYPE_DATA)) ? ETHER_ADDR_LEN : 0);
+	(FC_TYPE(_fc) == FC_TYPE_DATA)) ? ETHER_ADDR_LEN : 0);
 
 #endif /* _km_key_pvt_h_ */

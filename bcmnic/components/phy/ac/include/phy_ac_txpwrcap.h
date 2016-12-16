@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_txpwrcap.h 629423 2016-04-05 11:12:48Z pieterpg $
+ * $Id: phy_ac_txpwrcap.h 652728 2016-08-03 07:25:22Z $
  */
 
 #ifndef _phy_ac_txpwrcap_h_
@@ -31,8 +31,7 @@ phy_ac_txpwrcap_info_t *phy_ac_txpwrcap_register_impl(phy_info_t *pi,
 	phy_ac_info_t *aci, phy_txpwrcap_info_t *ti);
 void phy_ac_txpwrcap_unregister_impl(phy_ac_txpwrcap_info_t *info);
 
-void wlc_phy_txpwrcap_set_acphy(phy_info_t *pi);
-int8 wlc_phy_txpwrcap_tbl_get_max_percore_acphy(phy_info_t *pi, uint8 core);
+void phy_ac_txpwrcap_set(phy_ac_txpwrcap_info_t *info);
 
 #endif /* WLC_TXPWRCAP */
 #endif /* _phy_ac_txpwrcap_h_ */

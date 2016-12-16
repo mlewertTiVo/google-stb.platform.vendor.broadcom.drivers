@@ -57,6 +57,9 @@ typedef struct bss_bsscfg_psq_info {
 static void wlc_bsscfg_psq_bss_updown(void *ctx, bsscfg_up_down_event_data_t *notif);
 static int wlc_bsscfg_psq_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_bsscfg_psq_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_bsscfg_psq_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#endif
 #if defined(WL_DATAPATH_LOG_DUMP)
 static void wlc_bsscfg_psq_datapath_log_dump(void *ctx, wlc_bsscfg_t *cfg, int tag);
 #endif
@@ -87,6 +90,9 @@ BCMATTACHFN(wlc_bsscfg_psq_attach)(wlc_info_t *wlc)
 	cubby_params.context = psqi;
 	cubby_params.fn_init = wlc_bsscfg_psq_bss_init;
 	cubby_params.fn_deinit = wlc_bsscfg_psq_bss_deinit;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = wlc_bsscfg_psq_bss_dump;
+#endif
 #if defined(WL_DATAPATH_LOG_DUMP)
 	cubby_params.fn_data_log_dump = wlc_bsscfg_psq_datapath_log_dump;
 #endif
@@ -202,6 +208,20 @@ wlc_bsscfg_psq_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_bsscfg_psq_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_bsscfg_psq_info_t *psqi = (wlc_bsscfg_psq_info_t *)ctx;
+	bss_bsscfg_psq_info_t *bpsqi = BSS_BSSCFG_PSQ_INFO(psqi, cfg);
+
+	if (bpsqi != NULL) {
+		bcm_bprintf(b, "%s, length %d\n",
+		            BSS_TX_SUPR(cfg)? "suppressed":"not suppressed",
+		            pktq_n_pkts_tot(&bpsqi->psq));
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #if defined(WL_DATAPATH_LOG_DUMP)
 static void
@@ -272,6 +292,13 @@ wlc_bsscfg_tx_stop(wlc_bsscfg_psq_info_t *psqi, wlc_bsscfg_t *cfg)
 	        wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__,
 	        TXPKTPENDTOT(wlc), pktq_n_pkts_tot(WLC_GET_TXQ(cfg->wlcif->qi))));
 
+#if defined(BCMDBG) || defined(BCMDBG_ASSERT)
+	{
+	bss_bsscfg_psq_info_t *bpsqi = BSS_BSSCFG_PSQ_INFO(psqi, cfg);
+
+	ASSERT(pktq_n_pkts_tot(&bpsqi->psq) == 0);
+	}
+#endif
 }
 
 /** Call after the FIFO has drained */

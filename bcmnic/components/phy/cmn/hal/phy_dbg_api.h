@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_dbg_api.h 620395 2016-02-23 01:15:14Z vyass $
+ * $Id: phy_dbg_api.h 659514 2016-09-14 20:19:00Z $
  */
 
 #ifndef _phy_dbg_api_h_
@@ -24,6 +24,36 @@
 
 #define TAG_TYPE_PHY               0xf0
 #define TAG_TYPE_RAD               0xf1
+
+/* Error Types */
+typedef enum {
+	PHY_RC_NONE						= 0,
+	PHY_RC_TXPOWER_LIMITS			= 1,
+	PHY_RC_TEMPSENSE_LIMITS			= 2,
+	PHY_RC_VCOCAL_FAILED			= 3,
+	PHY_RC_PLL_NOTLOCKED			= 4,
+	PHY_RC_DESENSE_LIMITS			= 5,
+	PHY_RC_BASEINDEX_LIMITS			= 6,
+	PHY_RC_TXCHAIN_INVALID			= 7,
+	PHY_RC_PMUCAL_FAILED			= 8,
+	PHY_RC_RCAL_INVALID				= 9,
+	PHY_RC_FCBS_CHSW_FAILED			= 10,
+	PHY_RC_IQEST_FAILED				= 11,
+	PHY_RC_RESET2RX_FAILED			= 12,
+	PHY_RC_PKTPROC_RESET_FAILED		= 13,
+	PHY_RC_RFSEQ_STATUS_INVALID		= 14,
+	PHY_RC_TXIQLO_CAL_FAILED		= 15,
+	PHY_RC_PAPD_CAL_FAILED			= 16,
+	PHY_RC_NOISE_CAL_FAILED			= 17,
+	PHY_RC_RFSEQ_STATUS_OCL_INVALID	= 18,
+	PHY_RC_RX2TX_FAILED				= 19,
+	PHY_RC_AFE_CAL_FAILED			= 20,
+	PHY_RC_NOMEM					= 21,
+	PHY_RC_SAMPLEPLAY_LIMIT			= 22,
+	PHY_RC_RCCAL_INVALID			= 23,
+	PHY_RC_IDLETSSI_INVALID			= 24,
+	PHY_RC_LAST			/* This must be the last entry */
+} phy_crash_reason_t;
 
 /*
  * Invoke dump function for module 'name'. Return BCME_XXXX.

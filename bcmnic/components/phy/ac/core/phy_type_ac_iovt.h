@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_ac_iovt.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_type_ac_iovt.h 583048 2015-08-31 16:43:34Z $
  */
 
 #ifndef _phy_ac_iovt_h_

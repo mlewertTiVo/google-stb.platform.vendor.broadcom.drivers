@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mumimo.h 630527 2016-04-11 02:01:27Z $
+ * $Id: wlc_mumimo.h 664321 2016-10-12 05:46:42Z $
  */
 
 #ifndef _wlc_mumimo_h_
@@ -37,13 +37,17 @@
 /* Can be used as an MU group ID wildcard. Same value as SU. */
 #define MU_GROUP_ID_ANY 0
 
-/* Maximum number of MU candidates */
-#define MU_CANDIDATE_NUM  8
+/* Maximum number of MU clients */
+#define MUCLIENT_NUM  8
 
 /* Minimum number of MU clients */
 #define MUCLIENT_NUM_MIN  2
 #define MUCLIENT_NUM_4  4
 #define MUCLIENT_NUM_6  6
+#define MUCLIENT_NUM_16  16
+
+/* MU client scheduler duration */
+#define MUCLIENT_SCHEDULER_DUR  60
 
 /* Number of bytes in membership bit mask for a STA. */
 #define MU_MEMBERSHIP_SIZE  (ROUNDUP(MIMO_GROUP_NUM, NBBY)/NBBY)

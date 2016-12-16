@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_vndr_ie_list.c 599296 2015-11-13 06:36:13Z $
+ * $Id: wlc_vndr_ie_list.c 654687 2016-08-16 05:47:32Z $
  */
 
 /* common includes */
@@ -225,7 +225,7 @@ wlc_vndr_ie_list_del(osl_t *osh, vndr_ie_listel_t **vndr_ie_listp,
 		}
 
 		if (!found) {
-			WL_ERROR(("wl: %s(): IE not in list\n", __FUNCTION__));
+			WL_IE_ERROR(("wl: %s(): IE not in list\n", __FUNCTION__));
 			err = BCME_NOTFOUND;
 		}
 	}
@@ -440,7 +440,7 @@ wlc_vndr_ie_list_get(const vndr_ie_listel_t *vndr_ie_listp,
 	}
 
 	if (len < copylen) {
-		WL_ERROR(("wl: %s(): buf too small (copylen=%d, buflen=%d)\n",
+		WL_IE_ERROR(("wl: %s(): buf too small (copylen=%d, buflen=%d)\n",
 			__FUNCTION__, copylen, len));
 
 		/* Store the required buffer size value in the buffer provided */

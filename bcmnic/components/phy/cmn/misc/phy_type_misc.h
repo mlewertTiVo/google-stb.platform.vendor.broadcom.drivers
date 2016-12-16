@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_misc.h 627541 2016-03-25 01:49:14Z hou $
+ * $Id: phy_type_misc.h 666101 2016-10-19 23:52:54Z $
  */
 
 #ifndef _phy_type_misc_h_
@@ -34,15 +34,6 @@ typedef int (*phy_type_misc_init_fn_t)(phy_type_misc_ctx_t *ctx);
 typedef int (*phy_type_misc_dump_fn_t)(phy_type_misc_ctx_t *ctx, struct bcmstrbuf *b);
 typedef int (*phy_type_misc_getlistandsize_fn_t)(phy_type_misc_ctx_t *ctx,
 	phyradregs_list_t **phyreglist, uint16 *phyreglist_sz);
-typedef uint8 (*phy_type_vasip_get_ver_fn_t)(phy_type_misc_ctx_t *ctx);
-typedef void (*phy_type_vasip_proc_reset_fn_t)(phy_type_misc_ctx_t *ctx, int reset);
-typedef void (*phy_type_vasip_clk_set_t)(phy_type_misc_ctx_t *ctx, bool val);
-typedef void (*phy_type_vasip_bin_write_t)(phy_type_misc_ctx_t *ctx, const uint32 vasip_code[],
-		const uint nbytes);
-#ifdef VASIP_SPECTRUM_ANALYSIS
-typedef void (*phy_type_vasip_spectrum_tbl_write_t)(phy_type_misc_ctx_t *ctx,
-		const uint32 vasip_spectrum_tbl[], const uint nbytes_tbl);
-#endif
 typedef void (*phy_type_misc_test_init_fn_t)(phy_type_misc_ctx_t *ctx, bool encals);
 typedef void (*phy_type_misc_test_stop_fn_t)(phy_type_misc_ctx_t *ctx);
 typedef uint32 (*phy_type_misc_rx_iq_est_fn_t)(phy_type_misc_ctx_t *ctx, uint8 samples,
@@ -56,36 +47,27 @@ typedef int (*phy_type_misc_iovar_get_rx_iq_est_fn_t)(phy_type_misc_ctx_t *ctx,
 	int32 *ret_int_ptr, int32 int_val, int err);
 typedef int (*phy_type_misc_iovar_set_rx_iq_est_fn_t)(phy_type_misc_ctx_t *ctx,
 	int32 int_val, int err);
-#ifdef ATE_BUILD
 typedef void (*phy_type_misc_gpaioconfig_fn_t) (phy_type_misc_ctx_t *ctx,
 	wl_gpaio_option_t option, int core);
-#endif
+typedef void (*phy_type_misc_disable_ate_gpiosel_fn_t)(phy_type_misc_ctx_t *ctx);
 typedef int (*phy_type_misc_txswctrlmapset_fn_t) (phy_type_misc_ctx_t *ctx,
 	int32 int_val);
 typedef void (*phy_type_misc_txswctrlmapget_fn_t) (phy_type_misc_ctx_t *ctx,
 	int32 *ret_int_ptr);
 typedef bool (*phy_type_misc_get_rxgainerr_fn_t)(phy_type_misc_ctx_t *ctx, int16 *gainerr);
-typedef void (*phy_type_vasip_svmp_write_t)(phy_type_misc_ctx_t *ctx, uint32 offset, uint16 val);
-typedef uint16 (*phy_type_vasip_svmp_read_t)(phy_type_misc_ctx_t *ctx, const uint32 offset);
-typedef void (*phy_type_vasip_svmp_write_blk_t)(phy_type_misc_ctx_t *ctx,
-		uint32 offset, uint16 len, uint16 *val);
-typedef void (*phy_type_vasip_svmp_read_blk_t)(phy_type_misc_ctx_t *ctx,
-		uint32 offset, uint16 len, uint16 *val);
+
+typedef uint8 (*phy_get_bfe_ndp_recvstreams_fn_t)(phy_type_misc_ctx_t *ctx);
+typedef void (*phy_ldpc_override_set_fn_t)(phy_type_misc_ctx_t *ctx, bool ldpc);
+typedef void (*phy_preamble_override_set_fn_t)(phy_type_misc_ctx_t *ctx, int8 val);
+typedef void (*phy_set_wfdll_chan_active_fn_t)(phy_type_misc_ctx_t *ctx, bool chan_active);
+/* WARs */
+typedef int (*phy_type_misc_set_bool_fn_t)(phy_type_misc_ctx_t *ctx, bool val);
+typedef bool (*phy_type_misc_get_bool_fn_t)(phy_type_misc_ctx_t *ctx);
+typedef int (*phy_type_misc_tkip_rifs_war_fn_t)(phy_type_misc_ctx_t *ctx, uint8 rifs);
 
 typedef struct {
 	phy_type_misc_ctx_t *ctx;
 	phy_type_misc_getlistandsize_fn_t phy_type_misc_getlistandsize;
-	phy_type_vasip_get_ver_fn_t phy_type_vasip_get_ver;
-	phy_type_vasip_proc_reset_fn_t phy_type_vasip_proc_reset;
-	phy_type_vasip_clk_set_t phy_type_vasip_clk_set;
-	phy_type_vasip_bin_write_t phy_type_vasip_bin_write;
-#ifdef VASIP_SPECTRUM_ANALYSIS
-	phy_type_vasip_spectrum_tbl_write_t phy_type_vasip_spectrum_tbl_write;
-#endif
-	phy_type_vasip_svmp_write_t phy_type_vasip_svmp_write;
-	phy_type_vasip_svmp_read_t phy_type_vasip_svmp_read;
-	phy_type_vasip_svmp_write_blk_t phy_type_vasip_svmp_write_blk;
-	phy_type_vasip_svmp_read_blk_t phy_type_vasip_svmp_read_blk;
 	phy_type_misc_test_init_fn_t phy_type_misc_test_init;
 	phy_type_misc_test_stop_fn_t phy_type_misc_test_stop;
 	phy_type_misc_rx_iq_est_fn_t phy_type_misc_rx_iq_est;
@@ -96,12 +78,20 @@ typedef struct {
 	phy_type_misc_iovar_txlo_tone_fn_t phy_type_misc_iovar_txlo_tone;
 	phy_type_misc_iovar_get_rx_iq_est_fn_t phy_type_misc_iovar_get_rx_iq_est;
 	phy_type_misc_iovar_set_rx_iq_est_fn_t phy_type_misc_iovar_set_rx_iq_est;
-#ifdef ATE_BUILD
 	phy_type_misc_gpaioconfig_fn_t	gpaioconfig;
-#endif
+	phy_type_misc_disable_ate_gpiosel_fn_t	disable_ate_gpiosel;
 	phy_type_misc_txswctrlmapset_fn_t	txswctrlmapset;
 	phy_type_misc_txswctrlmapget_fn_t	txswctrlmapget;
 	phy_type_misc_get_rxgainerr_fn_t phy_type_misc_get_rxgainerr;
+	phy_get_bfe_ndp_recvstreams_fn_t	get_bfe_ndp_recvstreams;
+	phy_ldpc_override_set_fn_t		set_ldpc_override;
+	phy_preamble_override_set_fn_t	set_preamble_override;
+	phy_set_wfdll_chan_active_fn_t	set_wfdll_chan_active;
+	phy_type_misc_set_bool_fn_t set_lo_gain_nbcal;
+	/* WARs */
+	phy_type_misc_set_bool_fn_t set_filt_war;
+	phy_type_misc_get_bool_fn_t get_filt_war;
+	phy_type_misc_tkip_rifs_war_fn_t tkip_rifs_war;
 } phy_type_misc_fns_t;
 
 /*

@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlc_utils.h 636260 2016-05-07 02:05:02Z $
+ * $Id: wlc_utils.h 651027 2016-07-25 06:03:44Z $
  */
 
 #ifndef _wlc_utils_h_
@@ -58,6 +58,7 @@ typedef struct rsn_parms rsn_parms_t;
 extern bool wlc_rsn_ucast_lookup(struct rsn_parms *rsn, uint8 auth);
 extern bool wlc_rsn_akm_lookup(struct rsn_parms *rsn, uint8 akm);
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
+extern bool wlc_ssid_cmp(uint8 *ssid1, uint8 *ssid2, uint16 len1, uint16 len2);
 
 /* Frame Type and Frame Subtype conversion */
 #define FST2FT(fst) (((fst) << FC_SUBTYPE_SHIFT) & FC_SUBTYPE_MASK)

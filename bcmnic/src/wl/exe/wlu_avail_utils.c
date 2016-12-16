@@ -135,7 +135,7 @@ wl_avail_parse_intvl(char *arg_intvl, wl_time_interval_t *out_intvl)
 *  out_avail_slot: buffer to store the result
 */
 int
-wl_avail_parse_slot(char *arg_slot, wl_time_slot_t *out_avail_slot)
+wl_avail_parse_slot(char *arg_slot, wl_avail_slot_t *out_avail_slot)
 {
 	int arg_idx;
 	const char *tmp_start, *tmp_end;

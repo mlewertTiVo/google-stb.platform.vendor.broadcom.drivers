@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_tpc.h 596765 2015-11-03 02:53:00Z $
+ * $Id: wlc_tpc.h 649507 2016-07-17 22:43:57Z $
 */
 
 
@@ -57,6 +57,9 @@ extern uint8 wlc_tpc_get_local_constraint_qdbm(wlc_tpc_info_t *tpc);
 /* accessors */
 extern void wlc_tpc_set_local_max(wlc_tpc_info_t *tpc, uint8 pwr);
 extern bool wlc_tpc_diff_local_max(wlc_tpc_info_t *tpc, uint8 pwr);
+/* Set min Tx pwr cap */
+extern void wlc_tpc_set_pwr_cap_min(wlc_tpc_info_t *tpc, int8 min);
+extern int8 wlc_tpc_get_pwr_cap_min(wlc_tpc_info_t *tpc);
 #else /* !WLTPC */
 
 #define wlc_tpc_attach(wlc) NULL
@@ -78,6 +81,8 @@ extern bool wlc_tpc_diff_local_max(wlc_tpc_info_t *tpc, uint8 pwr);
 
 #define wlc_tpc_set_local_max(tpc, pwr) do {} while (0)
 #define wlc_tpc_diff_local_max(tpc, pwr) do {} while (0)
+#define wlc_tpc_set_pwr_cap_min(tpc, min) do {} while (0)
+#define wlc_tpc_get_pwr_cap_min(tpc) do {} while (0)
 #endif /* !WLTPC */
 
 #endif /* _wlc_tpc_h_ */

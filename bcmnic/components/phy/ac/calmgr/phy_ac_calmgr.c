@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_calmgr.c 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_calmgr.c 666402 2016-10-21 03:24:40Z $
  */
 
 #include <phy_cfg.h>
@@ -25,6 +25,7 @@
 #include <phy_ac.h>
 #include <phy_btcx.h>
 #include <phy_papdcal.h>
+#include <phy_calmgr.h>
 #include <phy_ac_calmgr.h>
 #include <phy_ac_chanmgr.h>
 #include <phy_ac_misc.h>
@@ -36,13 +37,16 @@
 #include <phy_ac_txiqlocal.h>
 #include <phy_ac_vcocal.h>
 #include <phy_cache_api.h>
+#include <phy_ocl_api.h>
+#include <phy_stf.h>
+#include <phy_misc_api.h>
+#include <phy_calmgr_api.h>
 
 /* ************************ */
 /* Modules used by this module */
 /* ************************ */
 #include <wlc_radioreg_20691.h>
 #include <wlc_radioreg_20695.h>
-#include "wlc_phy_ac_gains.h"
 #include <wlc_phy_radio.h>
 #include <wlc_phyreg_ac.h>
 #include <wlc_phy_int.h>
@@ -51,13 +55,18 @@
 #include <phy_utils_reg.h>
 #include <phy_ac_info.h>
 
+#ifdef WFD_PHY_LL
+/* Single-core on 20MHz channel */
+#define PHY_AC_CAL_INIT_TIME 2500
+#else
+#define PHY_AC_CAL_INIT_TIME 4000
+#endif
+
 /* module private states */
 struct phy_ac_calmgr_info {
 	phy_info_t *pi;
 	phy_ac_info_t *aci;
 	phy_calmgr_info_t *cmn_info;
-	/* cache coeffs */
-	txcal_coeffs_t txcal_cache[PHY_CORE_MAX];
 	/* cals  - Local copy of phyrxchains & EnTx bits before overwrite */
 	uint8 enRx;
 	uint8 enTx;
@@ -72,10 +81,11 @@ struct phy_ac_calmgr_info {
 };
 
 /* local functions */
+static int phy_ac_calmgr_init(phy_type_calmgr_ctx_t *ctx);
 static int phy_ac_calmgr_prepare(phy_type_calmgr_ctx_t *ctx);
 static void phy_ac_calmgr_cleanup(phy_type_calmgr_ctx_t *ctx);
-static bool phy_ac_calmgr_wd(phy_wd_ctx_t *ctx);
-static void phy_ac_calmgr_nvram_attach(phy_info_t *pi);
+static bool phy_ac_calmgr_wd(phy_type_calmgr_ctx_t *ctx);
+static void phy_ac_calmgr_nvram_attach(phy_ac_calmgr_info_t *calmgri);
 
 /* register phy type specific implementation */
 phy_ac_calmgr_info_t *
@@ -95,23 +105,22 @@ BCMATTACHFN(phy_ac_calmgr_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	ac_info->pi = pi;
 	ac_info->aci = aci;
 	ac_info->cmn_info = cmn_info;
-
-	/* register watchdog fn */
-	if (phy_wd_add_fn(pi->wdi, phy_ac_calmgr_wd, ac_info,
-		PHY_WD_PRD_1TICK, PHY_WD_GLACIAL_CAL, PHY_WD_FLAG_DEF_DEFER) != BCME_OK) {
-		PHY_ERROR(("%s: phy_wd_add_fn failed\n", __FUNCTION__));
-		goto fail;
+	if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
+		/* phy_cal based on tempsense only */
+		pi->cal_period = 0;
 	}
 
 	/* register PHY type specific implementation */
 	bzero(&fns, sizeof(fns));
+	fns.init = phy_ac_calmgr_init;
+	fns.wd = phy_ac_calmgr_wd;
 	fns.prepare = phy_ac_calmgr_prepare;
 	fns.cleanup = phy_ac_calmgr_cleanup;
 	fns.cals = wlc_phy_cals_acphy;
 	fns.ctx = ac_info;
 
 	/* Read srom params from nvram */
-	phy_ac_calmgr_nvram_attach(pi);
+	phy_ac_calmgr_nvram_attach(ac_info);
 
 	if (phy_calmgr_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_calmgr_register_impl failed\n", __FUNCTION__));
@@ -143,6 +152,17 @@ BCMATTACHFN(phy_ac_calmgr_unregister_impl)(phy_ac_calmgr_info_t *ac_info)
 	phy_calmgr_unregister_impl(cmn_info);
 
 	phy_mfree(pi, ac_info, sizeof(phy_ac_calmgr_info_t));
+}
+
+static int
+phy_ac_calmgr_init(phy_type_calmgr_ctx_t *ctx)
+{
+	phy_ac_calmgr_info_t *calmgri = (phy_ac_calmgr_info_t *) ctx;
+	phy_info_t * pi = calmgri->pi;
+	pi->interf->aci.ma_total = PHY_NOISE_MA_WINDOW_SZ * ACI_INIT_MA;
+	pi->interf->badplcp_ma_total = PHY_NOISE_GLITCH_INIT_MA_BADPlCP *
+		PHY_NOISE_MA_WINDOW_SZ;
+	return BCME_OK;
 }
 
 static int
@@ -226,15 +246,15 @@ phy_ac_wd_perical_schedule(phy_info_t *pi)
 
 /* watchdog callback */
 static bool
-phy_ac_calmgr_wd(phy_wd_ctx_t *ctx)
+phy_ac_calmgr_wd(phy_type_calmgr_ctx_t *ctx)
 {
 	phy_ac_calmgr_info_t *info = (phy_ac_calmgr_info_t *)ctx;
 	phy_info_t *pi = info->pi;
 	/* Check to see if a cal needs to be run */
 	if (phy_ac_wd_perical_schedule(pi)) {
-		PHY_CAL(("wl%d: %s: wd triggered cal\n"
+		PHY_CAL(("wl%d: phy_ac_calmgr_wd: wd triggered cal\n"
 			"(cal mode=%d, now=%d, prev_time=%d, gt=%d)\n",
-			PI_INSTANCE(pi), __FUNCTION__, pi->phy_cal_mode, PHYTIMER_NOW(pi),
+			PI_INSTANCE(pi), pi->phy_cal_mode, PHYTIMER_NOW(pi),
 			LAST_CAL_TIME(pi), GLACIAL_TIMER(pi)));
 		wlc_phy_cal_perical((wlc_phy_t *)pi, PHY_PERICAL_WATCHDOG);
 	}
@@ -242,14 +262,18 @@ phy_ac_calmgr_wd(phy_wd_ctx_t *ctx)
 }
 
 static void
-BCMATTACHFN(phy_ac_calmgr_nvram_attach)(phy_info_t *pi)
+BCMATTACHFN(phy_ac_calmgr_nvram_attach)(phy_ac_calmgr_info_t *calmgri)
 {
-	phy_info_acphy_t *pi_ac = pi->u.pi_acphy;
-
-	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
-		pi->phy_cal_mode = PHY_PERICAL_SPHASE;
+	if (ACMAJORREV_40(calmgri->pi->pubpi->phy_rev)) {
+		calmgri->pi->phy_cal_mode = PHY_PERICAL_SPHASE;
 	}
-	pi_ac->enIndxCap = TRUE;
+	calmgri->enIndxCap = TRUE;
+}
+
+bool
+phy_ac_calmgr_get_enIndxCap(phy_ac_calmgr_info_t *calmgri)
+{
+	return calmgri->enIndxCap;
 }
 
 static void
@@ -282,10 +306,12 @@ wlc_idac_read_20691(phy_info_t *pi, int16 *i, int16 *q)
 	wlc_phy_enable_lna_dcc_comp_20691(pi, PHY_ILNA(pi));
 }
 
-void
-phy_ac_calmgr_init(phy_info_t *pi, uint8 *searchmode, acphy_cal_result_t *accal, uint8 phase_id)
+static void
+phy_ac_calmgr_init_cals(phy_info_t *pi, uint8 *searchmode, acphy_cal_result_t *accal,
+	uint8 phase_id)
 {
 	phy_ac_calmgr_info_t *ci = pi->u.pi_acphy->calmgri;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 
 	/* Initializations */
 	ci->enRx = 0;
@@ -296,10 +322,10 @@ phy_ac_calmgr_init(phy_info_t *pi, uint8 *searchmode, acphy_cal_result_t *accal,
 #ifdef WL_NAP
 	ci->save_nap_en = 0;
 #endif /* WL_NAP */
-	ci->enIndxCap = pi->u.pi_acphy->enIndxCap;
+
 
 	if (ACMAJORREV_4(pi->pubpi->phy_rev))
-		pi->u.pi_acphy->enIndxCap = FALSE;
+		ci->enIndxCap = FALSE;
 
 	phy_ac_chanmgr_cal_init(pi, &(ci->enULB));
 
@@ -323,11 +349,13 @@ phy_ac_calmgr_init(phy_info_t *pi, uint8 *searchmode, acphy_cal_result_t *accal,
 
 	/* Save and overwrite Rx chains */
 	wlc_phy_update_rxchains((wlc_phy_t *)pi, &(ci->enRx), &(ci->enTx),
-		pi->sh->hw_phyrxchain, pi->sh->hw_phytxchain);
+		stf_shdata->hw_phyrxchain,
+		stf_shdata->hw_phytxchain);
+
 
 #ifdef OCL
 	if (PHY_OCL_ENAB(pi->sh->physhim)) {
-		wlc_phy_ocl_disable_req_set((wlc_phy_t *)pi, OCL_DISABLED_CAL,
+		phy_ocl_disable_req_set((wlc_phy_t *)pi, OCL_DISABLED_CAL,
 			TRUE, WLC_OCL_REQ_CAL);
 	}
 #endif
@@ -354,7 +382,7 @@ phy_ac_calmgr_init(phy_info_t *pi, uint8 *searchmode, acphy_cal_result_t *accal,
 	 */
 	if ((phase_id > MPHASE_CAL_STATE_INIT)) {
 		if (accal->chanspec != pi->radio_chanspec) {
-			wlc_phy_cal_perical_mphase_restart(pi);
+			phy_calmgr_mphase_restart(pi->calmgri);
 		}
 	}
 
@@ -372,7 +400,8 @@ phy_ac_calmgr_init(phy_info_t *pi, uint8 *searchmode, acphy_cal_result_t *accal,
 
 	if ((ACMAJORREV_32(pi->pubpi->phy_rev) && ACMINORREV_2(pi)) ||
 	    ACMAJORREV_33(pi->pubpi->phy_rev)) {
-		phy_ac_chanmgr_disable_core2core_sync_setup(pi);
+	    /* Disable core2core sync */
+	    phy_ac_chanmgr_core2core_sync_setup(pi->u.pi_acphy->chanmgri, FALSE);
 	}
 	pi->u.pi_acphy->radar_cal_active = TRUE;
 }
@@ -381,11 +410,14 @@ void
 phy_ac_calmgr_clean(phy_info_t *pi, bool *suspend)
 {
 	phy_ac_calmgr_info_t *ci = pi->u.pi_acphy->calmgri;
-
+	uint8 phyrxchain;
 	uint8 core;
+	BCM_REFERENCE(phyrxchain);
+
 	if ((PHY_IPA(pi)) && (ci->tx_pwr_ctrl_state == PHY_TPC_HW_ON) && (!TINY_RADIO(pi)) &&
 			(!ACMAJORREV_36(pi->pubpi->phy_rev))) {
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+		phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+		FOREACH_ACTV_CORE(pi, phyrxchain, core) {
 			MOD_PHYREGCEE(pi, EpsilonTableAdjust, core, epsilonOffset, 0);
 		}
 	}
@@ -402,9 +434,6 @@ phy_ac_calmgr_clean(phy_info_t *pi, bool *suspend)
 	phy_utils_phyreg_exit(pi);
 	wlapi_enable_mac(pi->sh->physhim);
 
-#ifdef ATE_BUILD
-		PHY_INFORM(("===> Resuming MAC, after cal\n"));
-#endif /* ATE_BUILD */
 
 #ifdef WL11ULB
 	phy_ac_rxgcrs_ulb_cal(pi->u.pi_acphy->rxgcrsi, ci->enULB);
@@ -412,7 +441,7 @@ phy_ac_calmgr_clean(phy_info_t *pi, bool *suspend)
 
 #ifdef OCL
 	if (PHY_OCL_ENAB(pi->sh->physhim)) {
-		wlc_phy_ocl_disable_req_set((wlc_phy_t *)pi, OCL_DISABLED_CAL,
+		phy_ocl_disable_req_set((wlc_phy_t *)pi, OCL_DISABLED_CAL,
 		                            FALSE, WLC_OCL_REQ_CAL);
 	}
 #endif
@@ -431,8 +460,8 @@ phy_ac_calmgr_clean(phy_info_t *pi, bool *suspend)
 	PHY_INFORM(("phase_id:%2d usec:%d\n", ci->cal_phase_id, hnd_time_us() - ci->start_time));
 #endif
 	if (ACMAJORREV_4(pi->pubpi->phy_rev)) {
-		pi->u.pi_acphy->enIndxCap = ci->enIndxCap;
-		wlc_phy_ac_gains_load(pi);
+		ci->enIndxCap = TRUE;
+		wlc_phy_ac_gains_load(pi->u.pi_acphy->tbli);
 	}
 }
 
@@ -457,9 +486,12 @@ phy_ac_calmgr_singleshot(phy_info_t *pi, uint8 searchmode, acphy_cal_result_t *a
 	/* TO-DO: Ensure that all inits and cleanups happen here */
 	/* carry out all phases "en bloc", for comments see the various phases below */
 	const uint16 tbl_cookie = TXCAL_CACHE_VALID;
+	uint8 sr_reg[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	bool nonbf_mode = 0;
 #if defined(PHYCAL_CACHING)
 	ch_calcache_t *ctx = wlc_phy_get_chanctx(pi, pi->radio_chanspec);
 #endif
+	PHY_CAL(("phy_ac_calmgr_singleshot\n"));
 	pi->cal_info->last_cal_time = pi->sh->now;
 	accal->chanspec = pi->radio_chanspec;
 
@@ -471,8 +503,8 @@ phy_ac_calmgr_singleshot(phy_info_t *pi, uint8 searchmode, acphy_cal_result_t *a
 		}
 		wlc_phy_radio_tiny_vcocal(pi);
 	} else if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
-		bool need_refresh = (pi->u.pi_acphy->pll_sel == PLL_2G) ?
-				READ_RADIO_REGFLD_28NM(pi, RFP, PLL_CFGR1, 0,
+		bool need_refresh = (phy_ac_radio_get_data(pi->u.pi_acphy->radioi)->pll_sel
+				== PLL_2G) ? READ_RADIO_REGFLD_28NM(pi, RFP, PLL_CFGR1, 0,
 				rfpll_monitor_need_refresh) :
 				READ_RADIO_REGFLD_28NM(pi, RFP, PLL5G_CFGR1, 0,
 				rfpll_5g_monitor_need_refresh);
@@ -528,14 +560,31 @@ phy_ac_calmgr_singleshot(phy_info_t *pi, uint8 searchmode, acphy_cal_result_t *a
 		wlc_btcx_override_enable(pi);
 		phy_ac_dccal(pi);
 
+		if (pi->u.pi_acphy->sromi->srom_low_adc_rate_en) {
+			wlc_phy_low_rate_adc_enable_acphy(pi, FALSE);
+		}
+
+		nonbf_mode = phy_ac_chanmgr_get_val_nonbf_logen_mode(pi->u.pi_acphy->chanmgri);
+
+		if (!nonbf_mode && CHSPEC_IS5G(pi->radio_chanspec)) {
+			wlc_phy_turnon_rxlogen_20694(pi, sr_reg);
+		}
 		wlc_phy_precal_txgain_acphy(pi, accal->txcal_txgain);
-		wlc_phy_cal_txiqlo_acphy(pi, searchmode, FALSE, 1);
+		wlc_phy_cal_txiqlo_acphy(pi, searchmode, FALSE, 0);
 		/* request "Sphase" */
 
 		wlc_phy_cal_rx_fdiqi_acphy(pi);
 
-		wlc_phy_precal_txgain_acphy(pi, accal->txcal_txgain);
-		wlc_phy_cal_txiqlo_acphy(pi, searchmode, FALSE, 0);
+		if (!nonbf_mode && CHSPEC_IS5G(pi->radio_chanspec)) {
+			wlc_phy_turnoff_rxlogen_20694(pi, sr_reg);
+			wlc_phy_precal_txgain_acphy(pi, accal->txcal_txgain);
+			wlc_phy_cal_txiqlo_acphy(pi, searchmode, FALSE, 0);
+		}
+
+		if (pi->u.pi_acphy->sromi->srom_low_adc_rate_en) {
+			wlc_phy_low_rate_adc_enable_acphy(pi, TRUE);
+		}
+
 		wlc_phy_btcx_override_disable(pi);
 		/* request "Sphase" */
 	} else  {
@@ -544,14 +593,16 @@ phy_ac_calmgr_singleshot(phy_info_t *pi, uint8 searchmode, acphy_cal_result_t *a
 
 	wlc_phy_cals_mac_susp_en_other_cr(pi, FALSE);
 
-	if (!ACMAJORREV_40(pi->pubpi->phy_rev) && !ACMAJORREV_37(pi->pubpi->phy_rev)) {
+	if (!ACMAJORREV_37(pi->pubpi->phy_rev) && !ACMAJORREV_40(pi->pubpi->phy_rev)) {
 		if (!ACMAJORREV_32(pi->pubpi->phy_rev) &&
 			!ACMAJORREV_33(pi->pubpi->phy_rev)) {
 			phy_ac_dssf(pi->u.pi_acphy->rxspuri, TRUE);
 		}
 		wlc_phy_table_write_acphy(pi, wlc_phy_get_tbl_id_iqlocal(pi, 0), 1,
 				IQTBL_CACHE_COOKIE_OFFSET, 16, &tbl_cookie);
-		wlc_phy_do_papd_cal_acphy(pi);
+		if (PHY_PAPDEN(pi)) {
+			wlc_phy_do_papd_cal_acphy(pi);
+		}
 	}
 
 	pi->first_cal_after_assoc = FALSE;
@@ -562,9 +613,12 @@ phy_ac_calmgr_singleshot(phy_info_t *pi, uint8 searchmode, acphy_cal_result_t *a
 	wlc_phy_scanroam_cache_rxcal_acphy(pi->u.pi_acphy->rxiqcali, 1);
 #endif /* !defined(PHYCAL_CACHING) */
 #if defined(PHYCAL_CACHING)
-	if (ctx)
-		wlc_phy_cal_cache((wlc_phy_t *)pi);
+	if (ctx) {
+		PHY_CAL(("phy_ac_calmgr_singleshot: wlc_phy_get_chanctx\n"));
+		phy_cache_cal(pi);
+	}
 #endif
+	pi->cal_info->fullphycalcntr++;
 }
 
 static void
@@ -573,13 +627,7 @@ phy_ac_calmgr_init_phase(phy_info_t *pi)
 	/*
 	 *   Housekeeping & Pre-Txcal Tx Gain Adjustment
 	 */
-
-#ifdef WFD_PHY_LL
-	/* Single-core on 20MHz channel */
-	wlc_phy_susp2tx_cts2self(pi, 2500);
-#else
-	wlc_phy_susp2tx_cts2self(pi, 4000);
-#endif
+	wlc_phy_susp2tx_cts2self(pi, PHY_AC_CAL_INIT_TIME);
 
 	/* remember time and channel of this cal event */
 	pi->cal_info->last_cal_time     = pi->sh->now;
@@ -600,6 +648,9 @@ phy_ac_calmgr_multiphase(phy_info_t *pi, uint8 phase_id, uint8 searchmode)
  *	 Carry out next step in multi-phase execution of cal tasks
  *
  */
+	pi->cal_info->multiphasecalcntr++;
+
+	PHY_CAL(("phy_ac_calmgr_multiphase\n"));
 	switch (phase_id) {
 	case ACPHY_CAL_PHASE_INIT:
 		phy_ac_calmgr_init_phase(pi);
@@ -643,7 +694,7 @@ phy_ac_calmgr_multiphase(phy_info_t *pi, uint8 phase_id, uint8 searchmode)
 	default:
 		PHY_ERROR(("%s: Invalid calibration phase %d\n", __FUNCTION__, phase_id));
 		ASSERT(0);
-		wlc_phy_cal_perical_mphase_reset(pi);
+		phy_calmgr_mphase_reset(pi->calmgri);
 		break;
 	}
 }
@@ -677,11 +728,6 @@ wlc_phy_cals_acphy(phy_type_calmgr_ctx_t *ctx, uint8 legacy_caltype, uint8 searc
 		return;
 	}
 
-#ifdef ATE_BUILD
-	PHY_INFORM(("===> wl%d:"
-		"Running ACPHY periodic calibration: Searchmode: %d. phymode: 0x%x \n",
-		pi->sh->unit, searchmode, phy_get_phymode(pi)));
-#endif /* ATE_BUILD */
 
 	/* -----------------
 	 *  Initializations
@@ -690,7 +736,7 @@ wlc_phy_cals_acphy(phy_type_calmgr_ctx_t *ctx, uint8 legacy_caltype, uint8 searc
 
 	/* Exit immediately if we are running on Quickturn */
 	if (ISSIM_ENAB(pi->sh->sih)) {
-		wlc_phy_cal_perical_mphase_reset(pi);
+		phy_calmgr_mphase_reset(pi->calmgri);
 		/* Resume MAC */
 		wlc_phy_conditional_resume(pi, &suspend);
 		return;
@@ -705,7 +751,7 @@ wlc_phy_cals_acphy(phy_type_calmgr_ctx_t *ctx, uint8 legacy_caltype, uint8 searc
 	}
 
 	cal_start_time = OSL_SYSUPTIME();
-	phy_ac_calmgr_init(pi, &searchmode, accal, phase_id);
+	phy_ac_calmgr_init_cals(pi, &searchmode, accal, phase_id);
 
 	/* -------------------
 	 *  Calibration Calls
@@ -731,4 +777,18 @@ wlc_phy_cals_acphy(phy_type_calmgr_ctx_t *ctx, uint8 legacy_caltype, uint8 searc
 	phy_ac_calmgr_clean(pi, &suspend);
 
 	pi->cal_dur += OSL_SYSUPTIME() - cal_start_time;
+}
+
+void
+wlc_phy_low_rate_adc_enable_acphy(phy_info_t *pi, bool enable)
+{
+	MOD_PHYREG(pi, RxFeCtrl1, soft_sdfeFifoReset, 1);
+
+	MOD_PHYREG(pi, lowRateTssi0, lb_tssi_adc_lowrate_mode, enable);
+	MOD_PHYREG(pi, lowRateTssi1, lb_tssi_adc_lowrate_mode, enable);
+	MOD_PHYREG(pi, lowRateTssi20, lb_tssi_adc_lowrate_mode, enable);
+	MOD_PHYREG(pi, lowRateTssi21, lb_tssi_adc_lowrate_mode, enable);
+	MOD_PHYREG(pi, sdfeClkGatingCtrl, disableRxStallonTx, enable);
+
+	MOD_PHYREG(pi, RxFeCtrl1, soft_sdfeFifoReset, 0);
 }

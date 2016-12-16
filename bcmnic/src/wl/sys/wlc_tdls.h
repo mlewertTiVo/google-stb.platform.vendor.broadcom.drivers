@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_tdls.h 637313 2016-05-12 07:33:51Z $
+ * $Id: wlc_tdls.h 656557 2016-08-29 03:35:15Z $
 */
 
 
@@ -124,6 +124,12 @@ bool wlc_tdls_scb_associated(tdls_info_t *tdls, wlc_bsscfg_t *cfg);
 extern bool wlc_tdls_get_pmoverride(tdls_info_t *tdls);
 extern bool wlc_tdls_isup(tdls_info_t *tdls);
 extern bool wlc_tdls_disabled_for_rsdb(tdls_info_t *tdls);
+#ifdef BCMPCIEDEV
+extern void wlc_tdls_flush_pkts(tdls_info_t *tdls, struct scb *scb, uint16 flowid);
+#endif /* BCMPCIEDEV */
+extern struct scb *wlc_tdls_scbfind(wlc_info_t *wlc, const struct ether_addr *ea);
+extern struct scb *_wlc_tdls_scbfind_all(wlc_info_t *wlc, const struct ether_addr *ea);
+extern bool wlc_tdls_wait_for_pti_resp(tdls_info_t *tdls, struct scb *scb);
 #else	/* stubs */
 #define TDLS_PRHEX(m, b, n)	do {} while (0)
 

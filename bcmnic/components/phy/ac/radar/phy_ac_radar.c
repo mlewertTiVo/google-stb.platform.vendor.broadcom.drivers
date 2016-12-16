@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_radar.c 619072 2016-02-14 23:04:06Z chihap $
+ * $Id: phy_ac_radar.c 669899 2016-11-11 16:11:42Z $
  */
 
 #include <typedefs.h>
@@ -38,8 +38,10 @@ struct phy_ac_radar_info {
 
 /* local functions */
 static int phy_ac_radar_init(phy_type_radar_ctx_t *ctx, bool on);
-static uint8 phy_ac_radar_run(phy_type_radar_ctx_t *ctx, radar_detected_info_t *radar_detected);
+static uint8 phy_ac_radar_run(phy_type_radar_ctx_t *ctx,
+	radar_detected_info_t *radar_detected, bool sec_pll, bool bw80_80_mode);
 static void phy_radar_init_st(phy_info_t *pi, phy_radar_st_t *st);
+static int phy_ac_radar_set_thresholds(phy_type_radar_ctx_t *ctx, wl_radar_thr_t *thresholds);
 
 /* Register/unregister ACPHY specific implementation to common layer. */
 phy_ac_radar_info_t *
@@ -64,6 +66,7 @@ BCMATTACHFN(phy_ac_radar_register_impl)(phy_info_t *pi, phy_ac_info_t *aci, phy_
 	bzero(&fns, sizeof(fns));
 	fns.init = phy_ac_radar_init;
 	fns.run = phy_ac_radar_run;
+	fns.set_thresholds = phy_ac_radar_set_thresholds;
 	fns.ctx = info;
 
 	if (phy_radar_register_impl(ri, &fns) != BCME_OK) {
@@ -76,12 +79,23 @@ BCMATTACHFN(phy_ac_radar_register_impl)(phy_info_t *pi, phy_ac_info_t *aci, phy_
 	ASSERT(st != NULL);
 
 	phy_radar_init_st(pi, st);
-
+	if (PHY_SUPPORT_SCANCORE(pi) || PHY_SUPPORT_BW80P80(pi)) {
+		if (!(st->radar_work_lp_sc =
+				(radar_lp_info_t *)phy_malloc(pi, sizeof(radar_lp_info_t)))) {
+			PHY_ERROR(("%s: phy_malloc failed\n", __FUNCTION__));
+			goto fail;
+		}
+		if (!(st->radar_status_sc =
+				(wl_radar_status_t *)phy_malloc(pi, sizeof(wl_radar_status_t)))) {
+			PHY_ERROR(("%s: phy_malloc failed\n", __FUNCTION__));
+			goto fail;
+		}
+	}
 	return info;
 
 fail:
-	if (info != NULL)
-		phy_mfree(pi, info, sizeof(phy_ac_radar_info_t));
+	phy_ac_radar_unregister_impl(info);
+
 	return NULL;
 }
 
@@ -90,13 +104,24 @@ BCMATTACHFN(phy_ac_radar_unregister_impl)(phy_ac_radar_info_t *info)
 {
 	phy_info_t *pi;
 	phy_radar_info_t *ri;
+	phy_radar_st_t *st;
 
-	ASSERT(info);
+	if (info == NULL) {
+		return;
+	}
+
 	pi = info->pi;
 	ri = info->ri;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
+	if (PHY_SUPPORT_SCANCORE(pi) || PHY_SUPPORT_BW80P80(pi)) {
+		st = phy_radar_get_st(ri);
+		if (st->radar_work_lp_sc != NULL)
+			phy_mfree(pi, st->radar_work_lp_sc, sizeof(radar_lp_info_t));
+		if (st->radar_status_sc != NULL)
+			phy_mfree(pi, st->radar_status_sc, sizeof(wl_radar_status_t));
+	}
 	phy_radar_unregister_impl(ri);
 
 	phy_mfree(pi, info, sizeof(phy_ac_radar_info_t));
@@ -104,23 +129,54 @@ BCMATTACHFN(phy_ac_radar_unregister_impl)(phy_ac_radar_info_t *info)
 
 static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_acphy_2cores) = {
 	WL_RADAR_THR_VERSION,
-	0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30
+	0x698, 0x30, 0x698, 0x30, 0x698, 0x30, 0x698, 0x30, 0x698, 0x30, 0x698, 0x30,
+	0x6b8, 0x30, 0x6c0, 0x30
 };
+
+static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_acphy_2cores_4366) = {
+	WL_RADAR_THR_VERSION,
+	0x6ac, 0x30, 0x6ac, 0x30, 0x6b4, 0x30, 0x6b4, 0x30, 0x6b4, 0x30, 0x6b4, 0x30,
+	0x6b4, 0x30, 0x6b4, 0x30
+};
+
+static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_acphy_2cores_4366_lesi) = {
+	WL_RADAR_THR_VERSION,
+	0x6ac, 0x24, 0x6ac, 0x20, 0x6b4, 0x30, 0x6ac, 0x20, 0x6b4, 0x20, 0x6b4, 0x30,
+	0x6b4, 0x30, 0x6b4, 0x30,
+};
+
 
 static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_acphy_1core) = {
 	WL_RADAR_THR_VERSION,
-	0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30
+	0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30, 0x6a8, 0x30,
+	0x6b8, 0x30, 0x6b0, 0x30
 };
 
 static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_acphy_1core_4350) = {
 	WL_RADAR_THR_VERSION,
-	0x6a8, 0x30, 0x6a4, 0x30, 0x6a0, 0x30, 0x6ac, 0x30, 0x6a8, 0x30, 0x6a8, 0x30
+	0x6a8, 0x30, 0x6a4, 0x30, 0x6a0, 0x30, 0x6ac, 0x30, 0x6a8, 0x30, 0x6a8, 0x30,
+	0x6b8, 0x30, 0x6b0, 0x30
 	/* Assume 3dB antenna gain, targeting -64dBm at input of antenna port */
 };
 
 static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_acphy_43602) = {
 	WL_RADAR_THR_VERSION,
-	0x698, 0x18, 0x698, 0x18, 0x698, 0x18, 0x698, 0x18, 0x698, 0x18, 0x698, 0x18
+	0x698, 0x18, 0x698, 0x18, 0x698, 0x18, 0x698, 0x18, 0x698, 0x18, 0x698, 0x18,
+	0x6b8, 0x30, 0x6b0, 0x30
+};
+
+static const wl_radar_thr2_t BCMATTACHDATA(wlc_phy_radar_thresh2_acphy) = {
+	WL_RADAR_THR_VERSION,
+	0x6b4, 0x30, 0x6b4, 0x30, 0x6b4, 0x30, 0x6b4, 0x30, 0x6b4, 0x30, 0x6b8, 0x30, //SC core
+	0xa, 0xa, 0xa, 0x258, 0x258, 0x258, 0x258, 0x4, 0xc
+	// fc_varth_sb = 10, fc_varth_bin5_sb = 10
+	// notradar_enb = 2'b1010, [3]: normal core lp, [2]: normal core non-lp
+	// [1]: scan core lp, [0]: scan core non-lp
+	// max_notradar_lp = 600, max_notradar = 600
+	// max_notradar_lp_sc = 600, max_notradar_sc = 600
+	// highpow_war_enb = 2'b0110, [0]: highpow WAR, [1]: chirp criterion
+	// [2-3]: min_fm_lp of scan core
+	// highpow_sp_ratio = 5
 };
 
 static void
@@ -132,6 +188,18 @@ BCMATTACHFN(phy_radar_init_st)(phy_info_t *pi, phy_radar_st_t *st)
 	st->rparams.radar_thrs = (GET_RDR_NANTENNAS(pi) == 1)
 							? wlc_phy_radar_thresh_acphy_1core
 							: wlc_phy_radar_thresh_acphy_2cores;
+
+	st->rparams.radar_thrs2 = wlc_phy_radar_thresh2_acphy;
+	if (ACMAJORREV_32(pi->pubpi->phy_rev) ||
+		ACMAJORREV_33(pi->pubpi->phy_rev)) {
+		st->rparams.radar_thrs = (GET_RDR_NANTENNAS(pi) == 1)
+							? wlc_phy_radar_thresh_acphy_1core
+							: wlc_phy_radar_thresh_acphy_2cores_4366;
+		//if (pi->u.pi_acphy->lesi == 1)
+		//	st->rparams.radar_thrs = wlc_phy_radar_thresh_acphy_2cores_4366_lesi;
+
+	}
+
 	if (ACMAJORREV_2(pi->pubpi->phy_rev)) {
 		st->rparams.radar_thrs = wlc_phy_radar_thresh_acphy_1core_4350;
 	} else if (ACMAJORREV_5(pi->pubpi->phy_rev)) {
@@ -158,10 +226,12 @@ BCMATTACHFN(phy_radar_init_st)(phy_info_t *pi, phy_radar_st_t *st)
 	st->rparams.radar_args.max_pw = 690;  /* 30us + 15% */
 	st->rparams.radar_args.thresh0 = st->rparams.radar_thrs.thresh0_20_lo;
 	st->rparams.radar_args.thresh1 = st->rparams.radar_thrs.thresh1_20_lo;
+	st->rparams.radar_args.thresh0_sc = st->rparams.radar_thrs2.thresh0_sc_20_lo;
+	st->rparams.radar_args.thresh1_sc = st->rparams.radar_thrs2.thresh1_sc_20_lo;
 	st->rparams.radar_args.fmdemodcfg = 0x7f09;
 	st->rparams.radar_args.autocorr = 0x1e;
-	/* it is used to check pw for acphy. if pw > 20.1us, then check fm */
-	st->rparams.radar_args.st_level_time = 0x8192;
+	/* it is used to check pw for acphy. if pw > 30us, then check fm */
+	st->rparams.radar_args.st_level_time = 0x8258;
 	st->rparams.radar_args.min_pw = 0;
 	st->rparams.radar_args.max_pw_tol = 12;
 	st->rparams.radar_args.npulses_lp = 10;
@@ -172,7 +242,7 @@ BCMATTACHFN(phy_radar_init_st)(phy_info_t *pi, phy_radar_st_t *st)
 #endif
 #ifdef BIN5_RADAR_DETECT_WAR_J28
 	st->rparams.radar_args.npulses_lp = 8;
-	st->rparams.radar_args.st_level_time = 0x0192;
+	st->rparams.radar_args.st_level_time &= 0x0fff;
 #endif
 	/* t2_min[15:12] = x; if n_non_single >= x && lp_length >
 	 * npulses_lp => bin5 detected
@@ -202,7 +272,7 @@ BCMATTACHFN(phy_radar_init_st)(phy_info_t *pi, phy_radar_st_t *st)
 	st->rparams.radar_args.min_fm_lp  = 20;
 #endif
 
-	if (ISACPHY(pi) && TONEDETECTION)
+	if (TONEDETECTION)
 		st->rparams.radar_args.max_span_lp = 61708;  /* 0xf20c; 15, 1, 12 */
 	else
 		st->rparams.radar_args.max_span_lp = 62476;  /* 0xf40c; 15, 4, 12 */
@@ -227,8 +297,6 @@ BCMATTACHFN(phy_radar_init_st)(phy_info_t *pi, phy_radar_st_t *st)
 	/* bits 7:4 = 4 for EU type 2, bits 3:0= 4 for EU type 1 */
 	/* 10 00 1100 1100 1100 */
 	st->rparams.radar_args.npulses_fra = 34406;  /* 0x8666, bits 15:14 low_intv_eu_t2 */
-	st->rparams.radar_args.npulses_stg2 = 7;
-	st->rparams.radar_args.npulses_stg3 = 7;
 	st->rparams.radar_args.percal_mask = 0x31;
 	st->rparams.radar_args.feature_mask = RADAR_FEATURE_USE_MAX_PW | RADAR_FEATURE_FCC_DETECT;
 
@@ -259,37 +327,21 @@ WLBANDINITFN(phy_ac_radar_init)(phy_type_radar_ctx_t *ctx, bool on)
 					st->rparams.radar_thrs.thresh0_20_lo;
 				st->rparams.radar_args.thresh1 =
 					st->rparams.radar_thrs.thresh1_20_lo;
-				ACPHY_REG_LIST_START
-					WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x08)
-					WRITE_PHYREG_ENTRY(pi, RadarT3BelowMin, 0)
-					WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 200)
-					WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 25)
-					WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac19)
-				ACPHY_REG_LIST_EXECUTE(pi);
 			} else if (CHSPEC_IS40(pi->radio_chanspec)) {
 				st->rparams.radar_args.thresh0 =
 					st->rparams.radar_thrs.thresh0_40_lo;
 				st->rparams.radar_args.thresh1 =
 					st->rparams.radar_thrs.thresh1_40_lo;
-				ACPHY_REG_LIST_START
-					WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x10)
-					WRITE_PHYREG_ENTRY(pi, RadarT3BelowMin, 0)
-					WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 400)
-					WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 50)
-					WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac32)
-				ACPHY_REG_LIST_EXECUTE(pi);
-			} else {
+			} else if (CHSPEC_IS80(pi->radio_chanspec)) {
 				st->rparams.radar_args.thresh0 =
 					st->rparams.radar_thrs.thresh0_80_lo;
 				st->rparams.radar_args.thresh1 =
 					st->rparams.radar_thrs.thresh1_80_lo;
-				ACPHY_REG_LIST_START
-					WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x1f)
-					WRITE_PHYREG_ENTRY(pi, RadarT3BelowMin, 0)
-					WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 800)
-					WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 100)
-					WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac64)
-				ACPHY_REG_LIST_EXECUTE(pi);
+			} else {
+				st->rparams.radar_args.thresh0 =
+					st->rparams.radar_thrs.thresh0_160_lo;
+				st->rparams.radar_args.thresh1 =
+					st->rparams.radar_thrs.thresh1_160_lo;
 			}
 		} else {
 			if (CHSPEC_BW_LE20(pi->radio_chanspec)) {
@@ -297,37 +349,21 @@ WLBANDINITFN(phy_ac_radar_init)(phy_type_radar_ctx_t *ctx, bool on)
 					st->rparams.radar_thrs.thresh0_20_hi;
 				st->rparams.radar_args.thresh1 =
 					st->rparams.radar_thrs.thresh1_20_hi;
-				ACPHY_REG_LIST_START
-					WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x08)
-					WRITE_PHYREG_ENTRY(pi, RadarT3BelowMin, 0)
-					WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 200)
-					WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 25)
-					WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac19)
-				ACPHY_REG_LIST_EXECUTE(pi);
 			} else if (CHSPEC_IS40(pi->radio_chanspec)) {
 				st->rparams.radar_args.thresh0 =
 					st->rparams.radar_thrs.thresh0_40_hi;
 				st->rparams.radar_args.thresh1 =
 					st->rparams.radar_thrs.thresh1_40_hi;
-				ACPHY_REG_LIST_START
-					WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x10)
-					WRITE_PHYREG_ENTRY(pi, RadarT3BelowMin, 0)
-					WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 400)
-					WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 50)
-					WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac32)
-				ACPHY_REG_LIST_EXECUTE(pi);
-			} else {
+			} else if (CHSPEC_IS80(pi->radio_chanspec)) {
 				st->rparams.radar_args.thresh0 =
 					st->rparams.radar_thrs.thresh0_80_hi;
 				st->rparams.radar_args.thresh1 =
 					st->rparams.radar_thrs.thresh1_80_hi;
-				ACPHY_REG_LIST_START
-					WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x1f)
-					WRITE_PHYREG_ENTRY(pi, RadarT3BelowMin, 0)
-					WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 800)
-					WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 100)
-					WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac64)
-				ACPHY_REG_LIST_EXECUTE(pi);
+			} else {
+				st->rparams.radar_args.thresh0 =
+					st->rparams.radar_thrs.thresh0_160_hi;
+				st->rparams.radar_args.thresh1 =
+					st->rparams.radar_thrs.thresh1_160_hi;
 			}
 		}
 		/* phy_utils_write_phyreg(pi, ACPHY_RadarBlankCtrl, */
@@ -336,11 +372,11 @@ WLBANDINITFN(phy_ac_radar_init)(phy_type_radar_ctx_t *ctx, bool on)
 			(uint16)((int16)st->rparams.radar_args.thresh0));
 		phy_utils_write_phyreg(pi, ACPHY_RadarThresh1(pi->pubpi->phy_rev),
 			(uint16)((int16)st->rparams.radar_args.thresh1));
+		phy_utils_write_phyreg(pi, ACPHY_RadarThresh0_core1(pi->pubpi->phy_rev),
+			(uint16)((int16)st->rparams.radar_args.thresh0));
+		phy_utils_write_phyreg(pi, ACPHY_RadarThresh1_core1(pi->pubpi->phy_rev),
+			(uint16)((int16)st->rparams.radar_args.thresh1));
 		phy_utils_write_phyreg(pi, ACPHY_Radar_t2_min(pi->pubpi->phy_rev), 0);
-		phy_utils_write_phyreg(pi, ACPHY_crsControlu(pi->pubpi->phy_rev),
-			(uint8)st->rparams.radar_args.autocorr);
-		phy_utils_write_phyreg(pi, ACPHY_crsControll(pi->pubpi->phy_rev),
-			(uint8)st->rparams.radar_args.autocorr);
 		phy_utils_write_phyreg(pi, ACPHY_FMDemodConfig(pi->pubpi->phy_rev),
 			st->rparams.radar_args.fmdemodcfg);
 		phy_utils_write_phyreg(pi, ACPHY_RadarBlankCtrl2(pi->pubpi->phy_rev), 0x5f88);
@@ -369,13 +405,101 @@ WLBANDINITFN(phy_ac_radar_init)(phy_type_radar_ctx_t *ctx, bool on)
 				/* WRITE_PHYREG_ENTRY(pi, RadarT3BelowMin, 0) */
 			ACPHY_REG_LIST_EXECUTE(pi);
 		}
+	} /* if (on) */
+	else { /* handling radar disable request */
+		phy_utils_write_phyreg(pi, ACPHY_RadarSearchCtrl
+			(pi->pubpi->phy_rev), 0x0);
 	}
 
 	if (TINY_RADIO(pi)) {
-		phy_utils_write_phyreg(pi, ACPHY_Radar_adc_to_dbm(pi->pubpi->phy_rev),
-			(ROUTER_4349(pi) && CHSPEC_CHANNEL(pi->radio_chanspec) <=
-			WL_THRESHOLD_LO_BAND) ? 0x4a4 : 0x4ac);
-		phy_utils_write_phyreg(pi, ACPHY_RadarDetectConfig1(pi->pubpi->phy_rev), 0x2c06);
+		if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
+			phy_utils_write_phyreg(pi, ACPHY_Radar_adc_to_dbm
+				(pi->pubpi->phy_rev), 0x34a3);
+
+			if (CHSPEC_IS8080(pi->radio_chanspec) ||
+				PHY_AS_80P80(pi, pi->radio_chanspec)) {
+				phy_utils_write_phyreg(pi, ACPHY_RadarDetectConfig1
+					(pi->pubpi->phy_rev), 0x32f7);
+			} else	 {
+				phy_utils_write_phyreg(pi, ACPHY_RadarDetectConfig1
+					(pi->pubpi->phy_rev), 0x3237);
+			}
+			phy_utils_write_phyreg(pi, ACPHY_RadarT3BelowMin(pi->pubpi->phy_rev),
+				0x14);
+			if (CHSPEC_IS20(pi->radio_chanspec)) {
+			ACPHY_REG_LIST_START
+				WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x08)
+				WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 200)
+				WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 25)
+				WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac19)
+				WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 0x258)
+			ACPHY_REG_LIST_EXECUTE(pi);
+			} else if (CHSPEC_IS40(pi->radio_chanspec)) {
+			ACPHY_REG_LIST_START
+				WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x10)
+				WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 400)
+				WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 50)
+				WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac32)
+				WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 0x4b0)
+			ACPHY_REG_LIST_EXECUTE(pi);
+
+			} else {
+			ACPHY_REG_LIST_START
+				WRITE_PHYREG_ENTRY(pi, RadarMaLength, 0x1f)
+				WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 800)
+				WRITE_PHYREG_ENTRY(pi, RadarResetBlankingDelay, 100)
+				WRITE_PHYREG_ENTRY(pi, RadarBlankCtrl, 0xac64)
+				WRITE_PHYREG_ENTRY(pi, RadarT3Timeout, 0x960)
+			ACPHY_REG_LIST_EXECUTE(pi);
+
+			}
+		} else {
+			phy_utils_write_phyreg(pi, ACPHY_Radar_adc_to_dbm(pi->pubpi->phy_rev),
+				(ROUTER_4349(pi) && CHSPEC_CHANNEL(pi->radio_chanspec) <=
+				WL_THRESHOLD_LO_BAND) ? 0x4a4 : 0x4ac);
+			phy_utils_write_phyreg(pi,
+				ACPHY_RadarDetectConfig1(pi->pubpi->phy_rev), 0x2c06);
+		}
+		if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
+			if (CHSPEC_IS20(pi->radio_chanspec)) {
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarMaLength_SC(pi->pubpi->phy_rev), 0x8);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarT3Timeout_SC(pi->pubpi->phy_rev), 600);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarResetBlankingDelay_SC(pi->pubpi->phy_rev), 25);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarBlankCtrl_SC(pi->pubpi->phy_rev), 0x8019);
+			} else if (CHSPEC_IS40(pi->radio_chanspec)) {
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarMaLength_SC(pi->pubpi->phy_rev), 0x10);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarT3Timeout_SC(pi->pubpi->phy_rev), 1200);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarResetBlankingDelay_SC(pi->pubpi->phy_rev), 50);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarBlankCtrl_SC(pi->pubpi->phy_rev), 0x8032);
+			} else {
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarMaLength_SC(pi->pubpi->phy_rev), 0x1f);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarT3Timeout_SC(pi->pubpi->phy_rev), 2400);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarResetBlankingDelay_SC(pi->pubpi->phy_rev), 100);
+				phy_utils_write_phyreg(pi,
+					ACPHY_RadarBlankCtrl_SC(pi->pubpi->phy_rev), 0x8064);
+			}
+			phy_utils_write_phyreg(pi,
+				ACPHY_Radar_adc_to_dbm_SC(pi->pubpi->phy_rev), 0x34a0);
+			phy_utils_write_phyreg(pi,
+				ACPHY_RadarDetectConfig1_SC(pi->pubpi->phy_rev), 0x3207);
+			phy_utils_write_phyreg(pi,
+				ACPHY_RadarT3BelowMin_SC(pi->pubpi->phy_rev), 0x14);
+			phy_utils_write_phyreg(pi,
+				ACPHY_RadarGainOverride_SC(pi->pubpi->phy_rev), 0x43d);
+			phy_utils_write_phyreg(pi,
+				ACPHY_RadarBlankCtrl2_SC(pi->pubpi->phy_rev), 0xa000);
+		}
 	}
 
 	wlapi_bmac_mhf(pi->sh->physhim, MHF1, MHF1_RADARWAR, (on ? MHF1_RADARWAR : 0), FALSE);
@@ -384,12 +508,33 @@ WLBANDINITFN(phy_ac_radar_init)(phy_type_radar_ctx_t *ctx, bool on)
 }
 
 static uint8
-phy_ac_radar_run(phy_type_radar_ctx_t *ctx, radar_detected_info_t *radar_detected)
+phy_ac_radar_run(phy_type_radar_ctx_t *ctx, radar_detected_info_t *radar_detected,
+bool sec_pll, bool bw80_80_mode)
 {
 	phy_ac_radar_info_t *info = (phy_ac_radar_info_t *)ctx;
 	phy_info_t *pi = info->pi;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
-	return phy_radar_run_nphy(pi, radar_detected);
+	return phy_radar_run_nphy(pi, radar_detected, sec_pll, bw80_80_mode);
+}
+
+static int
+phy_ac_radar_set_thresholds(phy_type_radar_ctx_t *ctx, wl_radar_thr_t *thresholds)
+{
+	phy_ac_radar_info_t *radari = (phy_ac_radar_info_t *)ctx;
+	phy_radar_st_t *st = phy_radar_get_st(radari->ri);
+	st->rparams.radar_thrs.thresh0_40_lo = thresholds->thresh0_40_lo;
+	st->rparams.radar_thrs.thresh1_40_lo = thresholds->thresh1_40_lo;
+	st->rparams.radar_thrs.thresh0_40_hi = thresholds->thresh0_40_hi;
+	st->rparams.radar_thrs.thresh1_40_hi = thresholds->thresh1_40_hi;
+	st->rparams.radar_thrs.thresh0_80_lo = thresholds->thresh0_80_lo;
+	st->rparams.radar_thrs.thresh1_80_lo = thresholds->thresh1_80_lo;
+	st->rparams.radar_thrs.thresh0_80_hi = thresholds->thresh0_80_hi;
+	st->rparams.radar_thrs.thresh1_80_hi = thresholds->thresh1_80_hi;
+	st->rparams.radar_thrs.thresh0_160_lo = thresholds->thresh0_160_lo;
+	st->rparams.radar_thrs.thresh1_160_lo = thresholds->thresh1_160_lo;
+	st->rparams.radar_thrs.thresh0_160_hi = thresholds->thresh0_160_hi;
+	st->rparams.radar_thrs.thresh1_160_hi = thresholds->thresh1_160_hi;
+	return BCME_OK;
 }

@@ -104,7 +104,8 @@ typedef volatile struct _d11regs {
 	uint32	suspreq;		/* 0xc4 */
 	uint32	flushreq;		/* 0xc8 */
 	uint32	chnflushstatus;		/* 0xcc */
-	uint32	PAD[12];		/* 0xd0 - 0xfc */
+	uint32  chnsuspstatus;		/* 0xd0 */
+	uint32	PAD[11];		/* 0xd4 - 0xfc */
 
 	/* tx fifos 6-7 and rx fifos 1-3 removed in corerev 5 */
 	uint32	intrcvlazy[4];		/* 0x100 - 0x10C */
@@ -256,7 +257,11 @@ typedef volatile struct _d11regs {
 			uint16	rcmta_addr0;		/* 0x43e */
 			uint16	rcmta_addr1;		/* 0x440 */
 			uint16	rcmta_addr2;		/* 0x442 */
-			uint16	PAD[13];		/* 0x444 - 0x45c */
+			uint16	PAD[2];			/* 0x444 - 0x446 */
+			uint16	dagg_ctl;		/* 0x448 For corerev < 40 */
+			uint16  dagg_count;		/* 0x44A For corerev < 40 */
+			uint16  dagg_length;	/* 0x44C For corerev < 40 */
+			uint16	PAD[8];		/* 0x44e - 0x45c */
 			uint16	ext_ihr_status;		/* 0x45e */
 			uint16	radio_ihr_addr;		/* 0x460 */
 			uint16	radio_ihr_data;		/* 0x462 */
@@ -419,7 +424,10 @@ typedef volatile struct _d11regs {
 			uint16	PAD[0XD];		/* 0x614 - 0x62C */
 			uint16  tsf_clk_frac_l;         /* 0x62E */
 			uint16  tsf_clk_frac_h;         /* 0x630 */
-			uint16	PAD[0X14];		/* 0x632 - 0x658 */
+			uint16	PAD[0X0A];		/* 0x632 - 0x645 */
+			uint16	tsf_gpt0_stat;	/* 0x646 */
+			uint16  tsf_gpt1_stat;	/* 0x648 */
+			uint16  PAD[0X08];		/* 0x64A - 0x658 */
 			uint16	tsf_random;		/* 0x65A */
 			uint16	PAD[0x05];		/* 0x65C - 0x664 */
 
@@ -835,7 +843,11 @@ typedef volatile struct _d11regs {
 			uint16  SampleCollectPlayCtrl; /* 0xb2e */
 			uint16  Core0BMCAllocStatusTID7;	/* b30 */
 			uint16  Core1BMCAllocStatusTID7;	/* b32 */
-			uint16	PAD[10];		/* 0xb34 - 0xb46 */
+			uint16	PAD[1];			/* 0xb34 */
+			uint16  BmcVpConfig;		/* 0xb36 */
+			uint16  PAD[1];			/* 0xb38 */
+			uint16	XmtTemplatePtrOffset;	/* b3a */
+			uint16	PAD[6];			/* 0xb3c - 0xb46 */
 			uint16	SysMStartAddrHi;	/* 0xb48 */
 			uint16	SysMStartAddrLo;	/* 0xb4a */
 			uint16	PAD[12];		/* 0xb4c - 0xb62 */

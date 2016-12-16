@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_papdcal.c 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_n_papdcal.c 639713 2016-05-24 18:02:57Z $
  */
 
 #include <typedefs.h>

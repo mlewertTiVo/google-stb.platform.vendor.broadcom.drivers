@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rxspur.h 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_rxspur.h 642720 2016-06-09 18:56:12Z $
  */
 
 #ifndef _phy_rxspur_h_
@@ -32,9 +32,5 @@ int phy_rxspur_init(phy_rxspur_info_t *cmn_info);
 int phy_rxspur_down(phy_rxspur_info_t *cmn_info);
 
 /* force spurmode iovar functions */
-#if defined(WLTEST)
-int phy_rxspur_set_force_spurmode(phy_rxspur_info_t *mi, int16 int_val);
-int phy_rxspur_get_force_spurmode(phy_rxspur_info_t *mi, int32 *ret_int_ptr);
-#endif /* WLTEST */
 
 #endif /* _phy_rxspur_h_ */

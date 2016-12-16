@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_txpwrcap.h 644299 2016-06-18 03:37:28Z gpasrija $
+ * $Id: phy_type_txpwrcap.h 656306 2016-08-26 03:32:45Z $
  */
 
 #ifndef _phy_type_txpwrcap_h_
@@ -23,6 +23,35 @@
 #include <phy_txpwrcap.h>
 #include <phy_txpwrcap_api.h>
 
+typedef struct phy_txpwrcap_priv_info phy_txpwrcap_priv_info_t;
+
+typedef struct phy_txpwrcap_data {
+	/* Tx Power cap vars */
+	wl_txpwrcap_tbl_t *txpwrcap_tbl;
+	bool	txpwrcap_cellstatus;
+	bool	_txpwrcap;	/* enable/disable Tx power cap feature */
+} phy_txpwrcap_data_t;
+
+struct phy_txpwrcap_info {
+	phy_txpwrcap_priv_info_t *priv;
+	phy_txpwrcap_data_t *data;
+};
+
+
+/* Tx Pwr Cap Support */
+#ifdef WLC_TXPWRCAP
+#if defined(WL_ENAB_RUNTIME_CHECK)
+	#define PHYTXPWRCAP_ENAB(txpwrcapi)   ((txpwrcapi)->data->_txpwrcap)
+#elif defined(WLC_TXPWRCAP_DISABLED)
+	#define PHYTXPWRCAP_ENAB(txpwrcapi)   0
+#else
+	#define PHYTXPWRCAP_ENAB(txpwrcapi)   ((txpwrcapi)->data->_txpwrcap)
+#endif
+#else
+	#define PHYTXPWRCAP_ENAB(txpwrcapi)   0
+#endif	/* WLC_TXPWRCAP */
+
+
 /*
  * PHY type implementation interface.
  *
@@ -32,28 +61,19 @@
 typedef void phy_type_txpwrcap_ctx_t;
 
 typedef int (*phy_type_txpwrcap_init_fn_t)(phy_type_txpwrcap_ctx_t *ctx);
-typedef int (*phy_type_txpwrcap_tbl_set_fn_t)(phy_type_txpwrcap_ctx_t *ctx,
-	wl_txpwrcap_tbl_t *txpwrcap_tbl);
-typedef int (*phy_type_txpwrcap_tbl_get_fn_t)(phy_type_txpwrcap_ctx_t *ctx,
-	wl_txpwrcap_tbl_t *txpwrcap_tbl);
-typedef void (*phy_type_txpwrcap_cellstatus_set_fn_t)(phy_type_txpwrcap_ctx_t *ctx,
-	int mask, int value);
-typedef bool (*phy_type_txpwrcap_cellstatus_get_fn_t)(phy_type_txpwrcap_ctx_t *ctx);
+typedef int (*phy_type_txpwrcap_tbl_set_fn_t)(phy_type_txpwrcap_ctx_t *ctx);
 typedef void (*phy_type_txpwrcap_to_shm_fn_t)(phy_type_txpwrcap_ctx_t *ctx,
 	uint16 tx_ant, uint16 rx_ant);
 typedef uint32 (*phy_type_txpwrcap_in_use_fn_t)(phy_type_txpwrcap_ctx_t *ctx);
+typedef void (*phy_type_txpwrcap_set_fn_t)(phy_type_txpwrcap_ctx_t *ctx);
 
 typedef struct {
 	/* init module including h/w */
 	phy_type_txpwrcap_init_fn_t init;
 	/* Txpwrcap Table Set */
 	phy_type_txpwrcap_tbl_set_fn_t txpwrcap_tbl_set;
-	/* Txpwrcap Table Get */
-	phy_type_txpwrcap_tbl_get_fn_t txpwrcap_tbl_get;
-	/* Txpwrcap Cellstatus Set */
-	phy_type_txpwrcap_cellstatus_set_fn_t txpwrcap_set_cellstatus;
-	/* Txpwrcap Cellstatus Get */
-	phy_type_txpwrcap_cellstatus_get_fn_t txpwrcap_get_cellstatus;
+	/* Txpwrcap Set */
+	phy_type_txpwrcap_set_fn_t txpwrcap_set;
 	/* txpwrcap values in shm along with diversity */
 	phy_type_txpwrcap_to_shm_fn_t txpwrcap_to_shm;
 	/* txpwrcap values in shm along with diversity */

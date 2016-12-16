@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_txiqlocal.c 620336 2016-02-22 20:09:51Z guangjie $
+ * $Id: phy_n_txiqlocal.c 620336 2016-02-22 20:09:51Z $
  */
 
 #include <typedefs.h>
@@ -40,7 +40,7 @@ struct phy_n_txiqlocal_info {
 };
 
 /* local functions */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static void wlc_nphy_get_tx_iqcc(phy_info_t *pi, uint16 *a, uint16 *b, uint16 *a1, uint16 *b1);
 static void wlc_nphy_set_tx_iqcc(phy_info_t *pi, uint16 a, uint16 b, uint16 a1, uint16 b1);
 static void wlc_nphy_get_tx_locc(phy_info_t *pi, uint16 *diq0, uint16 *diq1);
@@ -50,7 +50,7 @@ static void phy_n_txiqlocal_txiqccget(phy_type_txiqlocal_ctx_t *ctx, void *a);
 static void phy_n_txiqlocal_txiqccset(phy_type_txiqlocal_ctx_t *ctx, void *b);
 static void phy_n_txiqlocal_txloccget(phy_type_txiqlocal_ctx_t *ctx, void *a);
 static void phy_n_txiqlocal_txloccset(phy_type_txiqlocal_ctx_t *ctx, void *b);
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 
 /* register phy type specific implementation */
 phy_n_txiqlocal_info_t *
@@ -78,14 +78,14 @@ BCMATTACHFN(phy_n_txiqlocal_register_impl)(phy_info_t *pi, phy_n_info_t *aci,
 	bzero(&fns, sizeof(fns));
 	fns.ctx = ac_info;
 	/* Fix me! chip ID should be removed later! */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 	if (!(CHIPID_43236X_FAMILY(pi))) {
 	fns.txiqccget = phy_n_txiqlocal_txiqccget;
 	fns.txiqccset = phy_n_txiqlocal_txiqccset;
 	fns.txloccget = phy_n_txiqlocal_txloccget;
 	fns.txloccset = phy_n_txiqlocal_txloccset;
 	}
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 
 	if (phy_txiqlocal_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_txiqlocal_register_impl failed\n", __FUNCTION__));
@@ -116,7 +116,7 @@ BCMATTACHFN(phy_n_txiqlocal_unregister_impl)(phy_n_txiqlocal_info_t *ac_info)
 }
 
 /* Internal API */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static void
 wlc_nphy_get_tx_iqcc(phy_info_t *pi, uint16 *a, uint16 *b, uint16 *a1, uint16 *b1)
 {
@@ -260,6 +260,6 @@ static void phy_n_txiqlocal_txloccset(phy_type_txiqlocal_ctx_t *ctx, void *p)
 		loccValues[8], loccValues[9], loccValues[10],
 		loccValues[11]);
 }
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 
 /* External API */

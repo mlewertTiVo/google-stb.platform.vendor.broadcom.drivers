@@ -135,6 +135,13 @@ wlc_set_addrmatch(wlc_info_t *wlc, int idx, const struct ether_addr *addr,
 	int slot = idx;
 #endif /* ACKSUPR_MAC_FILTER */
 
+#ifdef BCMDBG
+	if (WL_WSEC_ON()) {
+		char addr_str[ETHER_ADDR_STR_LEN];
+		WL_WSEC(("wl%d: %s: idx %d addr %s attr 0x%04x\n", WLCWLUNIT(wlc),
+			__FUNCTION__, idx, bcm_ether_ntoa(addr, addr_str), attr));
+	}
+#endif /* BCMDBG */
 
 	ASSERT(wlc->pub->corerev > 4);
 	if (HAS_AMT(wlc)) {
@@ -203,8 +210,8 @@ wlc_clear_addrmatch(wlc_info_t *wlc, int idx)
 	return wlc_set_addrmatch(wlc, idx, &ether_null, 0);
 }
 
-#if defined(WL_BEAMFORMING) || defined(ACKSUPR_MAC_FILTER) || (defined(BCMULP) && \
-	defined(BCMFCBS))
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WL_BEAMFORMING) || \
+	defined(ACKSUPR_MAC_FILTER) || (defined(BCMULP) && defined(BCMFCBS))
 void
 wlc_get_addrmatch(wlc_info_t *wlc, int idx, struct ether_addr *addr,
 	uint16 *attr)
@@ -248,10 +255,92 @@ wlc_get_addrmatch(wlc_info_t *wlc, int idx, struct ether_addr *addr,
 #endif 
 
 
+#if defined(BCMDBG_DUMP)
+static int
+wlc_dump_rcmta(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	int i;
+	struct ether_addr ea;
+	char eabuf[ETHER_ADDR_STR_LEN];
+
+	ASSERT(IS_PRE_AMT(wlc));
+
+	if (!wlc->clk)
+		return BCME_NOCLK;
+
+	for (i = 0; i < RCMTA_SIZE; i ++) {
+		uint16 attr;
+		wlc_get_addrmatch(wlc, i, &ea, &attr);
+		if (ETHER_ISNULLADDR(&ea) && !(attr & AMT_ATTR_VALID))
+			continue;
+		bcm_bprintf(b, "%d %s\n", i, bcm_ether_ntoa(&ea, eabuf));
+	}
+
+	return BCME_OK;
+}
+
+static int
+wlc_dump_amt(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	int i;
+	struct ether_addr ea;
+	uint16 attr;
+	char flagstr[64];
+	static const bcm_bit_desc_t attr_flags[] = {
+		{AMT_ATTR_VALID, "Valid"},
+		{AMT_ATTR_A1, "A1"},
+		{AMT_ATTR_A2, "A2"},
+		{AMT_ATTR_A3, "A3"},
+		{0, NULL}
+	};
+
+	ASSERT(HAS_AMT(wlc));
+
+	if (!wlc->clk)
+		return BCME_NOCLK;
+
+	for (i = 0; i < (int)wlc->pub->max_addrma_idx; i ++) {
+		wlc_get_addrmatch(wlc, i, &ea, &attr);
+		if (ETHER_ISNULLADDR(&ea) && !(attr & AMT_ATTR_VALID))
+			continue;
+
+		bcm_bprintf(b, "%02d "MACF" 0x%04x", i, ETHER_TO_MACF(ea), attr);
+		if (attr != 0) {
+			bcm_format_flags(attr_flags, attr, flagstr, 64);
+			bcm_bprintf(b, " (%s)", flagstr);
+		}
+		bcm_bprintf(b, " amtinfo 0x%04x\n", wlc_read_amtinfo_by_idx(wlc, i));
+	}
+
+	return BCME_OK;
+}
+
+static int
+wlc_dump_addrmatch(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	ASSERT(wlc->pub->corerev > 4);
+
+	if (!wlc->clk)
+		return BCME_NOCLK;
+
+	if (HAS_AMT(wlc)) {
+		wlc_dump_amt(wlc, b);
+		return BCME_OK;
+	}
+	wlc_dump_rcmta(wlc, b);
+	return BCME_OK;
+}
+#endif 
 
 int
 BCMATTACHFN(wlc_addrmatch_attach)(wlc_info_t *wlc)
 {
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#if defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "rcmta", (dump_fn_t)wlc_dump_addrmatch, (void *)wlc);
+	wlc_dump_register(wlc->pub, "amt", (dump_fn_t)wlc_dump_addrmatch, (void *)wlc);
+#endif
+#endif /* BCMDBG || BCMDBG_DUMP */
 	return BCME_OK;
 }
 

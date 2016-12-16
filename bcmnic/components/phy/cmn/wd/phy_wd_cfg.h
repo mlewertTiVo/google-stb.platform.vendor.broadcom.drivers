@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_wd_cfg.h 617851 2016-02-08 20:16:34Z vyass $
+ * $Id: phy_wd_cfg.h 617851 2016-02-08 20:16:34Z $
  */
 
 #ifndef _phy_wd_cfg_h_

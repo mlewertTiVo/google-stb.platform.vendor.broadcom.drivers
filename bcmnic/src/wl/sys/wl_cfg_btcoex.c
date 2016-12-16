@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg_btcoex.c 655259 2016-08-18 15:48:30Z $
+ * $Id: wl_cfg_btcoex.c 673116 2016-12-01 00:15:06Z $
  */
 
 #if !defined(BCMDONGLEHOST)
@@ -109,11 +109,7 @@ dev_wlc_intvar_get_reg(struct net_device *dev, char *name,
 static int
 dev_wlc_bufvar_set(struct net_device *dev, char *name, char *buf, int len)
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 31)
-	char ioctlbuf_local[1024];
-#else
-	static char ioctlbuf_local[1024];
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 31) */
+	char ioctlbuf_local[WLC_IOCTL_SMLEN];
 
 	bcm_mkiovar(name, buf, len, ioctlbuf_local, sizeof(ioctlbuf_local));
 
@@ -426,9 +422,9 @@ void wl_cfg80211_btcoex_deinit()
 		btcoex_info_loc->timer_on = 0;
 		del_timer_sync(&btcoex_info_loc->timer);
 	}
-#if defined(BCMDONGLEHOST)
+#if defined(BCMDONGLEHOST) || defined(PLATFORM_INTEGRATED_WIFI)
 	cancel_work_sync(&btcoex_info_loc->work);
-#endif /* BCMDONGLEHOST */
+#endif /* BCMDONGLEHOST || PLATFORM_INTEGRATED_WIFI */
 
 	kfree(btcoex_info_loc);
 }
@@ -444,9 +440,9 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, dhd_pub_t *dhd, char *co
 	static int  pm = PM_FAST;
 	int  pm_local = PM_OFF;
 #endif /* OEM_ANDROID */
-#if defined(BCMDONGLEHOST)
+#if defined(COEX_DHCP)
 	struct btcoex_info *btco_inf = btcoex_info_loc;
-#endif /* BCMDONGLEHOST */
+#endif /* COEX_DHCP */
 	char powermode_val = 0;
 	char buf_reg66va_dhcp_on[8] = { 66, 00, 00, 00, 0x10, 0x27, 0x00, 0x00 };
 	char buf_reg41va_dhcp_on[8] = { 41, 00, 00, 00, 0x33, 0x00, 0x00, 0x00 };
@@ -473,16 +469,25 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, dhd_pub_t *dhd, char *co
 #if defined(OEM_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
 		/* Suppress scan during the DHCP */
 		wl_cfg80211_scan_suppress(dev, 1);
-#endif /* OEM_ANDROID */
+#endif /* OEM_ANDROID && DHCP_SCAN_SUPPRESS */
 
 #ifdef PKT_FILTER_SUPPORT
 		dhd->dhcp_in_progress = 1;
 
+#if defined(WL_VIRTUAL_APSTA) && defined(APSTA_BLOCK_ARP_DURING_DHCP)
+		if ((dhd->op_mode & DHD_FLAG_CONCURR_STA_HOSTAP_MODE) ==
+			DHD_FLAG_CONCURR_STA_HOSTAP_MODE) {
+			/* Block ARP frames while DHCP of STA interface is in
+			 * progress in case of STA/SoftAP concurrent mode
+			 */
+			wl_cfg80211_block_arp(dev, TRUE);
+		} else
+#endif /* WL_VIRTUAL_APSTA && APSTA_BLOCK_ARP_DURING_DHCP */
 		if (dhd->early_suspended) {
 			WL_TRACE_HW4(("DHCP in progressing , disable packet filter!!!\n"));
 			dhd_enable_packet_filter(0, dhd);
 		}
-#endif
+#endif /* PKT_FILTER_SUPPORT */
 
 		/* Retrieve and saved orig regs value */
 		if ((saved_status == FALSE) &&
@@ -517,12 +522,13 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, dhd_pub_t *dhd, char *co
 						(char *)&buf_reg68va_dhcp_on[0],
 						sizeof(buf_reg68va_dhcp_on));
 					saved_status = TRUE;
-#if defined(BCMDONGLEHOST)
+
+#if defined(COEX_DHCP)
 					btco_inf->bt_state = BT_DHCP_START;
 					btco_inf->timer_on = 1;
 					mod_timer(&btco_inf->timer, btco_inf->timer.expires);
 					WL_TRACE(("enable BT DHCP Timer\n"));
-#endif /* BCMDONGLEHOST */
+#endif /* COEX_DHCP */
 				}
 		}
 		else if (saved_status == TRUE) {
@@ -545,8 +551,15 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, dhd_pub_t *dhd, char *co
 		dhd->dhcp_in_progress = 0;
 		WL_TRACE_HW4(("DHCP is complete \n"));
 
-		/* Enable packet filtering */
+#if defined(WL_VIRTUAL_APSTA) && defined(APSTA_BLOCK_ARP_DURING_DHCP)
+		if ((dhd->op_mode & DHD_FLAG_CONCURR_STA_HOSTAP_MODE) ==
+			DHD_FLAG_CONCURR_STA_HOSTAP_MODE) {
+			/* Unblock ARP frames */
+			wl_cfg80211_block_arp(dev, FALSE);
+		} else
+#endif /* WL_VIRTUAL_APSTA && APSTA_BLOCK_ARP_DURING_DHCP */
 		if (dhd->early_suspended) {
+			/* Enable packet filtering */
 			WL_TRACE_HW4(("DHCP is complete , enable packet filter!!!\n"));
 			dhd_enable_packet_filter(1, dhd);
 		}
@@ -557,7 +570,7 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, dhd_pub_t *dhd, char *co
 		dev_wlc_ioctl(dev, WLC_SET_PM, &pm, sizeof(pm));
 #endif
 
-#if defined(BCMDONGLEHOST)
+#if defined(COEX_DHCP)
 		/* Stop any bt timer because DHCP session is done */
 		WL_TRACE(("disable BT DHCP Timer\n"));
 		if (btco_inf->timer_on) {
@@ -571,7 +584,7 @@ int wl_cfg80211_set_btcoex_dhcp(struct net_device *dev, dhd_pub_t *dhd, char *co
 				schedule_work(&btco_inf->work);
 			}
 		}
-#endif /* BCMDONGLEHOST */
+#endif /* COEX_DHCP */
 
 		/* Restoring btc_flag paramter anyway */
 		if (saved_status == TRUE)

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_tbl.c 612508 2016-01-14 05:57:14Z rraina $
+ * $Id: phy_n_tbl.c 657351 2016-08-31 23:00:22Z $
  */
 
 #include <typedefs.h>
@@ -50,8 +50,7 @@ static int phy_n_tbl_down(phy_type_tbl_ctx_t *ctx);
 #else
 #define phy_n_tbl_down NULL
 #endif
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 static bool phy_n_tbl_dump_tblfltr(phy_type_tbl_ctx_t *ctx, phy_table_info_t *ti);
 static bool phy_n_tbl_dump_addrfltr(phy_type_tbl_ctx_t *ctx,
 	phy_table_info_t *ti, uint addr);
@@ -88,8 +87,7 @@ BCMATTACHFN(phy_n_tbl_register_impl)(phy_info_t *pi, phy_n_info_t *ni, phy_tbl_i
 	bzero(&fns, sizeof(fns));
 	fns.init = phy_n_tbl_init;
 	fns.down = phy_n_tbl_down;
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 	fns.tblfltr = phy_n_tbl_dump_tblfltr;
 	fns.addrfltr = phy_n_tbl_dump_addrfltr;
 	fns.readtbl = phy_n_tbl_read_table;
@@ -134,73 +132,6 @@ WLBANDINITFN(phy_n_tbl_init)(phy_type_tbl_ctx_t *ctx)
 }
 
 #ifndef BCMNODOWN
-#ifdef BCMINTERNAL
-static void
-wlc_phy_tbl_check(phy_info_t *pi)
-{
-#ifdef LATER
-	/* to make sure these non-volatile tables are indeed reliable */
-	uint32 tab_maxlen = 0, i, idx;
-	uint32 *tbl_ptr = NULL;
-	uint32 width;
-	bool match = TRUE, suspend;
-#endif /* LATER */
-	return;
-
-#ifdef LATER
-	/* allocate the big enough memory for all tables */
-	for (idx = 0; idx < mimophytbl_info_sz_rev3; idx++) {
-		if (tab_maxlen < mimophytbl_info_rev3[idx].tbl_len)
-			tab_maxlen = mimophytbl_info_rev3[idx].tbl_len;
-	}
-
-	if ((tbl_ptr = MALLOC(pi->sh->osh, sizeof(uint32) * tab_maxlen)) == NULL)
-		return;
-
-	suspend = !(R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC);
-	if (!suspend)
-		wlapi_suspend_mac_and_wait(pi->sh->physhim);
-
-	for (idx = 0; idx < mimophytbl_info_sz_rev3; idx++) {
-		width = mimophytbl_info_rev3[idx].tbl_width;
-
-		ASSERT((width == 8) || (width == 16) ||	(width == 32));
-
-		wlc_phy_table_read_nphy(pi, mimophytbl_info_rev3[idx].tbl_id,
-			mimophytbl_info_rev3[idx].tbl_len,
-			mimophytbl_info_rev3[idx].tbl_offset,
-			width, tbl_ptr);
-
-		for (i = 0; i < mimophytbl_info_rev3[idx].tbl_len; i++) {
-			if (width == 8) {
-				match = (((uint8 *)(uintptr)tbl_ptr)[i] ==
-					((uint8 *)(uintptr) mimophytbl_info_rev3[idx].tbl_ptr)[i]);
-			} else if (width == 16) {
-				match = (((uint16 *)(uintptr)tbl_ptr)[i] ==
-					((uint16 *)(uintptr) mimophytbl_info_rev3[idx].tbl_ptr)[i]);
-			} else if (width == 32) {
-				match = (((uint32 *)(uintptr)tbl_ptr)[i] ==
-					((uint32 *)(uintptr) mimophytbl_info_rev3[idx].tbl_ptr)[i]);
-			}
-
-			if (!match) {
-				PHY_ERROR(("mimophy table %d corrupted at %d width %d\n",
-					idx, i, width));
-				break;
-			}
-		}
-
-	}
-	if (!suspend)
-		wlapi_enable_mac(pi->sh->physhim);
-
-	if (tbl_ptr != NULL)
-		MFREE(pi->sh->osh, tbl_ptr, sizeof(uint32) * tab_maxlen);
-
-	ASSERT(match);
-#endif /* LATER */
-}
-#endif	/* BCMINTERNAL */
 
 /* down h/w */
 static int
@@ -211,9 +142,6 @@ BCMUNINITFN(phy_n_tbl_down)(phy_type_tbl_ctx_t *ctx)
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
-#ifdef BCMINTERNAL
-	wlc_phy_tbl_check(ti->pi);
-#endif
 	ni->nphy_iqcal_chanspec_2G = 0;
 	ni->nphy_iqcal_chanspec_5G = 0;
 
@@ -222,7 +150,7 @@ BCMUNINITFN(phy_n_tbl_down)(phy_type_tbl_ctx_t *ctx)
 #endif /* BCMNODOWN */
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 
 static phy_table_info_t nphy3_tables[] = {
 	{ 0x00, 0,	99 },
@@ -291,11 +219,11 @@ phy_n_tbl_dumptbl(phy_type_tbl_ctx_t *ctx, struct bcmstrbuf *b)
 	phy_info_t *pi = ((phy_n_tbl_info_t *)ctx)->pi;
 	phy_table_info_t *ti = nphy3_tables;
 
-	wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	phy_tbl_do_dumptbl(((phy_n_tbl_info_t *)ctx)->ti, ti, b);
 
-	wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	return BCME_OK;
 }

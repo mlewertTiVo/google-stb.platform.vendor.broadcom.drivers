@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_misc.h 644994 2016-06-22 06:23:44Z vyass $
+ * $Id: phy_ac_misc.h 657044 2016-08-30 21:37:55Z $
  */
 
 #ifndef _phy_ac_misc_h_
@@ -31,15 +31,10 @@ phy_ac_misc_info_t *phy_ac_misc_register_impl(phy_info_t *pi,
 	phy_ac_info_t *aci, phy_misc_info_t *cmn_info);
 void phy_ac_misc_unregister_impl(phy_ac_misc_info_t *ac_info);
 
-extern void wlc_phy_update_rxldpc_acphy(phy_info_t *pi, bool ldpc);
 extern void wlc_phy_force_rfseq_acphy(phy_info_t *pi, uint8 cmd);
-extern uint16 wlc_phy_classifier_acphy(phy_info_t *pi, uint16 mask, uint16 val);
 extern void wlc_phy_deaf_acphy(phy_info_t *pi, bool mode);
 extern bool wlc_phy_get_deaf_acphy(phy_info_t *pi);
 extern void wlc_phy_gpiosel_acphy(phy_info_t *pi, uint16 sel, uint8 word_swap);
-#if defined(BCMINTERNAL) || defined(WLTEST)
-extern void wlc_phy_test_scraminit_acphy(phy_info_t *pi, int8 init);
-#endif /* BCMINTERNAL || WLTEST */
 
 void wlc_phy_susp2tx_cts2self(phy_info_t *pi, uint16 duration);
 void wlc_phy_cals_mac_susp_en_other_cr(phy_info_t *pi, bool suspend);

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_radar_api.h 604347 2015-12-07 00:05:52Z chihap $
+ * $Id: phy_radar_api.h 649994 2016-07-20 05:45:38Z $
  */
 
 #ifndef _phy_radar_api_h_
@@ -68,7 +68,8 @@ typedef struct {
 
 void phy_radar_detect_enable(phy_info_t *pi, bool on);
 
-uint8 phy_radar_detect(phy_info_t *pi, radar_detected_info_t *radar_detected);
+uint8 phy_radar_detect(phy_info_t *pi, radar_detected_info_t *radar_detected,
+	bool sec_pll, bool bw80_80_mode);
 
 typedef enum  phy_radar_detect_mode {
 	RADAR_DETECT_MODE_FCC,

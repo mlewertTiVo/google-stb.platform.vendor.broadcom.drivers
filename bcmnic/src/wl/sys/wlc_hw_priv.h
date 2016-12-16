@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_hw_priv.h 653755 2016-08-09 22:40:17Z $
+ * $Id: wlc_hw_priv.h 665208 2016-10-16 23:44:23Z $
  */
 
 #ifndef _wlc_hw_priv_h_
@@ -46,6 +46,8 @@
  */
 #define	DELAYEDINTMASK  (0 /* | MI_BG_NOISE */)
 
+#define BMAC_PHASE_NORMAL	(0)
+#define BMAC_PHASE_1		(1)
 
 /* default d11 core intrcvlazy value to have no delay before receive interrupt */
 #ifndef WLC_INTRCVLAZY_DEFAULT
@@ -151,7 +153,6 @@ struct wlc_hw_info {
 	uint16		vendorid;		/**< PCI vendor id */
 	uint16		deviceid;		/**< PCI device id */
 	uint		corerev;		/**< core revision */
-	uint8		corerev_minor;  /**< core minor revision */
 	uint		macunit;		/**< maccore unit instance number */
 	uint8		sromrev;		/**< version # of the srom */
 	uint16		boardrev;		/**< version # of particular board */
@@ -271,12 +272,11 @@ struct wlc_hw_info {
 #endif /* WL_PSMX */
 	uint    shmphymode;             /* shared memory phymode update */
 	bmac_suspend_stats_t* suspend_stats; /**< pointer to stats tracking track bmac suspend */
-	uint16  *vasip_addr;            /**< pointer to vasip base address */
 	uint	nfifo_inuse;			/* # of FIFOs that are in use runtime
 						 * Based on configuration of certain features like
 						 * WL_MU_TX this can change
 						 */
-	uint		**txavail_aqm;		/* # aqm descriptors available */
+	uint		*txavail_aqm[NFIFO_EXT];		/* # aqm descriptors available */
 	hnddma_t	*aqm_di[NFIFO_EXT]; /* hnddam handles per aqm fifo */
 	uint16  hw_ulb_cap;
 	char    vars_table_accessor[10];
@@ -285,6 +285,7 @@ struct wlc_hw_info {
 	const shmdefs_t *shmdefs;       /* Pointer to Auto-SHM strucutre */
 	wlc_rx_stall_info_t *rx_stall;  /**< Rx DMA Stall check */
 	wlc_txs_hist_t *txs_hist;       /**< TxStatus history */
+	uint16		tx_inhibit_tout;	/* Minimum GPIO based Tx inhibit duration */
 	bool hdrconv_mode;              /* HW header conversion mode */
 
 	/* This field indicates if ucode woken after HPS bit is cleared.
@@ -297,6 +298,11 @@ struct wlc_hw_info {
 	int32 pkteng_status;
 	struct wl_pkteng_cache *pkteng_cache;
 	bool	vasip_loaded;			/* TRUE after vasip code downloaded */
+	uint8 corerev_minor;		/**< core minor revision */
+	prephy_info_t *prepi;
+	uint32 phy_cap;		/* capabilities used for bmac attach */
+	uint32 bmac_phase;	/* bmac states: 0: normal-attach, 1: phase1-attach */
+	struct wl_timer *srtimer;	/* timer for save restore wakeup */
 };
 
 #endif /* !_wlc_hw_priv_h_ */

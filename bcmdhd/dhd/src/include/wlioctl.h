@@ -29,7 +29,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl.h 630403 2016-04-08 20:07:15Z $
+ * $Id: wlioctl.h 642854 2016-06-10 11:36:50Z $
  */
 
 #ifndef _wlioctl_h_
@@ -1252,11 +1252,12 @@ typedef struct {
 								 */
 	uint32			rx_pkts_retried;	/**< # rx with retry bit set */
 	uint32			tx_rate_fallback;	/**< lowest fallback TX rate */
+	wl_rateset_args_t       rateset_adv;		/* rateset along with mcs index bitmap */
 } sta_info_t;
 
 #define WL_OLD_STAINFO_SIZE	OFFSETOF(sta_info_t, tx_tot_pkts)
 
-#define WL_STA_VER		4
+#define WL_STA_VER		5
 
 
 typedef struct {

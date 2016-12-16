@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_pktc.c 626555 2016-03-22 05:10:59Z $
+ * $Id: wlc_pktc.c 660314 2016-09-20 05:47:54Z $
  */
 
 #include <wlc_cfg.h>
@@ -94,7 +94,7 @@ BCMATTACHFN(wlc_pktc_attach)(wlc_info_t *wlc)
 	/* initialize default pktc policy */
 	pktc->policy = (uint8)getintvar(wlc->pub->vars, rstr_pktc_policy);
 #endif
-#if (defined(PKTC_DONGLE) && !defined(PKTC_FDAP)) || (defined(PKTC) && defined(WLCXO))
+#if (defined(PKTC_DONGLE) && !defined(PKTC_FDAP))
 	pktc->policy = PKTC_POLICY_SENDUPUC;
 #endif
 
@@ -276,20 +276,31 @@ wlc_pktc_sdu_prep_copy(wlc_info_t *wlc, struct scb *scb, void *p, void *n, uint3
 	WLPKTTAG(n)->flags3 = WLPKTTAG(p)->flags3;
 	PKTSETPRIO(n, PKTPRIO(p));
 
-	/* Init llc snap hdr and fixup length */
-	/* Original is ethernet hdr (14)
-	 * Convert to 802.3 hdr (22 bytes) so only need to
-	 * another 8 bytes (DOT11_LLC_SNAP_HDR_LEN)
-	 */
-	dot3lsh = PKTPUSH(wlc->osh, n, DOT11_LLC_SNAP_HDR_LEN);
+	if (WLPKTTAG(p)->flags & WLF_NON8023) {
 
-	/* Retain orig ether_type */
-	bcopy(PKTDATA(wlc->osh, p), dot3lsh,
-		OFFSETOF(struct dot3_mac_llc_snap_header, type));
+		/* Init llc snap hdr and fixup length */
+		/* Original is ethernet hdr (14)
+		 * Convert to 802.3 hdr (22 bytes) so only need to
+		 * another 8 bytes (DOT11_LLC_SNAP_HDR_LEN)
+		 */
+		dot3lsh = PKTPUSH(wlc->osh, n, DOT11_LLC_SNAP_HDR_LEN);
+
+		/* Copy only 20 bytes & retain orig ether_type */
+		if ((((uintptr)PKTDATA(wlc->osh, p) | (uintptr)dot3lsh) & 3) == 0) {
+			typedef struct block_s {
+				uint32	data[5];
+			} block_t;
+			*(block_t*)dot3lsh = *(block_t*)PKTDATA(wlc->osh, p);
+		} else {
+			bcopy(PKTDATA(wlc->osh, p), dot3lsh,
+				OFFSETOF(struct dot3_mac_llc_snap_header, type));
+		}
+	}
 
 	/* Set packet exptime */
-	if (lifetime != 0)
-		wlc_lifetime_set(wlc, n, lifetime);
+	if (lifetime != 0) {
+		WLPKTTAG(n)->u.exptime = WLPKTTAG(p)->u.exptime;
+	}
 }
 
 void BCMFASTPATH

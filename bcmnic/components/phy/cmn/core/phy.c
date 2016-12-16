@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy.c 644198 2016-06-17 10:39:14Z hreddy $
+ * $Id: phy.c 662012 2016-09-28 03:05:05Z $
  */
 
 #include <typedefs.h>
@@ -65,6 +65,10 @@
 #include <phy.h>
 #include <phy_nap.h>
 #include <phy_hecap.h>
+#include <phy_rxgcrs.h>
+#include <phy_vasip.h>
+#include <phy_stf.h>
+#include <phy_misc_api.h>
 
 #include <phy_utils_var.h>
 
@@ -86,132 +90,114 @@ static int _phy_init(phy_init_ctx_t *ctx);
 static void phy_register_dumps(phy_info_t *pi);
 static void phy_init_done(phy_info_t *pi);
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 /* phydump page infra */
 static void phyreg_page_parser(phy_info_t *pi, phy_regs_t *reglist, struct bcmstrbuf *b);
 #endif /* BCMDBG_PHYDUMP */
 
-#ifdef WLC_TXCAL
-static int
-BCMATTACHFN(phy_txcal_attach)(phy_info_t *pi)
+/* returns a pointer to per interface instance data */
+shared_phy_t *
+BCMATTACHFN(wlc_phy_shared_attach)(shared_phy_params_t *shp)
 {
-	shared_phy_t *sh = pi->sh;
-	osl_t *osh = sh->osh;
-	txcal_root_pwr_tssi_t *pi_txcal_tssi_tbl;
-	txcal_pwr_tssi_lut_t *pwr_tssi_lut_5G80, *pwr_tssi_lut_5G40, *pwr_tssi_lut_5G20;
-	txcal_pwr_tssi_lut_t *pwr_tssi_lut_2G;
+	shared_phy_t *sh;
+	int ref_count = 0;
 
-	pi->txcali = phy_malloc(pi, sizeof(*pi->txcali));
-	if (pi->txcali) {
-		if ((pi->txcali->txcal_pwr_tssi = phy_malloc(pi,
-				sizeof(*pi->txcali->txcal_pwr_tssi))) == NULL) {
-			PHY_ERROR(("wl%d: %s: out of memory, malloced txcal_pwr_tssi %d bytes\n",
-					sh->unit, __FUNCTION__, MALLOCED(osh)));
-			goto err;
-		}
+#ifdef EVENT_LOG_COMPILE
+	/* First thing to do.. initialize the PHY_ERROR tag's attributes. */
+	/* This is the attach function for the PHY component. */
+	event_log_tag_start(EVENT_LOG_TAG_PHY_ERROR, EVENT_LOG_SET_ERROR,
+		EVENT_LOG_TAG_FLAG_LOG);
+#endif
 
-		if ((pi->txcali->txcal_meas = phy_malloc(pi,
-				sizeof(*pi->txcali->txcal_meas))) == NULL) {
-			PHY_ERROR(("wl%d: %s: out of memory, malloced txcal_meas %d bytes\n",
-					sh->unit, __FUNCTION__, MALLOCED(osh)));
-			goto err;
-		}
-
-		pi->txcali->txcal_root_pwr_tssi_tbl = phy_malloc(pi, sizeof(*pi_txcal_tssi_tbl));
-		pi_txcal_tssi_tbl = pi->txcali->txcal_root_pwr_tssi_tbl;
-		if (pi_txcal_tssi_tbl) {
-			pi_txcal_tssi_tbl->root_pwr_tssi_lut_2G = phy_malloc(pi,
-					sizeof(*pwr_tssi_lut_2G));
-			pwr_tssi_lut_2G = pi_txcal_tssi_tbl->root_pwr_tssi_lut_2G;
-			if (pwr_tssi_lut_2G) {
-				if ((pwr_tssi_lut_2G->txcal_pwr_tssi = phy_malloc(pi,
-						sizeof(*pwr_tssi_lut_2G->txcal_pwr_tssi))) ==
-						NULL) {
-					PHY_ERROR(("wl%d: %s: out of memory, malloced",
-							sh->unit, __FUNCTION__));
-					PHY_ERROR(("lut_2G->txcal_pwr_tssi %d bytes\n",
-							MALLOCED(osh)));
-					goto err;
-				}
-			} else {
-				PHY_ERROR(("wl%d: %s: out of memory, malloced",
-						sh->unit, __FUNCTION__));
-				PHY_ERROR(("root_pwr_tssi_lut_2G %d bytes\n", MALLOCED(osh)));
-				goto err;
-			}
-			pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G20 = phy_malloc(pi,
-					sizeof(*pwr_tssi_lut_5G20));
-			pwr_tssi_lut_5G20 = pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G20;
-			if (pwr_tssi_lut_5G20) {
-				if ((pwr_tssi_lut_5G20->txcal_pwr_tssi = phy_malloc(pi,
-						sizeof(*pwr_tssi_lut_5G20->txcal_pwr_tssi))) ==
-						NULL) {
-					PHY_ERROR(("wl%d: %s: out of memory, malloced",
-							sh->unit, __FUNCTION__));
-					PHY_ERROR(("5G20->txcal_pwr_tssi %d bytes\n",
-							MALLOCED(osh)));
-					goto err;
-				}
-			} else {
-				PHY_ERROR(("wl%d: %s: out of memory, malloced",
-					sh->unit, __FUNCTION__));
-				PHY_ERROR(("root_pwr_tssi_lut_5G20 %d bytes\n", MALLOCED(osh)));
-				goto err;
-			}
-			pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G40 = phy_malloc(pi,
-					sizeof(*pwr_tssi_lut_5G40));
-			pwr_tssi_lut_5G40 = pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G40;
-			if (pwr_tssi_lut_5G40) {
-				if ((pwr_tssi_lut_5G40->txcal_pwr_tssi = phy_malloc(pi,
-						sizeof(*pwr_tssi_lut_5G40->txcal_pwr_tssi))) ==
-						NULL) {
-					PHY_ERROR(("wl%d: %s: out of memory, malloced",
-							sh->unit, __FUNCTION__));
-					PHY_ERROR(("5G40->txcal_pwr_tssi %d bytes\n",
-							MALLOCED(osh)));
-					goto err;
-				}
-			} else {
-				PHY_ERROR(("wl%d: %s: out of memory, malloced",
-						sh->unit, __FUNCTION__));
-				PHY_ERROR(("root_pwr_tssi_lut_5G40 %d bytes\n", MALLOCED(osh)));
-				goto err;
-			}
-			pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G80 = phy_malloc(pi,
-					sizeof(*pwr_tssi_lut_5G80));
-			pwr_tssi_lut_5G80 = pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G80;
-			if (pwr_tssi_lut_5G80) {
-				if ((pwr_tssi_lut_5G80->txcal_pwr_tssi = phy_malloc(pi,
-						sizeof(*pwr_tssi_lut_5G80->txcal_pwr_tssi))) ==
-						NULL) {
-					PHY_ERROR(("wl%d: %s: out of memory, malloced",
-							sh->unit, __FUNCTION__));
-					PHY_ERROR(("5G80->txcal_pwr_tssi %d bytes\n",
-							MALLOCED(osh)));
-					goto err;
-				}
-			} else {
-				PHY_ERROR(("wl%d: %s: out of memory, malloced",
-						sh->unit, __FUNCTION__));
-				PHY_ERROR(("root_pwr_tssi_lut_5G80 %d bytes\n", MALLOCED(osh)));
-				goto err;
-			}
-		} else {
-			PHY_ERROR(("wl%d: %s: out of memory, malloced", sh->unit, __FUNCTION__));
-			PHY_ERROR(("txcal_root_pwr_tssi_tbl %d bytes\n", MALLOCED(osh)));
-			goto err;
-		}
-	} else {
-		PHY_ERROR(("wl%d: %s: out of memory, malloced txcali %d bytes\n",
-			sh->unit, __FUNCTION__, MALLOCED(osh)));
-		goto err;
+	/* allocate wlc_info_t state structure */
+	if ((sh = (shared_phy_t*) MALLOCZ(shp->osh, sizeof(shared_phy_t))) == NULL) {
+		PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+			shp->unit, __FUNCTION__, MALLOCED(shp->osh)));
+		goto fail;
 	}
-	return BCME_OK;
-err:
-	return BCME_NOMEM;
+
+	/* OBJECT REGISTRY: check if shared key has value already stored */
+	sh->sromi = (phy_srom_info_t *)wlapi_obj_registry_get(shp->physhim, OBJR_PHY_CMN_SROM_INFO);
+	if (sh->sromi == NULL) {
+		if ((sh->sromi = (phy_srom_info_t *)MALLOCZ(shp->osh,
+			sizeof(phy_srom_info_t))) == NULL) {
+
+			PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+				shp->unit, __FUNCTION__, MALLOCED(shp->osh)));
+			goto fail;
+		}
+
+		/* OBJECT REGISTRY: We are the first instance, store value for key */
+		wlapi_obj_registry_set(shp->physhim, OBJR_PHY_CMN_SROM_INFO, sh->sromi);
+	}
+	/* OBJECT REGISTRY: Reference the stored value in both instances */
+	ref_count = wlapi_obj_registry_ref(shp->physhim, OBJR_PHY_CMN_SROM_INFO);
+	ASSERT(ref_count <= MAX_RSDB_MAC_NUM);
+	BCM_REFERENCE(ref_count);
+
+	sh->osh		= shp->osh;
+	sh->sih		= shp->sih;
+	sh->physhim	= shp->physhim;
+	sh->unit	= shp->unit;
+	sh->corerev	= shp->corerev;
+	sh->vid		= shp->vid;
+	sh->did		= shp->did;
+	sh->chip	= shp->chip;
+	sh->chiprev	= shp->chiprev;
+	sh->chippkg	= shp->chippkg;
+	sh->sromrev	= shp->sromrev;
+	sh->boardtype	= shp->boardtype;
+	sh->boardrev	= shp->boardrev;
+	sh->boardvendor	= shp->boardvendor;
+	sh->boardflags	= shp->boardflags;
+	sh->boardflags2	= shp->boardflags2;
+	sh->boardflags4	= shp->boardflags4;
+	sh->bustype	= shp->bustype;
+	sh->buscorerev	= shp->buscorerev;
+	strncpy(sh->vars_table_accessor, shp->vars_table_accessor, sizeof(sh->vars_table_accessor));
+	sh->vars_table_accessor[sizeof(sh->vars_table_accessor)-1] = '\0';
+
+	/* create our timers */
+	sh->fast_timer	= PHY_SW_TIMER_FAST;
+	sh->slow_timer	= PHY_SW_TIMER_SLOW;
+	sh->glacial_timer = PHY_SW_TIMER_GLACIAL;
+
+	/* reset cal scheduler */
+	sh->scheduled_cal_time = 0;
+
+	/* ACI mitigation mode is auto by default */
+	sh->interference_mode = WLAN_AUTO;
+	/* sh->snr_mode = SNR_ANT_MERGE_MAX; */
+	sh->rssi_mode = RSSI_ANT_MERGE_MAX;
+	/* enabling BPHY MRC by default.
+	 * use iovar "wl phy_bphymrc" to disable on wl down
+	 */
+	sh->bphymrc_en = 1;
+	return sh;
+fail:
+	wlc_phy_shared_detach(sh);
+	return NULL;
 }
-#endif /* WLC_TXCAL */
+
+void
+BCMATTACHFN(wlc_phy_shared_detach)(shared_phy_t *sh)
+{
+	if (sh != NULL) {
+		/* phy_head must have been all detached */
+		if (sh->phy_head) {
+			PHY_ERROR(("wl%d: %s non NULL phy_head\n", sh->unit, __FUNCTION__));
+			ASSERT(!sh->phy_head);
+		}
+		if (sh->sromi != NULL) {
+			if (wlapi_obj_registry_unref(sh->physhim, OBJR_PHY_CMN_SROM_INFO) == 0) {
+				wlapi_obj_registry_set(sh->physhim, OBJR_PHY_CMN_SROM_INFO, NULL);
+				MFREE(sh->osh, sh->sromi, sizeof(phy_srom_info_t));
+			}
+		}
+		MFREE(sh->osh, sh, sizeof(shared_phy_t));
+	}
+}
 
 void
 wlc_phy_set_shmdefs(wlc_phy_t *ppi, const shmdefs_t *shmdefs)
@@ -290,12 +276,6 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 	    goto err;
 	}
 
-	if ((pi->txcore_temp = phy_malloc(pi, sizeof(phy_txcore_temp_t))) == NULL) {
-		PHY_ERROR(("wl%d: %s: out of memory, malloced txcore_temp %d bytes\n", sh->unit,
-		          __FUNCTION__, MALLOCED(osh)));
-	    goto err;
-	}
-
 	if ((pi->def_cal_info = phy_malloc(pi, sizeof(phy_cal_info_t))) == NULL) {
 		PHY_ERROR(("wl%d: %s: out of memory, malloced def_cal_info %d bytes\n", sh->unit,
 		          __FUNCTION__, MALLOCED(osh)));
@@ -342,6 +322,12 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 	    goto err;
 	}
 
+	if ((pi->tx_power_offset = ppr_create(pi->sh->osh, ppr_get_max_bw())) == NULL) {
+		PHY_ERROR(("wl%d: %s: out of memory, malloced tx_power_offset %d bytes\n", sh->unit,
+				__FUNCTION__, ppr_size(ppr_get_max_bw())));
+		goto err;
+	}
+
 	if ((pi->pwrdet_ac = phy_malloc(pi, (SROMREV(sh->sromrev) >= 12 ? sizeof(srom12_pwrdet_t)
 					       : sizeof(srom11_pwrdet_t)))) == NULL) {
 	    PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n", sh->unit,
@@ -349,20 +335,6 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 	    goto err;
 	}
 
-#ifdef WLC_TXCAL
-	/* txcal attach */
-	if (phy_txcal_attach(pi) != BCME_OK) {
-		PHY_ERROR(("%s: phy_txcal_attach failed\n", __FUNCTION__));
-		goto err;
-	}
-#endif /* WLC_TXCAL */
-#if defined(WLC_TXCAL) || (defined(WLOLPC) && !defined(WLOLPC_DISABLED))
-	if ((pi->olpci = phy_malloc(pi, sizeof(*pi->olpci))) == NULL) {
-		PHY_ERROR(("wl%d: %s: out of memory, malloced olpci %d bytes\n",
-			sh->unit, __FUNCTION__, MALLOCED(osh)));
-		goto err;
-	}
-#endif	/* WLC_TXCAL || (WLOLPC && !WLOLPC_DISABLED) */
 	if ((pi->pdpi = phy_malloc(pi, sizeof(*pi->pdpi))) == NULL) {
 		PHY_ERROR(("wl%d: %s: out of memory, malloced pdpi %d bytes\n",
 			sh->unit, __FUNCTION__, MALLOCED(osh)));
@@ -440,14 +412,9 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 	/* default channel and channel bandwidth is 20 MHZ */
 	pi->bw = WL_CHANSPEC_BW_20;
 	pi->radio_chanspec = BAND_2G(bandtype) ? CH20MHZ_CHSPEC(1) : CH20MHZ_CHSPEC(36);
-	pi->radio_chanspec_sc = BAND_2G(bandtype) ? CH20MHZ_CHSPEC(1) : CH20MHZ_CHSPEC(36);
 
 	/* attach nvram driven variables */
 	wlc_phy_srom_attach(pi, bandtype);
-
-	/* update standard configuration params to defaults */
-	wlc_phy_std_params_attach(pi);
-
 
 	/* ######## Attach process start ######## */
 
@@ -477,8 +444,8 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 		PHY_ERROR(("%s: phy_init_attach failed\n", __FUNCTION__));
 		goto err;
 	}
-#ifdef NEW_PHY_CAL_ARCH
-	/* Attach Channel Manager Nofitication module */
+#ifdef PHYCAL_CACHING
+	/* Attach Channel Manager Notification module */
 	if ((pi->chanmgr_notifi = phy_chanmgr_notif_attach(pi)) == NULL) {
 		PHY_ERROR(("%s: phy_chanmgr_notif_attach failed\n", __FUNCTION__));
 		goto err;
@@ -502,8 +469,16 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 		goto err;
 	}
 
-	/* ======== Attach PHY specific layer ======== */
+	/* Attach STF module */
+	if ((pi->stfi = phy_stf_attach(pi)) == NULL) {
+		PHY_ERROR(("%s: phy_stf_attach failed\n", __FUNCTION__));
+		goto err;
+	}
 
+	/* update standard configuration params to defaults */
+	wlc_phy_std_params_attach(pi);
+
+	/* ======== Attach PHY specific layer ======== */
 	/* Attach PHY Core type specific implementation */
 	if (pi->typei != NULL &&
 	    (*(phy_type_info_t **)(uintptr)&pi->u =
@@ -728,7 +703,22 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 		goto err;
 	}
 
+#ifdef RADIO_HEALTH_CHECK
+	/* Attach health check module */
+	if ((pi->hci = phy_hc_attach(pi)) == NULL) {
+		PHY_ERROR(("%s: phy_hc_attach failed\n", __FUNCTION__));
+		goto err;
+	}
+#endif /* RADIO_HEALTH_CHECK */
+
+	/* Attach vasip check module */
+	if ((pi->vasipi = phy_vasip_attach(pi)) == NULL) {
+		PHY_ERROR(("%s: phy_vasip_attach failed\n", __FUNCTION__));
+		goto err;
+	}
+
 	/* ...Attach other modules... */
+
 
 	/* ======== Attach modules' PHY specific layer ======== */
 
@@ -740,7 +730,10 @@ BCMATTACHFN(phy_module_attach)(shared_phy_t *sh, void *regs, int bandtype, char 
 	}
 
 #ifdef WLTXPWR_CACHE
-	pi->txpwr_cache = wlc_phy_txpwr_cache_create(pi->sh->osh);
+	if ((pi->txpwr_cache = wlc_phy_txpwr_cache_create(pi->sh->osh)) == NULL) {
+		PHY_ERROR(("%s: Init phy txpwr_cache failed\n", __FUNCTION__));
+		goto err;
+	}
 #endif
 
 	/* ######## Attach process end ######## */
@@ -769,6 +762,71 @@ err:
 	return NULL;
 }
 
+prephy_info_t *
+BCMATTACHFN(prephy_module_attach)(shared_phy_t *sh, void *regs)
+{
+	prephy_info_t *pi;
+	osl_t *osh = sh->osh;
+	uint phyversion;
+
+	PHY_TRACE(("prephy_module_attach, regs %p, sh %p)\n", regs, sh));
+
+	/* ONLY common PI is allocated. pi->u.pi_xphy is not available yet */
+	if ((pi = (prephy_info_t *)MALLOC_NOPERSIST(osh, sizeof(prephy_info_t))) == NULL) {
+		PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n", sh->unit,
+		          __FUNCTION__, MALLOCED(osh)));
+		return NULL;
+	}
+
+	pi->sh = sh; /* Assign sh so that phy_malloc can be used from here on */
+	pi->regs = (d11regs_t *)regs;
+
+	if ((pi->pubpi = phy_malloc(pi, sizeof(wlc_phy_t))) == NULL) {
+		PHY_ERROR(("wl%d: %s: out of memory, malloced pubpi %d bytes\n", sh->unit,
+		          __FUNCTION__, MALLOCED(osh)));
+	    goto err;
+	}
+
+	phyversion = R_REG(osh, &pi->regs->phyversion);
+	pi->pubpi->phy_type = PHY_TYPE(phyversion);
+	pi->pubpi->phy_rev = phyversion & PV_PV_MASK;
+
+	if ((pi->prephyi = phy_prephy_attach(pi)) == NULL) {
+		PHY_ERROR(("%s: phy_prephy_attach failed\n", __FUNCTION__));
+		goto err;
+	}
+
+	/* Mark that they are not longer available so we can error/assert.	Use a pointer
+	 * to self as a flag.
+	 */
+	return pi;
+
+err:
+	prephy_module_detach(pi);
+	return NULL;
+}
+
+shared_phy_t *
+BCMATTACHFN(wlc_prephy_shared_attach)(shared_phy_params_t *shp)
+{
+	shared_phy_t *sh;
+
+	/* allocate wlc_info_t state structure */
+	if ((sh = (shared_phy_t*) MALLOC_NOPERSIST(shp->osh, sizeof(shared_phy_t))) == NULL) {
+		PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+			shp->unit, __FUNCTION__, MALLOCED(shp->osh)));
+		return NULL;
+	}
+
+	sh->osh	= shp->osh;
+	sh->sih	= shp->sih;
+	sh->physhim	= shp->physhim;
+	sh->unit	= shp->unit;
+	sh->corerev	= shp->corerev;
+
+	return sh;
+}
+
 static void
 BCMATTACHFN(wlc_phy_srom_attach)(phy_info_t *pi, int bandtype)
 {
@@ -795,34 +853,6 @@ BCMATTACHFN(wlc_phy_srom_attach)(phy_info_t *pi, int bandtype)
 	pi->sh->phyrxdesens = (uint8)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_phyrxdesens, 0);
 #endif
 
-#ifdef BAND5G
-	for (i = 0; i < 3; i++) {
-		pi->rssi_corr_normal_5g[i] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-			rstr_rssicorrnorm5g, i, 0);
-		pi->rssi_corr_boardatten_5g[i] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-			rstr_rssicorratten5g, i, 0);
-	}
-#endif /* BAND5G */
-	/* The below parameters are used to adjust JSSI based range */
-	pi->rssi_corr_perrg_2g[0] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-		rstr_rssicorrperrg2g, 0, -150);
-	pi->rssi_corr_perrg_2g[1] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-		rstr_rssicorrperrg2g, 1, -150);
-#ifdef BAND5G
-	pi->rssi_corr_perrg_5g[0] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-		rstr_rssicorrperrg5g, 0, -150);
-	pi->rssi_corr_perrg_5g[1] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-		rstr_rssicorrperrg5g, 1, -150);
-#endif /* BAND5G */
-	for (i = 2; i < 5; i++) {
-		pi->rssi_corr_perrg_2g[i] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-			rstr_rssicorrperrg2g, i, 0);
-#ifdef BAND5G
-		pi->rssi_corr_perrg_5g[i] = (int8)PHY_GETINTVAR_ARRAY_DEFAULT(pi,
-			rstr_rssicorrperrg5g, i, 0);
-#endif /* BAND5G */
-	}
-
 	/* CCK Power index correction read from nvram */
 	pi->sromi->cckPwrIdxCorr = (int16) PHY_GETINTVAR_DEFAULT(pi, rstr_cckPwrIdxCorr, 0);
 
@@ -833,8 +863,7 @@ BCMATTACHFN(wlc_phy_srom_attach)(phy_info_t *pi, int bandtype)
 		pi->tx_pwr_backoff = PHY_TXPWRBCKOF_DEF;
 
 	pi->phy_tempsense_offset = 0;
-	/* Read default temp delta setting. */
-	wlc_phy_read_tempdelta_settings(pi, NPHY_CAL_MAXTEMPDELTA);
+
 	pi->core2slicemap = (uint8)PHY_GETINTVAR_DEFAULT(pi, rstr_core2slicemap, 0);
 	if (pi->core2slicemap != ((1 << DUAL_PHY_NUM_CORE_MAX) -1)) {
 	  for (i = 0; i < DUAL_PHY_NUM_CORE_MAX; i++) {
@@ -864,26 +893,18 @@ BCMATTACHFN(wlc_phy_std_params_attach)(phy_info_t *pi)
 	pi->rxgainerr5gu_isempty = FALSE;
 
 	/* Do not enable the PHY watchdog for ATE */
-#ifndef ATE_BUILD
 	pi->phywatchdog_override = TRUE;
-#endif
 
 	/* Enable both cores by default */
-	pi->sh->phyrxchain = 0x3;
+	phy_stf_set_phyrxchain(pi->stfi, 0x3);
 
 #ifdef N2WOWL
 	/* Reduce phyrxchain to 1 to save power in WOWL mode */
 	if (CHIPID(pi->sh->chip) == BCM43237_CHIP_ID) {
-		pi->sh->phyrxchain = 0x1;
+		phy_stf_set_phyrxchain(pi->stfi, 0x1);
 	}
 #endif /* N2WOWL */
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	/* Initialize to invalid index values */
-	pi->nphy_tbldump_minidx = -1;
-	pi->nphy_tbldump_maxidx = -1;
-	pi->nphy_phyreg_skipcnt = 0;
-#endif
 
 	/* This is the temperature at which the last PHYCAL was done.
 	 * Initialize to a very low value.
@@ -894,82 +915,10 @@ BCMATTACHFN(wlc_phy_std_params_attach)(phy_info_t *pi)
 	/* default, PHY type overrides if interrupt based noise measurement isn't supported */
 	pi->phynoise_polling = TRUE;
 
-	/* still need to have this information hanging around, even for OPT version */
-	pi->tx_power_offset = NULL;
-
 	/* Assign the default cal info */
 	pi->cal_info = pi->def_cal_info;
 	pi->cal_info->cal_suppress_count = 0;
 }
-#ifdef WLC_TXCAL
-static void
-BCMATTACHFN(phy_txcal_detach)(phy_info_t *pi)
-{
-	txcal_root_pwr_tssi_t *pi_txcal_tssi_tbl;
-	txcal_pwr_tssi_lut_t *pwr_tssi_lut_5G80, *pwr_tssi_lut_5G40, *pwr_tssi_lut_5G20;
-	txcal_pwr_tssi_lut_t *pwr_tssi_lut_2G;
-
-	pi_txcal_tssi_tbl = pi->txcali->txcal_root_pwr_tssi_tbl;
-	if (pi_txcal_tssi_tbl != NULL) {
-		pwr_tssi_lut_5G80 = pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G80;
-		pwr_tssi_lut_5G40 = pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G40;
-		pwr_tssi_lut_5G20 = pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G20;
-		pwr_tssi_lut_2G = pi_txcal_tssi_tbl->root_pwr_tssi_lut_2G;
-		if (pwr_tssi_lut_5G80 != NULL) {
-			if (pwr_tssi_lut_5G80->txcal_pwr_tssi != NULL) {
-				phy_mfree(pi, pwr_tssi_lut_5G80->txcal_pwr_tssi,
-						sizeof(*pwr_tssi_lut_5G80->txcal_pwr_tssi));
-				pwr_tssi_lut_5G80->txcal_pwr_tssi = NULL;
-			}
-			phy_mfree(pi, pwr_tssi_lut_5G80,
-					sizeof(*pwr_tssi_lut_5G80));
-			 pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G80 = NULL;
-		}
-		if (pwr_tssi_lut_5G40 != NULL) {
-			if (pwr_tssi_lut_5G40->txcal_pwr_tssi != NULL) {
-				phy_mfree(pi, pwr_tssi_lut_5G40->txcal_pwr_tssi,
-						sizeof(*pwr_tssi_lut_5G40->txcal_pwr_tssi));
-				pwr_tssi_lut_5G40->txcal_pwr_tssi = NULL;
-			}
-			phy_mfree(pi, pwr_tssi_lut_5G40,
-					sizeof(*pwr_tssi_lut_5G40));
-			 pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G40 = NULL;
-		}
-		if (pwr_tssi_lut_5G20 != NULL) {
-			if (pwr_tssi_lut_5G20->txcal_pwr_tssi != NULL) {
-				phy_mfree(pi, pwr_tssi_lut_5G20->txcal_pwr_tssi,
-						sizeof(*pwr_tssi_lut_5G20->txcal_pwr_tssi));
-				pwr_tssi_lut_5G20->txcal_pwr_tssi = NULL;
-			}
-			phy_mfree(pi, pwr_tssi_lut_5G20,
-					sizeof(*pwr_tssi_lut_5G20));
-			 pi_txcal_tssi_tbl->root_pwr_tssi_lut_5G20 = NULL;
-		}
-		if (pwr_tssi_lut_2G != NULL) {
-			if (pwr_tssi_lut_2G->txcal_pwr_tssi != NULL) {
-				phy_mfree(pi, pwr_tssi_lut_2G->txcal_pwr_tssi,
-						sizeof(*pwr_tssi_lut_2G->txcal_pwr_tssi));
-				pwr_tssi_lut_2G->txcal_pwr_tssi = NULL;
-			}
-			phy_mfree(pi, pwr_tssi_lut_2G, sizeof(*pwr_tssi_lut_2G));
-			pi_txcal_tssi_tbl->root_pwr_tssi_lut_2G = NULL;
-		}
-		phy_mfree(pi, pi_txcal_tssi_tbl, sizeof(*pi_txcal_tssi_tbl));
-		pi->txcali->txcal_root_pwr_tssi_tbl = NULL;
-	}
-	if (pi->txcali->txcal_meas != NULL) {
-		phy_mfree(pi, pi->txcali->txcal_meas, sizeof(*pi->txcali->txcal_meas));
-		pi->txcali->txcal_meas = NULL;
-	}
-	if (pi->txcali->txcal_pwr_tssi != NULL) {
-		phy_mfree(pi, pi->txcali->txcal_pwr_tssi,
-				sizeof(*pi->txcali->txcal_pwr_tssi));
-		pi->txcali->txcal_pwr_tssi = NULL;
-	}
-	phy_mfree(pi, pi->txcali, sizeof(*pi->txcali));
-	pi->txcali = NULL;
-}
-#endif /* WLC_TXCAL */
 
 void
 BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
@@ -994,6 +943,20 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 	/* ======== Detach modules' common layer ======== */
 
 	/* ...Detach other modules... */
+	/* Detach STF module */
+	if (pi->stfi != NULL)
+		phy_stf_detach(pi->stfi);
+
+	/* Detach vasip module */
+	if (pi->vasipi != NULL) {
+		phy_vasip_detach(pi->vasipi);
+	}
+
+#ifdef RADIO_HEALTH_CHECK
+	/* Detach health check module */
+	if (pi->hci != NULL)
+		phy_hc_detach(pi->hci);
+#endif /* RADIO_HEALTH_CHECK */
 
 	/* Detach envelope tracking module */
 	if (pi->eti != NULL)
@@ -1046,7 +1009,7 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 
 #ifdef WL11AX
 	/* Detach HE module */
-	if (ISHECAPPHY(pi)) {
+	if (pi->pubpi && ISHECAPPHY(pi)) {
 		if ((pi->hecapi != NULL))
 			phy_hecap_detach(pi->hecapi);
 	}
@@ -1166,7 +1129,7 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 	/* Detach CACHE module */
 	if (pi->cachei != NULL)
 		phy_cache_detach(pi->cachei);
-#ifdef NEW_PHY_CAL_ARCH
+#ifdef PHYCAL_CACHING
 	/* Detach CHannelManaGeR Notification module */
 	if (pi->chanmgr_notifi != NULL)
 		phy_chanmgr_notif_detach(pi->chanmgr_notifi);
@@ -1192,7 +1155,6 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 
 #if defined(PHYCAL_CACHING)
 	pi->phy_calcache_on = FALSE;
-	wlc_phy_cal_cache_deinit((wlc_phy_t *)pi);
 #endif
 
 	/* Quick-n-dirty remove from list */
@@ -1203,16 +1165,16 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 	else
 		ASSERT(0);
 
+
+	if (pi->tx_power_offset != NULL) {
+		/* Restore the correct bandwidth */
+		ppr_set_ch_bw(pi->tx_power_offset, ppr_get_max_bw());
+		ppr_delete(pi->sh->osh, pi->tx_power_offset);
+	}
+
 #ifdef WLTXPWR_CACHE
-	if (pi->tx_power_offset != NULL)
-		wlc_phy_clear_tx_power_offset((wlc_phy_t *)pi);
-#if defined(WLTXPWR_CACHE_PHY_ONLY)
 	if (pi->txpwr_cache != NULL)
 		wlc_phy_txpwr_cache_close(pi->sh->osh, pi->txpwr_cache);
-#endif
-#else
-	if (pi->tx_power_offset != NULL)
-		ppr_delete(pi->sh->osh, pi->tx_power_offset);
 #endif	/* WLTXPWR_CACHE */
 
 	if (pi->ff != NULL) {
@@ -1224,15 +1186,6 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 		phy_mfree(pi, pi->pdpi, sizeof(*pi->pdpi));
 		pi->pdpi = NULL;
 	}
-
-	if (pi->olpci != NULL) {
-		phy_mfree(pi, pi->olpci, sizeof(*pi->olpci));
-		pi->olpci = NULL;
-	}
-#ifdef WLC_TXCAL
-	if (pi->txcali != NULL)
-		phy_txcal_detach(pi);
-#endif /* WLC_TXCAL */
 
 	if (pi->pwrdet_ac != NULL) {
 	    phy_mfree(pi, pi->pwrdet_ac, (SROMREV(pi->sh->sromrev) >= 12 ?
@@ -1273,10 +1226,6 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 	    phy_mfree(pi, pi->def_cal_info, sizeof(phy_cal_info_t));
 	    pi->def_cal_info = NULL;
 	}
-	if (pi->txcore_temp != NULL) {
-	    phy_mfree(pi, pi->txcore_temp, sizeof(phy_txcore_temp_t));
-	    pi->txcore_temp = NULL;
-	}
 	if (pi->pwrdet != NULL) {
 	    phy_mfree(pi, pi->pwrdet, sizeof(srom_pwrdet_t));
 	    pi->pwrdet = NULL;
@@ -1297,6 +1246,37 @@ BCMATTACHFN(phy_module_detach)(phy_info_t *pi)
 	}
 
 	MFREE(pi->sh->osh, pi, sizeof(phy_info_t));
+}
+
+void
+BCMATTACHFN(prephy_module_detach)(prephy_info_t *pi)
+{
+
+	PHY_TRACE(("wl: %s: pi = %p\n", __FUNCTION__, pi));
+
+	if (pi == NULL)
+		return;
+
+	/* ======== Detach modules' PHY specific layer ======== */
+
+	if (pi->prephyi != NULL) {
+		phy_prephy_detach(pi->prephyi);
+	}
+
+	if (pi->pubpi != NULL) {
+	    phy_mfree(pi, pi->pubpi, sizeof(wlc_phy_t));
+	    pi->pubpi = NULL;
+	}
+
+	MFREE(pi->sh->osh, pi, sizeof(prephy_info_t));
+}
+
+void
+BCMATTACHFN(wlc_prephy_shared_detach)(shared_phy_t *sh)
+{
+	if (sh != NULL) {
+		MFREE(sh->osh, sh, sizeof(shared_phy_t));
+	}
 }
 
 /* Register all iovar tables to/from system */
@@ -1351,32 +1331,15 @@ fail:
 	return err;
 }
 
-/* band specific init */
-void
-WLBANDINITFN(phy_bsinit)(phy_info_t *pi, chanspec_t chanspec, bool forced)
-{
-	/* if chanswitch path, skip phy_init for D11REV > 40 */
-	if (!ISACPHY(pi) || forced)
-		phy_init(pi, chanspec);
-}
-
-/* band width init */
-void
-WLBANDINITFN(phy_bwinit)(phy_info_t *pi, chanspec_t chanspec)
-{
-	if (!ISACPHY(pi))
-		phy_init(pi, chanspec);
-}
-
 /* Init/deinit the PHY h/w. */
-void
+int
 WLBANDINITFN(phy_init)(phy_info_t *pi, chanspec_t chanspec)
 {
 	uint32	mc;
 #if defined(BCMDBG) || defined(PHYDBG)
 	char chbuf[CHANSPEC_STR_LEN];
 #endif
-
+	int err = BCME_OK;
 	ASSERT(pi != NULL);
 
 	pi->phy_crash_rc = PHY_RC_NONE;
@@ -1387,8 +1350,10 @@ WLBANDINITFN(phy_init)(phy_info_t *pi, chanspec_t chanspec)
 #endif
 
 	/* skip if this function is called recursively(e.g. when bw is changed) */
-	if (pi->init_in_progress)
-		return;
+	if (pi->init_in_progress) {
+		err = BCME_NOTREADY;
+		goto end;
+	}
 
 	pi->last_radio_chanspec = pi->radio_chanspec;
 
@@ -1397,7 +1362,7 @@ WLBANDINITFN(phy_init)(phy_info_t *pi, chanspec_t chanspec)
 	pi->phynoise_state = 0;
 
 	/* Update ucode channel value */
-	wlc_phy_chanspec_shm_set(pi, chanspec);
+	phy_chanmgr_set_shm(pi, chanspec);
 
 	mc = R_REG(pi->sh->osh, &pi->regs->maccontrol);
 	if ((mc & MCTL_EN_MAC) != 0) {
@@ -1426,14 +1391,6 @@ WLBANDINITFN(phy_init)(phy_info_t *pi, chanspec_t chanspec)
 	/* check D11 is running on Fast Clock */
 	ASSERT(si_core_sflags(pi->sh->sih, 0, 0) & SISF_FCLKA);
 
-#ifndef WLC_DISABLE_ACI
-	/* update interference mode before INIT process start */
-	if (((ISNPHY(pi) && NREV_GE(pi->pubpi->phy_rev, 3)) || ISHTPHY(pi) ||
-		ISACPHY(pi)) && !(SCAN_INPROG_PHY(pi)))
-		pi->sh->interference_mode = CHSPEC_IS2G(pi->radio_chanspec) ?
-			pi->sh->interference_mode_2G : pi->sh->interference_mode_5G;
-#endif
-
 #ifdef WL_DSI
 	if (phy_get_dsi_trigger_st(pi)) {
 		/* DeepSleepInit */
@@ -1446,11 +1403,11 @@ WLBANDINITFN(phy_init)(phy_info_t *pi, chanspec_t chanspec)
 		/* ======== Common inits ======== */
 
 		/* Init each feature/module including s/w and h/w */
-		if (phy_init_invoke_init_fns(pi->initi) != BCME_OK) {
+		if ((err = phy_init_invoke_init_fns(pi->initi)) != BCME_OK) {
 			PHY_ERROR(("wl%d: %s: phy_init_invoke_init_fns failed."
 				"phy_type %d, rev %d\n", pi->sh->unit, __FUNCTION__,
 				pi->pubpi->phy_type, pi->pubpi->phy_rev));
-			return;
+			goto end;
 		}
 
 		/* ======== Special inits ======== */
@@ -1478,12 +1435,12 @@ WLBANDINITFN(phy_init)(phy_info_t *pi, chanspec_t chanspec)
 	wlc_phy_femctrl_mask_on_band_change(pi);
 #endif
 	if (CHIPID(pi->sh->chip) == BCM43012_CHIP_ID) {
-		if (ISACPHY(pi)) {
-			uint16 curtemp = 0;
-			curtemp = wlc_phy_tempsense_acphy(pi);
-			wlapi_openloop_cal(pi->sh->physhim, curtemp);
-		}
+		int16 curtemp = 0;
+		phy_temp_get_tempsense_degree(pi->tempi, &curtemp);
+		wlapi_openloop_cal(pi->sh->physhim, (uint16) curtemp);
 	}
+end:
+	return err;
 }
 
 /* driver up/init processing */
@@ -1517,8 +1474,27 @@ BCMUNINITFN(phy_down)(phy_info_t *pi)
 	return callbacks;
 }
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+void
+BCMATTACHFN(phy_machwcap_set)(wlc_phy_t *ppi, uint32 machwcap)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+
+	pi->sh->machwcap = machwcap;
+}
+
+int
+phy_bss_init(wlc_phy_t *pih, bool bonlyap, int noise)
+{
+	phy_info_t *pi = (phy_info_t*)pih;
+
+	if (bonlyap) {
+	}
+
+	return phy_noise_bss_init(pi->noisei, noise);
+}
+
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 static int
 _phy_dump_phyregs(void *ctx, struct bcmstrbuf *b)
 {
@@ -1600,10 +1576,6 @@ phy_dump_phyregs(phy_info_t *pi, const char *str,
 	uint16 addr, val = 0, num;
 	phy_regs_t *reglist = rl, *rl_end = NULL;
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	uint16 i = 0;
-	bool skip;
-#endif
 	if (reglist == NULL)
 		return;
 
@@ -1628,21 +1600,6 @@ phy_dump_phyregs(phy_info_t *pi, const char *str,
 	bcm_bprintf(b, "Add Value\n");
 
 	while (((num = reglist->num) > 0) && (reglist != rl_end)) {
-#if defined(BCMINTERNAL) || defined(WLTEST)
-		skip = FALSE;
-
-		for (i = 0; i < pi->nphy_phyreg_skipcnt; i++) {
-			if (pi->nphy_phyreg_skipaddr[i] == reglist->base) {
-				skip = TRUE;
-				break;
-			}
-		}
-
-		if (skip) {
-			reglist++;
-			continue;
-		}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 
 		for (addr = reglist->base + off; num && b->size > 0; addr++, num--) {
 			val = phy_type_read_phyreg(pi->typei, addr);
@@ -1657,32 +1614,14 @@ phy_dump_phyregs(phy_info_t *pi, const char *str,
 		reglist++;
 	}
 }
-#endif /* ((BCMDBG || BCMDBG_DUMP) && (BCMINTERNAL || DBG_PHY_IOV)) || BCMDBG_PHYDUMP */
+#endif 
 
 static void
 BCMATTACHFN(phy_register_dumps)(phy_info_t *pi)
 {
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(BCMINTERNAL)) || \
-	defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG_PHYDUMP)
 	phy_dbg_add_dump_fn(pi, "phyreg", _phy_dump_phyregs, pi);
-#endif /* ((BCMDBG || BCMDBG_DUMP) && BCMINTERNAL) || BCMDBG_PHYDUMP */
-#if defined(BCMDBG) || defined(BCMDBG_DUMP)
-	phy_dbg_add_dump_fn(pi, "phypapd", wlc_phydump_papd, pi);
-	phy_dbg_add_dump_fn(pi, "phystate", wlc_phydump_state, pi);
-	phy_dbg_add_dump_fn(pi, "phylnagain", wlc_phydump_lnagain, pi);
-	phy_dbg_add_dump_fn(pi, "phyinitgain", wlc_phydump_initgain, pi);
-	phy_dbg_add_dump_fn(pi, "phyhpf1tbl", wlc_phydump_hpf1tbl, pi);
-	phy_dbg_add_dump_fn(pi, "phychanest", wlc_phydump_chanest, pi);
-	phy_dbg_add_dump_fn(pi, "phytxv0", wlc_phydump_txv0, pi);
-#if defined(DBG_BCN_LOSS)
-	phy_dbg_add_dump_fn(pi, "phycalrxmin", wlc_phydump_phycal_rx_min, pi);
-#endif
-#endif /* BCMDBG || BCMDBG_DUMP */
-
-#if defined(WLTEST)
-	phy_dbg_add_dump_fn(pi, "phych4rpcal", wlc_phydump_ch4rpcal, pi);
-#endif /* WLTEST */
-
+#endif 
 	/*  default page */
 	pi->pdpi->page = 0;
 }
@@ -1727,4 +1666,37 @@ void
 phy_set_measure_hold_status(phy_info_t *pi, mbool set)
 {
 	pi->measure_hold = set;
+}
+
+int8
+phy_preamble_override_get(wlc_phy_t *ppi)
+{
+	phy_info_t *pi = (phy_info_t *)ppi;
+	return pi->n_preamble_override;
+}
+
+int
+phy_hw_clk_state_upd(wlc_phy_t *pih, bool newstate)
+{
+	phy_info_t *pi = (phy_info_t *)pih;
+
+	if (!pi || !pi->sh) {
+		return BCME_ERROR;
+	}
+
+	pi->sh->clk = newstate;
+	return BCME_OK;
+}
+
+int
+phy_hw_state_upd(wlc_phy_t *pih, bool newstate)
+{
+	phy_info_t *pi = (phy_info_t *)pih;
+
+	if (!pi || !pi->sh) {
+		return BCME_ERROR;
+	}
+
+	pi->sh->up = newstate;
+	return BCME_OK;
 }

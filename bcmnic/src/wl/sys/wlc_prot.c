@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_prot.c 617211 2016-02-04 13:34:03Z $
+ * $Id: wlc_prot.c 660317 2016-09-20 05:54:54Z $
  */
 
 
@@ -57,11 +57,24 @@ uint16 wlc_prot_info_priv_offset = sizeof(wlc_prot_info_t);
 /* local functions */
 
 /* module entries */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_prot_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 static int wlc_prot_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif);
 
 /* bsscfg cubby */
 static int wlc_prot_bss_init(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_prot_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_prot_bss_dump NULL
+#endif
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 /* protection module code starts here... */
 
@@ -102,6 +115,9 @@ BCMATTACHFN(wlc_prot_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "prot", wlc_prot_dump, (void *)prot);
+#endif
 
 	return prot;
 
@@ -128,6 +144,27 @@ BCMATTACHFN(wlc_prot_detach)(wlc_prot_info_t *prot)
 	MFREE(wlc->osh, prot, WLC_PROT_SIZE);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_prot_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_prot_info_t *prot = (wlc_prot_info_t *)ctx;
+	wlc_prot_info_priv_t *priv = WLC_PROT_INFO_PRIV(prot);
+	wlc_info_t *wlc = priv->wlc;
+	int idx;
+	wlc_bsscfg_t *cfg;
+
+	bcm_bprintf(b, "prot: priv_offset %d cfgh %d\n",
+	            wlc_prot_info_priv_offset, prot->cfgh);
+
+	FOREACH_AS_BSS(wlc, idx, cfg) {
+		bcm_bprintf(b, "bsscfg %d >\n", WLC_BSSCFG_IDX(cfg));
+	        wlc_prot_bss_dump(prot, cfg, b);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static int
 wlc_prot_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif)
@@ -195,6 +232,28 @@ wlc_prot_bss_init(void *ctx, wlc_bsscfg_t *cfg)
 	return BCME_OK;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_prot_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_prot_info_t *prot = (wlc_prot_info_t *)ctx;
+	wlc_prot_info_priv_t *priv = WLC_PROT_INFO_PRIV(prot);
+	wlc_prot_cfg_t *wpc;
+	bss_prot_cfg_t *pc;
+
+	ASSERT(cfg != NULL);
+
+	wpc = WLC_PROT_CFG(prot, cfg);
+	ASSERT(wpc != NULL);
+
+	pc = BSS_PROT_CFG(prot, cfg);
+	ASSERT(pc != NULL);
+
+	bcm_bprintf(b, "\tcfg_offset %d\n", priv->cfg_offset);
+	bcm_bprintf(b, "\toverlap %d shortpreamble %d\n",
+	            pc->overlap, wpc->shortpreamble);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* centralized protection config change function to simplify debugging, no consistency checking
  * this should be called only on changes to avoid overhead in periodic function

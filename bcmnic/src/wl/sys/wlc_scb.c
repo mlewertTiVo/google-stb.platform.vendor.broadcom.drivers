@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scb.c 643594 2016-06-15 07:20:53Z $
+ * $Id: wlc_scb.c 660248 2016-09-19 21:45:03Z $
  */
 
 /**
@@ -37,7 +37,6 @@
 #include <bcmutils.h>
 #if defined(WL_DATAPATH_LOG_DUMP)
 #include <event_log.h>
-#include <proto/event_log_payload.h>
 #endif /* WL_DATAPATH_LOG_DUMP */
 #include <d11.h>
 #include <wlc_rate.h>
@@ -123,9 +122,78 @@ static void wlc_scb_freemem(scb_module_t *scbstate, struct scb_info *scbinfo);
 static void wlc_scb_init_rates(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bandunit,
 	struct scb *scb);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_scb_dump(wlc_info_t *wlc, struct bcmstrbuf *b);
+/** SCB Flags Names Initialization */
+static const bcm_bit_desc_t scb_flags[] =
+{
+	{SCB_NONERP, "NonERP"},
+	{SCB_LONGSLOT, "LgSlot"},
+	{SCB_SHORTPREAMBLE, "ShPre"},
+	{SCB_8021XHDR, "1X"},
+	{SCB_WPA_SUP, "WPASup"},
+	{SCB_DEAUTH, "DeA"},
+	{SCB_WMECAP, "WME"},
+	{SCB_BRCM, "BRCM"},
+	{SCB_WDS_LINKUP, "WDSLinkUP"},
+	{SCB_LEGACY_AES, "LegacyAES"},
+	{SCB_MYAP, "MyAP"},
+	{SCB_PENDING_PROBE, "PendingProbe"},
+	{SCB_AMSDUCAP, "AMSDUCAP"},
+	{SCB_HTCAP, "HT"},
+	{SCB_RECV_PM, "RECV_PM"},
+	{SCB_AMPDUCAP, "AMPDUCAP"},
+	{SCB_IS40, "40MHz"},
+	{SCB_NONGF, "NONGFCAP"},
+	{SCB_APSDCAP, "APSDCAP"},
+	{SCB_PENDING_PSPOLL, "PendingPSPoll"},
+	{SCB_RIFSCAP, "RIFSCAP"},
+	{SCB_HT40INTOLERANT, "40INTOL"},
+	{SCB_WMEPS, "WMEPSOK"},
+	{SCB_COEX_MGMT, "OBSSCoex"},
+	{SCB_IBSS_PEER, "IBSS Peer"},
+	{SCB_STBCCAP, "STBC"},
+	{0, NULL}
+};
+static const bcm_bit_desc_t scb_flags2[] =
+{
+	{SCB2_SGI20_CAP, "SGI20"},
+	{SCB2_SGI40_CAP, "SGI40"},
+	{SCB2_RX_LARGE_AGG, "LGAGG"},
+	{SCB2_LDPCCAP, "LDPC"},
+	{SCB2_VHTCAP, "VHT"},
+	{SCB2_AMSDU_IN_AMPDU_CAP, "AGG^2"},
+	{SCB2_P2P, "P2P"},
+	{SCB2_DWDS_ACTIVE, "DWDS_ACTIVE"},
+	{SCB2_HECAP, "HE"},
+	{0, NULL}
+};
+static const bcm_bit_desc_t scb_flags3[] =
+{
+	{SCB3_A4_DATA, "A4_DATA"},
+	{SCB3_A4_NULLDATA, "A4_NULLDATA"},
+	{SCB3_A4_8021X, "A4_8021X"},
+	{SCB3_DWDS_CAP, "DWDS_CAP"},
+	{SCB3_1024QAM_CAP, "1024QAM_CAP"},
+	{SCB3_MU_CAP, "MU_CAP"},
+	{0, NULL}
+};
+static const bcm_bit_desc_t scb_states[] =
+{
+	{AUTHENTICATED, "AUTH"},
+	{ASSOCIATED, "ASSOC"},
+	{PENDING_AUTH, "AUTH_PEND"},
+	{PENDING_ASSOC, "ASSOC_PEND"},
+	{AUTHORIZED, "AUTH_8021X"},
+	{0, NULL}
+};
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #ifdef SCBFREELIST
 static void wlc_scbfreelist_free(scb_module_t *scbstate);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_scbfreelist_dump(scb_module_t *scbstate, struct bcmstrbuf *b);
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 #endif /* SCBFREELIST */
 
 /* Each scb has the layout:
@@ -187,7 +255,11 @@ typedef struct scb_bsscfg_cubby {
 
 static int wlc_scb_bsscfg_init(void *context, wlc_bsscfg_t *cfg);
 static void wlc_scb_bsscfg_deinit(void *context, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_scb_bsscfg_dump(void *context, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_scb_bsscfg_dump NULL
+#endif
 
 static void wlc_scb_bsscfg_scbclear(struct wlc_info *wlc, wlc_bsscfg_t *cfg, bool perm);
 
@@ -229,6 +301,7 @@ wlc_scb_bsscfg_deinit(void *context, wlc_bsscfg_t *cfg)
 	scb_module_t *scbstate = (scb_module_t *)context;
 	wlc_info_t *wlc = scbstate->wlc;
 	scb_bsscfg_cubby_t *scb_cfg = SCB_BSSCFG_CUBBY(scbstate, cfg);
+	uint32 i;
 
 	/* clear all scbs */
 	wlc_scb_bsscfg_scbclear(wlc, cfg, TRUE);
@@ -240,6 +313,11 @@ wlc_scb_bsscfg_deinit(void *context, wlc_bsscfg_t *cfg)
 	/* N.B.: the hash is contiguously allocated across multiple bands */
 	MFREE(wlc->osh, scb_cfg->scbhash[0], SCB_HASH_SZ);
 	scb_cfg->scbhash[0] = NULL;
+
+	scb_cfg->nscbhash = 0;
+	for (i = 0; i < MAXBANDS; i++) {
+		scb_cfg->scbhash[i] = NULL;
+	}
 }
 
 static void
@@ -331,6 +409,9 @@ BCMATTACHFN(wlc_scb_attach)(wlc_info_t *wlc)
 	}
 #endif /* WL_DATAPATH_LOG_DUMP */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "scb", (dump_fn_t)wlc_scb_dump, (void *)wlc);
+#endif
 
 	/* create notification list for scb state change. */
 	if (bcm_notif_create_list(wlc->notif, &scbstate->scb_state_notif_hdl) != BCME_OK) {
@@ -474,15 +555,26 @@ wlc_scb_iternext(scb_module_t *scbstate, struct scb_iter *scbiter)
 	return NULL;
 }
 
+#ifdef BCMDBG
+/* undefine the BCMDBG helper macros so they will not interfere with the function definitions */
+#undef wlc_scb_cubby_reserve
+#undef wlc_scb_cubby_reserve_ext
+#endif
 
 /**
  * Reduced parameter version of wlc_scb_cubby_reserve_ext().
  *
  * Return value: negative values are errors.
  */
+#ifdef BCMDBG
+int
+BCMATTACHFN(wlc_scb_cubby_reserve)(wlc_info_t *wlc, uint size, scb_cubby_init_t fn_init,
+	scb_cubby_deinit_t fn_deinit, scb_cubby_dump_t fn_dump, void *context, const char *func)
+#else
 int
 BCMATTACHFN(wlc_scb_cubby_reserve)(wlc_info_t *wlc, uint size, scb_cubby_init_t fn_init,
 	scb_cubby_deinit_t fn_deinit, scb_cubby_dump_t fn_dump, void *context)
+#endif /* BCMDBG */
 {
 	scb_cubby_params_t params;
 	int ret;
@@ -494,7 +586,11 @@ BCMATTACHFN(wlc_scb_cubby_reserve)(wlc_info_t *wlc, uint size, scb_cubby_init_t 
 	params.fn_dump = fn_dump;
 	params.context = context;
 
+#ifdef BCMDBG
+	ret = wlc_scb_cubby_reserve_ext(wlc, size, &params, func);
+#else
 	ret = wlc_scb_cubby_reserve_ext(wlc, size, &params);
+#endif
 	return ret;
 }
 
@@ -506,11 +602,18 @@ BCMATTACHFN(wlc_scb_cubby_reserve)(wlc_info_t *wlc, uint size, scb_cubby_init_t 
  *
  * Return value: negative values are errors.
  */
+#ifdef BCMDBG
+int
+BCMATTACHFN(wlc_scb_cubby_reserve_ext)(wlc_info_t *wlc, uint size, scb_cubby_params_t *params,
+	const char *func)
+#else
 int
 BCMATTACHFN(wlc_scb_cubby_reserve_ext)(wlc_info_t *wlc, uint size, scb_cubby_params_t *params)
+#endif /* BCMDBG */
 {
 	scb_module_t *scbstate = wlc->scbstate;
 	wlc_cubby_fn_t fn;
+	wlc_cubby_cp_fn_t cp_fn;
 	int offset;
 
 	ASSERT(scbstate->nscb == 0);
@@ -521,8 +624,20 @@ BCMATTACHFN(wlc_scb_cubby_reserve_ext)(wlc_info_t *wlc, uint size, scb_cubby_par
 	fn.fn_secsz = (cubby_secsz_fn_t)params->fn_secsz;
 	fn.fn_dump = (cubby_dump_fn_t)params->fn_dump;
 	fn.fn_data_log_dump = (cubby_datapath_log_dump_fn_t)params->fn_data_log_dump;
+#ifdef BCMDBG
+	fn.name = func;
+#endif
 
-	offset = wlc_cubby_reserve(scbstate->cubby_info, size, &fn, 0, NULL, params->context);
+	/* Optional Cubby copy function. Currently we dont support
+	* get/set api's for SCB cubby copy. Only update
+	* function should be used by the callers to allow
+	* for single approach for SCB copy implementation.
+	*/
+	bzero(&cp_fn, sizeof(cp_fn));
+
+	cp_fn.fn_update = (cubby_update_fn_t)params->fn_update;
+
+	offset = wlc_cubby_reserve(scbstate->cubby_info, size, &fn, 0, &cp_fn, params->context);
 
 	if (offset < 0) {
 		WL_ERROR(("wl%d: %s: wlc_cubby_reserve failed with err %d\n",
@@ -676,6 +791,28 @@ wlc_scbfreelist_free(scb_module_t *scbstate)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static
+void wlc_scbfreelist_dump(scb_module_t *scbstate, struct bcmstrbuf *b)
+{
+	struct scb_info *entry = NULL;
+	int i = 1;
+
+#ifdef SCB_MEMDBG
+	bcm_bprintf(b, "scbfreelist (count: %7u):\n", scbstate->freelistcount);
+#else
+	bcm_bprintf(b, "scbfreelist:\n");
+#endif /* SCB_MEMDBG */
+
+	entry = SCBINFO(scbstate, scbstate->free_list);
+	while (entry) {
+		SCBFREESANITYCHECK(scbstate, SCBPUB(scbstate, entry));
+		bcm_bprintf(b, "%d: 0x%x\n", i, entry);
+		entry = entry->next;
+		i++;
+	}
+}
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 #endif /* SCBFREELIST */
 
 static void
@@ -759,6 +896,7 @@ _wlc_internalscb_alloc(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 
 	scb = SCBPUB(scbstate, scbinfo);
 	scb->bsscfg = cfg;
+	scb->if_stats = cfg->wlcif->_cnt;
 	scb->ea = *ea;
 
 	/* used by hwrs and bcmc scbs */
@@ -852,6 +990,7 @@ wlc_userscb_alloc(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 
 	scb = SCBPUB(scbstate, scbinfo);
 	scb->bsscfg = cfg;
+	scb->if_stats = cfg->wlcif->_cnt;
 	scb->ea = *ea;
 
 	bcmerror = wlc_scbinit(wlc, cfg, band->bandunit, scb);
@@ -936,7 +1075,9 @@ wlc_scbinit(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bandunit, struct scb *scb)
 		return BCME_OK;
 	}
 #endif
-
+#ifdef WLCNTSCB
+	bzero((char*)&scb->scb_stats, sizeof(scb->scb_stats));
+#endif
 	return wlc_cubby_init(scbstate->cubby_info, scb, wlc_scb_sec_sz, wlc_scb_sec_set, scbstate);
 }
 
@@ -1016,18 +1157,6 @@ wlc_scbdeinit(wlc_info_t *wlc, struct scb *scbd)
 #endif
 
 	wlc_cubby_deinit(scbstate->cubby_info, scbd, wlc_scb_sec_sz, wlc_scb_sec_get, scbstate);
-}
-
-bool
-wlc_scbfree_pktpend(wlc_info_t *wlc, struct scb *scbd, int32 *pktpend)
-{
-
-	/* Get latest pktpend count as frames like block ack req are sent
-	 * during cleanup time.
-	 */
-	*pktpend = SCBPKTPENDGET(wlc, scbd);
-
-	return wlc_scbfree(wlc, scbd);
 }
 
 static void
@@ -1115,9 +1244,9 @@ wlc_scbvictim(wlc_info_t *wlc)
 	struct scb *oldscb;
 	uint now, age;
 	struct scb_iter scbiter;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	wlc_bsscfg_t *bsscfg = NULL;
 
 #ifdef AP
@@ -1337,6 +1466,9 @@ wlc_scb_bsscfg_reinit(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 				"phy_type 0x%x gmode 0x%x\n", wlc->pub->unit, __FUNCTION__,
 				OSL_OBFUSCATE_BUF(scb), band->bandunit,
 				band->phytype, band->gmode));
+#ifdef BCMDBG
+			wlc_rateset_show(wlc, &scb->rateset, &scb->ea);
+#endif
 
 			wlc_rateset_default(&scb->rateset, &band->hw_rateset,
 			                    band->phytype, band->bandtype, cck_only, RATE_MASK,
@@ -1357,6 +1489,9 @@ wlc_scb_bsscfg_reinit(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 		WL_RATE(("wl%d: %s: bandunit 0x%x, phy_type 0x%x gmode 0x%x. final rateset is\n",
 			wlc->pub->unit, __FUNCTION__,
 			band->bandunit, band->phytype, band->gmode));
+#ifdef BCMDBG
+		wlc_rateset_show(wlc, &scb->rateset, &scb->ea);
+#endif
 	}
 }
 
@@ -1391,7 +1526,7 @@ _wlc_scbfind(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, const struct ether_addr *ea,
 
 	/* search for the scb which corresponds to the remote station ea */
 	scb_cfg = SCB_BSSCFG_CUBBY(scbstate, bsscfg);
-	if (scb_cfg) {
+	if (scb_cfg && scb_cfg->scbhash[bandunit]) {
 		indx = SCBHASHINDEX(scb_cfg->nscbhash, ea->octet);
 		scbinfo =
 			SCBINFO(scbstate, scb_cfg->scbhash[bandunit][indx]);
@@ -1432,7 +1567,7 @@ _wlc_scblookup(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, const struct ether_addr *e
 {
 	struct scb *scb;
 	struct wlcband *band;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char sa[ETHER_ADDR_STR_LEN];
 #endif
 
@@ -1453,6 +1588,23 @@ _wlc_scblookup(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, const struct ether_addr *e
 		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
 		          bcm_ether_ntoa(ea, sa)));
 		return NULL;
+#ifdef BCMDBG
+	case WLC_MACFLTR_ADDR_ALLOW:
+		WL_ASSOC(("wl%d.%d mac restrict: Allowing %s\n",
+		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+		          bcm_ether_ntoa(ea, sa)));
+		break;
+	case WLC_MACFLTR_ADDR_NOT_DENY:
+		WL_ASSOC(("wl%d.%d mac restrict: Not denying %s\n",
+		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+		          bcm_ether_ntoa(ea, sa)));
+		break;
+	case WLC_MACFLTR_DISABLED:
+		WL_NONE(("wl%d.%d no mac restrict: lookup %s\n",
+		         wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+		         bcm_ether_ntoa(ea, sa)));
+		break;
+#endif /* BCMDBG */
 	}
 
 	if ((scb = _wlc_scbfind(wlc, bsscfg, ea, bandunit)))
@@ -1622,7 +1774,7 @@ wlc_scbbssfindband(wlc_info_t *wlc, const struct ether_addr *hwaddr,
 
 	*bsscfg = NULL;
 
-	FOREACH_BSS(wlc, idx, cfg) {
+	FOREACH_ALL_WLC_BSS(wlc, idx, cfg) {
 		/* Find the bsscfg and scb matching specified hwaddr and peer mac */
 		if (eacmp(cfg->cur_etheraddr.octet, hwaddr->octet) == 0) {
 			scb = _wlc_scbfind(wlc, cfg, ea, bandunit);
@@ -1740,7 +1892,7 @@ wlc_scb_awdl_free(struct wlc_info *wlc)
 
 struct scb *
 wlc_scbfind_dualband(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
-	struct ether_addr *addr)
+	const struct ether_addr *addr)
 {
 	struct scb *scb;
 	scb = wlc_scbfind(wlc, bsscfg, addr);
@@ -1762,6 +1914,154 @@ wlc_scbfind_dualband(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
 	return scb;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void
+wlc_scb_dump_scb(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb, struct bcmstrbuf *b, int idx)
+{
+	char eabuf[ETHER_ADDR_STR_LEN];
+	char flagstr[64];
+	char flagstr2[64];
+	char flagstr3[64];
+	char statestr[64];
+#ifdef AP
+	char ssidbuf[SSID_FMT_BUF_LEN] = "";
+#endif /* AP */
+	scb_module_t *scbstate = wlc->scbstate;
+
+	bcm_format_flags(scb_flags, scb->flags, flagstr, 64);
+	bcm_format_flags(scb_flags2, scb->flags2, flagstr2, 64);
+	bcm_format_flags(scb_flags3, scb->flags3, flagstr3, 64);
+	bcm_format_flags(scb_states, scb->state, statestr, 64);
+
+	if (SCB_INTERNAL(scb))
+		bcm_bprintf(b, "  I");
+	else
+		bcm_bprintf(b, "%3d", idx);
+	bcm_bprintf(b, "%s %s\n", (scb->permanent? "*":" "),
+	            bcm_ether_ntoa(&scb->ea, eabuf));
+
+	bcm_bprintf(b, "     State:0x%02x (%s) Used:%d(%d)\n",
+	            scb->state, statestr, scb->used,
+	            (int)(scb->used - wlc->pub->now));
+	bcm_bprintf(b, "     Band:%s",
+	            ((scb->bandunit == BAND_2G_INDEX) ? BAND_2G_NAME :
+	             BAND_5G_NAME));
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "     Flags:0x%x", scb->flags);
+	if (flagstr[0] != '\0')
+		bcm_bprintf(b, " (%s)", flagstr);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "     Flags2:0x%x", scb->flags2);
+	if (flagstr2[0] != '\0')
+		bcm_bprintf(b, " (%s)", flagstr2);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "     Flags3:0x%x", scb->flags3);
+	if (flagstr3[0] != '\0')
+		bcm_bprintf(b, " (%s)", flagstr3);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\n");
+	if (cfg != NULL)
+		bcm_bprintf(b, "     Cfg:%d(%p)", WLC_BSSCFG_IDX(cfg), OSL_OBFUSCATE_BUF(cfg));
+
+	bcm_bprintf(b, "\n");
+
+	wlc_dump_rateset("     rates", &scb->rateset, b);
+	bcm_bprintf(b, "\n");
+
+	if (scb->rateset.htphy_membership) {
+		bcm_bprintf(b, "     membership %d(b)",
+		            (scb->rateset.htphy_membership & RATE_MASK));
+		bcm_bprintf(b, "\n");
+		bcm_bprintf(b, "     Prop HT rates support:%d\n",
+		            SCB_HT_PROP_RATES_CAP(scb));
+	}
+
+#ifdef AP
+	if (cfg != NULL && BSSCFG_AP(cfg)) {
+		bcm_bprintf(b, "     AID:0x%x PS:%d WDS:%d(%p)",
+		            scb->aid, scb->PS, (scb->wds ? 1 : 0),
+		            OSL_OBFUSCATE_BUF(scb->wds));
+		wlc_format_ssid(ssidbuf, cfg->SSID, cfg->SSID_len);
+		bcm_bprintf(b, " BSS %d \"%s\"\n",
+		            WLC_BSSCFG_IDX(cfg), ssidbuf);
+	}
+#endif
+#ifdef STA
+	if (cfg != NULL && BSSCFG_STA(cfg)) {
+		bcm_bprintf(b, "     MAXSP:%u DEFL:0x%x TRIG:0x%x DELV:0x%x\n",
+		            scb->apsd.maxsplen, scb->apsd.ac_defl,
+		            scb->apsd.ac_trig, scb->apsd.ac_delv);
+	}
+#endif
+	bcm_bprintf(b,  "     WPA_auth 0x%x wsec 0x%x\n", scb->WPA_auth, scb->wsec);
+
+#if defined(STA) && defined(DBG_BCN_LOSS)
+	bcm_bprintf(b,	"	  last_rx:%d last_rx_rssi:%d last_bcn_rssi: "
+	            "%d last_tx: %d\n",
+	            scb->dbg_bcn.last_rx, scb->dbg_bcn.last_rx_rssi, scb->dbg_bcn.last_bcn_rssi,
+	            scb->dbg_bcn.last_tx);
+#endif
+
+	bcm_bprintf(b, "scb base size: %u\n", (uint)sizeof(struct scb));
+	bcm_bprintf(b, "-------- scb cubbies --------\n");
+#ifdef INT_SCB_OPT
+	if (SCB_INTERNAL(scb)) {
+	}
+	else
+#endif
+	{
+	wlc_cubby_dump(scbstate->cubby_info, scb, wlc_scb_sec_sz, scbstate, b);
+	}
+
+	/* display scb state change callbacks */
+	bcm_bprintf(b, "-------- state change notify list --------\n");
+	bcm_notif_dump_list(scbstate->scb_state_notif_hdl, b);
+}
+
+static void
+wlc_scb_bsscfg_dump(void *context, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	scb_module_t *scbstate = (scb_module_t *)context;
+	wlc_info_t *wlc = scbstate->wlc;
+	int k;
+	struct scb *scb;
+	struct scb_iter scbiter;
+
+	bcm_bprintf(b, "idx  ether_addr\n");
+	k = 0;
+	FOREACH_BSS_SCB(scbstate, &scbiter, cfg, scb) {
+		wlc_scb_dump_scb(wlc, cfg, scb, b, k);
+		k++;
+	}
+
+	return;
+}
+
+static int
+wlc_scb_dump(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	int32 idx;
+	wlc_bsscfg_t *bsscfg;
+	scb_module_t *scbstate = wlc->scbstate;
+
+#ifdef SCB_MEMDBG
+	bcm_bprintf(b, "# of scbs: %u, scballoced[%u] scbfreed[%u] freelistcount[%u]\n",
+		scbstate->nscb, scbstate->scballoced, scbstate->scbfreed,
+		scbstate->freelistcount);
+#else
+	bcm_bprintf(b, "# of scbs: %u\n", scbstate->nscb);
+#endif /* SCB_MEMDBG */
+
+	FOREACH_BSS(wlc, idx, bsscfg) {
+		wlc_scb_bsscfg_dump(scbstate, bsscfg, b);
+	}
+
+#ifdef SCBFREELIST
+	wlc_scbfreelist_dump(scbstate, b);
+#endif /* SCBFREELIST */
+	return 0;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #if defined(WL_DATAPATH_LOG_DUMP)
 void
@@ -1798,14 +2098,14 @@ void
 wlc_scbfind_delete(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, struct ether_addr *ea)
 {
 	int i;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	struct scb *scb;
 
 	for (i = 0; i < (int)NBANDS(wlc); i++) {
 		/* Use band 1 for single band 11a */
-		if (IS_SINGLEBAND_5G(wlc->deviceid))
+		if (IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap))
 			i = BAND_5G_INDEX;
 
 		scb = wlc_scbfindband(wlc, bsscfg, ea, i);
@@ -1854,4 +2154,40 @@ wlc_scb_sec_cubby_free(wlc_info_t *wlc, struct scb *scb, void *secptr)
 	scb_module_t *scbstate = wlc->scbstate;
 
 	wlc_cubby_sec_free(scbstate->cubby_info, scb, secptr);
+}
+
+int
+wlc_scb_wlc_cfg_update(wlc_info_t *wlc_from, wlc_info_t *wlc_to, wlc_bsscfg_t *cfg_to,
+	struct scb *scb)
+{
+	scb_module_t *to_scbstate = wlc_to->scbstate;
+	wlc_bsscfg_t *bsscfg_from = scb->bsscfg;
+	scb_module_t *from_scbstate = wlc_from->scbstate;
+
+	/* Call the update function of the registered cubbies */
+	wlc_cubby_update(from_scbstate->cubby_info, scb, cfg_to);
+
+	wlc_scb_hash_del(wlc_from->scbstate, SCB_BSSCFG(scb), scb);
+	/* delete it from the link list */
+	wlc_scb_list_del(wlc_from->scbstate, bsscfg_from, scb);
+
+	/* update total allocated scb number */
+	from_scbstate->nscb--;
+	to_scbstate->nscb++;
+
+	/* Update band and bandunit */
+	wlc_to->band->bandunit = CHSPEC_WLCBANDUNIT(cfg_to->current_bss->chanspec);
+	scb->bandunit = wlc_to->band->bandunit;
+
+	/* add it to the link list */
+	wlc_scb_list_add(wlc_to->scbstate, cfg_to, scb);
+	/* install it in the cache */
+	wlc_scb_hash_add(wlc_to->scbstate, cfg_to, wlc_to->band->bandunit, scb);
+
+	/* force wlc_scb_set_bsscfg() */
+	scb->bsscfg = cfg_to;
+	scb->if_stats = cfg_to->wlcif->_cnt;
+
+	wlc_scb_switch_band(wlc_to, scb, scb->bandunit, cfg_to);
+	return BCME_OK;
 }

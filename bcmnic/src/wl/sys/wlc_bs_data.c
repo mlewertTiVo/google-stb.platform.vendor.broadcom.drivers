@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_bs_data.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_bs_data.c 661109 2016-09-23 07:54:52Z $
  */
 
 /**
@@ -125,9 +125,6 @@ wlc_bs_data_iovar_handler(void *handle, uint32 actionid,
 
 			bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
 			ASSERT(bsscfg != NULL);
-			if (!bsscfg) {
-				return BCME_ERROR;
-			}
 
 			FOREACH_BSS_SCB(wlc->scbstate, &scbiter, bsscfg, scb) {
 				if (SCB_ASSOCIATED(scb)) {

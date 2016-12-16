@@ -53,9 +53,14 @@ static cmd_t wl_pkt_filter_cmds[] = {
 	"\t          1 (Magic pattern match (variable offset)\n"
 	"\t          2 (Extended pattern list)\n"
 	"\t          4 (Android Packet Filter)\n"
+	"\t          5 (Pattern matching filter with timeout event)\n"
+	"\t          6 (Immediate Packet filter)\n"
 	"\toffset:   (type 0): Integer offset in received packet to start matching.\n"
 	"\t          (type 1): Integer offset, match here are anywhere later.\n"
 	"\t          (type 2): [<base>:]<offset>. Symbolic packet loc plus relative\n"
+	"\t                    offset, use wl_pkt_filter_add -l for a <base> list.\n"
+	"\t          (type 5): Integer offset in received packet to start matching.\n"
+	"\t          (type 6): [<base>:]<offset>. Symbolic packet loc plus relative\n"
 	"\t                    offset, use wl_pkt_filter_add -l for a <base> list.\n"
 	"\tpolarity: Set to 1 to negate match result. 0 is default.\n"
 	"\tbitmask:  Hex bitmask that indicates which bits of 'pattern' to match.\n"
@@ -66,9 +71,11 @@ static cmd_t wl_pkt_filter_cmds[] = {
 	"\tpattern:  Hex pattern to match.  Must be same size as <bitmask>.\n"
 	"\t          Syntax: same as bitmask, but for type 2 (pattern list), a '!'\n"
 	"\t          may be used to negate that pattern match (e.g. !0xff03).\n"
-	"\tFor type 2: [<base>:]<offset> <bitmask> [!]<pattern> triple may be\n"
+	"\tFor type 2 & 6: [<base>:]<offset> <bitmask> [!]<pattern> triple may be\n"
 	"\trepeated; all sub-patterns must match for the filter to match.\n"
-	"\tFor type 4: <id> <polarity> <type> <apf program> \n"},
+	"\tFor type 4: <id> <polarity> <type> <apf program> \n"
+	"\ttimeout:  (type 5): Number of seconds to wait before sending a timeout event when\n"
+	"\t                    a matching pattern packet is not received.\n"},
 	{ "pkt_filter_clear_stats", wl_varint, -1, WLC_SET_VAR,
 	"Clear packet filter statistic counter values.\n"
 	"\tUsage: wl pkt_filter_clear_stats <id>" },
@@ -266,15 +273,19 @@ wl_pkt_filter_add(void *wl, cmd_t *cmd, char **argv)
 		return BCME_USAGE_ERROR;
 	}
 	if ((ftype != WL_PKT_FILTER_TYPE_PATTERN_MATCH) &&
+		(ftype != WL_PKT_FILTER_TYPE_MAGIC_PATTERN_MATCH) &&
 		(ftype != WL_PKT_FILTER_TYPE_PATTERN_LIST_MATCH) &&
-		(ftype != WL_PKT_FILTER_TYPE_APF_MATCH)) {
+		(ftype != WL_PKT_FILTER_TYPE_APF_MATCH) &&
+		(ftype != WL_PKT_FILTER_TYPE_PATTERN_MATCH_TIMEOUT) &&
+		(ftype != WL_PKT_FILTER_TYPE_IMMEDIATE_PATTERN_MATCH)) {
 		printf("Invalid filter type %d\n", ftype);
 		return BCME_USAGE_ERROR;
 	}
 	pkt_filter.type = htod32(ftype);
 
 	/* Handle basic (or magic) pattern filter */
-	if ((ftype == WL_PKT_FILTER_TYPE_PATTERN_MATCH) || (ftype == 1)) {
+	if ((ftype == WL_PKT_FILTER_TYPE_PATTERN_MATCH) ||
+		(ftype == WL_PKT_FILTER_TYPE_MAGIC_PATTERN_MATCH)) {
 		wl_pkt_filter_pattern_t *pfilter = &pkt_filterp->u.pattern;
 
 		/* Parse pattern filter offset. */
@@ -329,7 +340,8 @@ wl_pkt_filter_add(void *wl, cmd_t *cmd, char **argv)
 	}
 
 	/* Handle pattern list */
-	if (ftype == WL_PKT_FILTER_TYPE_PATTERN_LIST_MATCH) {
+	if ((ftype == WL_PKT_FILTER_TYPE_PATTERN_LIST_MATCH) ||
+		(ftype == WL_PKT_FILTER_TYPE_IMMEDIATE_PATTERN_MATCH)) {
 		int list_cnt = 0;
 		wl_pkt_filter_pattern_listel_t *pf_el = &pkt_filterp->u.patlist.patterns[0];
 
@@ -472,6 +484,66 @@ wl_pkt_filter_add(void *wl, cmd_t *cmd, char **argv)
 		memcpy((char *)pkt_filterp, &pkt_filter, WL_PKT_FILTER_FIXED_LEN);
 	}
 
+	/* Handle pattern filter with timeout event */
+	if (ftype == WL_PKT_FILTER_TYPE_PATTERN_MATCH_TIMEOUT) {
+		wl_pkt_filter_pattern_timeout_t *pfilter = &pkt_filterp->u.pattern_timeout;
+
+		/* Parse pattern filter offset. */
+		if (*++argv == NULL) {
+			printf("Offset not provided\n");
+			return BCME_USAGE_ERROR;
+		}
+		pkt_filter.u.pattern.offset = htod32(strtoul(*argv, &endptr, 0));
+		if (*endptr) {
+			printf("Invalid number for offset: %s\n", *argv);
+			return BCME_USAGE_ERROR;
+		}
+
+		/* Parse pattern filter mask. */
+		if (*++argv == NULL) {
+			printf("Bitmask not provided\n");
+			return BCME_USAGE_ERROR;
+		}
+		rc = wl_pattern_atoh(*argv, (char *)pfilter->mask_and_pattern);
+		if (rc == -1) {
+			printf("Rejecting: %s\n", *argv);
+			return BCME_USAGE_ERROR;
+		}
+		mask_size = htod32(rc);
+
+		/* Parse pattern filter pattern. */
+		if (*++argv == NULL) {
+			printf("Pattern not provided\n");
+			return BCME_USAGE_ERROR;
+		}
+		rc = wl_pattern_atoh(*argv, (char *)&pfilter->mask_and_pattern[rc]);
+		if (rc == -1) {
+			printf("Rejecting: %s\n", *argv);
+			return BCME_USAGE_ERROR;
+		}
+		pattern_size = htod32(rc);
+
+		if (mask_size != pattern_size) {
+			printf("Mask and pattern not the same size\n");
+			return BCME_USAGE_ERROR;
+		}
+
+		if (*++argv == NULL) {
+			printf("timeout not specified\n");
+			return BCME_USAGE_ERROR;
+		}
+		pkt_filter.u.pattern_timeout.timeout = htod32(strtoul(*argv, &endptr, 0));
+		pkt_filter.u.pattern.size_bytes = mask_size;
+		buf_len += WL_PKT_FILTER_FIXED_LEN;
+		buf_len += (WL_PKT_FILTER_PATTERN_TIMEOUT_FIXED_LEN + 2 * rc);
+
+		/* The fields that were put in a local for alignment purposes now
+		 * get copied to the right place in the ioctl buffer.
+		 */
+		memcpy((char *)pkt_filterp, &pkt_filter,
+				WL_PKT_FILTER_FIXED_LEN + WL_PKT_FILTER_PATTERN_TIMEOUT_FIXED_LEN);
+	}
+
 	rc = wlu_set(wl, WLC_SET_VAR, buf, buf_len);
 
 	return (rc);
@@ -532,7 +604,25 @@ wl_pkt_filter_list(void *wl, cmd_t *cmd, char **argv)
 	{
 		uint type = dtoh32(filterp->type);
 
-		if (type == WL_PKT_FILTER_TYPE_APF_MATCH) {
+		if (type == WL_PKT_FILTER_TYPE_PATTERN_MATCH_TIMEOUT) {
+			printf("Id          :%d\n"
+				"Negate      :%d\n"
+				"Type        :%d\n"
+				"Offset      :%d\n"
+				"Pattern len :%d\n"
+				"Timeout     :%d seconds\n",
+				dtoh32(filterp->id),
+				dtoh32(filterp->negate_match),
+				dtoh32(filterp->type),
+				dtoh32(filterp->u.pattern_timeout.offset),
+				dtoh32(filterp->u.pattern_timeout.size_bytes),
+				dtoh32(filterp->u.pattern_timeout.timeout));
+
+			wl_pkt_filter_list_mask_pat(filterp->u.pattern_timeout.mask_and_pattern,
+				dtoh32(filterp->u.pattern_timeout.size_bytes), "");
+			filter_len = WL_PKT_FILTER_PATTERN_TIMEOUT_FIXED_LEN +
+					2 * dtoh32(filterp->u.pattern_timeout.size_bytes);
+		} else if (type == WL_PKT_FILTER_TYPE_APF_MATCH) {
 			wl_apf_program_t *apf_program;
 			uint8 *pc;
 			uint16 len;
@@ -562,7 +652,8 @@ wl_pkt_filter_list(void *wl, cmd_t *cmd, char **argv)
 			}
 			printf("\n\n");
 			filter_len = WL_APF_PROGRAM_TOTAL_LEN(apf_program);
-		} else if (type == WL_PKT_FILTER_TYPE_PATTERN_LIST_MATCH) {
+		} else if ((type == WL_PKT_FILTER_TYPE_PATTERN_LIST_MATCH) ||
+			(type == WL_PKT_FILTER_TYPE_IMMEDIATE_PATTERN_MATCH)) {
 			char *indent = "    ";
 			uint cnt = filterp->u.patlist.list_cnt;
 			wl_pkt_filter_pattern_listel_t *listel = filterp->u.patlist.patterns;

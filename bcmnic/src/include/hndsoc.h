@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hndsoc.h 652660 2016-08-02 22:39:26Z $
+ * $Id: hndsoc.h 665717 2016-10-18 23:29:25Z $
  */
 
 #ifndef	_HNDSOC_H
@@ -39,19 +39,25 @@
 #define	SI_SDRAM_SWAPPED	0x10000000	/* Byteswapped Physical SDRAM */
 #define SI_SDRAM_R2		0x80000000	/* Region 2 for sdram (512 MB) */
 
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 #define SI_REG_BASE_SIZE	0xB000		/* size from 0xf1800000 to 0xf180AFFF (44KB) */
-#define SI_ENUM_BASE		0xF1800000	/* Enumeration space base */
-#define SI_WRAP_BASE		0xF1900000	/* Wrapper space base */
-#endif /* BCM7271 */
+#define SI_ENUM_BASE_DEFAULT		0xF1800000	/* Enumeration space base */
+#define SI_WRAP_BASE_DEFAULT		0xF1900000	/* Wrapper space base */
+#endif /* STB_SOC_WIFI */
 
-#ifndef SI_ENUM_BASE
-#define SI_ENUM_BASE		0x18000000	/* Enumeration space base */
+#ifndef SI_ENUM_BASE_DEFAULT
+#define SI_ENUM_BASE_DEFAULT		0x18000000	/* Enumeration space base */
 #endif
 
-#ifndef SI_WRAP_BASE
-#define SI_WRAP_BASE		0x18100000	/* Wrapper space base */
+#ifndef SI_WRAP_BASE_DEFAULT
+#define SI_WRAP_BASE_DEFAULT		0x18100000	/* Wrapper space base */
 #endif
+
+/** new(er) chips started locating their chipc core at a different BP address than 0x1800_0000 */
+// NIC and DHD driver binaries should support both old(er) and new(er) chips at the same time
+#define SI_ENUM_BASE(sih)	((sih)->enum_base)
+#define SI_WRAP_BASE(sih)	(SI_ENUM_BASE(sih) + 0x00100000)
+
 #define SI_CORE_SIZE		0x1000		/* each core gets 4Kbytes for registers */
 
 #define SI_NIC400_GPV_BASE	0x18200000	/* NIC-400 Global Programmers View (GPV) */
@@ -88,7 +94,9 @@
 #define	SI_ARMCM3_SRAM2		0x60000000	/* ARM Cortex-M3 SRAM Region 2 */
 #define	SI_ARM7S_SRAM2		0x80000000	/* ARM7TDMI-S SRAM Region 2 */
 #define	SI_ARMCA7_ROM		0x00000000	/* ARM Cortex-A7 ROM */
+#ifndef SI_ARMCA7_RAM
 #define	SI_ARMCA7_RAM		0x00200000	/* ARM Cortex-A7 RAM */
+#endif
 #define	SI_ARM_FLASH1		0xffff0000	/* ARM Flash Region 1 */
 #define	SI_ARM_FLASH1_SZ	0x00010000	/* ARM Size of Flash Region 1 */
 
@@ -238,7 +246,7 @@
 #define GMAC_4706B0_CORE_REV	0x80000000		/* Gigabit MAC core */
 #define NS_PCIEG2_CORE_REV_B0	0x7		/* NS-B0 PCIE Gen 2 core rev */
 
-/* There are TWO constants on all HND chips: SI_ENUM_BASE above,
+/* There are TWO constants on all HND chips: SI_ENUM_BASE_DEFAULT above,
  * and chipcommon being the first core:
  */
 #define	SI_CC_IDX		0
@@ -271,6 +279,10 @@
 #define SISF_NS_BOOTDEV_OFFLOAD	0x0003	/* ROM core */
 #define SISF_NS_SKUVEC_MASK	0x000c	/* ROM core */
 
+/* dot11 core-specific status flags */
+#define	SISF_MINORREV_D11_SHIFT	16
+#define	SISF_MINORREV_D11_MASK	0xF		/**< minor corerev (corerev == 61) */
+
 /* A register that is common to all cores to
  * communicate w/PMU regarding clock control.
  */
@@ -301,9 +313,6 @@
 #define CCS_ERSRC_STS_SHIFT	24
 #define CCS_SECI_AVAIL		0x01000000	/* RO: SECI is available  */
 
-#define	CCS0_HTAVAIL		0x00010000	/* HT avail in chipc and pcmcia on 4328a0 */
-#define	CCS0_ALPAVAIL		0x00020000	/* ALP avail in chipc and pcmcia on 4328a0 */
-
 /* Not really related to SOC Interconnect, but a couple of software
  * conventions for the use the flash space:
  */
@@ -331,27 +340,6 @@
 
 #define	SOC_KNLDEV_NORFLASH	0x00000002
 #define	SOC_KNLDEV_NANDFLASH	0x00000004
-
-
-#ifdef STB_SOC_WIFI
-/* BCM7XXX WLAN_INTF_D2H_INTR2 Registers */
-#define	BCHP_WLAN_INTF_D2H_INTR2_CPU_STATUS			0x217e0100 /* CPU int Status */
-#define BCHP_WLAN_INTF_D2H_INTR2_CPU_SET			0x217e0104 /* CPU int Set  */
-#define BCHP_WLAN_INTF_D2H_INTR2_CPU_CLEAR			0x217e0108 /* CPU int Clear  */
-#define BCHP_WLAN_INTF_D2H_INTR2_CPU_MASK_STATUS	0x217e010c /* CPU int Mask Status  */
-#define BCHP_WLAN_INTF_D2H_INTR2_CPU_MASK_SET		0x217e0110 /* CPU int Mask Set  */
-#define BCHP_WLAN_INTF_D2H_INTR2_CPU_MASK_CLEAR		0x217e0114 /* CPU int Mask Clear  */
-#define BCHP_WLAN_INTF_D2H_INTR2_PCI_STATUS			0x217e0118 /* PCI int Status  */
-#define BCHP_WLAN_INTF_D2H_INTR2_PCI_SET			0x217e011c /* PCI int Set  */
-#define BCHP_WLAN_INTF_D2H_INTR2_PCI_CLEAR			0x217e0120 /* PCI int Clear  */
-#define BCHP_WLAN_INTF_D2H_INTR2_PCI_MASK_STATUS	0x217e0124 /* PCI int Mask Status  */
-#define BCHP_WLAN_INTF_D2H_INTR2_PCI_MASK_SET		0x217e0128 /* PCI int Mask Set  */
-#define BCHP_WLAN_INTF_D2H_INTR2_PCI_MASK_CLEAR		0x217e012c /* PCI int Mask Clear  */
-
-#define BCHP_WLAN_INTF_D2H_INTR2_REGMASK	0xFFFFF000
-#define BCHP_WLAN_INTF_D2H_INTR2_CPU_STATUS_OFFSET	0x100
-#define BCHP_WLAN_INTF_D2H_INTR2_CPU_CLEAR_OFFSET	0x108
-#endif /* STB_SOC_WIFI */
 
 #if !defined(_LANGUAGE_ASSEMBLY) && !defined(__ASSEMBLY__)
 int soc_boot_dev(void *sih);

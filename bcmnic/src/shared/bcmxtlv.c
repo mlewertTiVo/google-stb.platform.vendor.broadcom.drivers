@@ -121,6 +121,11 @@ bcm_xtlv_t *
 bcm_next_xtlv(bcm_xtlv_t *elt, int *buflen, bcm_xtlv_opts_t opts)
 {
 	int sz;
+#ifdef BCMDBG
+	/* validate current elt */
+	if (!bcm_valid_xtlv(elt, *buflen, opts))
+		return NULL;
+#endif
 	/* advance to next elt */
 	sz = BCM_XTLV_SIZE_EX(elt, opts);
 	elt = (bcm_xtlv_t*)((uint8 *)elt + sz);

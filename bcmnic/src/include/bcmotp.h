@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmotp.h 635194 2016-05-03 04:35:31Z $
+ * $Id: bcmotp.h 662295 2016-09-29 03:29:10Z $
  */
 
 #ifndef	_bcmotp_h_
@@ -69,5 +69,7 @@ extern int	otp_nvread(void *oh, char *data, uint *len);
 extern uint32 otp_ecc_status(si_t *sih, uint offset);
 extern int otp_ecc_enable(si_t *sih, uint enab);
 extern int otp_ecc_clear_dblerrbit(si_t *sih);
+
+extern int otp_pcie_hwhdr_sz(si_t *sih);
 
 #endif /* _bcmotp_h_ */

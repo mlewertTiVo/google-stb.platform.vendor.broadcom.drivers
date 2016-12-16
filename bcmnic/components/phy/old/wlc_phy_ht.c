@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_ht.c 639978 2016-05-25 16:03:11Z vyass $
+ * $Id: wlc_phy_ht.c 660565 2016-09-21 04:54:58Z $
  *
  */
 
@@ -44,6 +44,7 @@
 #include <wlc_phy_ht.h>
 #include <wlc_phyreg_ht.h>
 #include <wlc_phytbl_ht.h>
+#include <phy_calmgr.h>
 #include <phy_papdcal.h>
 #include <phy_rxgcrs_api.h>
 #include <phy_chanmgr_api.h>
@@ -56,16 +57,20 @@
 #include <phy_ht_radar.h>
 #include <phy_ht_rssi.h>
 #include <phy_misc.h>
+#include <phy_noise_api.h>
+#include <phy_calmgr_api.h>
+#include <phy_radio.h>
+
 /*
  * Include phy_ht_txiqlocal.h because TB_START_COEFFS_xx are moved to this file because
  * we need these in phy_ht_cache.c file
  */
 #include <phy_ht_txiqlocal.h>
+#include <phy_stf.h>
 
 /* TODO: Required for wlc_phy_get_chanctx which returns (ch_calcache *)
  * Need to decide where to move this function and ch_calcache structure.
  */
-#include <wlc_phy_int.h>
 #include <phy_type_cache.h>
 #if defined(PHYCAL_CACHING)
 extern void wlc_phy_cal_cache_htphy(phy_type_cache_ctx_t * cache_ctx);
@@ -2445,12 +2450,11 @@ typedef struct {
 
 /* %%%%%% function declaration */
 
-static void wlc_phy_watchdog_htphy(phy_info_t *pi);
+static bool wlc_phy_watchdog_htphy(phy_wd_ctx_t *ctx);
 static void wlc_phy_get_txgain_settings_by_index(phy_info_t *pi, txgain_setting_t *txgain_settings,
 	int8 txpwrindex);
 static void wlc_phy_write_txmacreg_htphy(wlc_phy_t *ppi, uint16 holdoff, uint16 delay);
 static void wlc_phy_txpwrctrl_config_htphy(phy_info_t *pi);
-static void wlc_phy_resetcca_htphy(phy_info_t *pi);
 static void wlc_phy_workarounds_htphy(phy_info_t *pi);
 static void wlc_phy_subband_cust_htphy(phy_info_t *pi);
 static void wlc_phy_extlna_war_htphy(phy_info_t *pi);
@@ -2522,8 +2526,6 @@ static void wlc_phy_txcal_phy_cleanup_htphy(phy_info_t *pi);
 static void wlc_phy_cal_txiqlo_update_ladder_htphy(phy_info_t *pi, uint16 bbmult);
 
 static void wlc_phy_extpa_set_tx_digi_filts_htphy(phy_info_t *pi);
-static void wlc_phy_tx_digi_filts_htphy_war(phy_info_t *pi, bool init);
-static void wlc_phy_clip_det_htphy(phy_info_t *pi, uint8 write, uint16 *vals);
 
 static bool wlc_phy_srom_read_htphy(phy_info_t *pi);
 
@@ -2594,9 +2596,6 @@ static void wlc_phy_noisemode_glitch_chk_adj_htphy(phy_info_t *pi, uint16 noise_
 static void wlc_phy_bphynoisemode_glitch_chk_adj_htphy(phy_info_t *pi);
 
 static void wlc_phy_aci_noise_store_values_htphy(phy_info_t *pi);
-#if defined(BCMDBG) && defined(BCMINTERNAL)
-static void wlc_phy_aci_noise_print_values_htphy(phy_info_t *pi);
-#endif
 
 static void wlc_phy_enable_extlna_extpa_htphy(phy_info_t *pi);
 
@@ -2863,21 +2862,19 @@ BCMATTACHFN(wlc_phy_attach_htphy)(phy_info_t *pi)
 		pi->fem5g->pdetrange == 9);
 	pi->itssi_cap_low5g = FALSE;
 
-	/* setup function pointers */
-	pi->pi_fptr->calinit = wlc_phy_cal_init_htphy;
-	pi->pi_fptr->phywatchdog = wlc_phy_watchdog_htphy;
-#if defined(BCMDBG) || defined(WLTEST)
+	/* register watchdog fn */
+	if (phy_wd_add_fn(pi->wdi, wlc_phy_watchdog_htphy, pi,
+		PHY_WD_PRD_1TICK, PHY_WD_GLACIAL_CAL, PHY_WD_FLAG_DEF_DEFER) != BCME_OK) {
+		PHY_ERROR(("%s: phy_wd_add_fn failed\n", __FUNCTION__));
+		goto exit;
+	}
+
+#if defined(BCMDBG)
 	pi->pi_fptr->longtrn = NULL;
 #endif
 
 	pi->pi_fptr->carrsuppr = NULL;
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	pi->pi_fptr->rxsigpwr = NULL;
-#endif
 
-#ifdef ATE_BUILD
-	pi->pi_fptr->gpaioconfigptr = NULL;
-#endif
 	/* PA Mode change not supported by HT PHYs */
 	pi->pi_fptr->txswctrlmapsetptr = NULL;
 	pi->pi_fptr->txswctrlmapgetptr = NULL;
@@ -3012,15 +3009,6 @@ WLBANDINITFN(wlc_phy_init_htphy)(phy_info_t *pi)
 
 	wlapi_bmac_macphyclk_set(pi->sh->physhim, ON);
 
-#if defined(BCMINTERNAL)
-	if (PHY_THERMAL_ON()) {
-		/* For calibration of temperature, read tempsense as soon as possible
-		 * to report temperature of the die before self-heating occurs.
-		 * Tempsense information will be dumped to PHY_INFORM in DBGview.
-		 */
-		wlc_phy_tempsense_htphy(pi);
-	}
-#endif /* defined(BCMINTERNAL) */
 
 	/* example calls to avoid compiler warnings, not used elsewhere yet: */
 	wlc_phy_classifier_htphy(pi, 0, 0);
@@ -3063,8 +3051,9 @@ WLBANDINITFN(wlc_phy_init_htphy)(phy_info_t *pi)
 	/* If any rx cores were disabled before htphy_init,
 	 *  disable them again since htphy_init enables all rx cores
 	 */
-	if (pi->sh->phyrxchain != 0x7) {
-		wlc_phy_rxcore_setstate_htphy((wlc_phy_t *)pi, pi->sh->phyrxchain);
+	if (phy_stf_get_data(pi->stfi)->phyrxchain != 0x7) {
+		wlc_phy_rxcore_setstate_htphy((wlc_phy_t *)pi,
+				phy_stf_get_data(pi->stfi)->phyrxchain);
 	}
 
 
@@ -3122,7 +3111,7 @@ wlc_phy_update_rxldpc_htphy(phy_info_t *pi, bool ldpc)
 	phy_utils_write_phyreg(pi, HTPHY_HTSigTones, val);
 }
 
-static void
+void
 wlc_phy_resetcca_htphy(phy_info_t *pi)
 {
 	uint16 val;
@@ -3175,7 +3164,7 @@ wlc_phy_rxcore_setstate_htphy(wlc_phy_t *pih, uint8 rxcore_bitmask)
 
 	ASSERT((rxcore_bitmask > 0) && (rxcore_bitmask <= 7));
 
-	pi->sh->phyrxchain = rxcore_bitmask;
+	phy_stf_set_phyrxchain(pi->stfi, rxcore_bitmask);
 
 	if (!pi->sh->clk)
 		return;
@@ -3201,7 +3190,7 @@ wlc_phy_rxcore_setstate_htphy(wlc_phy_t *pih, uint8 rxcore_bitmask)
 	MOD_PHYREG(pi, HTPHY_RfseqCoreActv2059, EnTx, 0);
 	MOD_PHYREG(pi, HTPHY_RfseqMode, CoreActv_override, 1);
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	/* To Turn off the AFE:
 	 * TxFrame needs to toggle on and off.
@@ -3222,7 +3211,7 @@ wlc_phy_rxcore_setstate_htphy(wlc_phy_t *pih, uint8 rxcore_bitmask)
 	SPINWAIT(((phy_utils_read_phyreg(pi, HTPHY_RfseqStatus0) & 0x1) == 1),
 	         HTPHY_SPINWAIT_RFSEQ_STOP);
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	MOD_PHYREG(pi, HTPHY_sampleCmd, stop, 1);
 
@@ -3246,7 +3235,7 @@ wlc_phy_rxcore_getstate_htphy(wlc_phy_t *pih)
 
 	rxen_bits = READ_PHYREG(pi, HTPHY_RfseqCoreActv2059, EnRx);
 
-	ASSERT(pi->sh->phyrxchain == rxen_bits);
+	ASSERT(phy_stf_get_data(pi->stfi)->phyrxchain == rxen_bits);
 
 	return ((uint8) rxen_bits);
 }
@@ -9350,7 +9339,7 @@ wlc_phy_radio2059_init(phy_info_t *pi)
 
 	wlc_phy_radio2059_reset(pi);
 
-	wlc_phy_init_radio_regs_allbands(pi, regs_2059_ptr);
+	phy_radio_init_radio_regs_allbands(pi, regs_2059_ptr);
 
 	FOREACH_CORE(pi, core) {
 		phy_utils_mod_radioreg(pi, RADIO_2059_XTALPUOVR_PINCTRL(core), 0x3, 0x3);
@@ -9852,9 +9841,6 @@ wlc_phy_chanspec_set_htphy(phy_info_t *pi, chanspec_t chanspec)
 	phy_ht_radar_upd(pi->u.pi_htphy->radari);
 #endif /* defined(AP) && defined(RADAR) */
 
-#if defined(BCMDBG) && defined(BCMINTERNAL)
-	wlc_phy_aci_noise_print_values_htphy(pi);
-#endif
 }
 
 
@@ -10491,7 +10477,7 @@ wlc_phy_classifier_htphy(phy_info_t *pi, uint16 mask, uint16 val)
 	return new_ctl;
 }
 
-static void
+void
 wlc_phy_clip_det_htphy(phy_info_t *pi, uint8 write, uint16 *vals)
 {
 	uint16 core;
@@ -10943,10 +10929,6 @@ wlc_phy_tempsense_htphy(phy_info_t *pi)
 	AfectrlOverride0_save = phy_utils_read_phyreg(pi, HTPHY_AfectrlOverride0);
 	RSSIMultCoef0QPowerDet_save = phy_utils_read_phyreg(pi, HTPHY_RSSIMultCoef0QPowerDet);
 
-#if defined(BCMINTERNAL)
-	if (PHY_THERMAL_ON()) {
-	}
-#endif /* BCMINTERNAL */
 
 	auxADC_Vmid = 0xce;
 	auxADC_Av   = 0x3;
@@ -11201,7 +11183,7 @@ wlc_phy_runsamples_htphy(phy_info_t *pi, uint16 num_samps, uint16 loops, uint16 
 	uint8  sample_cmd;
 	uint16 orig_RfseqCoreActv;
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	phy_utils_write_phyreg(pi, HTPHY_sampleDepthCount, num_samps-1);
 
@@ -11230,7 +11212,7 @@ wlc_phy_runsamples_htphy(phy_info_t *pi, uint16 num_samps, uint16 loops, uint16 
 
 	phy_utils_write_phyreg(pi, HTPHY_RfseqMode, orig_RfseqCoreActv);
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 }
 
 void
@@ -11458,7 +11440,7 @@ wlc_phy_cals_htphy(phy_info_t *pi, uint8 searchmode)
 
 	/* Exit immediately if we are running on Quickturn */
 	if (ISSIM_ENAB(pi->sh->sih)) {
-		wlc_phy_cal_perical_mphase_reset(pi);
+		phy_calmgr_mphase_reset(pi->calmgri);
 		return;
 	}
 
@@ -11489,7 +11471,7 @@ wlc_phy_cals_htphy(phy_info_t *pi, uint8 searchmode)
 	 */
 	if ((phase_id > MPHASE_CAL_STATE_INIT)) {
 		if (htcal->chanspec != pi->radio_chanspec) {
-			wlc_phy_cal_perical_mphase_restart(pi);
+			phy_calmgr_mphase_restart(pi->calmgri);
 		}
 	}
 
@@ -11613,7 +11595,7 @@ wlc_phy_cals_htphy(phy_info_t *pi, uint8 searchmode)
 			if (wlc_phy_cal_txiqlo_htphy(pi, searchmode, TRUE) != BCME_OK) {
 				/* rare case, just reset */
 				PHY_ERROR(("wlc_phy_cal_txiqlo_htphy failed\n"));
-				wlc_phy_cal_perical_mphase_reset(pi);
+				phy_calmgr_mphase_reset(pi->calmgri);
 				break;
 			}
 
@@ -11674,7 +11656,7 @@ wlc_phy_cals_htphy(phy_info_t *pi, uint8 searchmode)
 			if (pi->first_cal_after_assoc || pi->itssical) {
 				pi->cal_info->cal_phase_id++;
 			} else {
-				wlc_phy_cal_perical_mphase_reset(pi);
+				phy_calmgr_mphase_reset(pi->calmgri);
 			}
 			break;
 
@@ -11694,13 +11676,13 @@ wlc_phy_cals_htphy(phy_info_t *pi, uint8 searchmode)
 
 			/* done with multi-phase cal, reset phase */
 			pi->first_cal_after_assoc = FALSE;
-			wlc_phy_cal_perical_mphase_reset(pi);
+			phy_calmgr_mphase_reset(pi->calmgri);
 			break;
 
 		default:
 			PHY_ERROR(("wlc_phy_cals_phy: Invalid calibration phase %d\n", phase_id));
 			ASSERT(0);
-			wlc_phy_cal_perical_mphase_reset(pi);
+			phy_calmgr_mphase_reset(pi->calmgri);
 			break;
 		}
 	}
@@ -11786,7 +11768,7 @@ wlc_phy_cal_txiqlo_htphy(phy_info_t *pi, uint8 searchmode, uint8 mphase)
 	num_cores = pi->pubpi->phy_corenum;
 
 	/* prevent crs trigger */
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	/* phy_bw */
 	if (CHSPEC_IS40(pi->radio_chanspec)) {
@@ -12052,7 +12034,7 @@ wlc_phy_cal_txiqlo_htphy(phy_info_t *pi, uint8 searchmode, uint8 mphase)
 	 */
 
 	/* prevent crs trigger */
-	wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	return bcmerror;
 }
@@ -13130,7 +13112,7 @@ wlc_phy_cal_rxiq_htphy(phy_info_t *pi, bool debug)
 	PHY_TRACE(("wl%d: %s\n", pi->sh->unit, __FUNCTION__));
 
 	/* Make sure we start in RX state and are "deaf" */
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 	wlc_phy_force_rfseq_htphy(pi, HTPHY_RFSEQ_RESET2RX);
 
 	/* Zero Out coefficients */
@@ -13153,32 +13135,12 @@ wlc_phy_cal_rxiq_htphy(phy_info_t *pi, bool debug)
 	}
 
 	/* reactivate carrier search */
-	wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	return BCME_OK;
 }
 
 void
-wlc_phy_set_filt_war_htphy(phy_info_t *pi, bool war)
-{
-	phy_info_htphy_t *pi_ht;
-	pi_ht = (phy_info_htphy_t *)pi->u.pi_htphy;
-	if (pi_ht->ht_ofdm20_filt_war_req != war) {
-		pi_ht->ht_ofdm20_filt_war_req = war;
-		if (pi->sh->up)
-			wlc_phy_tx_digi_filts_htphy_war(pi, TRUE);
-	}
-}
-
-bool
-wlc_phy_get_filt_war_htphy(phy_info_t *pi)
-{
-	phy_info_htphy_t *pi_ht;
-	pi_ht = (phy_info_htphy_t *)pi->u.pi_htphy;
-	return pi_ht->ht_ofdm20_filt_war_req;
-}
-
-static void
 wlc_phy_tx_digi_filts_htphy_war(phy_info_t *pi, bool init)
 {
 	int j, type;
@@ -13772,11 +13734,11 @@ wlc_phy_txpwrctrl_pwr_setup_htphy(phy_info_t *pi)
 	FOREACH_CORE(pi, core) {
 		int8 txpwr = (int8)pi->tx_power_max_per_core[core];
 #ifdef WL_SARLIMIT
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 		if (pi->txpwr_max_percore_override[core] != 0) {
 			txpwr = (int8)pi->txpwr_max_percore_override[core];
 		}
-#endif /* BCMDBG || WLTEST */
+#endif 
 #endif /* WL_SARLIMIT */
 		target_pwr_qtrdbm[core] = txpwr + pi_ht->txpwr_offset[core];
 		/* never target below the min threshold */
@@ -14141,42 +14103,6 @@ wlc_phy_txpwr_by_index_htphy(phy_info_t *pi, uint8 core_mask, int8 txpwrindex)
 	}
 }
 
-void
-wlc_phy_stay_in_carriersearch_htphy(phy_info_t *pi, bool enable)
-{
-	phy_info_htphy_t *pi_ht = (phy_info_htphy_t *)pi->u.pi_htphy;
-	uint16 clip_off[] = {0xffff, 0xffff, 0xffff, 0xffff};
-
-	PHY_TRACE(("wl%d: %s\n", pi->sh->unit, __FUNCTION__));
-
-	/* MAC should be suspended before calling this function */
-	ASSERT(!(R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC));
-
-	if (enable) {
-		if (pi_ht->deaf_count == 0) {
-			pi_ht->classifier_state = wlc_phy_classifier_htphy(pi, 0, 0);
-			wlc_phy_classifier_htphy(pi, HTPHY_ClassifierCtrl_classifierSel_MASK, 4);
-			wlc_phy_clip_det_htphy(pi, 0, pi_ht->clip_state);
-			wlc_phy_clip_det_htphy(pi, 1, clip_off);
-		}
-
-		pi_ht->deaf_count++;
-
-		wlc_phy_resetcca_htphy(pi);
-
-	} else {
-		ASSERT(pi_ht->deaf_count > 0);
-
-		pi_ht->deaf_count--;
-
-		if (pi_ht->deaf_count == 0) {
-			wlc_phy_classifier_htphy(pi, HTPHY_ClassifierCtrl_classifierSel_MASK,
-			pi_ht->classifier_state);
-			wlc_phy_clip_det_htphy(pi, 1, pi_ht->clip_state);
-		}
-	}
-}
-
 bool
 wlc_phy_get_deaf_htphy(phy_info_t *pi)
 {
@@ -14525,7 +14451,7 @@ phy_ht_sample_collect(phy_info_t *pi, wl_samplecollect_args_t *collect, uint32 *
 	/* be deaf if requested (e.g. for spur measurement) */
 	if (collect->be_deaf) {
 		wlapi_suspend_mac_and_wait(pi->sh->physhim);
-		wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 	}
 
 	/* perform AGC if requested */
@@ -14646,7 +14572,7 @@ phy_ht_sample_collect(phy_info_t *pi, wl_samplecollect_args_t *collect, uint32 *
 	/* CLEAN UP: */
 	/* return from deaf if requested */
 	if (collect->be_deaf) {
-		wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 		wlapi_enable_mac(pi->sh->physhim);
 	}
 	/* revert to original gains if AGC was applied */
@@ -14931,186 +14857,8 @@ phy_ht_sample_data(phy_info_t *pi, wl_sampledata_t *sample_data, void *b)
 }
 #endif /* SAMPLE_COLLECT */
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
 
-
-void
-wlc_phy_bphy_testpattern_htphy(phy_info_t *pi, uint8 testpattern, uint16 rate_reg, bool enable)
-{
-	uint16 clip_off[] = {0xffff, 0xffff, 0xffff, 0xffff};
-	uint16 core;
-
-	if (enable == TRUE) {
-		/* Save existing clip_detect state */
-		wlc_phy_clip_det_htphy(pi, 0, pi->phy_clip_state);
-		/* Turn OFF all clip detections */
-		wlc_phy_clip_det_htphy(pi, 1, clip_off);
-		/* Save existing classifier state */
-		pi->phy_classifier_state = wlc_phy_classifier_htphy(pi, 0, 0);
-		/* Turn OFF all classifcation */
-		wlc_phy_classifier_htphy(pi, HTPHY_ClassifierCtrl_classifierSel_MASK, 4);
-		/* Trigger SamplePlay Start */
-		phy_utils_write_phyreg(pi,  HTPHY_sampleCmd, 0x1);
-		/* Save BPHY test and testcontrol registers */
-		pi->old_bphy_test = phy_utils_read_phyreg(pi, (HTPHY_TO_BPHY_OFF + BPHY_TEST));
-		pi->old_bphy_testcontrol = phy_utils_read_phyreg(pi, HTPHY_bphytestcontrol);
-		if (testpattern == HTPHY_TESTPATTERN_BPHY_EVM) {
-			phy_utils_and_phyreg(pi, (HTPHY_TO_BPHY_OFF + BPHY_TEST),
-			            ~(TST_TXTEST_ENABLE|TST_TXTEST_RATE|TST_TXTEST_PHASE));
-			phy_utils_or_phyreg(pi, (HTPHY_TO_BPHY_OFF + BPHY_TEST),
-			           TST_TXTEST_ENABLE | rate_reg);
-
-		} else {
-			phy_utils_and_phyreg(pi, (HTPHY_TO_BPHY_OFF + BPHY_TEST), 0xfc00);
-			phy_utils_or_phyreg(pi, (HTPHY_TO_BPHY_OFF + BPHY_TEST), 0x0228);
-		}
-		/* Configure htphy's bphy testcontrol */
-		phy_utils_write_phyreg(pi, HTPHY_bphytestcontrol, 0xF);
-		/* Force Rx2Tx */
-		wlc_phy_force_rfseq_htphy(pi, HTPHY_RFSEQ_RX2TX);
-
-		FOREACH_CORE(pi, core) {
-			MOD_PHYREGC(pi, HTPHY_AfectrlOverride, core, dac_pd, 1);
-			MOD_PHYREGC(pi, HTPHY_Afectrl, core, dac_pd, 0);
-		}
-
-		PHY_CAL(("wl%d: %s: Turning  ON: TestPattern = %3d  "
-		         "en = %3d",
-		         pi->sh->unit, __FUNCTION__, testpattern, enable));
-
-	} else if (enable == FALSE) {
-		/* Turn OFF BPHY testpattern */
-		/* Turn off AFE Override */
-
-		FOREACH_CORE(pi, core) {
-			MOD_PHYREGC(pi, HTPHY_AfectrlOverride, core, dac_pd, 0);
-			MOD_PHYREGC(pi, HTPHY_Afectrl, core, dac_pd, 1);
-		}
-
-		/* Force Tx2Rx */
-		wlc_phy_force_rfseq_htphy(pi, HTPHY_RFSEQ_TX2RX);
-		/* Restore BPHY test and testcontrol registers */
-		phy_utils_write_phyreg(pi, HTPHY_bphytestcontrol, pi->old_bphy_testcontrol);
-		phy_utils_write_phyreg(pi, (HTPHY_TO_BPHY_OFF + BPHY_TEST), pi->old_bphy_test);
-		/* Turn ON receive packet activity */
-		wlc_phy_clip_det_htphy(pi, 1, pi->phy_clip_state);
-		wlc_phy_classifier_htphy(pi, HTPHY_ClassifierCtrl_classifierSel_MASK,
-		                        pi->phy_classifier_state);
-
-		/* Trigger samplePlay Stop */
-		phy_utils_write_phyreg(pi,  HTPHY_sampleCmd, 0x2);
-
-		PHY_CAL(("wl%d: %s: Turning OFF: TestPattern = %3d  "
-		         "en = %3d",
-		         pi->sh->unit, __FUNCTION__, testpattern, enable));
-	}
-}
-
-void
-wlc_phy_test_scraminit_htphy(phy_info_t *pi, int8 init)
-{
-	uint16 mask, value;
-
-
-	if (init < 0) {
-		/* auto: clear Mode bit so that scrambler LFSR will be free
-		 * running.  ok to leave scramindexctlEn and initState in
-		 * whatever current condition, since their contents are unused
-		 * when free running, but for ease of reg diffs, just write
-		 * 0x7f to them for repeatability.
-		 */
-		mask = (HTPHY_ScramSigCtrl_scramCtrlMode_MASK |
-		        HTPHY_ScramSigCtrl_scramindexctlEn_MASK |
-		        HTPHY_ScramSigCtrl_initStateValue_MASK);
-		value = ((0 << HTPHY_ScramSigCtrl_scramCtrlMode_SHIFT) |
-		         HTPHY_ScramSigCtrl_initStateValue_MASK);
-		phy_utils_mod_phyreg(pi, HTPHY_ScramSigCtrl, mask, value);
-	} else {
-		/* fixed init: set Mode bit, clear scramindexctlEn, and write
-		 * init to initState, so that scrambler LFSR will be
-		 * initialized with specified value for each transmission.
-		 */
-		mask = (HTPHY_ScramSigCtrl_scramCtrlMode_MASK |
-		        HTPHY_ScramSigCtrl_scramindexctlEn_MASK |
-		        HTPHY_ScramSigCtrl_initStateValue_MASK);
-		value = (HTPHY_ScramSigCtrl_scramCtrlMode_MASK |
-		         (HTPHY_ScramSigCtrl_initStateValue_MASK &
-		          (init << HTPHY_ScramSigCtrl_initStateValue_SHIFT)));
-		phy_utils_mod_phyreg(pi, HTPHY_ScramSigCtrl, mask, value);
-	}
-}
-
-int8
-wlc_phy_test_tssi_htphy(phy_info_t *pi, int8 ctrl_type, int8 pwr_offs)
-{
-	int8 tssi;
-
-	switch (ctrl_type & 0x3) {
-	case 0:
-	case 1:
-	case 2:
-		tssi = phy_utils_read_phyreg(pi, HTPHY_TSSIBiasVal((ctrl_type & 0x3))) & 0xff;
-		break;
-	default:
-		tssi = -127;
-	}
-	return (tssi);
-}
-
-void
-wlc_phy_gpiosel_htphy(phy_info_t *pi, uint16 sel)
-{
-	uint32 mc;
-
-	/* kill OutEn */
-	phy_utils_write_phyreg(pi, HTPHY_gpioLoOutEn, 0x0);
-	phy_utils_write_phyreg(pi, HTPHY_gpioHiOutEn, 0x0);
-
-#if defined(BCMINTERNAL) && defined(PCIEDBG)
-	PHY_ERROR(("wlc_phy_gpiosel_htphy: PCIEDBG is turned on."
-	           "GPIO controlled by PCIE\n"));
-	return;
-#endif
-
-	/* take over gpio control from cc */
-	si_gpiocontrol(pi->sh->sih, 0xffff, 0xffff, GPIO_DRV_PRIORITY);
-
-	/* clear the mac selects, disable mac oe */
-	mc = R_REG(pi->sh->osh, &pi->regs->maccontrol);
-	mc &= ~MCTL_GPOUT_SEL_MASK;
-	W_REG(pi->sh->osh, &pi->regs->maccontrol, mc);
-	W_REG(pi->sh->osh, &pi->regs->psm_gpio_oe, 0x0);
-
-	/* set up htphy GPIO sel */
-	phy_utils_write_phyreg(pi, HTPHY_gpioSel, sel);
-	phy_utils_write_phyreg(pi, HTPHY_gpioLoOutEn, 0xffff);
-	phy_utils_write_phyreg(pi, HTPHY_gpioHiOutEn, 0xffff);
-}
-void
-wlc_phy_pavars_get_htphy(phy_info_t *pi, uint16 *buf, uint16 band, uint16 core)
-{
-	srom_pwrdet_t	*pwrdet  = pi->pwrdet;
-
-	ASSERT(PHY_CORE_MAX > core);
-	ASSERT((CH_2G_GROUP + CH_5G_GROUP_EXT) > band);
-
-	buf[0] = pwrdet->pwrdet_a1[core][band];
-	buf[1] = pwrdet->pwrdet_b0[core][band];
-	buf[2] = pwrdet->pwrdet_b1[core][band];
-}
-
-void
-wlc_phy_pavars_set_htphy(phy_info_t *pi, uint16 *buf, uint16 band, uint16 core)
-{
-	srom_pwrdet_t	*pwrdet  = pi->pwrdet;
-
-	pwrdet->pwrdet_a1[core][band] = buf[0];
-	pwrdet->pwrdet_b0[core][band] = buf[1];
-	pwrdet->pwrdet_b1[core][band] = buf[2];
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 int
 wlc_phy_freq_accuracy_htphy(phy_info_t *pi, int channel)
 {
@@ -15131,7 +14879,7 @@ wlc_phy_freq_accuracy_htphy(phy_info_t *pi, int channel)
 	}
 	return bcmerror;
 }
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 
 /* reset both aci and/or noise states, hardware and software */
 void
@@ -15588,146 +15336,6 @@ wlc_phy_aci_noise_store_values_htphy(phy_info_t *pi)
 	}
 }
 
-#if defined(BCMDBG) && defined(BCMINTERNAL)
-static void
-wlc_phy_aci_noise_print_values_htphy(phy_info_t *pi)
-{
-
-	bool suspend;
-	uint16 temp[4];
-
-	suspend = ((R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC) == 0);
-	if (!suspend) {
-		wlapi_suspend_mac_and_wait(pi->sh->physhim);
-	}
-
-	PHY_ACI(("PRINT START *************************************************\n"));
-	PHY_ACI(("Current channel = %d\n", CHSPEC_CHANNEL(pi->radio_chanspec)));
-
-	PHY_ACI(("crshighlowpowThreshold(,u,l) \n"));
-	PHY_ACI(("0x%x\n0x%x\n0x%x\n",
-	         (uint16) (phy_utils_read_phyreg(pi, HTPHY_crshighlowpowThreshold)),
-	         (uint16) (phy_utils_read_phyreg(pi, HTPHY_crshighlowpowThresholdu)),
-	         (uint16) (phy_utils_read_phyreg(pi, HTPHY_crshighlowpowThresholdl))));
-
-	PHY_ACI(("Digigainlimit0\n"));
-	PHY_ACI(("0x%x\n", (uint16) (phy_utils_read_phyreg(pi, HTPHY_DigiGainLimit0))));
-
-	if (CHSPEC_IS2G(pi->radio_chanspec)) {
-		PHY_ACI(("PeakEnergyL\n"));
-		PHY_ACI(("0x%x\n", (uint16)
-		         (phy_utils_read_phyreg(pi, HTPHY_TO_BPHY_OFF+BPHY_PEAK_ENERGY_LO))));
-	}
-
-	PHY_ACI(("HTPHY_crsminpowerl0/u0\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n",
-		(uint16) (phy_utils_read_phyreg(pi, HTPHY_crsminpowerl0)),
-		(uint16) (phy_utils_read_phyreg(pi, HTPHY_crsminpoweru0))));
-
-	PHY_ACI(("HTPHY_Core0InitGainCodeA2059\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0InitGainCodeA2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core1InitGainCodeA2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core2InitGainCodeA2059)));
-	PHY_ACI(("HTPHY_Core0InitGainCodeB2059\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0InitGainCodeB2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core1InitGainCodeB2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core2InitGainCodeB2059)));
-	wlc_phy_table_read_htphy(pi, HTPHY_TBL_ID_RFSEQ,
-		pi->pubpi->phy_corenum, 0x106, 16, temp);
-	PHY_ACI(("HTPHY_TBL_ID_RFSEQ=\n0x%x\n0x%x\n0x%x\n0x%x\n",
-		temp[0], temp[1], temp[2], temp[3]));
-
-	PHY_ACI(("HTPHY_Core0clipHiGainCodeA2059\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0clipHiGainCodeA2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core1clipHiGainCodeA2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core2clipHiGainCodeA2059)));
-
-	PHY_ACI(("HTPHY_Core0clipHiGainCodeB2059\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0clipHiGainCodeB2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core1clipHiGainCodeB2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core2clipHiGainCodeB2059)));
-
-	PHY_ACI(("HTPHY_Core0nbClipThreshold\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0nbClipThreshold),
-		phy_utils_read_phyreg(pi, HTPHY_Core1nbClipThreshold),
-		phy_utils_read_phyreg(pi, HTPHY_Core2nbClipThreshold)));
-
-	wlc_phy_table_read_htphy(pi, 4, 4, 0x10, 16, temp);
-	PHY_ACI(("init_ofdmlna2gainchange\n0x%x\n0x%x\n0x%x\n0x%x\n",
-		temp[0], temp[1], temp[2], temp[3]));
-	wlc_phy_table_read_htphy(pi, 4, 4, 0x50, 16, temp);
-	PHY_ACI(("init_ccklna2gainchange\n0x%x\n0x%x\n0x%x\n0x%x\n",
-		temp[0], temp[1], temp[2], temp[3]));
-
-	PHY_ACI(("HTPHY_Core0cliploGainCodeA2059\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0cliploGainCodeA2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core1cliploGainCodeA2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core2cliploGainCodeA2059)));
-
-	PHY_ACI(("HTPHY_Core0cliploGainCodeB2059\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0cliploGainCodeB2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core1cliploGainCodeB2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core2cliploGainCodeB2059)));
-
-	PHY_ACI(("HTPHY_Core0clipwbThreshold2059\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_Core0clipwbThreshold2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core1clipwbThreshold2059),
-		phy_utils_read_phyreg(pi, HTPHY_Core2clipwbThreshold2059)));
-
-	PHY_ACI(("HTPHY_energydroptimeoutLen\n"));
-	PHY_ACI(("0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_energydroptimeoutLen)));
-
-	PHY_ACI(("HTPHY_ed_crs20LAssertThresh0/1\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20LAssertThresh0),
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20LAssertThresh1)));
-	PHY_ACI(("HTPHY_ed_crs20LDeassertThresh0/1\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20LDeassertThresh0),
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20LDeassertThresh1)));
-
-	PHY_ACI(("HTPHY_ed_crs20UAssertThresh0/1\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20UAssertThresh0),
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20UAssertThresh1)));
-	PHY_ACI(("HTPHY_ed_crs20UDeassertThresh0/1\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n",
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20UDeassertThresh0),
-		phy_utils_read_phyreg(pi, HTPHY_ed_crs20UDeassertThresh1)));
-
-	PHY_ACI(("RADIO_2059_NB_MASTER(0)\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_radioreg(pi, RADIO_2059_NB_MASTER(0)),
-		phy_utils_read_radioreg(pi, RADIO_2059_NB_MASTER(1)),
-		phy_utils_read_radioreg(pi, RADIO_2059_NB_MASTER(2))));
-
-	PHY_ACI(("RADIO_2059_RSSI_GPAIOSEL_W1_IDACS(0)\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_radioreg(pi, RADIO_2059_RSSI_GPAIOSEL_W1_IDACS(0)),
-		phy_utils_read_radioreg(pi, RADIO_2059_RSSI_GPAIOSEL_W1_IDACS(1)),
-		phy_utils_read_radioreg(pi, RADIO_2059_RSSI_GPAIOSEL_W1_IDACS(2))));
-
-	PHY_ACI(("RADIO_2059_W2_MASTER(0)\n"));
-	PHY_ACI(("0x=%x\n0x=%x\n0x=%x\n",
-		phy_utils_read_radioreg(pi, RADIO_2059_W2_MASTER(0)),
-		phy_utils_read_radioreg(pi, RADIO_2059_W2_MASTER(1)),
-		phy_utils_read_radioreg(pi, RADIO_2059_W2_MASTER(2))));
-
-	if (!suspend) {
-		wlapi_enable_mac(pi->sh->physhim);
-	}
-	PHY_ACI(("PRINT END *************************************************\n"));
-}
-#endif	/* defined(BCMDBG) && defined(BCMINTERNAL) */
 
 void
 wlc_phy_noisemode_reset_htphy(phy_info_t *pi)
@@ -16432,7 +16040,9 @@ wlc_phy_aci_scan_iqbased_htphy(phy_info_t *pi)
 			phy_utils_write_phyreg(pi, HTPHY_gpioHiOutEn, 0xffff);
 
 			/* Select W2 Rssi */
-			wlc_phy_auxadc_sel_htphy(pi, pi->sh->phyrxchain, HTPHY_AUXADC_SEL_W2);
+			wlc_phy_auxadc_sel_htphy(pi,
+					phy_stf_get_data(pi->stfi)->phyrxchain,
+					HTPHY_AUXADC_SEL_W2);
 
 			/* ** end (changing registers) ** */
 
@@ -16504,7 +16114,7 @@ wlc_phy_aci_scan_iqbased_htphy(phy_info_t *pi)
 	phy_utils_write_phyreg(pi, HTPHY_gpioSel, gpiosel);
 	phy_utils_write_phyreg(pi, HTPHY_gpioLoOutEn, gpioLoOutEn);
 	phy_utils_write_phyreg(pi, HTPHY_gpioHiOutEn, gpioHiOutEn);
-	wlc_phy_auxadc_sel_htphy(pi, pi->sh->phyrxchain, HTPHY_AUXADC_SEL_OFF);
+	wlc_phy_auxadc_sel_htphy(pi, phy_stf_get_data(pi->stfi)->phyrxchain, HTPHY_AUXADC_SEL_OFF);
 
 	/* turn off rxgain, lpf_gain_biq0, lpf_gain_biq1 overrides */
 	FOREACH_CORE(pi, core) {
@@ -17299,14 +16909,6 @@ wlc_phy_aci_hw_set_htphy(phy_info_t *pi, bool enable, int aci_pwr)
 	}
 }
 
-
-void
-wlc_phy_cal_init_htphy(phy_info_t *pi)
-{
-	wlc_phy_aci_init_htphy(pi);
-	wlc_phy_aci_sw_reset_htphy(pi);
-}
-
 static void
 wlc_phy_pcieingress_war_htphy(phy_info_t *pi)
 {
@@ -17557,9 +17159,10 @@ void wlc_phy_rfctrl_override_rxgain_htphy(phy_info_t *pi, uint8 restore,
 	}
 }
 
-static void
-wlc_phy_watchdog_htphy(phy_info_t *pi)
+static bool
+wlc_phy_watchdog_htphy(phy_wd_ctx_t *ctx)
 {
+	phy_info_t *pi = (phy_info_t *) ctx;
 	phy_info_htphy_t *pi_htphy = pi->u.pi_htphy;
 	ASSERT(pi_htphy != NULL);
 	BCM_REFERENCE(pi_htphy);
@@ -17588,6 +17191,8 @@ wlc_phy_watchdog_htphy(phy_info_t *pi)
 	/* Read and (implicitly) store current temperature */
 	if (pi->sh->now % HTPHY_TEMPSENSE_TIMER == 0)
 		wlc_phy_tempsense_htphy(pi);
+
+	return TRUE;
 }
 
 static void
@@ -17601,4 +17206,5 @@ wlc_phy_set_srom_eu_edthresh_htphy(phy_info_t *pi)
 	if (eu_edthresh < -10)
 		wlc_phy_adjust_ed_thres(pi, &eu_edthresh, TRUE);
 }
+
 #endif /* HTCONF != 0 */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_pmkid.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_pmkid.c 648723 2016-07-13 11:45:33Z $
  */
 
 /**
@@ -247,6 +247,19 @@ wlc_pmkid_doiovar(void *handle, uint32 actionid,
 			/* Fill cache */
 			for (i = 0; i < npmkid; i++) {
 				bcopy(&pmkid->pmkid[i], &bss_pmkid->pmkid[i], sizeof(pmkid_t));
+#ifdef BCMDBG
+				if (WL_WSEC_ON()) {
+					char eabuf[ETHER_ADDR_STR_LEN];
+					uint j;
+
+					WL_WSEC(("wl%d: PMKID[%d]: %s = ", UNIT(pmkid_info), i,
+						bcm_ether_ntoa(&pmkid->pmkid[i].BSSID,
+						eabuf)));
+					for (j = 0; j < WPA2_PMKID_LEN; j++)
+						WL_WSEC(("%02x ", pmkid->pmkid[i].PMKID[j]));
+					WL_WSEC(("\n"));
+				}
+#endif /* BCMDBG */
 			}
 			bss_pmkid->npmkid = npmkid;
 			break;
@@ -441,6 +454,21 @@ wlc_pmkid_putpmkid(wlc_pmkid_info_t *pmkid_info, wlc_bsscfg_t *cfg,
 		for (i = 0; i < bss_pmkid->npmkid; i++) {
 			if (bcmp((void *)bssid,
 				(void *)&bss_pmkid->pmkid[i].BSSID, ETHER_ADDR_LEN) == 0) {
+#ifdef BCMDBG
+				if (WL_WSEC_ON()) {
+					char eabuf[ETHER_ADDR_STR_LEN];
+					uint j;
+
+					WL_WSEC(("wl%d: PMKID cache hit: %s = ",
+						UNIT(pmkid_info),
+						bcm_ether_ntoa(bssid,
+						eabuf)));
+					for (j = 0; j < WPA2_PMKID_LEN; j++)
+						WL_WSEC(("%02x ",
+							bss_pmkid->pmkid[i].PMKID[j]));
+					WL_WSEC(("\n"));
+				}
+#endif /* BCMDBG */
 				pmkid[npmkid++] = bss_pmkid->pmkid[i].PMKID;
 			}
 		}
@@ -482,6 +510,16 @@ wlc_pmkid_putpmkid(wlc_pmkid_info_t *pmkid_info, wlc_bsscfg_t *cfg,
 
 		/* fill in PMKID list */
 		for (i = 0; i < npmkid; i++) {
+#ifdef BCMDBG
+			if (WL_WSEC_ON()) {
+				uint j;
+
+				WL_WSEC(("wl%d: try PMKID: ", UNIT(pmkid_info)));
+				for (j = 0; j < WPA2_PMKID_LEN; j++)
+					WL_WSEC(("%02x ", pmkid[i][j]));
+				WL_WSEC(("\n"));
+			}
+#endif /* BCMDBG */
 
 			bcopy(pmkid[i], &pmkid_list->list[i], WPA2_PMKID_LEN);
 			wpa2_ie->len += WPA2_PMKID_LEN;
@@ -497,7 +535,7 @@ wpa_calc_pmkid_for_okc(wlc_pmkid_info_t *pmkid_info, wlc_bsscfg_t *cfg, struct e
 {
 	/* PMKID = HMAC-SHA1-128(PMK, "PMK Name" | AA | SPA) */
 	int i = 0;
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	char eabuf1[ETHER_ADDR_STR_LEN];
 	char eabuf2[ETHER_ADDR_STR_LEN];
 #endif
@@ -530,17 +568,29 @@ wpa_calc_pmkid_for_okc(wlc_pmkid_info_t *pmkid_info, wlc_bsscfg_t *cfg, struct e
 		wlc_sup_set_pmkid(pmkid_info->wlc->idsup, cfg,
 		pmk, (ushort)pmk_len, auth_ea, pmkid->PMKID)) {
 #endif
-	if ((cfg->WPA_auth & (WPA2_AUTH_1X_SHA256 | WPA2_AUTH_PSK_SHA256)) &&
-	    (cfg->current_bss->wpa2.flags & RSN_FLAGS_SHA256))
+#ifdef MFP
+	if (WLC_MFP_ENAB(pmkid_info->wlc->pub) &&
+	(cfg->WPA_auth & (WPA2_AUTH_1X_SHA256 | WPA2_AUTH_PSK_SHA256)) &&
+	(cfg->current_bss->wpa2.flags & RSN_FLAGS_SHA256)) {
 		kdf_calc_pmkid(auth_ea, sta_ea, pmk, pmk_len, pmkid->PMKID, data, digest);
+	}
 	else
+#endif /* MFP */
+	{
 		wpa_calc_pmkid(auth_ea, sta_ea, pmk, pmk_len, pmkid->PMKID, data, digest);
+	}
 #if defined(BCMINTSUP) && defined(BCMSUP_PSK)
 	}
 #endif
 	bcopy((uint8 *)auth_ea, (uint8 *)&pmkid->BSSID, ETHER_ADDR_LEN);
 	WL_WSEC(("auth_ea address : %s , sta_ea address : %s", bcm_ether_ntoa(auth_ea, eabuf1),
 		bcm_ether_ntoa(sta_ea, eabuf2)));
+#ifdef BCMDBG
+	WL_WSEC(("PMK: "));
+	for (i = 0; i < 32; i++)
+		WL_WSEC(("%02X ", pmk[i]));
+	WL_WSEC(("\n"));
+#endif
 	WL_WSEC(("PMKID: "));
 	for (i = 0; i < WPA2_PMKID_LEN; i++)
 		WL_WSEC(("%02x ", pmkid->PMKID[i]));

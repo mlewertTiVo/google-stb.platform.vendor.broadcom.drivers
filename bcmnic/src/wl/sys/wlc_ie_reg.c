@@ -28,7 +28,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_reg.c 617664 2016-02-06 13:09:19Z $
+ * $Id: wlc_ie_reg.c 665073 2016-10-14 20:33:29Z $
  */
 
 #include <wlc_cfg.h>
@@ -91,10 +91,10 @@ struct wlc_ier_reg {
 
 /* registry structure */
 /* typedef struct {
- *	uint8 build_tag[build_cnt]; -- 'build' tag table
+ *	wlc_iem_tag_t build_tag[build_cnt]; -- 'build' tag table
  *	wlc_iem_cbe_t build_cb[build_cnt] -- 'build' callback table
  *	uint16 build_tt[IE_NUM_TT + 1]; -- 'build' tag type table
- *	uint8 parse_tag[parse_cnt]; -- 'parse' tag table
+ *	wlc_iem_tag_t parse_tag[parse_cnt]; -- 'parse' tag table
  *	wlc_iem_pe_t parse_cb[parse_cnt] -- 'parse' callback table
  *	uint16 parse_tt[IE_NUM_TT + 1]; -- 'parse' tag type table
  * } wlc_ier_reg_mem_t;
@@ -126,10 +126,10 @@ struct wlc_ier_reg {
 #define IE_TT_PRIO	1	/* VS IE prio/id */
 
 /* registry access macros */
-#define BUILD_TAG_TBL(reg) (uint8 *)((uintptr)(reg) + (reg)->build_tag_offset)
+#define BUILD_TAG_TBL(reg) (wlc_iem_tag_t *)((uintptr)(reg) + (reg)->build_tag_offset)
 #define BUILD_CB_TBL(reg) (wlc_iem_cbe_t *)((uintptr)(reg) + (reg)->build_cb_offset)
 #define BUILD_TT_TBL(reg) (uint16 *)((uintptr)(reg) + (reg)->build_tt_offset)
-#define PARSE_TAG_TBL(reg) (uint8 *)((uintptr)(reg) + (reg)->parse_tag_offset)
+#define PARSE_TAG_TBL(reg) (wlc_iem_tag_t *)((uintptr)(reg) + (reg)->parse_tag_offset)
 #define PARSE_CB_TBL(reg) (wlc_iem_pe_t *)((uintptr)(reg) + (reg)->parse_cb_offset)
 #define PARSE_TT_TBL(reg) (uint16 *)((uintptr)(reg) + (reg)->parse_tt_offset)
 
@@ -166,6 +166,10 @@ struct wlc_ier_reg {
  */
 
 /* debugging */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_ier_dump(void *ctx, struct bcmstrbuf *b);
+static int wlc_ier_reg_dump(wlc_ier_reg_t *reg, struct bcmstrbuf *b);
+#endif
 
 /* Vendor Specific IE proxy */
 static uint wlc_ier_vs_calc_len_cb(void *ctx, wlc_iem_calc_data_t *data);
@@ -183,6 +187,10 @@ BCMATTACHFN(wlc_ier_attach)(wlc_info_t *wlc)
 
 	/* module private data length (fixed struct + variable structs) */
 	len = (uint16)sizeof(wlc_ier_info_t);	/* fixed */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* registry pointers */
+	len += (uint16)(sizeof(void *) * wlc->pub->tunables->max_ie_regs);
+#endif
 
 	/* allocate module private data */
 	if ((iem = MALLOC(wlc->osh, len)) == NULL) {
@@ -196,7 +204,16 @@ BCMATTACHFN(wlc_ier_attach)(wlc_info_t *wlc)
 
 	/* suballocate variable size arrays */
 	len = (uint16)sizeof(wlc_ier_info_t);	/* fixed */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* registry pointers */
+	iem->regs_offset = len;
+	len += (uint16)(sizeof(void *) * wlc->pub->tunables->max_ie_regs);
+#endif
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* register dump routine */
+	wlc_dump_register(wlc->pub, "ier", wlc_ier_dump, (void *)iem);
+#endif
 	return iem;
 
 fail:	/* error handling */
@@ -216,12 +233,41 @@ BCMATTACHFN(wlc_ier_detach)(wlc_ier_info_t *iem)
 	wlc = iem->wlc;
 	len = iem->af_info_len;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* for debugging */
+	{
+	int idx;
+	for (idx = 0; idx < wlc->pub->tunables->max_ie_regs; idx ++) {
+		ASSERT(IE_REG(iem, idx) == NULL);
+	}
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	wlc_module_unregister(wlc->pub, "ier", iem);
 
 	MFREE(wlc->osh, iem, len);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_ier_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_ier_info_t *iem = (wlc_ier_info_t *)ctx;
+	wlc_info_t *wlc = iem->wlc;
+	int idx;
+
+	bcm_bprintf(b, "registries: %u\n", iem->regs_cnt);
+	for (idx = 0; idx < wlc->pub->tunables->max_ie_regs; idx ++) {
+		wlc_ier_reg_t *reg = IE_REG(iem, idx);
+		if (reg == NULL)
+			continue;
+		bcm_bprintf(b, "  registry: %u\n", idx);
+		wlc_ier_reg_dump(reg, b);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /*
  * Create a registry to hold 'calc_len/build' and 'parse' callbacks.
@@ -259,18 +305,18 @@ BCMATTACHFN(wlc_ier_create_registry)(wlc_ier_info_t *iem, uint16 build_cnt, uint
 
 	/* module private data length (fixed struct + variable strcuts) */
 	len = (uint16)sizeof(wlc_ier_reg_t);	/* fixed */
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* build tag */
-	len += (uint16)(sizeof(uint8) * build_cnt);
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* build tag */
+	len += (uint16)(sizeof(wlc_iem_tag_t) * build_cnt);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* build cb */
 	len += (uint16)(sizeof(wlc_iem_cbe_t) * build_cnt);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* build tt */
-	len += (uint16)(sizeof(uint16) * tts);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* parse tag */
-	len += (uint16)(sizeof(uint8) * parse_cnt);
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* build tt */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * tts);
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* parse tag */
+	len += (uint16)(sizeof(wlc_iem_tag_t) * parse_cnt);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* parse cb */
 	len += (uint16)(sizeof(wlc_iem_pe_t) * parse_cnt);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* parse tt */
-	len += (uint16)(sizeof(uint16) * tts);
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* parse tt */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * tts);
 
 	/* allocate module private data */
 	if ((reg = MALLOC(wlc->osh, len)) == NULL) {
@@ -285,28 +331,42 @@ BCMATTACHFN(wlc_ier_create_registry)(wlc_ier_info_t *iem, uint16 build_cnt, uint
 
 	/* suballocate variable size arrays */
 	len = (uint16)sizeof(wlc_ier_reg_t);	/* fixed */
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* build tag */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* build tag */
 	reg->build_tag_offset = len;
-	len += (uint16)(sizeof(uint8) * build_cnt);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * build_cnt);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* build cb */
 	reg->build_cb_offset = len;
 	len += (uint16)(sizeof(wlc_iem_cbe_t) * build_cnt);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* build tt */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* build tt */
 	reg->build_tt_offset = len;
-	len += (uint16)(sizeof(uint16) * tts);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* parse tag */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * tts);
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* parse tag */
 	reg->parse_tag_offset = len;
-	len += (uint16)(sizeof(uint8) * parse_cnt);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * parse_cnt);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* parse cb */
 	reg->parse_cb_offset = len;
 	len += (uint16)(sizeof(wlc_iem_pe_t) * parse_cnt);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* parse tt */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* parse tt */
 	reg->parse_tt_offset = len;
-	len += (uint16)(sizeof(uint16) * tts);
+	len += (uint16)(sizeof(wlc_iem_ft_t) * tts);
 
 	reg->build_cnt = build_cnt;
 	reg->parse_cnt = parse_cnt;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* for debugging */
+	{
+	int idx;
+	for (idx = 0; idx < wlc->pub->tunables->max_ie_regs; idx ++) {
+		if (IE_REG(iem, idx) == NULL) {
+			wlc_ier_reg_t **regp = &IE_REG(iem, idx);
+			*regp = reg;
+			break;
+		}
+	}
+	ASSERT(idx < wlc->pub->tunables->max_ie_regs);
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	iem->regs_cnt ++;
 
@@ -352,6 +412,20 @@ BCMATTACHFN(wlc_ier_destroy_registry)(wlc_ier_reg_t *reg)
 
 	ASSERT(iem->regs_cnt > 0);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* for debugging */
+	{
+	int idx;
+	for (idx = 0; idx < wlc->pub->tunables->max_ie_regs; idx ++) {
+		if (IE_REG(iem, idx) == reg) {
+			wlc_ier_reg_t **regp = &IE_REG(iem, idx);
+			*regp = NULL;
+			break;
+		}
+	}
+	ASSERT(idx < wlc->pub->tunables->max_ie_regs);
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	iem->regs_cnt --;
 
@@ -363,9 +437,9 @@ BCMATTACHFN(wlc_ier_destroy_registry)(wlc_ier_reg_t *reg)
  * table 'ies_tag'.
  */
 int
-BCMINITFN(wlc_ier_sort_cbtbl)(wlc_ier_reg_t *reg, const uint8 *ie_tags, uint16 ie_cnt)
+BCMINITFN(wlc_ier_sort_cbtbl)(wlc_ier_reg_t *reg, const wlc_iem_tag_t *ie_tags, uint16 ie_cnt)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(reg);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(reg);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
 	uint16 *build_tt = BUILD_TT_TBL(reg);
 	uint16 cur, next;
@@ -382,6 +456,60 @@ BCMINITFN(wlc_ier_sort_cbtbl)(wlc_ier_reg_t *reg, const uint8 *ie_tags, uint16 i
 	return BCME_OK;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_ier_reg_dump(wlc_ier_reg_t *reg, struct bcmstrbuf *b)
+{
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(reg);
+	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
+	uint16 *build_tt = BUILD_TT_TBL(reg);
+	wlc_iem_tag_t *parse_tag = PARSE_TAG_TBL(reg);
+	wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(reg);
+	uint16 *parse_tt = PARSE_TT_TBL(reg);
+	uint16 cur, next;
+	uint i;
+
+	bcm_bprintf(b, "  build %u parse %u\n", reg->build_cnt, reg->parse_cnt);
+	/* calc/build */
+	TBL_POS_GET(build_tt, IE_TT_IE, cur, next);
+	bcm_bprintf(b, "    calc/build %u\n", next - cur);
+	for (i = cur; i < next; i ++) {
+		bcm_bprintf(b, "      idx %u(%u): tag %u, calc %p, build %p, ctx %p\n",
+		            i - cur, i, build_tag[i],
+		            OSL_OBFUSCATE_BUF(build_cb[i].calc),
+				OSL_OBFUSCATE_BUF(build_cb[i].build),
+				OSL_OBFUSCATE_BUF(build_cb[i].ctx));
+	}
+	TBL_POS_GET(build_tt, IE_TT_PRIO, cur, next);
+	bcm_bprintf(b, "    vs calc/build %u\n", next - cur);
+	for (i = cur; i < next; i ++) {
+		bcm_bprintf(b, "      idx %u(%u): tag %u, calc %p, build %p, ctx %p\n",
+		            i - cur, i, build_tag[i],
+		            OSL_OBFUSCATE_BUF(build_cb[i].calc),
+				OSL_OBFUSCATE_BUF(build_cb[i].build),
+				OSL_OBFUSCATE_BUF(build_cb[i].ctx));
+	}
+	/* parse */
+	TBL_POS_GET(parse_tt, IE_TT_IE, cur, next);
+	bcm_bprintf(b, "    parse %u\n", next - cur);
+	for (i = cur; i < next; i ++) {
+		bcm_bprintf(b, "      idx %u(%u): tag %u, parse %p, ctx %p\n",
+		            i - cur, i, parse_tag[i],
+		            OSL_OBFUSCATE_BUF(parse_cb[i].parse),
+				OSL_OBFUSCATE_BUF(parse_cb[i].ctx));
+	}
+	TBL_POS_GET(parse_tt, IE_TT_PRIO, cur, next);
+	bcm_bprintf(b, "    vs parse %u\n", next - cur);
+	for (i = cur; i < next; i ++) {
+		bcm_bprintf(b, "      idx %u(%u): tag %u, parse %p, ctx %p\n",
+		            i - cur, i, parse_tag[i],
+		            OSL_OBFUSCATE_BUF(parse_cb[i].parse),
+				OSL_OBFUSCATE_BUF(parse_cb[i].ctx));
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /*
  * Register a pair of 'calc_len'/'build' callbacks for an non Vendor Specific IE.
@@ -392,10 +520,10 @@ BCMINITFN(wlc_ier_sort_cbtbl)(wlc_ier_reg_t *reg, const uint8 *ie_tags, uint16 i
  * A negative return value indicates an error.
  */
 int
-BCMATTACHFN(wlc_ier_add_build_fn)(wlc_ier_reg_t *reg, uint8 tag,
+BCMATTACHFN(wlc_ier_add_build_fn)(wlc_ier_reg_t *reg, wlc_iem_tag_t tag,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(reg);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(reg);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
 	uint16 *build_tt = BUILD_TT_TBL(reg);
 	uint16 cur, next;
@@ -434,10 +562,10 @@ BCMATTACHFN(wlc_ier_add_build_fn)(wlc_ier_reg_t *reg, uint8 tag,
  *
  * A negative return value indicates an error.
  */
-int BCMATTACHFN(wlc_ier_vs_add_build_fn)(wlc_ier_reg_t *reg, uint8 prio,
+int BCMATTACHFN(wlc_ier_vs_add_build_fn)(wlc_ier_reg_t *reg, wlc_iem_tag_t prio,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(reg);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(reg);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
 	uint16 *build_tt = BUILD_TT_TBL(reg);
 	uint16 cur, next;
@@ -476,10 +604,10 @@ int BCMATTACHFN(wlc_ier_vs_add_build_fn)(wlc_ier_reg_t *reg, uint8 prio,
  * A negative return value indicates an error (BCME_XXXX).
  */
 uint
-wlc_ier_calc_len(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
+wlc_ier_calc_len(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_cbparm_t *cbparm)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(reg);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(reg);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
 	uint16 *build_tt = BUILD_TT_TBL(reg);
 	uint16 cur, next;
@@ -501,7 +629,7 @@ static uint
 wlc_ier_vs_calc_len_cb(void *ctx, wlc_iem_calc_data_t *data)
 {
 	wlc_ier_reg_t *reg = (wlc_ier_reg_t *)ctx;
-	uint8 *build_prio = BUILD_TAG_TBL(reg);
+	wlc_iem_tag_t *build_prio = BUILD_TAG_TBL(reg);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
 	uint16 *build_tt = BUILD_TT_TBL(reg);
 	uint16 cur, next;
@@ -531,10 +659,10 @@ wlc_ier_vs_calc_len_cb(void *ctx, wlc_iem_calc_data_t *data)
  *
  * A negative return value indicates an error (BCME_XXXX).
  */
-int wlc_ier_build_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
+int wlc_ier_build_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(reg);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(reg);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
 	uint16 *build_tt = BUILD_TT_TBL(reg);
 	uint16 cur, next;
@@ -556,7 +684,7 @@ static int
 wlc_ier_vs_build_cb(void *ctx, wlc_iem_build_data_t *data)
 {
 	wlc_ier_reg_t *reg = (wlc_ier_reg_t *)ctx;
-	uint8 *build_prio = BUILD_TAG_TBL(reg);
+	wlc_iem_tag_t *build_prio = BUILD_TAG_TBL(reg);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(reg);
 	uint16 *build_tt = BUILD_TT_TBL(reg);
 	uint16 cur, next;
@@ -583,10 +711,10 @@ wlc_ier_vs_build_cb(void *ctx, wlc_iem_build_data_t *data)
  * A negative return value indicates an error.
  */
 int
-BCMATTACHFN(wlc_ier_add_parse_fn)(wlc_ier_reg_t *reg, uint8 tag,
+BCMATTACHFN(wlc_ier_add_parse_fn)(wlc_ier_reg_t *reg, wlc_iem_tag_t tag,
 	wlc_iem_parse_fn_t parse_fn, void *ctx)
 {
-	uint8 *parse_tag = PARSE_TAG_TBL(reg);
+	wlc_iem_tag_t *parse_tag = PARSE_TAG_TBL(reg);
 	wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(reg);
 	uint16 *parse_tt = PARSE_TT_TBL(reg);
 	uint16 cur, next;
@@ -624,10 +752,10 @@ BCMATTACHFN(wlc_ier_add_parse_fn)(wlc_ier_reg_t *reg, uint8 tag,
  *
  * A negative return value indicates an error.
  */
-int BCMATTACHFN(wlc_ier_vs_add_parse_fn)(wlc_ier_reg_t *reg, uint8 id,
+int BCMATTACHFN(wlc_ier_vs_add_parse_fn)(wlc_ier_reg_t *reg, wlc_iem_tag_t id,
 	wlc_iem_parse_fn_t parse_fn, void *ctx)
 {
-	uint8 *parse_tag = PARSE_TAG_TBL(reg);
+	wlc_iem_tag_t *parse_tag = PARSE_TAG_TBL(reg);
 	wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(reg);
 	uint16 *parse_tt = PARSE_TT_TBL(reg);
 	uint16 cur, next;
@@ -665,10 +793,10 @@ int BCMATTACHFN(wlc_ier_vs_add_parse_fn)(wlc_ier_reg_t *reg, uint8 id,
  * A negative return value indicates an error (BCME_XXXX).
  */
 int
-wlc_ier_parse_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
+wlc_ier_parse_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_upp_t *upp, wlc_iem_pparm_t *pparm, uint8 *buf, uint buf_len)
 {
-	uint8 *parse_tag = PARSE_TAG_TBL(reg);
+	wlc_iem_tag_t *parse_tag = PARSE_TAG_TBL(reg);
 	wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(reg);
 	uint16 *parse_tt = PARSE_TT_TBL(reg);
 	uint16 cur, next;
@@ -697,7 +825,7 @@ static int
 wlc_ier_vs_parse_cb(void *ctx, wlc_iem_parse_data_t *data)
 {
 	wlc_ier_reg_t *reg = (wlc_ier_reg_t *)ctx;
-	uint8 *parse_id = PARSE_TAG_TBL(reg);
+	wlc_iem_tag_t *parse_id = PARSE_TAG_TBL(reg);
 	wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(reg);
 	uint16 *parse_tt = PARSE_TT_TBL(reg);
 	uint16 cur, next;

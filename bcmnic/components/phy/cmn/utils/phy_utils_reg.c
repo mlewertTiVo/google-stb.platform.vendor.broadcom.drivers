@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_reg.c 648678 2016-07-13 08:52:18Z mvermeid $
+ * $Id: phy_utils_reg.c 656914 2016-08-30 10:24:27Z $
  */
 
 #include <typedefs.h>
@@ -91,13 +91,13 @@ phy_utils_read_radioreg(phy_info_t *pi, uint16 addr)
 
 	wlc_phy_conditional_assert(pi);
 
-	if ((addr == RADIO_IDCODE) && (!ISHTPHY(pi)) && (!ISACPHY(pi)))
+	if ((addr == RADIO_IDCODE) && (!ISHTPHY(pi)) && (!ISACPHY(pi))) {
 		return RADIO_REG_READ_FAIL;
+	}
 
 	/* Check for valid radio address access */
 	if (addr == INVALID_ADDRESS) {
 		ASSERT(addr != INVALID_ADDRESS);
-
 		return RADIO_REG_READ_FAIL;
 	}
 
@@ -145,9 +145,7 @@ phy_utils_read_radioreg_debug(phy_info_t *pi, uint16 addr, const char *reg_name)
 	if (addr == INVALID_ADDRESS) {
 		PHY_ERROR(("wl%d: Reg \"%s\" invalid for radio rev %d\n", pi->sh->unit,
 		          reg_name, RADIOREV(pi->pubpi->radiorev)));
-
 		ASSERT(addr != INVALID_ADDRESS);
-
 		return 0xffffU;
 	}
 
@@ -319,9 +317,7 @@ phy_utils_read_phyreg_debug(phy_info_t *pi, uint16 addr, const char *reg_name)
 	if (addr == INVALID_ADDRESS) {
 		PHY_ERROR(("wl%d: Reg \"%s\" invalid for phy rev %d\n", pi->sh->unit,
 		          reg_name, pi->pubpi->phy_rev));
-
 		ASSERT(addr != INVALID_ADDRESS);
-
 		return 0xffffU;
 	}
 
@@ -346,16 +342,6 @@ void phy_utils_write_phyreg_array(phy_info_t *pi, const uint16* regp, int length
 	{
 		uint16 addr;
 		uint16 access_type;
-#if defined(DONGLEBUILD)
-		access_type = *regp & PHY_RADIO_REG_MASK_TYPE;
-		if (ACREV_IS(pi->pubpi->phy_rev, 40) && (access_type != RADIO_REG_TYPE)) {
-			/* Broadcast bit is 14 for rev40 */
-			addr = *regp++ & ~ 0x8000;
-		} else {
-			addr = *regp++ & ~ PHY_RADIO_REG_MASK_TYPE;
-		}
-
-#else
 		access_type = *regp++ & PHY_RADIO_REG_MASK_TYPE;
 		--length;
 		if (ACREV_IS(pi->pubpi->phy_rev, 40) && (access_type != RADIO_REG_TYPE)) {
@@ -364,7 +350,6 @@ void phy_utils_write_phyreg_array(phy_info_t *pi, const uint16* regp, int length
 		} else {
 			addr = *regp++ & ~ PHY_RADIO_REG_MASK_TYPE;
 		}
-#endif /* DONGLEBUILD */
 		switch (access_type)
 		{
 			case PHY_REG_MOD_TYPE:
@@ -443,7 +428,6 @@ phy_utils_write_phyreg_debug(phy_info_t *pi, uint16 addr, uint16 val, const char
 	if (addr == INVALID_ADDRESS) {
 		PHY_ERROR(("wl%d: Reg \"%s\" invalid for phy rev %d\n", pi->sh->unit,
 		          reg_name, pi->pubpi->phy_rev));
-
 		ASSERT(addr != INVALID_ADDRESS);
 	} else {
 		phy_utils_write_phyreg(pi, addr, val);
@@ -489,8 +473,8 @@ phy_utils_or_phyreg(phy_info_t *pi, uint16 addr, uint16 val)
 
 	/* Check for valid PHY address access */
 	if (addr == INVALID_ADDRESS) {
-			ASSERT(addr != INVALID_ADDRESS);
-			return;
+		ASSERT(addr != INVALID_ADDRESS);
+		return;
 	}
 
 	W_REG(pi->sh->osh, &regs->phyregaddr, addr);
@@ -534,7 +518,6 @@ phy_utils_mod_phyreg_debug(phy_info_t *pi, uint16 addr, uint16 mask, uint16 val,
 	if (addr == INVALID_ADDRESS) {
 		PHY_ERROR(("wl%d: Reg \"%s\" invalid for phy rev %d\n", pi->sh->unit,
 		          reg_name, pi->pubpi->phy_rev));
-
 		ASSERT(addr != INVALID_ADDRESS);
 	} else {
 		phy_utils_mod_phyreg(pi, addr, mask, val);
@@ -1073,10 +1056,46 @@ static void
 wlc_phy_conditional_assert(phy_info_t *pi)
 {
 	BCM_REFERENCE(pi);
+
+#ifdef CHECK_MACSUSPEND_REGACCESS
+	ASSERT(!(R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC));
+	PHY_TRACE(("wl%d: %s\n", pi->sh->unit, __FUNCTION__));
+#endif
+
 #ifdef PHYWAR_43012_CRWLDOT11M_2177
 	if ((R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC)) {
 		ROMMABLE_ASSERT(0);
 		PHY_TRACE(("wl%d: %s\n", pi->sh->unit, __FUNCTION__));
 	}
 #endif
+}
+
+/* direct phy register read without pi structure
+ * this can be used at preattach or so
+ */
+uint16
+phy_utils_read_phyreg_nopi(prephy_info_t *pi, d11regs_t *regs, uint16 addr)
+{
+	W_REG(pi->sh->osh, &regs->phyregaddr, addr);
+#ifdef __mips__
+	(void)R_REG(pi->sh->osh, &regs->phyregaddr);
+#endif
+	return (R_REG(pi->sh->osh, &regs->phyregdata));
+}
+
+/* direct phy register write without pi structure
+ * this can be used at preattach or so
+ */
+void
+phy_utils_write_phyreg_nopi(prephy_info_t *pi, d11regs_t *regs, uint16 addr, uint16 val)
+{
+#ifdef __mips__
+	W_REG(pi->sh->osh, &regs->phyregaddr, addr);
+	(void)R_REG(pi->sh->osh, &regs->phyregaddr);
+	W_REG(OSH_NULL, &regs->phyregdata, val);
+	if (addr == NPHY_TableAddress)
+		(void)R_REG(pi->sh->osh, &regs->phyregdata);
+#else
+	W_REG(pi->sh->osh, (volatile uint32 *)(uintptr)(&regs->phyregaddr), addr | (val << 16));
+#endif /* __mips__ */
 }

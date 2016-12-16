@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hnddma.h 644675 2016-06-21 09:47:00Z $
+ * $Id: hnddma.h 654730 2016-08-16 09:04:55Z $
  */
 
 #ifndef	_hnddma_h_
@@ -29,9 +29,6 @@
 #include <osl_decl.h>
 #include <siutils.h>
 #include <sbhnddma.h>
-#ifdef WLCXO
-#include <wlioctl.h>
-#endif
 
 #ifndef _hnddma_pub_
 #define _hnddma_pub_
@@ -69,6 +66,9 @@ enum dma_param_id {
 
 #define SPLIT_FIFO_0	1
 #define SPLIT_FIFO_1	2
+
+typedef void (*setup_context_t)(void *ctx, void *p, uint8 **desc0, uint16 *len0,
+	uint8 **desc1, uint16 *len1);
 
 /* dma function type */
 typedef void (*di_detach_t)(hnddma_t *dmah);
@@ -124,21 +124,10 @@ typedef void (*di_param_set_t)(hnddma_t *dmah, uint16 paramid, uint16 paramval);
 typedef bool (*dma_glom_enable_t) (hnddma_t *dmah, uint32 val);
 typedef uint (*dma_active_rxbuf_t) (hnddma_t *dmah);
 typedef bool (*di_rxidlestatus_t) (hnddma_t *dmah);
+typedef void (*di_context_t)(hnddma_t *dmah, setup_context_t fn, void *ctx);
 
 /** dma opsvec */
 typedef struct di_fcn_s {
-#ifdef WLCXO_DATA
-	di_getvar_t             d_getvar;
-	di_txreclaim_t          txreclaim;
-	di_getnexttxp_t         getnexttxp;
-	di_txfast_t             txfast;
-	di_rxidle_t             rxidle;
-	di_rxenabled_t		rxenabled;
-	di_rx_t                 rx;
-	di_rxfill_t             rxfill;
-	di_rxreclaim_t          rxreclaim;
-	di_getnextrxp_t         getnextrxp;
-#else
 	di_detach_t		detach;
 	di_txinit_t             txinit;
 	di_txreset_t		txreset;
@@ -194,8 +183,8 @@ typedef struct di_fcn_s {
 	dma_glom_enable_t	glom_enab;
 	dma_active_rxbuf_t	dma_activerxbuf;
 	di_rxidlestatus_t	dma_rxidlestatus;
+	di_context_t		context;
 	uint			endnum;
-#endif /* WLCXO_DATA */
 } di_fcn_t;
 
 /**
@@ -227,8 +216,7 @@ typedef struct dma_common dma_common_t;
 							 */
 
 extern dma_common_t * dma_common_attach(osl_t *osh, volatile uint32 *indqsel,
-	volatile uint32 *suspreq, volatile uint32 *flushreq,
-	volatile uint32 *chnflushstatus);
+	volatile uint32 *suspreq, volatile uint32 *flushreq);
 extern void dma_common_detach(dma_common_t *dmacommon);
 
 #ifdef BCM_DMA_INDIRECT
@@ -293,20 +281,22 @@ extern hnddma_t * dma_attach(osl_t *osh, const char *name, si_t *sih,
 #define dma_txpending(di)		((di)->di_fn->txpending(di))
 #define dma_txcommitted(di)		((di)->di_fn->txcommitted(di))
 #define dma_pktpool_set(di, pool)	((di)->di_fn->pktpool_set((di), (pool)))
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define dma_dump(di, buf, dumpring)	((di)->di_fn->dump(di, buf, dumpring))
+#define dma_dumptx(di, buf, dumpring)	((di)->di_fn->dumptx(di, buf, dumpring))
+#define dma_dumprx(di, buf, dumpring)	((di)->di_fn->dumprx(di, buf, dumpring))
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 #define dma_rxtxerror(di, istx)	((di)->di_fn->rxtxerror(di, istx))
 #define dma_burstlen_set(di, rxlen, txlen)	((di)->di_fn->burstlen_set(di, rxlen, txlen))
 #define dma_avoidance_cnt(di)		((di)->di_fn->avoidancecnt(di))
 #define dma_param_set(di, paramid, paramval)	((di)->di_fn->param_set(di, paramid, paramval))
 #define dma_activerxbuf(di)		((di)->di_fn->dma_activerxbuf(di))
+#define dma_context(di, flags, ctx)	((di)->di_fn->context(di, flags, ctx))
 
 #define dma_glom_enable(di, val)	(0)
 #define dma_rxidlestatus(di)		((di)->di_fn->dma_rxidlestatus(di))
 
 #else /* BCMDMA32 */
-#ifdef WLCXO_DATA
-/* Ensure that dma_xxx macros map to dma64proc_cxo in CXO datapath code */
-#define dma64proc			dma64proc_cxo
-#endif /* WLCXO_DATA */
 extern const di_fcn_t dma64proc;
 
 #define dma_detach(di)			(dma64proc.detach(di))
@@ -353,10 +343,16 @@ extern const di_fcn_t dma64proc;
 #define dma_txpending(di)		(dma64proc.txpending(di))
 #define dma_txcommitted(di)		(dma64proc.txcommitted(di))
 #define dma_pktpool_set(di, pool)	(dma64proc.pktpool_set((di), (pool)))
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define dma_dump(di, buf, dumpring)	(dma64proc.dump(di, buf, dumpring))
+#define dma_dumptx(di, buf, dumpring)	(dma64proc.dumptx(di, buf, dumpring))
+#define dma_dumprx(di, buf, dumpring)	(dma64proc.dumprx(di, buf, dumpring))
+#endif
 #define dma_rxtxerror(di, istx)	(dma64proc.rxtxerror(di, istx))
 #define dma_burstlen_set(di, rxlen, txlen)	(dma64proc.burstlen_set(di, rxlen, txlen))
 #define dma_avoidance_cnt(di)		(dma64proc.avoidancecnt(di))
 #define dma_param_set(di, paramid, paramval)	(dma64proc.param_set(di, paramid, paramval))
+#define dma_context(di, flags, ctx)	(dma64proc.context(di, flags, ctx))
 
 #define dma_glom_enable(di, val)	(dma64proc.glom_enab(di, val))
 #define dma_activerxbuf(di)	(dma64proc.dma_activerxbuf(di))
@@ -396,37 +392,6 @@ extern void dma_get_txd_memaddr(hnddma_t *dmah, uint32 *addrlo, uint32 *addrhi, 
 
 extern int dma_txdesc(hnddma_t *dmah, dma64dd_t *dd, bool commit);
 extern int dma_getnexttxdd(hnddma_t *dmah, txd_range_t range, uint32 *flags);
-
-#ifdef WLCXO
-/* DMA control commands of CXO offload driver */
-#define	CXO_DMACTRL_RESET_TX	1
-#define	CXO_DMACTRL_RECLAIM_TX	2
-#define	CXO_DMACTRL_RESET_RX	3
-#define	CXO_DMACTRL_RECLAIM_RX	4
-
-typedef struct dma_chnl {
-	dma64regs_t	*txregs_64;	/* 64-bit dma tx engine registers */
-	dma64regs_t	*rxregs_64;	/* 64-bit dma rx engine registers */
-	dma64dd_t	*txd_64;	/* pointer to dma64 tx descriptor ring */
-	dma64dd_t	*rxd_64;	/* pointer to dma64 rx descriptor ring */
-	void		**txp;		/* parallel array of pointers to tx packets */
-	void		**rxp;		/* parallel array of pointers to rx packets */
-} dma_chnl_t;
-
-typedef struct dma_hw_params {
-	struct dma_chnl chnl[NFIFO];
-} dma_hw_params_t;
-
-#ifdef WLCXO_DATA
-extern void cxo_data_dma_ctrl(hnddma_t *hnddma, uint8 cmd);
-extern hnddma_t *cxo_data_dma_info_clone(osl_t *osh, hnddma_t *di, uint8 fifo);
-extern void cxo_data_dma_info_clone_free(osl_t *osh, hnddma_t *hnddma);
-extern void cxo_data_dma_hw_params_set(hnddma_t *hnddma, dma_hw_params_t *dmahwp, int i);
-#endif /* WLCXO_DATA */
-#ifdef WLCXO_CTRL
-extern void cxo_ctrl_dma_hw_params_get(dma_hw_params_t *dmahwp, hnddma_t *hnddma, int i);
-#endif /* WLCXO_CTRL */
-#endif /* WLCXO */
 
 extern void dma_update_rxfill(hnddma_t *dmah);
 extern void dma_rxchan_reset(hnddma_t *di);

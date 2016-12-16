@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_btcx.c 636848 2016-05-10 23:32:14Z $
+ * $Id: wlc_btcx.c 665208 2016-10-16 23:44:23Z $
  */
 
 
@@ -92,7 +92,7 @@
 #define A2DP_DEBOUNCE_ON_SECS	1
 #define A2DP_DEBOUNCE_OFF_SECS	10
 
-#define BT_AMPDU_THRESH		10000	/* if BT period < this threshold, turn off ampdu */
+#define BT_AMPDU_THRESH		21000	/* if BT period < this threshold, turn off ampdu */
 /* RX aggregation size (high/low) is decided based on this threshold */
 #define BT_AMPDU_RESIZE_THRESH         7500
 
@@ -156,6 +156,7 @@ enum {
 	IOV_BTC_AIBSS_STATUS =		15,
 	IOV_BTC_SET_STROBE =		16,	/* Get/Set BT Strobe */
 	IOV_BTC_SELECT_PROFILE =	17,
+	IOV_BTC_PROFILE =		18,	/* BTC profile for UCM */
 	IOV_LAST
 };
 
@@ -212,6 +213,10 @@ const bcm_iovar_t btc_iovars[] = {
 #endif
 	{"btc_status", IOV_BTC_STATUS, (IOVF_GET_UP), 0, IOVT_UINT32, 0},
 #ifdef WLAIBSS
+#if defined(BCMDBG)
+	{"btc_set_strobe", IOV_BTC_SET_STROBE, 0, 0, IOVT_UINT32, 0
+	},
+#endif /* BCMDBG */
 	{"btc_aibss_status", IOV_BTC_AIBSS_STATUS, 0, 0, IOVT_BUFFER, 0
 	},
 #endif /* WLAIBSS */
@@ -220,6 +225,10 @@ const bcm_iovar_t btc_iovars[] = {
 	{"btc_select_profile", IOV_BTC_SELECT_PROFILE, 0, 0, IOVT_BUFFER, 0},
 #endif
 #endif /* STA */
+#ifdef WL_UCM
+	{"btc_profile", IOV_BTC_PROFILE, 0, 0, IOVT_BUFFER, sizeof(wlc_btcx_profile_t)
+	},
+#endif /* WL_UCM */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -347,8 +356,8 @@ struct wlc_btc_info {
 	wlc_btc_aibss_info_t *aibss_info; // AIBSS related cfg & status info
 	uint8	rxagg_resized;			/* Flag to indicate rx agg size was resized */
 	uint8	rxagg_size;				/* New Rx agg size when SCO is on */
-	/* counter to keep track of time after resizing the aggregation window */
-	uint8	rxagg_resized_cnt;
+	uint8	pad;		/* can be re-used */
+	wlc_btcx_profile_t	**profile_array;	/* UCM BTCX profile array */
 };
 
 #ifdef WLAIBSS
@@ -434,6 +443,12 @@ static void wlc_btcx_rx_ba_window_modify(wlc_info_t *wlc, bool *rx_agg);
 static void wlc_btcx_rx_ba_window_reset(wlc_info_t *wlc);
 #endif /* WLAMPDU */
 
+#ifdef WL_UCM
+static int wlc_btc_prof_get(wlc_info_t *wlc, int32 idx, void *resbuf, uint len);
+static int wlc_btc_prof_set(wlc_info_t *wlc, void *parambuf, uint len);
+static int wlc_btc_ucm_attach(wlc_btc_info_t *btc);
+static void wlc_btc_ucm_detach(wlc_btc_info_t *btc);
+#endif /* WL_UCM */
 
 #ifdef BCMULP
 static int wlc_ulp_btcx_enter_cb(void *handle, ulp_ext_info_t *einfo);
@@ -615,6 +630,15 @@ BCMATTACHFN(wlc_btc_attach)(wlc_info_t *wlc)
 	}
 #endif /* WLAIBSS */
 
+#if defined(WL_UCM) && !defined(WL_UCM_DISABLED)
+	/* all the UCM related attach activities go here */
+	if (wlc_btc_ucm_attach(btc) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+		goto fail;
+	}
+	wlc->pub->_ucm = TRUE;
+#endif /* WL_UCM && !WL_UCM_DISABLED */
 	return btc;
 
 	/* error handling */
@@ -689,8 +713,100 @@ BCMATTACHFN(wlc_btc_detach)(wlc_btc_info_t *btc)
 	}
 #endif /* WLAIBSS */
 
+#ifdef WL_UCM
+	/* All the UCM related detach activities go here */
+	wlc_btc_ucm_detach(btc);
+#endif /* WL_UCM */
+
 	MFREE(wlc->osh, btc, sizeof(wlc_btc_info_t));
 }
+
+#ifdef WL_UCM
+/* All UCM related attach activities go here */
+static int
+BCMATTACHFN(wlc_btc_ucm_attach)(wlc_btc_info_t *btc)
+{
+	wlc_info_t *wlc = btc->wlc;
+	int idx, idx2;
+	size_t ucm_profile_sz;
+	size_t ucm_array_sz = MAX_UCM_PROFILES*sizeof(*btc->profile_array);
+	uint8 chain_attr_count = WLC_BITSCNT(wlc->stf->hw_txchain);
+	wlc_btcx_chain_attr_t *chain_attr;
+
+	/* Check from obj registry if common info is allocated */
+	btc->profile_array = obj_registry_get(wlc->objr, OBJR_BTC_PROFILE_INFO);
+	if (btc->profile_array == NULL) {
+		/* first create an array of pointers to btc profile */
+		btc->profile_array = (wlc_btcx_profile_t **)MALLOCZ(wlc->osh, ucm_array_sz);
+		if (btc->profile_array == NULL) {
+			WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			return BCME_NOMEM;
+		}
+		/* Update registry after allocating profile array */
+		obj_registry_set(wlc->objr, OBJR_BTC_PROFILE_INFO, btc->profile_array);
+
+		/* malloc individual profiles and insert their address in the btc profile array */
+		for (idx = 0; idx < MAX_UCM_PROFILES; idx++) {
+			/* the profile size is determined by the number of tx chains */
+			ucm_profile_sz = sizeof(*btc->profile_array[idx])
+				+ chain_attr_count*sizeof(btc->profile_array[idx]->chain_attr[0]);
+			btc->profile_array[idx] =
+				(wlc_btcx_profile_t *)MALLOCZ(wlc->osh, ucm_profile_sz);
+			if (btc->profile_array[idx] == NULL) {
+				WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+					wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+				return BCME_NOMEM;
+			}
+			btc->profile_array[idx]->profile_index = idx;
+			/* last element of the profile is a struct with explicit padding */
+			btc->profile_array[idx]->length = ucm_profile_sz;
+			/* whenever changing the profile struct, update the last fixed entry here */
+			btc->profile_array[idx]->fixed_length =
+				STRUCT_SIZE_THROUGH(btc->profile_array[idx],
+				tx_pwr_wl_lo_hi_rssi_thresh);
+			btc->profile_array[idx]->version = UCM_PROFILE_VERSION;
+			btc->profile_array[idx]->chain_attr_count = chain_attr_count;
+			/* whenever changing the attributes struct, update last fixed entry here */
+			for (idx2 = 0; idx2 < chain_attr_count; idx2++) {
+				chain_attr = &(btc->profile_array[idx]->chain_attr[idx2]);
+				chain_attr->length =
+					STRUCT_SIZE_THROUGH(chain_attr, tx_pwr_weak_rssi);
+			}
+		}
+	}
+
+	(void)obj_registry_ref(wlc->objr, OBJR_BTC_PROFILE_INFO);
+	return BCME_OK;
+}
+
+/* All UCM related detach activities go here */
+static void
+BCMATTACHFN(wlc_btc_ucm_detach)(wlc_btc_info_t *btc)
+{
+	int idx;
+	wlc_info_t *wlc = btc->wlc;
+	wlc_btcx_profile_t *profile;
+	size_t ucm_profile_sz;
+	size_t ucm_array_sz = MAX_UCM_PROFILES*sizeof(*btc->profile_array);
+	/* if profile_array was not allocated, then nothing to do */
+	if (btc->profile_array) {
+		if (obj_registry_unref(wlc->objr, OBJR_BTC_PROFILE_INFO) == 0) {
+			obj_registry_set(wlc->objr, OBJR_BTC_PROFILE_INFO, NULL);
+			for (idx = 0; idx < MAX_UCM_PROFILES; idx++) {
+				profile = btc->profile_array[idx];
+				if (profile) {
+					ucm_profile_sz = sizeof(*profile)
+						+(profile->chain_attr_count)
+						*sizeof(profile->chain_attr[0]);
+					MFREE(wlc->osh, profile, ucm_profile_sz);
+				}
+			}
+			MFREE(wlc->osh, btc->profile_array, ucm_array_sz);
+		}
+	}
+}
+#endif /* WL_UCM */
 
 /* BTCX Wl up callback */
 static int
@@ -714,6 +830,7 @@ wlc_btc_wlc_down(void *ctx)
 
 	BCM_REFERENCE(wlc);
 	btc->bt_shm_addr = 0;
+
 
 
 	return BCME_OK;
@@ -1297,26 +1414,6 @@ wlc_ampdu_agg_state_update_rx_all_but_AWDL(wlc_info_t *wlc, bool aggr)
 }
 #endif /* WLAMPDU */
 
-void  wlc_btc_4313_gpioctrl_init(wlc_info_t *wlc)
-{
-	if (CHIPID(wlc->pub->sih->chip) == BCM4313_CHIP_ID) {
-	/* ePA 4313 brds */
-		if (wlc->pub->boardflags & BFL_FEM) {
-			if (wlc->pub->boardrev >= 0x1250 && (wlc->pub->boardflags & BFL_FEM_BT)) {
-				wlc_mhf(wlc, MHF5, MHF5_4313_BTCX_GPIOCTRL, MHF5_4313_BTCX_GPIOCTRL,
-					WLC_BAND_ALL);
-			} else
-				wlc_mhf(wlc, MHF4, MHF4_EXTPA_ENABLE,
-				MHF4_EXTPA_ENABLE, WLC_BAND_ALL);
-			/* iPA 4313 brds */
-			} else {
-				if (wlc->pub->boardflags & BFL_FEM_BT)
-					wlc_mhf(wlc, MHF5, MHF5_4313_BTCX_GPIOCTRL,
-						MHF5_4313_BTCX_GPIOCTRL, WLC_BAND_ALL);
-			}
-	}
-}
-
 uint
 wlc_btc_frag_threshold(wlc_info_t *wlc, struct scb *scb)
 {
@@ -1854,10 +1951,10 @@ wlc_btcx_ltecx_apply_agg_state(wlc_info_t *wlc)
 			wlc_btc_hflg(wlc, dyagg, BTCX_HFLG_DYAGG);
 			wlc_btc_params_set(wlc, BTC_FW_AGG_STATE_REQ, wlc->btch->agg_state_req);
 
-			if ((btc->agg_state_req != BTC_LIMAGG)&& (wlc->btch->rxagg_resized)) {
-				rx_agg = FALSE;
-				tx_agg = FALSE;
+			if ((btc->agg_state_req != BTC_LIMAGG) && (wlc->btch->rxagg_resized)) {
+				wlc_ampdu_agg_state_update_rx_all(wlc, OFF);
 				wlc_btcx_rx_ba_window_reset(wlc);
+				WL_INFORM(("BTCX: Revert Rx agg\n"));
 			}
 		}
 		if ((rx_agg) &&
@@ -1933,16 +2030,17 @@ This function is called by AMPDU Rx to get modified Rx aggregation size.
 */
 uint8 wlc_btcx_get_ba_rx_wsize(wlc_info_t *wlc)
 {
+	if (BAND_2G(wlc->band->bandtype)) {
 #ifdef WLAIBSS
-	if ((AIBSS_ENAB(wlc->pub)) && wlc->btch->aibss_info->rx_agg_change)
-		return (BT_AIBSS_RX_AGG_SIZE);
-	else
+		if ((AIBSS_ENAB(wlc->pub)) && wlc->btch->aibss_info->rx_agg_change)
+			return (BT_AIBSS_RX_AGG_SIZE);
+		else
 #endif
-	if (wlc->btch->rxagg_resized && wlc->btch->rxagg_size) {
-		return wlc->btch->rxagg_size;
+		if (wlc->btch->rxagg_resized && wlc->btch->rxagg_size) {
+			return wlc->btch->rxagg_size;
+		}
 	}
-	else
-		return (0);
+	return (0);
 }
 #endif /* WLAMPDU */
 
@@ -2081,6 +2179,16 @@ wlc_btcx_aibss_parse_ie(void *ctx, wlc_iem_parse_data_t *parse)
 
 			btc_brcm_prop_ie_t *btc_brcm_prop_ie = (btc_brcm_prop_ie_t *)parse->ie;
 
+#if defined(BCMDBG)
+			if (bt_info->btinfo != btc_brcm_prop_ie->info) {
+				char eabuf[ETHER_ADDR_STR_LEN];
+
+				bcm_ether_ntoa(&parse->pparm->ft->bcn.scb->ea, eabuf);
+				WL_INFORM(("wl%d: Bcn: eth: %s BT Info chg: 0x%x 0x%x\n",
+					btc->wlc->pub->unit, eabuf, bt_info->btinfo,
+					btc_brcm_prop_ie->info));
+			}
+#endif
 			bt_info->btinfo = btc_brcm_prop_ie->info;
 			bt_info->bcn_rx_cnt++;
 			wlc_btcx_aibss_check_state(btc);
@@ -2124,6 +2232,12 @@ wlc_btcx_aibss_check_state(wlc_btc_info_t *btc)
 		int i;
 		wlc_bsscfg_t *cfg;
 
+#if defined(BCMDBG)
+		WL_ERROR(("wl%d: BTCX: Local BT Info chg: 0x%x to 0x%x prd: %d sync: %d\n",
+			btc->wlc->pub->unit, btc->aibss_info->last_btinfo,
+			btc->aibss_info->local_btinfo, btc->bth_period,
+			btc->aibss_info->local_bt_in_sync));
+#endif
 		/* Update Beacon since BT status has changed */
 		FOREACH_BSS(btc->wlc, i, cfg) {
 			if (cfg->associated && BSSCFG_IBSS(cfg)) {
@@ -2306,6 +2420,9 @@ wlc_btcx_aibss_set_strobe(wlc_btc_info_t *btc, int strobe_on)
 		} else if (btc->aibss_info->strobe_on && !strobe_on) {
 			/* Disable WCI-2 interface */
 			si_gci_reset(sih);
+#if defined(BCMDBG)
+			WL_INFORM(("wl%d: BTCX STROBE: Off\n", btc->wlc->pub->unit));
+#endif
 
 			/* Disable strobing in ucode */
 			btcx_config &= ~(C_BTCX_CONFIG_BT_STROBE | C_BTCX_CONFIG_SCO_PROT);
@@ -2420,6 +2537,10 @@ wlc_btcx_aibss_chk_clk_sync(wlc_btc_info_t *btc)
 							pri_map_lo);
 						btc->aibss_info->acl_grant_set = TRUE;
 						btc->aibss_info->acl_grant_cnt = 0;
+#if defined(BCMDBG)
+						WL_INFORM(("wl%d: BT Not in Sync\n",
+							btc->wlc->pub->unit));
+#endif
 					} else {
 						btc->aibss_info->acl_grant_cnt++;
 					}
@@ -2431,6 +2552,10 @@ wlc_btcx_aibss_chk_clk_sync(wlc_btc_info_t *btc)
 						wlc_write_shm(btc->wlc, M_BTCX_PRI_MAP_LO(btc->wlc),
 							pri_map_lo);
 						btc->aibss_info->acl_grant_set = FALSE;
+#if defined(BCMDBG)
+						WL_INFORM(("wl%d: BT in Sync\n",
+							btc->wlc->pub->unit));
+#endif
 					}
 				}
 				return;
@@ -2533,6 +2658,9 @@ certain conditions
 static void
 wlc_btcx_aibss_update_agg_state(wlc_btc_info_t *btc)
 {
+#if defined(BCMDBG)
+	bool prev_rx_agg = btc->aibss_info->rx_agg_change;
+#endif
 
 	if (AIBSS_ENAB(btc->wlc->pub)) {
 		if ((!btc->aibss_info->other_esco_present) &&
@@ -2545,6 +2673,13 @@ wlc_btcx_aibss_update_agg_state(wlc_btc_info_t *btc)
 					btc->aibss_info->esco_off_cnt = BT_ESCO_OFF_DELAY_CNT;
 					// Revert aggregation size change
 					btc->aibss_info->rx_agg_change = FALSE;
+#if defined(BCMDBG)
+					if (prev_rx_agg != btc->aibss_info->rx_agg_change) {
+						WL_INFORM(("BTCX: Rx Agg revert cnt: %d esco: %d\n",
+							btc->aibss_info->esco_off_cnt,
+							btc->aibss_info->other_esco_present));
+					}
+#endif
 				}
 			}
 			goto exit;
@@ -2553,6 +2688,13 @@ wlc_btcx_aibss_update_agg_state(wlc_btc_info_t *btc)
 		btc->aibss_info->esco_off_cnt = 0;
 		// Indicate aggregation size change is needed.
 		btc->aibss_info->rx_agg_change = TRUE;
+#if defined(BCMDBG)
+		if (prev_rx_agg != btc->aibss_info->rx_agg_change) {
+			WL_INFORM(("BTCX: Rx Agg chg cnt: %d esco: %d\n",
+				btc->aibss_info->esco_off_cnt,
+				btc->aibss_info->other_esco_present));
+		}
+#endif
 	} else {
 		btc->aibss_info->esco_off_cnt = BT_ESCO_OFF_DELAY_CNT;
 		btc->aibss_info->rx_agg_change = FALSE;
@@ -2630,12 +2772,22 @@ wlc_btcx_write_core_specific_mask(wlc_info_t *wlc)
 	{
 		if (wlc->hw->macunit == 0) {
 			/* Mask 1x1 core */
-			si_gci_indirect(wlc->pub->sih, 11, OFFSETOF(chipcregs_t, gci_chipctrl),
-					GCI_CHIP_CTRL_PRISEL_MASK, GCI_CHIP_CTRL_PRISEL_MASK_CORE1);
+			si_gci_chipcontrol(wlc->pub->sih, CC_GCI_CHIPCTRL_11,
+				GCI_CHIP_CTRL_PRISEL_MASK, GCI_CHIP_CTRL_PRISEL_MASK_CORE1);
 		} else {
 			/* Mask 3x3 core */
-			si_gci_indirect(wlc->pub->sih, 11, OFFSETOF(chipcregs_t, gci_chipctrl),
-					GCI_CHIP_CTRL_PRISEL_MASK, GCI_CHIP_CTRL_PRISEL_MASK_CORE0);
+			si_gci_chipcontrol(wlc->pub->sih, CC_GCI_CHIPCTRL_11,
+				GCI_CHIP_CTRL_PRISEL_MASK, GCI_CHIP_CTRL_PRISEL_MASK_CORE0);
+		}
+	} else if (BCM4347_CHIP(wlc->pub->sih->chip)) {
+		if (wlc->hw->macunit == 0) {
+			/* Mask core 1 */
+			si_gci_chipcontrol(wlc->pub->sih, CC_GCI_CHIPCTRL_08,
+			GCI_CHIP_CTRL_PRISEL_MASK_4347, GCI_CHIP_CTRL_PRISEL_MASK_CORE1_4347);
+		} else {
+			/* Mask core 0 */
+			si_gci_chipcontrol(wlc->pub->sih, CC_GCI_CHIPCTRL_08,
+			GCI_CHIP_CTRL_PRISEL_MASK_4347, GCI_CHIP_CTRL_PRISEL_MASK_CORE0_4347);
 		}
 	}
 }
@@ -2666,8 +2818,13 @@ wlc_btcx_update_gci_mask(wlc_info_t *wlc)
 			wlc_btcx_write_core_specific_mask(other_wlc);
 		} else {
 			/* Both cores in 5G leave both the mask to 0 for both the cores */
-			si_gci_indirect(wlc->pub->sih, 11, OFFSETOF(chipcregs_t, gci_chipctrl),
-				GCI_CHIP_CTRL_PRISEL_MASK, 0x00000000);
+			if (CHIPID(wlc->pub->sih->chip) == BCM4364_CHIP_ID) {
+				si_gci_chipcontrol(wlc->pub->sih, CC_GCI_CHIPCTRL_11,
+					GCI_CHIP_CTRL_PRISEL_MASK, 0x00000000);
+			} else if (BCM4347_CHIP(wlc->pub->sih->chip)) {
+				si_gci_chipcontrol(wlc->pub->sih, CC_GCI_CHIPCTRL_08,
+					GCI_CHIP_CTRL_PRISEL_MASK_4347, 0x00000000);
+			}
 		}
 	}
 }
@@ -2697,25 +2854,21 @@ wlc_btcx_rx_ba_window_modify(wlc_info_t *wlc, bool *rx_agg)
 			*rx_agg = FALSE;
 		}
 		else {
-			if (wlc->btch->rxagg_resized_cnt == 0) {
-				/* To modify Rx agg size, turn off agg
-				 * which will result in the other side
-				 * sending BA Request. The new size will
-				 * be indicated at that time
-				 */
-				*rx_agg = FALSE;
-			} else if ((wlc->btch->rxagg_resized_cnt >= 3) &&
-					window_sz) {
-				/* New size will be set when BA request
-				 * is received
-				 */
-				wlc->btch->rxagg_resized = TRUE;
-				wlc->btch->rxagg_size = window_sz;
-				*rx_agg = TRUE;
-				WL_INFORM(("BTCX: Resize Rx agg: %d\n",
-					window_sz));
-			}
-			wlc->btch->rxagg_resized_cnt++;
+			/* To modify Rx agg size, turn off agg
+			 * which will result in the other side
+			 * sending BA Request. The new size will
+			 * be indicated at that time
+			 */
+			wlc_ampdu_agg_state_update_rx_all(wlc, OFF);
+
+			/* New size will be set when BA request
+			 * is received
+			 */
+			wlc->btch->rxagg_resized = TRUE;
+			wlc->btch->rxagg_size = window_sz;
+			*rx_agg = TRUE;
+			WL_INFORM(("BTCX: Resize Rx agg: %d\n",
+				window_sz));
 		}
 	}
 }
@@ -2725,7 +2878,6 @@ wlc_btcx_rx_ba_window_reset(wlc_info_t *wlc)
 {
 	wlc->btch->rxagg_resized = FALSE;
 	wlc->btch->rxagg_size = 0;
-	wlc->btch->rxagg_resized_cnt = 0;
 }
 #endif /* WLAMPDU */
 
@@ -3052,6 +3204,17 @@ wlc_btc_doiovar(void *ctx, uint32 actionid,
 		break;
 
 #ifdef WLAIBSS
+#if defined(BCMDBG)
+	case IOV_SVAL(IOV_BTC_SET_STROBE):
+		if (AIBSS_ENAB(wlc->pub)) {
+			wlc_btcx_strobe_enable(btc, int_val);
+		}
+		break;
+
+	case IOV_GVAL(IOV_BTC_SET_STROBE):
+		*ret_int_ptr = btc->aibss_info->strobe_enabled;
+		break;
+#endif /* BCMDBG */
 	case IOV_GVAL(IOV_BTC_AIBSS_STATUS):
 		if (AIBSS_ENAB(wlc->pub)) {
 			if (p_len >= sizeof(wlc_btc_aibss_status_t))
@@ -3074,6 +3237,22 @@ wlc_btc_doiovar(void *ctx, uint32 actionid,
 		break;
 #endif /* WLBTCPROF */
 #endif /* STA */
+
+#ifdef WL_UCM
+	case IOV_GVAL(IOV_BTC_PROFILE):
+		if (UCM_ENAB(wlc->pub))
+			err = wlc_btc_prof_get(wlc, int_val, arg, len);
+		else
+			err = BCME_UNSUPPORTED;
+	break;
+
+	case IOV_SVAL(IOV_BTC_PROFILE):
+		if (UCM_ENAB(wlc->pub))
+			err = wlc_btc_prof_set(wlc, arg, len);
+		else
+			err = BCME_UNSUPPORTED;
+	break;
+#endif /* WL_UCM */
 
 	default:
 		err = BCME_UNSUPPORTED;
@@ -3123,6 +3302,70 @@ wlc_btcx_get_btc_status(wlc_info_t *wlc)
 
 	return status;
 }
+
+#ifdef WL_UCM
+static int
+wlc_btc_prof_get(wlc_info_t *wlc, int32 idx, void *resbuf, uint len)
+{
+	wlc_btcx_profile_t *profile, **profile_array = wlc->btch->profile_array;
+	if (idx >= MAX_UCM_PROFILES || idx < 0) {
+		return BCME_RANGE;
+	}
+	profile = profile_array[idx];
+	/* check if the IO buffer has provided enough space to send the profile */
+	if (profile->length > len) {
+		return BCME_BUFTOOSHORT;
+	}
+	/* Although wlu does not know in advance, we copy over the profile with right sized array */
+	memcpy(resbuf, profile, sizeof(*profile)
+		+(profile->chain_attr_count)*sizeof(profile->chain_attr[0]));
+	return BCME_OK;
+}
+
+static int
+wlc_btc_prof_set(wlc_info_t *wlc, void *parambuf, uint len)
+{
+	uint8 idx, prof_attr;
+	uint16 prof_len, prof_ver;
+	wlc_btcx_profile_t *profile, **profile_array = wlc->btch->profile_array;
+	size_t ucm_prof_sz;
+
+	/* extract the profile index, so we know which one needs to be updated */
+	idx = ((wlc_btcx_profile_t *)parambuf)->profile_index;
+	if (idx >= MAX_UCM_PROFILES || idx < 0) {
+		return BCME_RANGE;
+	}
+	profile = profile_array[idx];
+	ucm_prof_sz = sizeof(*profile)
+		+(profile->chain_attr_count)*sizeof(profile->chain_attr[0]);
+	/* check if the io buffer has enough data */
+	prof_len = ((wlc_btcx_profile_t *)parambuf)->length;
+	if (prof_len > len) {
+		return BCME_BUFTOOSHORT;
+	}
+	/* check if the version returned by the utility is correct */
+	prof_ver = ((wlc_btcx_profile_t *)parambuf)->version;
+	if (prof_ver != UCM_PROFILE_VERSION) {
+		return BCME_VERSION;
+	}
+	/* check if the profile length is consistent */
+	if (prof_len != profile->length) {
+		return BCME_BADLEN;
+	}
+	prof_attr = ((wlc_btcx_profile_t *)parambuf)->chain_attr_count;
+	/* check if the number of tx chains is consistent */
+	if (prof_attr != profile->chain_attr_count) {
+		return BCME_BADLEN;
+	}
+
+	/* wlc will copy over the var array sized to number of attributes */
+	memcpy(profile, parambuf, ucm_prof_sz);
+
+	/* indicate that this profile or a part of this profile has been initialized */
+	profile->init = 1;
+	return BCME_OK;
+}
+#endif /* WL_UCM */
 
 #ifdef WL_BTCDYN
 /* dynamic BTCOEX wl densense & coex mode switching */
@@ -3732,29 +3975,28 @@ wlc_btc_update_btrssi(wlc_btc_info_t *btc)
 
 		/* actual btrssi = -1 x (btrssi x BT_RSSI_STEP + BT_RSSI_OFFSET) */
 		cur_rssi = (-1) * (int8)(btrssi_shm * BTC_BTRSSI_STEP + BTC_BTRSSI_OFFSET);
+
+		/* # of samples max out at btrssi_maxsamp */
+		if (btc->btrssi_cnt < btc->btrssi_maxsamp)
+			btc->btrssi_cnt++;
+
+		/* accumulate & calc moving average */
+		old_rssi = btc->btrssi_sample[btc->btrssi_idx];
+		btc->btrssi_sample[btc->btrssi_idx] = cur_rssi;
+		/* sum = -old one, +new  */
+		btc->btrssi_sum = btc->btrssi_sum - old_rssi + cur_rssi;
+		ASSERT(btc->btrssi_cnt);
+		btrssi_avg = btc->btrssi_sum / btc->btrssi_cnt;
+
+		btc->btrssi_idx = MODINC_POW2(btc->btrssi_idx, btc->btrssi_maxsamp);
+
+		if (btc->btrssi_cnt < btc->btrssi_minsamp) {
+			btc->bt_rssi = BTC_BTRSSI_INVALID;
+			return;
+		}
+
+		btc->bt_rssi = (int8)btrssi_avg;
 	}
-
-	/* # of samples max out at btrssi_maxsamp */
-	if (btc->btrssi_cnt < btc->btrssi_maxsamp)
-		btc->btrssi_cnt++;
-
-	/* accumulate & calc moving average */
-	old_rssi = btc->btrssi_sample[btc->btrssi_idx];
-	btc->btrssi_sample[btc->btrssi_idx] = cur_rssi;
-	/* sum = -old one, +new  */
-	btc->btrssi_sum = btc->btrssi_sum - old_rssi + cur_rssi;
-	ASSERT(btc->btrssi_cnt);
-	btrssi_avg = btc->btrssi_sum / btc->btrssi_cnt;
-
-	btc->btrssi_idx = MODINC_POW2(btc->btrssi_idx, btc->btrssi_maxsamp);
-
-	if (btc->btrssi_cnt < btc->btrssi_minsamp) {
-		btc->bt_rssi = BTC_BTRSSI_INVALID;
-		return;
-	} else if (!btc->bt_rssi)
-		wlc_btc_reset_btrssi(btc);
-
-	btc->bt_rssi = (int8)btrssi_avg;
 }
 
 static void

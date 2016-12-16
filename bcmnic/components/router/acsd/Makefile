@@ -9,19 +9,20 @@
 # or duplicated in any form, in whole or in part, without the prior
 # written permission of Broadcom.
 #
-# $Id: Makefile 593127 2015-10-15 11:23:46Z $
+# $Id: Makefile 658127 2016-09-06 12:54:31Z $
 #
 
 ifeq ($(WL_MEDIA_ACSD),1)
 include ../../../src/makefiles/WLAN_Common.mk
 export SRCBASE := $(WLAN_SrcBaseA)
+export SRCBASE_SYS := $(WLAN_SrcBaseA)
 export BASEDIR := $(WLAN_TreeBaseA)
 export TOP = ..
 
 endif
 
-CFLAGS	+= -I. -I$(TOP)/shared -I$(SRCBASE)/include ${WLAN_StdIncPathA} -I$(SRCBASE)/common/include -Wall -Werror
-CFLAGS	+= $(if $(WLAN_ComponentIncPath),$(WLAN_ComponentIncPath),$(addprefix -I,$(wildcard $(SRCBASE)/shared/bcmwifi/include)))
+CFLAGS	+= -I. -I$(TOP)/shared -I$(SRCBASE_SYS)/include ${WLAN_StdIncPathA} -I$(SRCBASE_SYS)/common/include -Wall -Werror
+CFLAGS	+= $(if $(WLAN_ComponentIncPath),$(WLAN_ComponentIncPath),$(addprefix -I,$(wildcard $(SRCBASE_SYS)/shared/bcmwifi/include)))
 ifeq ($(WL_MEDIA_ACSD_DEBUG),1)
 CFLAGS	+= -g -DDEBUG
 else
@@ -38,9 +39,9 @@ endif
 LDFLAGS += $(EXTRA_LDFLAGS)
 
 
-vpath %.c $(SRCBASE)/shared/
+vpath %.c $(SRCBASE_SYS)/shared/
 ifeq ($(WL_MEDIA_ACSD),1)
-vpath %.c $(SRCBASE)/shared/ $(SRCBASE)/shared/bcmwifi/src
+vpath %.c $(SRCBASE_SYS)/shared/ $(SRCBASE_SYS)/shared/bcmwifi/src
 endif
 
 all: acsd acs_cli

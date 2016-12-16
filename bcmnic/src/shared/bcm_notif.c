@@ -27,7 +27,19 @@
 #endif
 
 
+#if defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG)
+
+#if defined(ERR_USE_EVENT_LOG_RA)
+#define	NOTIF_ERROR(args)	EVENT_LOG_RA(EVENT_LOG_TAG_NOTIF_ERROR, args)
+#else
+#define	NOTIF_ERROR(args)	EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_NOTIF_ERROR, args)
+#endif /* ERR_USE_EVENT_LOG_RA */
+
+#elif defined(BCMDBG_ERR) || defined(BCMDBG)
+#define NOTIF_ERROR(args)	printf args
+#else
 #define NOTIF_ERROR(args)
+#endif /* defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG) */
 
 
 static void dealloc_module(bcm_notif_module_t *notif_module);
@@ -446,6 +458,32 @@ int bcm_notif_delete_list(bcm_notif_h *hdl)
  */
 int bcm_notif_dump_list(bcm_notif_h hdl, struct bcmstrbuf *b)
 {
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	struct bcm_notif_client_request * nodep;
+
+	if (hdl == NULL)
+		bcm_bprintf(b, "<uninit list>\n");
+	else {
+		nodep = hdl->tail;
+
+		bcm_bprintf(b, "List id=0x%p: ", OSL_OBFUSCATE_BUF(hdl));
+
+		if (nodep == NULL) {
+			bcm_bprintf(b, "(empty)");
+		} else {
+			/* List is not empty. Display all data in correct sequence. */
+			struct bcm_notif_client_request * firstp = hdl->tail->next;
+			nodep = nodep->next;
+			do {
+				bcm_bprintf(b, " [0x%p,0x%p]", OSL_OBFUSCATE_BUF(nodep->callback),
+				          OSL_OBFUSCATE_BUF(nodep->passthru));
+				nodep = nodep->next;
+			} while (nodep != firstp);
+		}
+	}
+
+	bcm_bprintf(b, "\n");
+#endif   /* BCMDBG || BCMDBG_DUMP */
 
 	return (BCME_OK);
 }

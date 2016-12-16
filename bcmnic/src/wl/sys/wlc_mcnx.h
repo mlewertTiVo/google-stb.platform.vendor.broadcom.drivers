@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mcnx.h 632923 2016-04-20 23:17:01Z $
+ * $Id: wlc_mcnx.h 659395 2016-09-14 03:09:14Z $
  */
 
 #ifndef _wlc_mcnx_h_
@@ -55,6 +55,7 @@ extern void wlc_mcnx_tbtt_inv(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg);
 extern void wlc_mcnx_tbtt_adj_all(wlc_mcnx_info_t *mcnx, int32 off_h, int32 off_l);
 extern void wlc_mcnx_tbtt_adj(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg, int adj);
 extern void wlc_mcnx_tbtt_upd(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg, bool set);
+extern uint32 wlc_get_bmi_bcn_offset(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg);
 extern void wlc_mcnx_unaligned_tbtt_upd(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg,
 	uint32 tbtt_tsfo);
 extern void wlc_mcnx_tbtt_calc(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg,

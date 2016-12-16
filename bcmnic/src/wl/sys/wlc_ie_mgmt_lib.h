@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt_lib.h 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_ie_mgmt_lib.h 665105 2016-10-14 23:39:24Z $
  */
 
 #ifndef _wlc_ie_mgmt_lib_h_
@@ -27,6 +27,12 @@
 #include <typedefs.h>
 #include <wlc_types.h>
 #include <wlc_ie_mgmt_types.h>
+
+/*
+ * maximum ID (IE ID, VS IE prio/id, etc) supported by the ieml module.
+ */
+#define WLC_IEM_ID_EXT_MAX	63
+#define WLC_IEM_ID_MAX		(255 + WLC_IEM_ID_EXT_MAX)
 
 /*
  * 'calc_len'/'build' callback pair callback table entry
@@ -44,9 +50,9 @@ typedef struct {
  * 'calc_fn', 'build_fn', and 'ctx' are the callback functions and context.
  * 'tag' is a value (IE tag or VS IE prio) that the callback pair is registered for.
  */
-extern void wlc_ieml_add_build_fn(uint8 *build_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx,
-	uint8 tag);
+extern void wlc_ieml_add_build_fn(wlc_iem_tag_t *build_tag, wlc_iem_cbe_t *build_cb,
+	uint16 build_cnt, wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx,
+	wlc_iem_tag_t tag);
 
 /*
  * Invoke to calculate all IEs' length.
@@ -57,9 +63,9 @@ extern void wlc_ieml_add_build_fn(uint8 *build_tag, wlc_iem_cbe_t *build_cb, uin
  * 'cfg' and 'ft' are the BSS and frame type that the function is called for, and are
  * passed to the 'calc_len' callbacks as is.
  */
-extern uint wlc_ieml_calc_len(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
+extern uint wlc_ieml_calc_len(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb,
+	uint16 build_cnt, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
 
 /*
  * Invoke to calculate a specific non Vendor Specific IE's length.
@@ -71,9 +77,9 @@ extern uint wlc_ieml_calc_len(wlc_bsscfg_t *cfg, uint16 ft,
  * passed to the 'calc_len' callbacks as is.
  * 'tag' is the specific IE's tag.
  */
-extern uint wlc_ieml_calc_ie_len(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	uint8 tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
+extern uint wlc_ieml_calc_ie_len(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
 
 /*
  * Invoke to write all IEs into buffer
@@ -85,9 +91,9 @@ extern uint wlc_ieml_calc_ie_len(wlc_bsscfg_t *cfg, uint16 ft,
  * passed to the 'build' callbacks as is.
  * 'buf' and 'buf_len' are the buffer and its length the IEs are written to.
  */
-extern int wlc_ieml_build_frame(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
+extern int wlc_ieml_build_frame(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb,
+	uint16 build_cnt, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
 	uint8 *buf, uint buf_len);
 
 /*
@@ -101,16 +107,17 @@ extern int wlc_ieml_build_frame(wlc_bsscfg_t *cfg, uint16 ft,
  * 'buf' and 'buf_len' are the buffer and its length the IEs are written to.
  * 'tag' is the specific IE's tag.
  */
-extern int wlc_ieml_build_ie(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	uint8 tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len);
+extern int wlc_ieml_build_ie(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
+	uint8 *buf, uint buf_len);
 
 /*
  * Sort calc_len/build callback table (build_tag + build_cb) entries based on
  * the tags order in the tag table 'tag'.
  */
-extern void wlc_ieml_sort_cbtbl(uint8 *build_tag, wlc_iem_cbe_t *buidd_cb, uint16 build_cnt,
-	const uint8 *tag, uint16 cnt);
+extern void wlc_ieml_sort_cbtbl(wlc_iem_tag_t *build_tag, wlc_iem_cbe_t *buidd_cb,
+	uint16 build_cnt, const wlc_iem_tag_t *tag, uint16 cnt);
 
 /*
  * 'parse' callback table entry
@@ -127,9 +134,9 @@ typedef struct {
  * 'parse_fn' and ctx are callback function and context.
  * 'tag' is a value (IE tag or VS IE id) that the callback is registered for.
  */
-extern void wlc_ieml_add_parse_fn(uint8 *parse_tag, wlc_iem_pe_t *parse_cb, uint16 parse_cnt,
-	wlc_iem_parse_fn_t parse_fn, void *ctx,
-	uint8 tag);
+extern void wlc_ieml_add_parse_fn(wlc_iem_tag_t *parse_tag, wlc_iem_pe_t *parse_cb,
+	uint16 parse_cnt, wlc_iem_parse_fn_t parse_fn, void *ctx,
+	wlc_iem_tag_t tag);
 
 /*
  * Invoke to parse all IEs in buffer.
@@ -140,9 +147,9 @@ extern void wlc_ieml_add_parse_fn(uint8 *parse_tag, wlc_iem_pe_t *parse_cb, uint
  * passed to the parse callbacks as is.
  * 'buf' and 'buf_len' are the buffer containing the IEs and their length in bytes.
  */
-extern int wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *parse_tag, bool is_tag, wlc_iem_pe_t *parse_cb, uint16 parse_cnt,
-	wlc_iem_upp_t *upp, wlc_iem_pparm_t *pparm,
+extern int wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *parse_tag, bool is_tag, wlc_iem_pe_t *parse_cb,
+	uint16 parse_cnt, wlc_iem_upp_t *upp, wlc_iem_pparm_t *pparm,
 	uint8 *buf, uint buf_len);
 
 #endif /* _wlc_ie_mgmt_lib_h_ */

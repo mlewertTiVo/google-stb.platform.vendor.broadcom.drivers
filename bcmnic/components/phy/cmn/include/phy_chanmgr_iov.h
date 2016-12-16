@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_chanmgr_iov.h 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_chanmgr_iov.h 642720 2016-06-09 18:56:12Z $
  */
 
 #ifndef _phy_chanmgr_iov_h_

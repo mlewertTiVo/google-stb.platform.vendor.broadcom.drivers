@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_fcbs.h 612041 2016-01-12 22:04:08Z guangjie $
+ * $Id: phy_fcbs.h 612041 2016-01-12 22:04:08Z $
  */
 
 #ifndef _phy_fcbs_h_

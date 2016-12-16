@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_var.h 600701 2015-11-19 14:44:26Z aswath $
+ * $Id: phy_utils_var.h 600701 2015-11-19 14:44:26Z $
  */
 
 #ifndef _phy_utils_var_h_

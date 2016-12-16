@@ -236,7 +236,25 @@ eapd_safe_get_conf(char *outval, int outval_size, char *name)
 int
 main(int argc, char* argv[])
 {
+#ifdef BCMDBG
+	char *dbg;
+#endif
 
+#ifdef BCMDBG
+	/* display usage if nothing is specified */
+	if (argc == 2 &&
+		(!strncmp(argv[1], "-h", 2) ||
+		!strncmp(argv[1], "-H", 2))) {
+		eapd_wksp_display_usage();
+		return 0;
+	}
+
+	/* get eapd_msg_level from nvram */
+	if ((dbg = nvram_get("eapd_dbg"))) {
+		eapd_msg_level = (uint)strtoul(dbg, NULL, 0);
+	}
+
+#endif
 	EAPD_INFO("EAP Dispatch Start...\n");
 	/* alloc eapd work space */
 	if (!(eapd_nwksp = eapd_wksp_alloc_workspace())) {

@@ -211,17 +211,17 @@ wl_bsscfg_enable(void *wl, cmd_t *cmd, char **argv)
 			int val;
 		} bss_setbuf;
 		if (!stricmp(*argv, "move"))
-			val = 4;
+			val = WLC_AP_IOV_OP_MOVE;
 		else if (!stricmp(*argv, "ap"))
-			val = 3;
+			val = WLC_AP_IOV_OP_MANUAL_AP_BSSCFG_CREATE;
 		else if (!stricmp(*argv, "sta"))
-			val = 2;
+			val = WLC_AP_IOV_OP_MANUAL_STA_BSSCFG_CREATE;
 		else if (!stricmp(*argv, "up"))
-			val = 1;
+			val = WLC_AP_IOV_OP_ENABLE;
 		else if (!stricmp(*argv, "down"))
-			val = 0;
+			val = WLC_AP_IOV_OP_DISABLE;
 		else if (!stricmp(*argv, "del"))
-			val = -1;
+			val = WLC_AP_IOV_OP_DELETE;
 		else {
 			val = strtol(*argv, &endptr, 0);
 			if (*endptr != '\0') {

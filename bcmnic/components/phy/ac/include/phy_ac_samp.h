@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_samp.h 635707 2016-05-05 00:32:31Z vyass $
+ * $Id: phy_ac_samp.h 655756 2016-08-23 12:40:40Z $
  */
 
 #ifndef _phy_ac_samp_h_
@@ -21,6 +21,16 @@
 #include <phy_api.h>
 #include <phy_ac.h>
 #include <phy_samp.h>
+#include <phy_type_samp.h>
+
+/* Macros for sample play */
+#ifdef IQPLAY_DEBUG
+#define SAMPLE_COLLECT_PLAY_CTRL_PLAY_MODE_SHIFT	10
+#define START_IDX_ADDR	65536
+#define AXI_BASE_ADDR	0xE8000000U
+#define MAIN_AUX_CORE_ADDR_OFFSET	0x800000U
+#define BM_BASE_OFFFSET_ADDR	0x00400000U
+#endif /* IQPLAY_DEBUG */
 
 /* forward declaration */
 typedef struct phy_ac_samp_info phy_ac_samp_info_t;

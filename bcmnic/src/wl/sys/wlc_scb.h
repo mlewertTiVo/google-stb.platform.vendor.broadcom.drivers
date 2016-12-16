@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scb.h 640732 2016-05-30 13:13:25Z $
+ * $Id: wlc_scb.h 660248 2016-09-19 21:45:03Z $
  */
 
 
@@ -25,14 +25,6 @@
 #include <wlc_rate.h>
 #include <wlioctl.h>
 #include <wlc_bsscfg.h>
-
-#ifndef WLCXO_CTRL
-#define SCBPKTPENDGET(wlc, scb)	0
-#define SCBPKTPENDSET(wlc, scb, val)
-#define SCBPKTPENDINC(wlc, scb, val)
-#define SCBPKTPENDDEC(wlc, scb, val)
-#define SCBPKTPENDCLR(wlc, scb)
-#endif /* WLCXO_CTRL */
 
 #ifdef WLCNTSCB
 typedef struct wlc_scb_stats {
@@ -106,6 +98,7 @@ struct scb {
 	uint16		cap;		/**< sta's advertized capability field */
 	wlc_if_t	*wds;		/**< per-port WDS cookie */
 	tx_path_node_t	*tx_path;	/**< pkt tx path (allocated as scb cubby) */
+	wl_if_stats_t	*if_stats;
 #ifdef WL_CS_RESTRICT_RELEASE
 	uint16	restrict_txwin;
 	uint8	restrict_deadline;
@@ -124,9 +117,6 @@ struct scb {
 	struct wlc_scb_dbg_bcn dbg_bcn;
 #endif
 };
-
-#define CXO_PAUSE_REASON_PS	(1 << 0)
-#define CXO_PAUSE_REASON_PPS	(1 << 1)
 
 /** Iterator for scb list */
 struct scb_iter {
@@ -167,6 +157,8 @@ typedef void (*scb_cubby_deinit_t)(void *, struct scb *);
 typedef uint (*scb_cubby_secsz_t)(void *, struct scb *);
 typedef void (*scb_cubby_dump_t)(void *, struct scb *, struct bcmstrbuf *b);
 typedef void (*scb_cubby_datapath_log_dump_t)(void *, struct scb *, int);
+/* Function to clone the scb from one bsscfg to another */
+typedef int (*scb_cubby_config_update_t)(void *, struct scb *, wlc_bsscfg_t *);
 
 typedef struct scb_cubby_params {
 	void *context;
@@ -175,6 +167,7 @@ typedef struct scb_cubby_params {
 	scb_cubby_dump_t fn_dump;
 	scb_cubby_datapath_log_dump_t fn_data_log_dump;
 	scb_cubby_secsz_t fn_secsz;
+	scb_cubby_config_update_t fn_update;
 } scb_cubby_params_t;
 
 /**
@@ -185,10 +178,26 @@ typedef struct scb_cubby_params {
  * It returns a handle that can be used in macro SCB_CUBBY to retrieve the cubby.
  * Function returns a negative number on failure
  */
+#ifdef BCMDBG
+int wlc_scb_cubby_reserve_ext(wlc_info_t *wlc, uint size, scb_cubby_params_t *params,
+                              const char *func);
+int wlc_scb_cubby_reserve(wlc_info_t *wlc, uint size,
+                          scb_cubby_init_t fn_init, scb_cubby_deinit_t fn_deinit,
+                          scb_cubby_dump_t fn_dump, void *context,
+                          const char *func);
+
+/* Macro defines to automatically supply the function name parameter */
+#define wlc_scb_cubby_reserve(wlc, size, fn_init, fn_deinit, fn_dump, ctx) \
+	wlc_scb_cubby_reserve(wlc, size, fn_init, fn_deinit, fn_dump, ctx, __FUNCTION__)
+
+#define wlc_scb_cubby_reserve_ext(wlc, size, params) \
+	wlc_scb_cubby_reserve_ext(wlc, size, params, __FUNCTION__)
+#else
 int wlc_scb_cubby_reserve_ext(wlc_info_t *wlc, uint size, scb_cubby_params_t *params);
 int wlc_scb_cubby_reserve(wlc_info_t *wlc, uint size,
                           scb_cubby_init_t fn_init, scb_cubby_deinit_t fn_deinit,
                           scb_cubby_dump_t fn_dump, void *context);
+#endif /* BCMDBG */
 
 /* macro to retrieve pointer to module specific opaque data in scb container */
 #define SCB_CUBBY(scb, handle)	(void *)(((uint8 *)(scb)) + handle)
@@ -256,8 +265,6 @@ bool wlc_scbfree(wlc_info_t *wlc, struct scb *remove);
 /** * "|" operation */
 void wlc_scb_setstatebit(wlc_info_t *wlc, struct scb *scb, uint8 state);
 
-bool wlc_scbfree_pktpend(wlc_info_t *wlc, struct scb *remove, int32 *pktpend);
-
 /** * "& ~" operation . */
 void wlc_scb_clearstatebit(wlc_info_t *wlc, struct scb *scb, uint8 state);
 
@@ -320,8 +327,6 @@ extern void wlc_scb_awdl_free(struct wlc_info *wlc);
 #define SCB2_SHA256             0x00000400      /**< sha256 for AKM */
 #define SCB2_VHTCAP             0x00000800      /**< VHT (11ac) capable device */
 #define SCB2_HECAP		0x00001000      /**< HE (11ax) capable device */
-#define SCB2_TWT_REQCAP		0x00002000      /**< TWT Requestor capable device */
-#define SCB2_TWT_RESPCAP	0x00004000      /**< TWT Responder capable device */
 #define SCB2_IGN_SMPS		0x08000000 	/**< ignore SM PS update */
 #define SCB2_IS80               0x10000000      /**< 80MHz capable */
 #define SCB2_AMSDU_IN_AMPDU_CAP	0x20000000      /**< AMSDU over AMPDU */
@@ -354,7 +359,6 @@ extern void wlc_scb_awdl_free(struct wlc_info *wlc);
 #define SCB3_AWDL_AGGR_CHANGE	0x04000000	/* Reduce tx agg for AWDL (Jira 49554)
 						 * Reserve for AWDL compatibility
 						 */
-#define SCB3_CXO		0x08000000      /* Enable CXO */
 #define SCB3_HT_BEAMFORMEE      0x10800000      /* Receive NDP Capable */
 #define SCB3_HT_BEAMFORMER      0x20000000      /* Transmit NDP Capable */
 #define SCB3_HE_TRIGGERED_TX	0x40000000		/* Use trigger queues for tx */
@@ -460,9 +464,6 @@ extern void wlc_scb_awdl_free(struct wlc_info *wlc);
 #define SCB_HE_TRIG_TX(a)	FALSE
 #endif /* WL11N */
 
-#define SCB_TWT_REQ_CAP(a)	((a)->flags2 & SCB2_TWT_REQCAP)
-#define SCB_TWT_RESP_CAP(a)	((a)->flags2 & SCB2_TWT_RESPCAP)
-
 #ifdef WL11AC
 #define SCB_OPER_MODE_NOTIF_CAP(a) ((a)->flags3 & SCB3_OPER_MODE_NOTIF)
 #else
@@ -482,18 +483,6 @@ extern void wlc_scb_awdl_free(struct wlc_info *wlc);
 #define SCB_PKTC_DISABLE(a)
 #define SCB_PKTC_ENABLED(a)	FALSE
 #endif
-
-#ifdef WLCXO_CTRL
-#define SCB_CXO_ENABLE(a)	((a)->flags3 |= SCB3_CXO)
-#define SCB_CXO_DISABLE(a)	((a)->flags3 &= ~SCB3_CXO)
-#define SCB_CXO_ENABLED(a)	((a)->flags3 & SCB3_CXO)
-#else
-#define SCB_CXO_ENABLE(a)
-#define SCB_CXO_DISABLE(a)
-#define SCB_CXO_ENABLED(a)	FALSE
-#endif
-
-#define SCB_11E(a)		FALSE
 
 #define SCB_QOS(a)		((a)->flags & (SCB_WMECAP | SCB_HTCAP))
 
@@ -562,7 +551,7 @@ extern void wlc_scb_awdl_free(struct wlc_info *wlc);
 #define WLCNTSCBSET(a,value)		/* No stats support */
 #define WLCNTSCBVAL(a)		0	/* No stats support */
 #define WLCNTSCB_COND_SET(c, a, v)	/* No stats support */
-#define WLCNTSCB_COND_ADD(c, a, d) 	/* No stats support */
+#define WLCNTSCB_COND_ADD(c, a, d)	/* No stats support */
 #define WLCNTSCB_COND_INCR(c, a)	/* No stats support */
 #endif /* WLCNTSCB */
 
@@ -570,7 +559,7 @@ extern void wlc_scb_switch_band(wlc_info_t *wlc, struct scb *scb, int new_bandun
 	wlc_bsscfg_t *bsscfg);
 
 extern struct scb * wlc_scbfind_dualband(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
-	struct ether_addr *addr);
+	const struct ether_addr *addr);
 
 typedef struct {
 	struct scb *scb;
@@ -580,9 +569,12 @@ typedef void (*scb_state_upd_cb_t)(void *arg, scb_state_upd_data_t *data);
 extern int wlc_scb_state_upd_register(wlc_info_t *wlc, scb_state_upd_cb_t fn, void *arg);
 extern int wlc_scb_state_upd_unregister(wlc_info_t *wlc, scb_state_upd_cb_t fn, void *arg);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void wlc_scb_dump_scb(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb,
+	struct bcmstrbuf *b, int idx);
+#endif
 
-void wlc_scbfind_delete(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
-	struct ether_addr *ea);
+void wlc_scbfind_delete(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,	struct ether_addr *ea);
 
 void wlc_scb_datapath_log_dump(wlc_info_t *wlc, struct scb *scb, int tag);
 
@@ -590,5 +582,8 @@ void wlc_scb_datapath_log_dump(wlc_info_t *wlc, struct scb *scb, int tag);
 int wlc_get_bcn_dbg_info(struct wlc_bsscfg *cfg, struct ether_addr *addr,
 	struct wlc_scb_dbg_bcn *dbg_bcn);
 #endif
+
+extern int wlc_scb_wlc_cfg_update(wlc_info_t *wlc_from, wlc_info_t *wlc_to, wlc_bsscfg_t *cfg_to,
+	struct scb *scb);
 
 #endif /* _wlc_scb_h_ */

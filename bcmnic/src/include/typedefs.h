@@ -16,7 +16,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: typedefs.h 641107 2016-06-01 08:07:23Z $
+ * $Id: typedefs.h 663318 2016-10-04 19:02:16Z $
  */
 
 #ifndef _TYPEDEFS_H_
@@ -341,7 +341,7 @@ typedef float64 float_t;
 /* Avoid warning for discarded const or volatile qualifier in special cases (-Wcast-qual) */
 #define DISCARD_QUAL(ptr, type) ((type *)(uintptr)(ptr))
 
-#else
+#else /* !EDK_RELEASE_VERSION || (EDK_RELEASE_VERSION < 0x00020000) */
 
 #include <sys/types.h>
 #include <strings.h>
@@ -352,9 +352,6 @@ typedef float64 float_t;
 #define stderr stdout
 #endif
 
-typedef UINT32  uint;
-typedef UINT64  ulong;
-typedef UINT16  ushort;
 typedef UINT8   uint8;
 typedef UINT16  uint16;
 typedef UINT32  uint32;
@@ -367,11 +364,6 @@ typedef INT64   int64;
 typedef BOOLEAN       bool;
 typedef unsigned char uchar;
 typedef UINTN         uintptr;
-
-typedef UINT8   u_char;
-typedef UINT16  u_short;
-typedef UINTN   u_int;
-typedef ULONGN  u_long;
 
 #define UNUSED_PARAMETER(x) (void)(x)
 #define DISCARD_QUAL(ptr, type) ((type *)(uintptr)(ptr))

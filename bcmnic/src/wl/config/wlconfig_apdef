@@ -28,6 +28,7 @@
 MFP      = $(if $(findstring y,$(CONFIG_MFP)),1,0)
 HSPOT    = $(if $(findstring y,$(CONFIG_HSPOT)),1,0)
 WLWNM_AP = $(if $(findstring y,$(CONFIG_WNM)$(CONFIG_HSPOT)),1,0)
+WLFBT    = $(if $(findstring y,$(CONFIG_FBT)),1,0)
 
 AP=1
 WDS=1

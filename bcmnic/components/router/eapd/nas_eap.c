@@ -10,7 +10,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: nas_eap.c 470487 2014-04-15 10:40:14Z $
+ * $Id: nas_eap.c 660153 2016-09-19 07:48:57Z $
  */
 
 #include <stdio.h>
@@ -63,6 +63,8 @@ nas_app_wpa2_akm2auth(uint32 akm)
 	switch (akm) {
 	case RSN_AKM_PSK:
 		return WPA2_AUTH_PSK;
+	case RSN_AKM_FBT_PSK:
+		return WPA2_AUTH_FT;
 	case RSN_AKM_UNSPECIFIED:
 		return WPA2_AUTH_UNSPECIFIED;
 	case RSN_AKM_NONE:
@@ -81,6 +83,8 @@ nas_app_wpa_auth2mode(int auth)
 		return WPA;
 	case WPA2_AUTH_PSK:
 		return WPA2_PSK;
+	case WPA2_AUTH_FT:
+		return WPA2_FT;
 	case WPA2_AUTH_UNSPECIFIED:
 		return WPA2;
 	case WPA_AUTH_DISABLED:
@@ -368,6 +372,9 @@ nas_app_set_eventmask(eapd_app_t *app)
 	setbit(app->bitvec, WLC_E_DISASSOC_IND);
 	setbit(app->bitvec, WLC_E_DEAUTH_IND);
 	setbit(app->bitvec, WLC_E_MIC_ERROR);
+#ifdef WLHOSTFBT
+	setbit(app->bitvec, WLC_E_FBT_AUTH_REQ_IND);
+#endif /* WLHOSTFBT */
 #ifdef WLWNM
 	setbit(app->bitvec, WLC_E_WNM_STA_SLEEP);
 #endif /* WLWNM */
@@ -630,6 +637,8 @@ nas_app_enabled(char *name)
 			nasm |= WPA2;
 		if (!strcmp(akm, "psk2"))
 			nasm |= WPA2_PSK;
+		if (!strcmp(akm, "psk2ft"))
+			nasm |= WPA2_FT;
 	}
 	if (!nasm) {
 		EAPD_INFO("NAS:ignored interface %s. Invalid NAS mode\n", os_name);

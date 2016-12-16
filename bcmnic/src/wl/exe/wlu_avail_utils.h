@@ -16,7 +16,7 @@
 #ifndef __WLU_AVAIL_UTILS_H___
 #define __WLU_AVAIL_UTILS_H__
 int
-wl_avail_parse_slot(char *arg_slot, wl_time_slot_t *out_avail_slot);
+wl_avail_parse_slot(char *arg_slot, wl_avail_slot_t *out_avail_slot);
 int
 wl_avail_parse_period(char *arg_slot, wl_time_interval_t *out_intvl);
 int

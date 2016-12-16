@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_rssi.c 646150 2016-06-28 17:04:40Z jqliu $
+ * $Id: phy_ht_rssi.c 663069 2016-10-04 01:20:17Z $
  */
 
 #include <phy_cfg.h>
@@ -27,6 +27,8 @@
 #include "phy_type_rssi.h"
 #include <phy_ht.h>
 #include <phy_ht_rssi.h>
+#include <phy_stf.h>
+#include <phy_noise_api.h>
 
 #ifndef ALL_NEW_PHY_MOD
 /* < TODO: all these are going away... */
@@ -51,10 +53,6 @@ static int phy_ht_rssi_dump(phy_type_rssi_ctx_t *ctx, struct bcmstrbuf *b);
 #else
 #define phy_ht_rssi_dump NULL
 #endif
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int phy_ht_rssi_get_pkteng_stats(phy_type_rssi_ctx_t *ctx, void *a, int alen,
-	wl_pkteng_stats_t stats);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 
 /* register phy type specific functions */
 phy_ht_rssi_info_t *
@@ -80,9 +78,6 @@ BCMATTACHFN(phy_ht_rssi_register_impl)(phy_info_t *pi, phy_ht_info_t *hti, phy_r
 	fns.compute = phy_ht_rssi_compute;
 	fns.init_gain_err = _phy_ht_rssi_init_gain_err;
 	fns.dump = phy_ht_rssi_dump;
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	fns.get_pkteng_stats = phy_ht_rssi_get_pkteng_stats;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 	fns.ctx = info;
 
 	phy_rssi_register_impl(ri, &fns);
@@ -162,16 +157,19 @@ phy_ht_rssi_compute(phy_type_rssi_ctx_t *ctx, wlc_d11rxhdr_t *wrxh)
 		 rxpwr_core[i] = MAX(-128, rxpwr_core[i]);
 		 wrxh->rxpwr[i] = (int8)rxpwr_core[i];
 	}
-	wrxh->do_rssi_ma = 0;
 
 	/* legacy interface */
 	if (PHYCORENUM(pi->pubpi->phy_corenum) == 1) {
 		rxpwr = rxpwr_core[0];
 	} else {
 		uint8 num_activecores = 0;
+		uint8 phyrxchain;
+
+		BCM_REFERENCE(phyrxchain);
 
 		rxpwr = 0;
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, i) {
+		phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+		FOREACH_ACTV_CORE(pi, phyrxchain, i) {
 			if (num_activecores++ == 0) {
 				rxpwr = rxpwr_core[i];
 			} else {
@@ -268,32 +266,3 @@ phy_ht_rssi_dump(phy_type_rssi_ctx_t *ctx, struct bcmstrbuf *b)
 	return BCME_OK;
 }
 #endif /* BCMDBG || BCMDBG_DUMP */
-
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int
-phy_ht_rssi_get_pkteng_stats(phy_type_rssi_ctx_t *ctx, void *a, int alen, wl_pkteng_stats_t stats)
-{
-	phy_ht_rssi_info_t *rssii = (phy_ht_rssi_info_t *)ctx;
-	phy_info_t *pi = rssii->pi;
-	uint16 rxstats_base;
-	int i;
-
-	stats.rssi = R_REG(pi->sh->osh, &pi->regs->rssi) & 0xff;
-	if (stats.rssi > 127) {
-		stats.rssi -= 256;
-	}
-	stats.snr = stats.rssi - PHY_NOISE_FIXED_VAL_NPHY;
-
-	/* rx pkt stats */
-	rxstats_base = wlapi_bmac_read_shm(pi->sh->physhim, M_RXSTATS_BLK_PTR(pi));
-	for (i = 0; i <= NUM_80211_RATES; i++) {
-		stats.rxpktcnt[i] =
-			wlapi_bmac_read_shm(pi->sh->physhim, 2*(rxstats_base+i));
-	}
-
-	bcopy(&stats, a,
-		(sizeof(wl_pkteng_stats_t) < (uint)alen) ? sizeof(wl_pkteng_stats_t) : (uint)alen);
-
-	return BCME_OK;
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */

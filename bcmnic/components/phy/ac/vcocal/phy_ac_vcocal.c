@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_vcocal.c 650142 2016-07-20 17:06:54Z ernst $
+ * $Id: phy_ac_vcocal.c 666529 2016-10-21 18:42:23Z $
  */
 
 #include <typedefs.h>
@@ -33,7 +33,7 @@
 #include <wlc_radioreg_20694.h>
 #include <wlc_radioreg_20695.h>
 #include <wlc_radioreg_20696.h>
-
+#include <phy_calmgr.h>
 #include <phy_rstr.h>
 #include <phy_utils_var.h>
 
@@ -42,16 +42,16 @@ struct phy_ac_vcocal_info {
 	phy_info_t			*pi;
 	phy_ac_info_t		*aci;
 	phy_vcocal_info_t	*cmn_info;
+	acphy_vcocal_radregs_t *ac_vcocal_radioregs_orig;
 	uint8				pll_mode;
-/* add other variable size variables here at the end */
-	acphy_vcocal_radregs_t ac_vcocal_radioregs_orig;
 	bool vcotune;
+	/* add other variable size variables here at the end */
 };
 
 /* local functions */
 static void wlc_phy_force_vcocal_acphy(phy_type_vcocal_ctx_t *ctx);
 static void phy_ac_vcocal_nvram_attach(phy_ac_vcocal_info_t *vcocali);
-
+static int phy_ac_vcocal_status(phy_type_vcocal_ctx_t *ctx);
 /* register phy type specific implementation */
 phy_ac_vcocal_info_t *
 BCMATTACHFN(phy_ac_vcocal_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
@@ -77,10 +77,17 @@ BCMATTACHFN(phy_ac_vcocal_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 
 	/* register PHY type specific implementation */
 	bzero(&fns, sizeof(fns));
-#if defined(BCMINTERNAL) || defined(WLTEST)
+#if defined(RADIO_HEALTH_CHECK)
 	fns.force = wlc_phy_force_vcocal_acphy;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+#endif 
+	fns.status = phy_ac_vcocal_status;
 	fns.ctx = ac_info;
+
+	if ((ac_info->ac_vcocal_radioregs_orig =
+		phy_malloc(pi, sizeof(acphy_vcocal_radregs_t))) == NULL) {
+		PHY_ERROR(("%s: ac_vcocal_radioregs_orig malloc failed\n", __FUNCTION__));
+		goto fail;
+	}
 
 	/* Read srom params from nvram */
 	phy_ac_vcocal_nvram_attach(ac_info);
@@ -94,8 +101,7 @@ BCMATTACHFN(phy_ac_vcocal_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 
 	/* error handling */
 fail:
-	if (ac_info != NULL)
-		phy_mfree(pi, ac_info, sizeof(phy_ac_vcocal_info_t));
+	phy_ac_vcocal_unregister_impl(ac_info);
 	return NULL;
 }
 
@@ -105,7 +111,9 @@ BCMATTACHFN(phy_ac_vcocal_unregister_impl)(phy_ac_vcocal_info_t *ac_info)
 	phy_vcocal_info_t *cmn_info;
 	phy_info_t *pi;
 
-	ASSERT(ac_info);
+	if (ac_info == NULL) {
+		return;
+	}
 	pi = ac_info->pi;
 	cmn_info = ac_info->cmn_info;
 
@@ -113,6 +121,10 @@ BCMATTACHFN(phy_ac_vcocal_unregister_impl)(phy_ac_vcocal_info_t *ac_info)
 
 	/* unregister from common */
 	phy_vcocal_unregister_impl(cmn_info);
+
+	if (ac_info->ac_vcocal_radioregs_orig != NULL) {
+		phy_mfree(pi, ac_info->ac_vcocal_radioregs_orig, sizeof(acphy_vcocal_radregs_t));
+	}
 
 	phy_mfree(pi, ac_info, sizeof(phy_ac_vcocal_info_t));
 }
@@ -126,6 +138,7 @@ wlc_phy_force_vcocal_acphy(phy_type_vcocal_ctx_t *ctx)
 	phy_ac_vcocal_info_t *info = (phy_ac_vcocal_info_t *)ctx;
 	phy_info_t *pi = info->pi;
 	/* IOVAR call */
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
 	if (TINY_RADIO(pi)) {
 		if (RADIOID_IS(pi->pubpi->radioid, BCM20691_ID)) {
 			/* turn on VCO Calibration clock */
@@ -153,6 +166,7 @@ wlc_phy_force_vcocal_acphy(phy_type_vcocal_ctx_t *ctx)
 	} else {
 		wlc_phy_radio2069_vcocal(pi);
 	}
+	wlapi_enable_mac(pi->sh->physhim);
 }
 
 static void
@@ -172,7 +186,7 @@ wlc_phy_radio_tiny_vcocal(phy_info_t *pi)
 
 	uint8 core;
 	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
-	acphy_vcocal_radregs_t *porig = &(pi_ac->vcocali->ac_vcocal_radioregs_orig);
+	acphy_vcocal_radregs_t *porig = pi_ac->vcocali->ac_vcocal_radioregs_orig;
 
 	ASSERT(TINY_RADIO(pi));
 
@@ -184,7 +198,6 @@ wlc_phy_radio_tiny_vcocal(phy_info_t *pi)
 		porig->clk_div_ovr1 = _READ_RADIO_REG(pi, RADIO_REG_20693(pi, CLK_DIV_OVR1, 0));
 		porig->clk_div_cfg1 = _READ_RADIO_REG(pi, RADIO_REG_20693(pi, CLK_DIV_CFG1, 0));
 
-		/* JIRA: SW4349-937 */
 		/* In core0, afeclk_6/12g_xxx_mimo_xxx needs to be off */
 		ACPHY_REG_LIST_START
 			MOD_RADIO_REG_20693_ENTRY(pi, CLK_DIV_OVR1, 0, ovr_afeclkdiv_6g_mimo_pu, 1)
@@ -467,21 +480,22 @@ wlc_phy_radio2069_vcocal(phy_info_t *pi)
 	MOD_RADIO_REG(pi, RFP, PLL_VCOCAL1, rfpll_vcocal_cal, 1);
 }
 
-#define MAX_2069x_VCOCAL_WAITLOOPS 100
+#define RADIO2069X_VCOCAL_MAX_WAITLOOPS 100
 
 /* vcocal should take < 120 us */
-void
+int
 wlc_phy_radio2069x_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calcode)
 {
 	/* Use legacy mode */
-	uint8 done, itr, core, start_core = 0, end_core = 0;
+	int done, itr;
+	uint8 core, start_core = 0, end_core = 0;
 	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
-	acphy_vcocal_radregs_t *porig = &(pi_ac->vcocali->ac_vcocal_radioregs_orig);
+	acphy_vcocal_radregs_t *porig = pi_ac->vcocali->ac_vcocal_radioregs_orig;
 	uint8 pll_mode = pi_ac->vcocali->pll_mode;
 	uint16 maincap = 0, secondcap = 0, auxcap = 0, base_addr;
 
 	if (ISSIM_ENAB(pi->sh->sih))
-		return;
+		return RADIO2069X_VCOCAL_NO_HWSUPPORT;
 
 	switch (pll_mode) {
 	case 0:
@@ -510,13 +524,14 @@ wlc_phy_radio2069x_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 		PHY_ERROR(("wl%d: %s: Unsupported PLL/VCO operating mode %d\n",
 			pi->sh->unit, __FUNCTION__, pll_mode));
 		ASSERT(0);
-		return;
+		return RADIO2069X_VCOCAL_UNSUPPORTED_MODE;
 	}
 
 	/* Wait for vco_cal to be done, max = 100us * 10 = 1ms	*/
-	done = 0;
+	done = RADIO2069X_VCOCAL_NOT_DONE;
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
 	if (RADIOID_IS(pi->pubpi->radioid, BCM20693_ID) && RADIOMAJORREV(pi) == 3) {
-		for (itr = 0; itr < MAX_2069x_VCOCAL_WAITLOOPS; itr++) {
+		for (itr = 0; itr < RADIO2069X_VCOCAL_MAX_WAITLOOPS; itr++) {
 			OSL_DELAY(10);
 			if (TINY_RADIO(pi)) {
 				done = READ_RADIO_PLLREGFLD_20693(pi, PLL_STATUS1, start_core,
@@ -535,7 +550,7 @@ wlc_phy_radio2069x_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 			if (ISSIM_ENAB(pi->sh->sih))
 				done = 1;
 
-			if (done == 1)
+			if (done == RADIO2069X_VCOCAL_IS_DONE)
 				break;
 		}
 	} else {
@@ -580,11 +595,12 @@ wlc_phy_radio2069x_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 		wlapi_enable_mac(pi->sh->physhim);
 	}
 
+	wlapi_enable_mac(pi->sh->physhim);
 	/* Need to wait extra time after vcocal done bit is high for it to settle */
 	if (set_delay == TRUE)
 		OSL_DELAY(120);
 
-	ASSERT(done & 0x1);
+	ASSERT(done & RADIO2069X_VCOCAL_IS_DONE);
 
 	/* Restore the radio regs for core 0 */
 	if (RADIOID_IS(pi->pubpi->radioid, BCM20693_ID) && RADIOMAJORREV(pi) != 3) {
@@ -641,6 +657,7 @@ wlc_phy_radio2069x_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 	}
 
 	PHY_INFORM(("wl%d: %s vcocal done\n", pi->sh->unit, __FUNCTION__));
+	return done;
 }
 
 void
@@ -659,7 +676,7 @@ wlc_phy_28nm_radio_vcocal(phy_info_t *pi, uint8 cal_mode, uint8 coupling_mode)
 	MOD_RADIO_REG_28NM(pi, RFP, XTAL6, 0, xtal_outbufCalstrg, 0xF);
 
 	/* PLL configured */
-	pll_sel = pi_ac->pll_sel;
+	pll_sel = phy_ac_radio_get_data(pi_ac->radioi)->pll_sel;
 
 	if (pll_sel == PLL_2G) {
 		/* 2G PLL */
@@ -751,7 +768,8 @@ wlc_phy_28nm_radio_vcocal_isdone(phy_info_t *pi, bool set_delay)
 	for (itr = 0; itr < 10; itr++) {
 		OSL_DELAY(10);
 
-		done = (pi_ac->pll_sel == PLL_2G) ? READ_RADIO_REGFLD_28NM(pi, RFP,
+		done = (phy_ac_radio_get_data(pi_ac->radioi)->pll_sel == PLL_2G) ?
+				READ_RADIO_REGFLD_28NM(pi, RFP,
 				PLL_STATUS1, 0, rfpll_vcocal_done_cal) :
 				READ_RADIO_REGFLD_28NM(pi, RFP, PLL5G_STATUS1, 0,
 				rfpll_5g_vcocal_done_cal);
@@ -761,7 +779,8 @@ wlc_phy_28nm_radio_vcocal_isdone(phy_info_t *pi, bool set_delay)
 	}
 
 	/* Clear Slope In OVR */
-	(pi_ac->pll_sel == PLL_2G) ? MOD_RADIO_REG_28NM(pi, RFP, PLL_VCOCAL_OVR1, 0,
+	(phy_ac_radio_get_data(pi_ac->radioi)->pll_sel == PLL_2G) ?
+			MOD_RADIO_REG_28NM(pi, RFP, PLL_VCOCAL_OVR1, 0,
 			ovr_rfpll_vcocal_slopeIn, 0x0) :
 			MOD_RADIO_REG_28NM(pi, RFP, PLL5G_VCOCAL_OVR1, 0,
 			ovr_rfpll_5g_vcocal_slopeIn, 0x0);
@@ -774,7 +793,7 @@ wlc_phy_28nm_radio_vcocal_isdone(phy_info_t *pi, bool set_delay)
 	  OSL_DELAY(120);
 	}
 
-	if (pi_ac->pll_sel == PLL_2G) {
+	if (phy_ac_radio_get_data(pi_ac->radioi)->pll_sel == PLL_2G) {
 		if (done == 1) {
 			PHY_INFORM(("wl%d: %s 2G vcocal success, status = %d\n",
 					pi->sh->unit, __FUNCTION__, READ_RADIO_REGFLD_28NM(pi,
@@ -812,10 +831,8 @@ wlc_phy_20694_radio_vcocal(phy_info_t *pi, uint8 cal_mode, uint8 coupling_mode)
 
 	MOD_RADIO_REG_20694(pi, RFP, PLL_CFG6, 0, rfpll_vcocal_clk_pu, 0x1);
 	MOD_RADIO_REG_20694(pi, RFP, PLL_OVR1, 0, ovr_rfpll_vcocal_clk_pu, 1);
-	MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL2, 0, rfpll_vcocal_force_caps_ovr, 0x0);
 
 	if (sicoreunit == DUALMAC_MAIN) {
-		MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL21, 0, rfpll_vcocal_force_caps2_ovr, 0x0);
 		MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL22, 0, rfpll_vcocal_force_aux1_ovr, 0x0);
 		MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL23, 0, rfpll_vcocal_force_aux2_ovr, 0x0);
 	}
@@ -842,7 +859,7 @@ wlc_phy_20694_radio_vcocal(phy_info_t *pi, uint8 cal_mode, uint8 coupling_mode)
 		/* Slope In */
 		MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL15, 0, rfpll_vcocal_slopeIn,
 			rfpll_vcocal_slopeIn[0]);
-	  }
+	}
 
 	if (sicoreunit == DUALMAC_MAIN) {
 		if (READ_RADIO_REGFLD_20694(pi, RFP, PLL_VCOCAL24, 0,
@@ -869,7 +886,7 @@ wlc_phy_20694_radio_vcocal(phy_info_t *pi, uint8 cal_mode, uint8 coupling_mode)
 		OSL_DELAY(10);
 		MOD_RADIO_REG_20694(pi, RFP, PLL_CFG2, 0, rfpll_rst_n, 0x1);
 
-		} else {
+	} else {
 		/* WARM Start */
 		// WARM Start When pll_val is changed without rst_n toggling
 		// Initialize slope & offset: If slope == 0
@@ -882,8 +899,6 @@ wlc_phy_20694_radio_vcocal(phy_info_t *pi, uint8 cal_mode, uint8 coupling_mode)
 		MOD_RADIO_REG_20694(pi, RFP, PLL_CFG2, 0, rfpll_rst_n, 0x1);
 	}
 }
-/* ************************************************************************** */
-
 
 void
 wlc_phy_20696_radio_vcocal(phy_info_t *pi, uint8 cal_mode, uint8 coupling_mode)
@@ -945,7 +960,6 @@ wlc_phy_20696_radio_vcocal(phy_info_t *pi, uint8 cal_mode, uint8 coupling_mode)
 		MOD_RADIO_PLLREG_20696(pi, PLL_CFG2, rfpll_rst_n, 0x1);
 	}
 }
-/* ************************************************************************** */
 
 void
 wlc_phy_radio20694_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calcode)
@@ -953,6 +967,8 @@ wlc_phy_radio20694_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 	uint8 done, itr;
 	uint16 maincap = 0, secondcap = 0, auxcap = 0;
 	uint16 shmoff = (wlapi_bmac_read_shm(pi->sh->physhim, M_USEQ_PWRUP_PTR(pi)) << 1);
+	uint sicoreunit;
+	sicoreunit = wlapi_si_coreunit(pi->sh->physhim);
 
 	/* Wait for vco_cal to be done, max = 10us * 10 = 100us  */
 	/* timeout is 1ms in TCL */
@@ -964,6 +980,8 @@ wlc_phy_radio20694_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 			break;
 		}
 	}
+	ASSERT(done & 0x1);
+
 	/* Clear Slope In OVR */
 	MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL_OVR1, 0, ovr_rfpll_vcocal_slopeIn, 0x0);
 	/* PD cal clock */
@@ -982,19 +1000,31 @@ wlc_phy_radio20694_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 			/* power off vcocal_clk */
 			MOD_RADIO_REG_20694(pi, RFP, PLL_CFG6, 0, rfpll_vcocal_clk_pu, 0x1);
 			MOD_RADIO_REG_20694(pi, RFP, PLL_OVR1, 0, ovr_rfpll_vcocal_clk_pu, 0x1);
-			MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL7, 0,
-			rfpll_vcocal_CalCapRBMode, 0x2);
 
-			maincap = READ_RADIO_REGFLD_20694(pi, RFP, PLL_STATUS2, 0,
-			rfpll_vcocal_calCapRB);
-			MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL7, 0,
-			rfpll_vcocal_CalCapRBMode, 0x3);
-			secondcap = READ_RADIO_REGFLD_20694(pi, RFP, PLL_STATUS2, 0,
-			rfpll_vcocal_calCapRB);
-			MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL7, 0,
-			rfpll_vcocal_CalCapRBMode, 0x4);
+			MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL7, 0, rfpll_vcocal_CalCapRBMode,
+				0x2);
+
+			maincap =
+				((sicoreunit == DUALMAC_MAIN) &&
+				(READ_RADIO_REGFLD_20694(pi, RFP, PLL_CFG5, 0,
+					rfpll_vco_core1_en) == 0)) ?
+				0 : READ_RADIO_REGFLD_20694(pi, RFP, PLL_STATUS2, 0,
+					rfpll_vcocal_calCapRB);
+
+			MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL7, 0, rfpll_vcocal_CalCapRBMode,
+				0x3);
+
+			secondcap =
+				((sicoreunit == DUALMAC_MAIN) &&
+				(READ_RADIO_REGFLD_20694(pi, RFP, PLL_CFG5, 0,
+					rfpll_vco_core2_en) == 0)) ?
+				0 : READ_RADIO_REGFLD_20694(pi, RFP, PLL_STATUS2, 0,
+					rfpll_vcocal_calCapRB);
+
+			MOD_RADIO_REG_20694(pi, RFP, PLL_VCOCAL7, 0, rfpll_vcocal_CalCapRBMode,
+				0x4);
 			auxcap = READ_RADIO_REGFLD_20694(pi, RFP, PLL_STATUS2, 0,
-			rfpll_vcocal_calCapRB);
+				rfpll_vcocal_calCapRB);
 
 			/* PD cal clock */
 			MOD_RADIO_REG_20694(pi, RFP, XTAL6, 0, xtal_pu_caldrv, 0x0);
@@ -1004,7 +1034,7 @@ wlc_phy_radio20694_vcocal_isdone(phy_info_t *pi, bool set_delay, bool cache_calc
 
 			wlapi_bmac_write_shm(pi->sh->physhim, (shmoff + 0x44), (0x1000 | maincap));
 			wlapi_bmac_write_shm(pi->sh->physhim, (shmoff + 0x4c),
-			(0x1000 | secondcap));
+				(0x1000 | secondcap));
 			wlapi_bmac_write_shm(pi->sh->physhim, (shmoff + 0x54), (0x1000 | auxcap));
 			wlapi_bmac_write_shm(pi->sh->physhim, (shmoff + 0x5c), (0x1000 | auxcap));
 		}
@@ -1089,13 +1119,25 @@ phy_ac_vcocal(phy_info_t *pi)
 	 */
 	if (pi->first_cal_after_assoc) {
 		pi->cal_info->cal_phase_id++;
+#if defined(PHYCAL_CACHING)
+	} else if (ctx && (ctx->valid != TRUE)) {
+		pi->cal_info->cal_phase_id++;
+#endif
 	} else {
 		wlc_phy_table_write_acphy(pi, wlc_phy_get_tbl_id_iqlocal(pi, 0), 1,
 		                          IQTBL_CACHE_COOKIE_OFFSET, 16, &tbl_cookie);
 #if defined(PHYCAL_CACHING)
-		if (ctx)
-			wlc_phy_cal_cache((wlc_phy_t *)pi);
+		if (ctx) {
+			phy_ac_tpc_save_cache(pi->u.pi_acphy->tpci, ctx);
+		}
 #endif
-		wlc_phy_cal_perical_mphase_reset(pi);
+		phy_calmgr_mphase_reset(pi->calmgri);
 	}
+}
+static int
+phy_ac_vcocal_status(phy_type_vcocal_ctx_t *ctx)
+{
+	phy_ac_vcocal_info_t *info = (phy_ac_vcocal_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+	return wlc_phy_radio2069x_vcocal_isdone(pi, TRUE, FALSE);
 }

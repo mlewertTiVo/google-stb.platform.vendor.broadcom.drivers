@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ht.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_ht.c 665208 2016-10-16 23:44:23Z $
  */
 
 /** 802.11n (High Throughput) */
@@ -60,7 +60,6 @@
 #include <wlc_tdls.h>
 #endif
 #include <wlc_txmod.h>
-#include <wlc_ulb.h>
 
 #include <wlc_tx.h>
 #include <wlc_txc.h>
@@ -71,6 +70,8 @@
 #include <wlc_rspec.h>
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
+#include <phy_stf_api.h>
+#include <phy_misc_api.h>
 
 /* IE mgmt */
 static uint wlc_ht_calc_cap_ie_len(void *ctx, wlc_iem_calc_data_t *data);
@@ -100,6 +101,13 @@ static int wlc_ht_tdls_parse_op_ie(void *ctx, wlc_iem_parse_data_t *parse);
 #endif /* IEEE2012_TDLSSEPC */
 #endif /* WLTDLS */
 
+#if defined(WL_NAN)
+static int wlc_ht_nan_write_cap_ie(void *ctx, wlc_iem_build_data_t *data);
+static uint wlc_ht_nan_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data);
+static int wlc_ht_nan_write_op_ie(void *ctx, wlc_iem_build_data_t *data);
+#endif /* defined(WL_NAN) */
+
+static int wlc_ht_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg);
 static int wlc_ht_scb_init(void *context, struct scb *scb);
 static void wlc_ht_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
 
@@ -121,7 +129,11 @@ static void *
 wlc_send_action_ht_mimops(wlc_ht_info_t *hti, wlc_bsscfg_t *bsscfg, uint8 mimops_mode);
 
 static int
-wlc_update_bwcap(wlc_ht_info_t *hti, int bandtype, uint8 bwcap);
+wlc_update_bwcap(wlc_ht_info_t *hti, int bandtype, uint8 bwcap, bool use_max_phycap);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_dump_htcap(wlc_ht_info_t *hti, struct bcmstrbuf *b);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static void
 wlc_update_mimo_band_bwcap(wlc_info_t *wlc, uint8 bwcap);
@@ -155,6 +167,10 @@ wlc_ht_set_cap_params(wlc_ht_info_t *pub, uint8 p);
 static uint8
 wlc_ht_get_cap_params(wlc_ht_info_t *pub);
 
+#ifdef BCMDBG
+static void
+wlc_get_mcsset(wlc_ht_info_t *hti, void *arg, bool istx);
+#endif /* BCMDBG */
 
 static uint16 wlc_ht_get_scb_cap(wlc_ht_info_t *hti, struct scb *scb);
 static int32 wlc_ht_get_rifs_advert(wlc_ht_info_t *hti);
@@ -165,6 +181,23 @@ static void wlc_ht_update_txbw_override(wlc_ht_info_t *pub);
 static void wlc_ht_build_cap_ie(wlc_bsscfg_t *cfg, ht_cap_ie_t *cap_ie,
 	uint8* sup_mcs, bool is2G);
 
+#if defined(BCMDBG)
+enum txbw_override {
+	WLC_TXBW_20MHZ = 2,
+	WLC_TXBW_20MHZ_UP,
+	WLC_TXBW_40MHZ,
+	WLC_TXBW_40MHZ_DUP,
+	WLC_TXBW_80MHZ_20LL,
+	WLC_TXBW_80MHZ_20LU,
+	WLC_TXBW_80MHZ_20UL,
+	WLC_TXBW_80MHZ_20UU,
+	WLC_TXBW_80MHZ_40L,
+	WLC_TXBW_80MHZ_40U,
+	WLC_TXBW_80MHZ
+};
+#define WLC_TXBW40_MAX  WLC_TXBW_40MHZ
+#define WLC_TXBW80_MAX WLC_TXBW_80MHZ
+#endif 
 
 typedef struct wlc_ht_priv_info {
 	wlc_info_t *wlc;
@@ -200,6 +233,10 @@ typedef struct wlc_ht_scb_info_priv {
 	uint16		amsdu_ht_mtu_pref;	/* preferred HT AMSDU mtu in bytes */
 	uint16		ht_capabilities;	/* current advertised capability set */
 	uint8		ht_ampdu_params;	/* current adverised AMPDU config */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	uint8		rclen;			/* regulatory class length */
+	uint8		rclist[MAXRCLISTSIZE];	/* regulatory class list */
+#endif /* BCMDBG || BCMDBG_DUMP */
 } wlc_ht_scb_info_priv_t;
 
 typedef struct wlc_ht_scb_cubby {
@@ -285,6 +322,14 @@ static const bcm_iovar_t ht_iovars[] = {
 	{"mimo_ps", IOV_HT_MIMOPS,
 	(IOVF_OPEN_ALLOW), 0, IOVT_UINT8, 0
 	},
+#ifdef BCMDBG
+	{"txmcsset", IOV_TXMCSSET,
+	(0), 0, IOVT_BUFFER, 0
+	},
+	{"rxmcsset", IOV_RXMCSSET,
+	(0), 0, IOVT_BUFFER, 0
+	},
+#endif /* BCMDBG */
 	{"nrate", IOV_NRATE,
 	(IOVF_OPEN_ALLOW), 0, IOVT_UINT32, 0
 	},
@@ -294,6 +339,16 @@ static const bcm_iovar_t ht_iovars[] = {
 	{"cur_mcsset", IOV_CURR_MCSSET,
 	(IOVF_OPEN_ALLOW), 0, IOVT_BUFFER, MCSSET_LEN
 	},
+#if defined(BCMDBG)
+	{"mimo_txbw", IOV_MIMO_TXBW,
+	(IOVF_MFG), 0, IOVT_INT32, 0
+	},
+#endif 
+#if defined(BCMDBG)
+	{"aggdbg", IOV_AGGDBG,
+	(0), 0, IOVT_INT32, 0
+	},
+#endif
 	{"nreqd", IOV_NREQD,
 	(IOVF_SET_DOWN|IOVF_OPEN_ALLOW), 0, IOVT_UINT32, 0
 	},
@@ -324,6 +379,20 @@ static const bcm_iovar_t ht_iovars[] = {
 	{"ldpc_tx", IOV_LDPC_TX,
 	(0), 0, IOVT_INT32, 0
 	},
+#ifdef BCMDBG
+	{"ofdm_txbw", IOV_OFDM_TXBW,
+	(0), 0, IOVT_INT32, 0
+	},
+	{"cck_txbw", IOV_CCK_TXBW,
+	(0), 0, IOVT_INT32, 0
+	},
+	{"txburst_limit", IOV_TXBURST_LIM,
+	(0), 0, IOVT_INT32, 0
+	},
+	{"htphy_membership", IOV_HTPHY_MEMBERSHIP,
+	(IOVF_SET_DOWN), 0, IOVT_BOOL, 0
+	},
+#endif /* BCMDBG */
 	{"ht_wsec_restrict", IOV_HT_WSEC_RESTRICT,
 	(0), 0, IOVT_INT32, 0,
 	},
@@ -374,7 +443,7 @@ wlc_ht_update_ldpc(wlc_ht_info_t *pub, int8 val)
 	if (wlc->pub->up) {
 		wlc_update_beacon(wlc);
 		wlc_update_probe_resp(wlc, TRUE);
-		wlc_phy_ldpc_override_set(WLC_PI(wlc), (val ? TRUE : FALSE));
+		phy_misc_set_ldpc_override(WLC_PI(wlc), (val ? TRUE : FALSE));
 	}
 }
 
@@ -397,18 +466,11 @@ void BCMATTACHFN(wlc_ht_init_defaults)(wlc_ht_info_t *pub)
 		hti->cap_ie.cap &= ~HT_CAP_MAX_AMSDU;
 	}
 
-	if (WLCISLCNPHY(wlc->band) && LCNREV_LE(wlc->band->phyrev, 2)) {
-		hti->cap_ie.cap &= ~HT_CAP_40MHZ;
-	}
-
 	if (WLC_BITSCNT(wlc->stf->hw_rxchain) == 1) {
 		hti->cap_ie.cap &= ~HT_CAP_MIMO_PS_MASK;
 		hti->cap_ie.cap |= (HT_CAP_MIMO_PS_ON << HT_CAP_MIMO_PS_SHIFT);
 	}
 
-	if (CHIPID(wlc->pub->sih->chip) == BCM4313_CHIP_ID) {
-		hti->cap_ie.cap &= ~HT_CAP_GF;
-	}
 #if WL_HT_TXBW_OVERRIDE_ENAB
 	pub->mimo_40txbw = AUTO;
 	pub->ofdm_40txbw = AUTO;
@@ -419,27 +481,16 @@ void BCMATTACHFN(wlc_ht_init_defaults)(wlc_ht_info_t *pub)
 	{
 		uint8 bw_cap = WLC_BW_CAP_20MHZ;
 
-#ifdef WL11ULB
-		if (ULB_ENAB(wlc->pub)) {
-			bw_cap |= (WLC_2P5MHZ_ULB_SUPP_HW(wlc) ? WLC_BW_CAP_2P5MHZ : 0);
-			bw_cap |= (WLC_5MHZ_ULB_SUPP_HW(wlc)   ? WLC_BW_CAP_5MHZ   : 0);
-			bw_cap |= (WLC_10MHZ_ULB_SUPP_HW(wlc)  ? WLC_BW_CAP_10MHZ  : 0);
-		}
-#endif /* WL11ULB */
-
-		wlc_update_bwcap(pub, WLC_BAND_2G, bw_cap);
+		wlc_update_bwcap(pub, WLC_BAND_2G, bw_cap, FALSE);
 	}
-	wlc_update_bwcap(pub, WLC_BAND_5G, WLC_BW_CAP_UNRESTRICTED);
+	wlc_update_bwcap(pub, WLC_BAND_5G, WLC_BW_CAP_UNRESTRICTED, TRUE);
 
 	/* Enable setting the RIFS Mode bit by default in HT Info IE */
 	hti->rifs_advert = AUTO;
 
 	/* Set default values of SGI */
 	if (WLC_SGI_CAP_PHY(wlc)) {
-		if (WLCISLCNPHY(wlc->band))
-			wlc_ht_update_sgi_rx(pub, WLC_N_SGI_20);
-		else
-			wlc_ht_update_sgi_rx(pub, (WLC_N_SGI_20 | WLC_N_SGI_40));
+		wlc_ht_update_sgi_rx(pub, (WLC_N_SGI_20 | WLC_N_SGI_40));
 		pub->sgi_tx = AUTO;
 	} else {
 		wlc_ht_update_sgi_rx(pub, 0);
@@ -470,6 +521,7 @@ BCMATTACHFN(wlc_ht_attach)(wlc_info_t *wlc)
 {
 	wlc_ht_info_t *hti;
 	wlc_ht_priv_info_t *htip;
+	scb_cubby_params_t ht_scb_cubby_params;
 
 	uint16 capfstbmp =
 	        FT2BMP(FC_BEACON) |
@@ -561,7 +613,8 @@ BCMATTACHFN(wlc_ht_attach)(wlc_info_t *wlc)
 		}
 		/* tdlssetupresp */
 		if (wlc_ier_add_build_fn(wlc->ier_tdls_srs, DOT11_MNG_HT_CAP,
-			wlc_ht_tdls_calc_cap_ie_len, wlc_ht_tdls_write_cap_ie, hti) != BCME_OK) {
+				wlc_ht_tdls_calc_cap_ie_len, wlc_ht_tdls_write_cap_ie, hti)
+				!= BCME_OK) {
 			WL_ERROR(("wl%d: %s: wlc_ier_add_build_fn failed, "
 				"ht cap ie in tdls setupresp\n", wlc->pub->unit, __FUNCTION__));
 			goto fail;
@@ -569,28 +622,45 @@ BCMATTACHFN(wlc_ht_attach)(wlc_info_t *wlc)
 	/* tdlssetupconfirm */
 #ifdef IEEE2012_TDLSSEPC
 		if (wlc_ier_add_build_fn(wlc->ier_tdls_scf, DOT11_MNG_HT_ADD,
-			wlc_ht_tdls_calc_op_ie_len, wlc_ht_tdls_write_op_ie, hti) != BCME_OK) {
+				wlc_ht_tdls_calc_op_ie_len, wlc_ht_tdls_write_op_ie, hti)
+				!= BCME_OK) {
 			WL_ERROR(("wl%d: %s: wlc_ier_add_build_fn failed, "
 				"ht op ie in tdls setupconfirm\n", wlc->pub->unit, __FUNCTION__));
 			goto fail;
 		}
 #else
 		if (wlc_ier_add_build_fn(wlc->ier_tdls_scf, DOT11_MNG_HT_CAP,
-			wlc_ht_tdls_calc_cap_ie_len, wlc_ht_tdls_write_cap_ie, hti) != BCME_OK) {
+				wlc_ht_tdls_calc_cap_ie_len, wlc_ht_tdls_write_cap_ie, hti)
+				!= BCME_OK) {
 			WL_ERROR(("wl%d: %s: wlc_ier_add_build_fn failed, "
 				"ht cap ie in tdls setupconfirm\n", wlc->pub->unit, __FUNCTION__));
 			goto fail;
 		}
-#endif
+#endif /* IEEE2012_TDLSSEPC */
 		/* tdlsdiscresp */
 		if (wlc_ier_add_build_fn(wlc->ier_tdls_drs, DOT11_MNG_HT_CAP,
-			wlc_ht_tdls_calc_cap_ie_len, wlc_ht_tdls_write_cap_ie, hti) != BCME_OK) {
+				wlc_ht_tdls_calc_cap_ie_len, wlc_ht_tdls_write_cap_ie, hti)
+				!= BCME_OK) {
 			WL_ERROR(("wl%d: %s: wlc_ier_add_build_fn failed, "
 				"ht cap ie in tdls discresp\n", wlc->pub->unit, __FUNCTION__));
 			goto fail;
 		}
 	}
 #endif /* WLTDLS */
+#if defined(WL_NAN)
+	if (wlc_ier_add_build_fn(wlc->ier_nan_elmt_cntr, DOT11_MNG_HT_CAP,
+			wlc_ht_calc_cap_ie_len, wlc_ht_nan_write_cap_ie, hti) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_ier_add_build_fn failed, "
+			"ht cap ie in nan element container\n", wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+	if (wlc_ier_add_build_fn(wlc->ier_nan_elmt_cntr, DOT11_MNG_HT_ADD,
+			wlc_ht_nan_calc_op_ie_len, wlc_ht_nan_write_op_ie, hti) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_ier_add_build_fn failed, "
+			"ht op ie in nan element container\n", wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif /* WL_NAN */
 	/* parse */
 #ifdef AP
 	/* assocreq/reassocreq */
@@ -666,8 +736,15 @@ BCMATTACHFN(wlc_ht_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-	hti->scbh = wlc_scb_cubby_reserve(wlc, WLC_HT_SCB_CUBBY_SIZE,
-		wlc_ht_scb_init, NULL, wlc_ht_scb_dump, (void *)hti);
+	/* reserve some space in scb container */
+	bzero(&ht_scb_cubby_params, sizeof(ht_scb_cubby_params));
+
+	ht_scb_cubby_params.context = hti;
+	ht_scb_cubby_params.fn_init = wlc_ht_scb_init;
+	ht_scb_cubby_params.fn_dump = wlc_ht_scb_dump;
+	ht_scb_cubby_params.fn_update = wlc_ht_scb_update;
+
+	hti->scbh = wlc_scb_cubby_reserve_ext(wlc, WLC_HT_SCB_CUBBY_SIZE, &ht_scb_cubby_params);
 
 	if (hti->scbh < 0) {
 		WL_ERROR(("wl%d:%s: wlc_scb_cubby_reserve() failed\n",
@@ -683,6 +760,9 @@ BCMATTACHFN(wlc_ht_attach)(wlc_info_t *wlc)
 			wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "htcap", (dump_fn_t)wlc_dump_htcap, (void *)hti);
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 	hti->txburst_limit_override = AUTO;
 	hti->ampdu_rts = TRUE;
@@ -740,6 +820,18 @@ wlc_ht_scb_init(void *context, struct scb *scb)
 
 }
 
+/* scb cubby update */
+static int
+wlc_ht_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg)
+{
+	wlc_ht_info_t *pub = (wlc_ht_info_t *)context;
+	wlc_ht_scb_cubby_t *cubby_info = SCB_HT_CUBBY(pub, scb);
+	wlc_info_t *new_wlc = new_cfg->wlc;
+	cubby_info->priv.wlc = new_wlc;
+	return BCME_OK;
+
+}
+
 static void
 wlc_ht_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
 {
@@ -767,6 +859,9 @@ wlc_ht_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
 			scb_pub->ht_mimops_rtsmode);
 		bcm_bprintf(b, "\n");
 	}
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_rclist("     rclist", cubby->rclist, cubby->rclen, b);
+#endif 
 }
 
 /* bsscfg cubby init */
@@ -1006,6 +1101,33 @@ wlc_ht_tdls_write_cap_ie(void *ctx, wlc_iem_build_data_t *build)
 }
 #endif /* WLTDLS */
 
+#if defined(WL_NAN)
+static int
+wlc_ht_nan_write_cap_ie(void *ctx, wlc_iem_build_data_t *data)
+{
+	wlc_ht_info_t *pub = (wlc_ht_info_t *)ctx;
+	wlc_ht_priv_info_t *hti = WLC_HT_INFO_PRIV(pub);
+
+	wlc_info_t *wlc = hti->wlc;
+	wlc_bsscfg_t *cfg = data->cfg;
+
+	if (data->cbparm->ht) {
+		ht_cap_ie_t cap_ie;
+		uint8 *mcs;
+
+		mcs = wlc->band->hw_rateset.mcs;
+		ASSERT(mcs != NULL);
+
+		/* nan does not support CCK */
+		wlc_ht_build_cap_ie(cfg, &cap_ie, mcs, FALSE);
+
+		bcm_write_tlv(DOT11_MNG_HT_CAP, &cap_ie, HT_CAP_IE_LEN, data->buf);
+	}
+
+	return BCME_OK;
+}
+#endif /* defined(WL_NAN) */
+
 /** HT Operation */
 static uint
 wlc_ht_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data)
@@ -1073,6 +1195,32 @@ wlc_ht_tdls_write_op_ie(void *ctx, wlc_iem_build_data_t *data)
 }
 #endif /* IEEE2012_TDLSSEPC */
 #endif /* WLTDLS */
+
+#if defined(WL_NAN)
+static uint
+wlc_ht_nan_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data)
+{
+	wlc_iem_ft_cbparm_t *ftcbparm = data->cbparm->ft;
+
+	if (!ftcbparm->nan.ht_op_ie) {
+		return 0;
+	}
+
+	return wlc_ht_calc_op_ie_len(ctx, data);
+}
+
+static int
+wlc_ht_nan_write_op_ie(void *ctx, wlc_iem_build_data_t *data)
+{
+	wlc_iem_ft_cbparm_t *ftcbparm = data->cbparm->ft;
+
+	if (!ftcbparm->nan.ht_op_ie) {
+		return BCME_OK;
+	}
+
+	return wlc_ht_write_op_ie(ctx, data);
+}
+#endif /* defined(WL_NAN) */
 
 /** BRCM HT Cap */
 static uint
@@ -1414,9 +1562,6 @@ wlc_ht_doiovar(void *context, uint32 actionid,
 			wlcband_t *cur_band = wlc->band;
 			ratespec_t rspec;
 			uint32 wl_rspec;
-#ifdef WL11ULB
-			chanspec_t min_bw = WLC_ULB_GET_BSS_MIN_BW(wlc, bsscfg);
-#endif /* WL11ULB */
 
 			if (bsscfg->associated)
 				cur_band = wlc->bandstate[CHSPEC_IS2G(current_bss->chanspec) ?
@@ -1437,17 +1582,6 @@ wlc_ht_doiovar(void *context, uint32 actionid,
 			wl_rspec |= RSPEC_ISTXBF(rspec) ? WL_RSPEC_TXBF : 0;
 			wl_rspec |= RSPEC_ISLDPC(rspec) ? WL_RSPEC_LDPC : 0;
 			wl_rspec |= RSPEC_ISSGI(rspec) ? WL_RSPEC_SGI : 0;
-#ifdef WL11ULB
-			/* Only on the Query interface if the min_bw of bsscfg indicates setting of
-			 * ULB BW then BW is set to appropriate ULB BW
-			 */
-			if (WLC_ULB_MODE_ENABLED(wlc) && (min_bw != WL_CHANSPEC_BW_20)) {
-				wl_rspec |= (min_bw == WL_CHANSPEC_BW_10) ? WL_RSPEC_BW_10MHZ : 0;
-				wl_rspec |= (min_bw == WL_CHANSPEC_BW_5) ? WL_RSPEC_BW_5MHZ : 0;
-				wl_rspec |= (min_bw == WL_CHANSPEC_BW_2P5) ? WL_RSPEC_BW_2P5MHZ : 0;
-
-			} else
-#endif /* WL11ULB */
 			{
 				wl_rspec |= RSPEC_IS20MHZ(rspec) ? WL_RSPEC_BW_20MHZ : 0;
 				wl_rspec |= RSPEC_IS40MHZ(rspec) ? WL_RSPEC_BW_40MHZ : 0;
@@ -1542,24 +1676,21 @@ wlc_ht_doiovar(void *context, uint32 actionid,
 		case IOV_GVAL(IOV_BW_CAP):
 		case IOV_SVAL(IOV_BW_CAP):
 			{
-				wlcband_t *band = NULL;
 				int bandtype = int_val;
 				uint8 bw_cap = (uint8) int_val2;
 
 				if (IOV_ISSET(actionid)) {
-					err = wlc_update_bwcap(pub, bandtype, (uint8) bw_cap);
+					err = wlc_update_bwcap(pub, bandtype, (uint8) bw_cap,
+						((bandtype == WLC_BAND_5G)? TRUE: FALSE));
 				} else {
-					if (bandtype == WLC_BAND_5G) {
-						band = wlc->bandstate[BAND_5G_INDEX];
-					} else if (bandtype == WLC_BAND_2G) {
-						band = wlc->bandstate[BAND_2G_INDEX];
-					} else {
+					if ((bandtype != WLC_BAND_5G) &&
+						(bandtype != WLC_BAND_2G)) {
 						err = BCME_BADBAND;
+						break;
 					}
 
-					if (err == 0) {
-						*ret_int_ptr = (int32)band->bw_cap;
-					}
+					*ret_int_ptr = wlc_get_cmn_bwcap(wlc, bandtype);
+
 				}
 				break;
 			}
@@ -1645,6 +1776,53 @@ wlc_ht_doiovar(void *context, uint32 actionid,
 			break;
 #endif /* WL_HT_TXBW_OVERRIDE_ENAB */
 
+#ifdef BCMDBG
+		case IOV_SVAL(IOV_AGGDBG): {
+			int32 *shmbuf;
+			int i;
+
+			int_val2 = (int_val >> 16) & 0xffff;
+			int_val = int_val & 0xffff;
+
+			/* block 1 */
+			shmbuf = MALLOC(wlc->osh, int_val);
+			if (shmbuf == NULL) {
+				printf("malloc err\n");
+				break;
+			}
+			for (i = 0; i < int_val/4; i++)
+				shmbuf[i] = i;
+
+			wlc_bmac_copyto_shm(wlc->hw, (uint)-1, shmbuf, int_val);
+			MFREE(wlc->osh, shmbuf, int_val);
+
+			/* block 2 */
+			shmbuf = MALLOC(wlc->osh, int_val2);
+			if (shmbuf == NULL) {
+				printf("malloc err\n");
+				break;
+			}
+			for (i = 0; i < int_val2/4; i++)
+				shmbuf[i] = i;
+
+			wlc_bmac_copyto_shm(wlc->hw, (uint)-1, shmbuf, int_val2);
+			MFREE(wlc->osh, shmbuf, int_val2);
+
+			/* block 3 */
+			shmbuf = MALLOC(wlc->osh, int_val2);
+			if (shmbuf == NULL) {
+				printf("malloc err\n");
+				break;
+			}
+			for (i = 0; i < int_val2/4; i++)
+				shmbuf[i] = i;
+
+			wlc_bmac_copyto_shm(wlc->hw, (uint)-1, shmbuf, int_val2);
+			MFREE(wlc->osh, shmbuf, int_val2);
+
+			break;
+		}
+#endif /* BCMDBG */
 		case IOV_GVAL(IOV_GF_CAP):
 
 			if (!WLC_PHY_11N_CAP(wlc->band)) {
@@ -1654,6 +1832,19 @@ wlc_ht_doiovar(void *context, uint32 actionid,
 			*ret_int_ptr = (hti->cap_ie.cap & HT_CAP_GF) ? 1 : 0;
 			break;
 
+#ifdef BCMDBG
+		case IOV_GVAL(IOV_TXBURST_LIM):
+			*ret_int_ptr = (int32)hti->txburst_limit;
+			break;
+
+		case IOV_GVAL(IOV_HTPHY_MEMBERSHIP):
+			*ret_int_ptr = (int32)(hti->htphy_membership ? TRUE : FALSE);
+			break;
+
+		case IOV_SVAL(IOV_HTPHY_MEMBERSHIP):
+			hti->htphy_membership = (bool_val ? (WLC_HTPHY | WLC_RATE_FLAG) : 0);
+			break;
+#endif /* BCMDBG */
 
 		case IOV_GVAL(IOV_CURR_MCSSET):
 			if (bsscfg->associated)
@@ -1682,7 +1873,7 @@ wlc_ht_doiovar(void *context, uint32 actionid,
 				}
 				/* pass _rifs flag down to wlc_hw_info structure */
 				/* and update PHY holdoff and delay registers */
-				wlc_phy_tkip_rifs_war(WLC_PI(wlc), pub->_rifs);
+				phy_misc_tkip_rifs_war(WLC_PI(wlc), pub->_rifs);
 			}
 			break;
 
@@ -1778,6 +1969,17 @@ wlc_ht_doiovar(void *context, uint32 actionid,
 				hti->ht_wsec_restriction = (uint8)int_val;
 
 			break;
+#ifdef BCMDBG
+			case IOV_GVAL(IOV_TXMCSSET):
+				wlc_get_mcsset(pub, arg, TRUE);
+
+				break;
+
+			case IOV_GVAL(IOV_RXMCSSET):
+				wlc_get_mcsset(pub, arg, FALSE);
+
+				break;
+#endif /* BCMDBG */
 
 #if defined(WLPROPRIETARY_11N_RATES)
 	case IOV_GVAL(IOV_HTFEATURES):
@@ -2166,7 +2368,7 @@ wlc_mimops_post_actionframe_update(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 
 	if (new_rxchain_cnt == 1) {
 		/* if no reponse for HT action frame, the SCB may disappeared */
-		wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+		phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 	}
 	wlc_ht_mimops_cap_update(wlc->hti, mimops_mode);
 }
@@ -2201,7 +2403,7 @@ wlc_mimops_action_ht_complete(wlc_info_t *wlc, uint txstatus, void *arg)
 		wlc_mimo_siso_metrics_snapshot(wlc, FALSE,
 			WL_MIMOPS_METRICS_SNAPSHOT_HT_COMPLETE);
 		/* only when HT action frame is ACKed, do we update the Rx chain HW state */
-		wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+		phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 	}
 #ifdef WL_MIMOPS_CFG
 	if (WLC_MIMOPS_ENAB(wlc->pub)) {
@@ -2811,7 +3013,7 @@ wlc_update_mimo_band_bwcap(wlc_info_t *wlc, uint8 bwcap)
 	/* 5G Band setup
 	 * Only setup if dual band or single band 5G device
 	 */
-	if (NBANDS(wlc) == 2 || IS_SINGLEBAND_5G(wlc->deviceid)) {
+	if (NBANDS(wlc) == 2 || IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)) {
 		band = wlc->bandstate[BAND_5G_INDEX];
 
 		if ((bwcap == WLC_N_BW_40ALL) ||
@@ -2822,7 +3024,7 @@ wlc_update_mimo_band_bwcap(wlc_info_t *wlc, uint8 bwcap)
 
 		/* Set it to 80MHz only if the adapter is 802.11AC */
 		if (wlc->pub->phy_bw80_capable) {
-		band->bw_cap |= WLC_BW_80MHZ_BIT;
+			band->bw_cap |= WLC_BW_80MHZ_BIT;
 		}
 	}
 
@@ -2831,6 +3033,25 @@ wlc_update_mimo_band_bwcap(wlc_info_t *wlc, uint8 bwcap)
 	wlc_ht_update_coex_support(wlc, wlc->pub->_coex);
 }
 
+#ifdef BCMDBG
+void
+wlc_get_mcsset(wlc_ht_info_t *pub, void *arg, bool istx)
+{
+	wlc_ht_priv_info_t *hti;
+	wlc_info_t *wlc;
+	uint8 streams;
+	uint8 *mcs = (uint8*)arg;
+	int i;
+
+	hti = WLC_HT_INFO_PRIV(pub);
+	wlc = hti->wlc;
+	streams = istx ? wlc->stf->txstreams : wlc->stf->rxstreams;
+
+	memset(mcs, 0, MCSSET_LEN);
+	for (i = 0; i < streams; i++)
+		mcs[i] = 0xff;
+}
+#endif /* BCMDBG */
 
 void
 BCMATTACHFN(wlc_ht_nvm_overrides)(wlc_ht_info_t *pub, uint n_disabled)
@@ -2864,28 +3085,79 @@ BCMATTACHFN(wlc_ht_nvm_overrides)(wlc_ht_info_t *pub, uint n_disabled)
 		hti->cap_ie.cap &= ~HT_CAP_GF;
 }
 
-
+/* Function handles updating BW capability of chip. In case of RSBD chip use_max_phycap is used to
+ * indicate how bw_cap needs to be adopted based on PHY BW capability of each core (wlc). For
+ * instance if this paramtere is TRUE then max of PHY BW capability across all cores is considered
+ * else min capability is considered. This is especially useful in resolving updating bw_cap in
+ * assymetric dual mac RSDB chip with shared wlc->bandstate
+ */
 static int
-wlc_update_bwcap(wlc_ht_info_t *pub, int bandtype, uint8 bwcap)
+wlc_update_bwcap(wlc_ht_info_t *pub, int bandtype, uint8 bwcap, bool use_max_phycap)
 {
 	wlc_ht_priv_info_t *hti = WLC_HT_INFO_PRIV(pub);
 
 	wlc_info_t *wlc = hti->wlc;
 	wlcband_t *band = NULL;
 	int err = 0;
+	bool phy_bw40_capable = FALSE;
+	bool phy_bw80_capable = FALSE;
+	bool phy_bw8080_capable = FALSE;
+	bool phy_bw160_capable = FALSE;
 
 	if (bandtype == WLC_BAND_5G) {
-		if ((NBANDS(wlc) != 2) && !IS_SINGLEBAND_5G(wlc->deviceid))
+		if ((NBANDS(wlc) != 2) && !IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap))
 			return BCME_BADBAND;
 
 		band = wlc->bandstate[BAND_5G_INDEX];
 	} else if (bandtype == WLC_BAND_2G) {
-		if (IS_SINGLEBAND_5G(wlc->deviceid))
+		if (IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap))
 			return BCME_BADBAND;
 
 		band = wlc->bandstate[BAND_2G_INDEX];
 	} else {
 		return BCME_BADARG;
+	}
+
+#ifdef RSDB_CMN_BANDSTATE
+	/* We want to ensure phy_bwXX_capable is set appropriately based on use_max_phycap.
+	 * If use_max_phycap is true then phy_bwXX_capable is set to max of all cores capability
+	 * else it set min of core capabilities
+	 */
+	if (RSDB_CMN_BANDSTATE_ENAB(wlc->pub)) {
+		wlc_info_t* iwlc;
+		int idx;
+
+		FOREACH_WLC(wlc->cmn, idx, iwlc) {
+			if (WLC_40MHZ_CAP_PHY(iwlc)) {
+				phy_bw40_capable = TRUE;
+			}
+
+			if (WLC_80MHZ_CAP_PHY(iwlc)) {
+				phy_bw80_capable = TRUE;
+			}
+
+			if (WLC_8080MHZ_CAP_PHY(iwlc)) {
+				phy_bw8080_capable = TRUE;
+			}
+
+			if (WLC_160MHZ_CAP_PHY(iwlc)) {
+				phy_bw160_capable = TRUE;
+			}
+		}
+		phy_bw40_capable = (phy_bw40_capable && use_max_phycap);
+		phy_bw80_capable = (phy_bw80_capable && use_max_phycap);
+		phy_bw8080_capable = (phy_bw8080_capable && use_max_phycap);
+		phy_bw160_capable = (phy_bw160_capable && use_max_phycap);
+	} else
+#endif /* RSDB_CMN_BANDSTATE */
+	/* If Bandstate is not shared accross WLCs then we will use PHY cap directly from
+	 * pub->phy_bwXX_capable
+	 */
+	{
+		phy_bw40_capable = wlc->pub->phy_bw40_capable;
+		phy_bw80_capable = wlc->pub->phy_bw80_capable;
+		phy_bw8080_capable = wlc->pub->phy_bw8080_capable;
+		phy_bw160_capable = wlc->pub->phy_bw160_capable;
 	}
 
 	switch (bwcap) {
@@ -2895,67 +3167,37 @@ wlc_update_bwcap(wlc_ht_info_t *pub, int bandtype, uint8 bwcap)
 
 	case WLC_BW_CAP_40MHZ:
 		/* Must be 11N capable to set 40 MHz */
-		if (!wlc->pub->phy_bw40_capable)
+		if (!phy_bw40_capable)
 			err = BCME_RANGE;
 		break;
 
 	case WLC_BW_CAP_80MHZ:
 		/* Only allow 80MHz cap if 5GHz band and phy supports it */
-		if ((bandtype != WLC_BAND_5G) || !wlc->pub->phy_bw80_capable)
+		if ((bandtype != WLC_BAND_5G) || !phy_bw80_capable)
 			err = BCME_RANGE;
 		break;
 
 	case WLC_BW_CAP_160MHZ:
 		/* Only allow 160MHz cap if 5GHz band and phy supports it */
 		if ((bandtype != WLC_BAND_5G) ||
-			!(wlc->pub->phy_bw160_capable || wlc->pub->phy_bw8080_capable))
+			!(phy_bw160_capable || phy_bw8080_capable))
 			err = BCME_RANGE;
 		break;
 
 	case WLC_BW_CAP_UNRESTRICTED:
-		if ((bandtype == WLC_BAND_5G) && (wlc->pub->phy_bw160_capable))
+		if ((bandtype == WLC_BAND_5G) && (phy_bw160_capable))
 			bwcap = WLC_BW_CAP_160MHZ;
-		else if ((bandtype == WLC_BAND_5G) && (wlc->pub->phy_bw8080_capable))
+		else if ((bandtype == WLC_BAND_5G) && (phy_bw8080_capable))
 			bwcap = WLC_BW_CAP_160MHZ;
-		else if ((bandtype == WLC_BAND_5G) && (wlc->pub->phy_bw80_capable))
+		else if ((bandtype == WLC_BAND_5G) && (phy_bw80_capable))
 			bwcap = WLC_BW_CAP_80MHZ;
-		else if (wlc->pub->phy_bw40_capable)
+		else if (phy_bw40_capable)
 			bwcap = WLC_BW_CAP_40MHZ;
 		else
 			bwcap = WLC_BW_CAP_20MHZ;
-#ifdef WL11ULB
-		if (ULB_ENAB(wlc->pub)) {
-			int ulb_bw_cap = 0;
-
-			if (WLC_2P5MHZ_ULB_SUPP_HW(wlc))
-				ulb_bw_cap |= WLC_BW_CAP_2P5MHZ;
-
-			if (WLC_5MHZ_ULB_SUPP_HW(wlc))
-				ulb_bw_cap |= WLC_BW_CAP_5MHZ;
-
-			if (WLC_10MHZ_ULB_SUPP_HW(wlc))
-				ulb_bw_cap |= WLC_BW_CAP_10MHZ;
-
-			bwcap |= ulb_bw_cap;
-		}
-#endif /* WL11ULB */
-
 		break;
 
 	default:
-#ifdef WL11ULB
-		if (bwcap & (WLC_BW_CAP_2P5MHZ | WLC_BW_CAP_5MHZ | WLC_BW_CAP_10MHZ)) {
-			if (ULB_ENAB(wlc->pub)) {
-				if (((bwcap & WLC_BW_CAP_2P5MHZ) && !WLC_2P5MHZ_ULB_SUPP_HW(wlc)) ||
-					((bwcap & WLC_BW_CAP_5MHZ) && !WLC_5MHZ_ULB_SUPP_HW(wlc)) ||
-					((bwcap & WLC_BW_CAP_10MHZ) &&
-						!WLC_10MHZ_ULB_SUPP_HW(wlc))) {
-					err = BCME_RANGE;
-				}
-			} else
-				err = BCME_NOTENABLED;
-		} else
-#endif /* WL11ULB */
 		WL_ERROR(("wl%d: %s:Bandwidth capability:%d Unsupported\n",
 			WLCWLUNIT(wlc), __FUNCTION__, bwcap));
 		err = BCME_BADARG;
@@ -2970,6 +3212,78 @@ wlc_update_bwcap(wlc_ht_info_t *pub, int bandtype, uint8 bwcap)
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_dump_htcap(wlc_ht_info_t *pub, struct bcmstrbuf *b)
+{
+	uint16 stbc_val, mimo_ps_val;
+	uint16 val;
+	wlc_ht_priv_info_t *hti;
+	wlc_info_t *wlc;
+
+	hti = WLC_HT_INFO_PRIV(pub);
+	wlc = hti->wlc;
+	val = hti->cap_ie.cap;
+
+	if ((wlc_channel_locale_flags(wlc->cmi) & WLC_NO_40MHZ) ||
+	    (!WL_BW_CAP_40MHZ(wlc->band->bw_cap)) ||
+	    (wlc->cfg != NULL &&
+	     (BSSCFG_AP(wlc->cfg) || (!wlc->cfg->BSS && !BSSCFG_IS_TDLS(wlc->cfg))) &&
+	     (CHSPEC_IS20(wlc->cfg->current_bss->chanspec)))) {
+		val &= ~HT_CAP_40MHZ;
+		val &= ~HT_CAP_SHORT_GI_40;
+	}
+
+	bcm_bprintf(b, "HT dump:\n");
+
+	bcm_bprintf(b, "HT Cap 0X%04x\n", hti->cap_ie.cap);
+	if (val & HT_CAP_LDPC_CODING)
+		bcm_bprintf(b, "LDPC ");
+	if (val & HT_CAP_40MHZ)
+		bcm_bprintf(b, "40MHz ");
+
+	mimo_ps_val = (val & HT_CAP_MIMO_PS_MASK) >> HT_CAP_MIMO_PS_SHIFT;
+	if (mimo_ps_val == HT_CAP_MIMO_PS_ON)
+		bcm_bprintf(b, "MIMO-PS-ON ");
+	else if (mimo_ps_val == HT_CAP_MIMO_PS_RTS)
+		bcm_bprintf(b, "MIMO-PS-RTS ");
+	else if (mimo_ps_val == HT_CAP_MIMO_PS_OFF)
+		bcm_bprintf(b, "MIMO-PS-OFF ");
+
+	if (val & HT_CAP_GF)
+		bcm_bprintf(b, "GF ");
+	if (val & HT_CAP_SHORT_GI_20)
+		bcm_bprintf(b, "SGI-20 ");
+	if (val & HT_CAP_SHORT_GI_40)
+		bcm_bprintf(b, "SGI-40 ");
+	if (val & HT_CAP_TX_STBC)
+		bcm_bprintf(b, "STBC-TX ");
+
+	stbc_val = (val & HT_CAP_RX_STBC_MASK) >> HT_CAP_RX_STBC_SHIFT;
+	if (stbc_val == HT_CAP_RX_STBC_ONE_STREAM)
+		bcm_bprintf(b, "STBC-RX-1SS ");
+	else if (stbc_val == HT_CAP_RX_STBC_TWO_STREAM)
+		bcm_bprintf(b, "STBC-RX-2SS ");
+	else if (stbc_val == HT_CAP_RX_STBC_THREE_STREAM)
+		bcm_bprintf(b, "STBC-RX-3SS ");
+
+	if (val & HT_CAP_DELAYED_BA)
+		bcm_bprintf(b, "Delay-BA ");
+	if (val & HT_CAP_MAX_AMSDU)
+		bcm_bprintf(b, "AMSDU-Max ");
+	if (val & HT_CAP_DSSS_CCK)
+		bcm_bprintf(b, "DSSS-CCK ");
+	if (val & HT_CAP_PSMP)
+		bcm_bprintf(b, "PSMP ");
+	if (val & HT_CAP_40MHZ_INTOLERANT)
+		bcm_bprintf(b, "40-Intol ");
+	if (val & HT_CAP_LSIG_TXOP)
+		bcm_bprintf(b, "LSIG-TXOP ");
+	wlc_dump_mcsset("\nhw_mcsset ", &wlc->band->hw_rateset.mcs[0], b);
+	bcm_bprintf(b, "\n");
+	return 0;
+}
+#endif	/* BCMDBG || BCMDBG_DUMP */
 
 uint8
 wlc_ht_get_wsec_restriction(wlc_ht_info_t *pub)
@@ -3114,8 +3428,14 @@ wlc_ht_monitor(wlc_ht_info_t* pub, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 
 	if ((subtype == FC_SUBTYPE_QOS_DATA) || (subtype == FC_SUBTYPE_QOS_NULL)) {
 
-		/* A-MPDU parsing */
-		if ((wrxh->rxhdr.lt80.PhyRxStatus_0 & PRXS0_FT_MASK) == PRXS0_PREN) {
+		/**
+		 * A-MPDU parsing
+		 *
+		 * Todo : use rxh->ge80.PhyRxStatus_0 for (corerev >=80) when new remapped
+		 * d11rxhdr_lt80_t format is deprecated
+		 */
+		if ((wrxh->rxhdr.lt80.PhyRxStatus_0 &
+			PRXS_FT_MASK(wlc->pub->corerev)) == PRXS0_PREN) {
 			if (WLC_IS_MIMO_PLCP_AMPDU(plcp)) {
 				sts->nfrmtype |= WL_RXS_NFRM_AMPDU_FIRST;
 				/* Save the rspec for later */
@@ -3127,7 +3447,12 @@ wlc_ht_monitor(wlc_ht_info_t* pub, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 			}
 		}
 #ifdef WL11AC
-		else if ((wrxh->rxhdr.lt80.PhyRxStatus_0 & PRXS0_FT_MASK) == FT_VHT) {
+		/**
+		 * Todo : use rxh->ge80.PhyRxStatus_0 for (corerev >=80) when new remapped
+		 * d11rxhdr_lt80_t format is deprecated
+		 */
+		else if ((wrxh->rxhdr.lt80.PhyRxStatus_0 &
+			PRXS_FT_MASK(wlc->pub->corerev)) == FT_VHT) {
 			if ((plcp[0] | plcp[1] | plcp[2]) &&
 				!(wrxh->rxhdr.lt80.RxStatus2 & RXS_PHYRXST_VALID)) {
 				/* First MPDU:
@@ -3353,7 +3678,7 @@ wlc_ht_build_cap_ie(wlc_bsscfg_t *cfg, ht_cap_ie_t *cap_ie, uint8 *supp_mcs, boo
 #endif
 		1) ||
 	    (cfg != NULL && (BSSCFG_AP(cfg) || (!cfg->BSS && !BSSCFG_IS_TDLS(cfg))) &&
-	     (WLC_ULB_CHSPEC_ISLE20(wlc, cfg->current_bss->chanspec)))) {
+	     (CHSPEC_IS20(cfg->current_bss->chanspec)))) {
 		cap &= ~HT_CAP_40MHZ;
 		cap &= ~HT_CAP_SHORT_GI_40;
 		cap &= ~HT_CAP_DSSS_CCK;
@@ -3707,10 +4032,14 @@ void
 wlc_ht_mimops_handle_rxchain_update(wlc_ht_info_t *pub, uint8 mimops_mode)
 {
 	wlc_info_t *wlc = WLC_HT_INFO_PRIV(pub)->wlc;
+	wlc_bsscfg_t *cfg;
+	uint8 idx;
 
-	wlc_ht_set_cfg_mimops_PM(pub, wlc->cfg, mimops_mode);
+	FOREACH_AS_BSS(wlc, idx, cfg) {
+		wlc_ht_set_cfg_mimops_PM(pub, cfg, mimops_mode);
+	}
 	if (AP_ENAB(wlc->pub)) {
-		wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+		phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 		wlc_ht_mimops_cap_update(pub, mimops_mode);
 		if ((wlc->pub->associated) &&
 #ifdef WL_MODESW
@@ -3718,14 +4047,16 @@ wlc_ht_mimops_handle_rxchain_update(wlc_ht_info_t *pub, uint8 mimops_mode)
 			!MODE_SWITCH_IN_PROGRESS(wlc->modesw)) &&
 #endif
 			TRUE) {
-			wlc_mimops_action_ht_send(pub, wlc->cfg, mimops_mode);
+			FOREACH_AS_BSS(wlc, idx, cfg) {
+				wlc_mimops_action_ht_send(pub, cfg, mimops_mode);
+			}
 		}
 		return;
 	}
 	if (wlc->pub->associated) {
 		if (mimops_mode == HT_CAP_MIMO_PS_OFF) {
 			/* if mimops is off, turn on the Rx chain first */
-			wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain,
+			phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain,
 				wlc->stf->rxchain);
 			wlc_ht_mimops_cap_update(pub, mimops_mode);
 		}
@@ -3733,10 +4064,12 @@ wlc_ht_mimops_handle_rxchain_update(wlc_ht_info_t *pub, uint8 mimops_mode)
 		if (WLC_MODESW_ENAB(wlc->pub) &&
 			!MODE_SWITCH_IN_PROGRESS(wlc->modesw))
 #endif
-		wlc_mimops_action_ht_send(pub, wlc->cfg, mimops_mode);
+		FOREACH_AS_BSS(wlc, idx, cfg) {
+			wlc_mimops_action_ht_send(pub, cfg, mimops_mode);
+		}
 	} else {
-		wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
-		wlc_ht_mimops_cap_update(wlc->hti, mimops_mode);
+		phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+		wlc_ht_mimops_cap_update(pub, mimops_mode);
 	}
 }
 
@@ -3919,12 +4252,6 @@ wlc_ht_chanspec(wlc_info_t *wlc, uint8 chan, uint8 extch, wlc_bsscfg_t *cfg)
 	chanspec_t chanspec = 0;
 	BCM_REFERENCE(wlc);
 
-#ifdef WL11ULB
-	if ((cfg != NULL) && BSSCFG_ULB_ENAB(wlc, cfg)) {
-		bw = WLC_ULB_GET_BSS_MIN_BW(wlc, cfg);
-		extch = DOT11_EXT_CH_NONE;
-	}
-#endif /* WL11ULB */
 	BCM_REFERENCE(cfg);
 
 	if (CHANNEL_BANDUNIT(wlc, chan) == BAND_5G_INDEX)

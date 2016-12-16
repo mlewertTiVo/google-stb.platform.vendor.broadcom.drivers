@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_chanmgr_notif_priv.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_chanmgr_notif_priv.h 583048 2015-08-31 16:43:34Z $
  */
 
 #ifndef _phy_chanmgr_notif_priv_h_

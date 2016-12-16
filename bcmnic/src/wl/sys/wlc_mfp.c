@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mfp.c 639072 2016-05-20 02:57:38Z $
+ * $Id: wlc_mfp.c 663406 2016-10-05 07:22:04Z $
  *
  * This file provides implementation of interface to MFP functionality
  * defined in wlc_mfp.h
@@ -84,6 +84,9 @@
 #include <wlc_mfp_test.h>
 #endif
 #include <wlc_pm.h>
+#ifdef WL_PROXDETECT
+#include <wlc_ftm.h>
+#endif
 
 /* buffer size to fPRF */
 #define PRF_RESULT_LEN 80
@@ -130,26 +133,23 @@ typedef struct mfp_scb mfp_scb_t;
 #define MFP_SCB(m, s) ((mfp_scb_t*)SCB_CUBBY(s, (m)->h_scb))
 
 /* iovar support */
-enum {
-	IOV_MFP,
-#ifdef AP
-	IOV_MFP_BIP,
-#endif
-#ifdef MFP_TEST
-	IOV_MFP_SA_QUERY,
-	IOV_MFP_DISASSOC,
-	IOV_MFP_DEAUTH,
-	IOV_MFP_ASSOC,
-	IOV_MFP_AUTH,
-	IOV_MFP_REASSOC,
-	IOV_MFP_BIP_TEST
-#endif
+enum wlc_mfp_iov {
+	IOV_MFP = 1,
+	IOV_MFP_BIP = 2,
+	IOV_MFP_SA_QUERY = 3,
+	IOV_MFP_DISASSOC = 4,
+	IOV_MFP_DEAUTH = 5,
+	IOV_MFP_ASSOC = 6,
+	IOV_MFP_AUTH = 7,
+	IOV_MFP_REASSOC = 8,
+	IOV_MFP_BIP_TEST = 9,
+	IOV_MFP_LAST
 };
 
 static const bcm_iovar_t mfp_iovars[] = {
 	{"mfp", IOV_MFP, (0), 0, IOVT_INT32, 0},
 #ifdef AP
-	{"bip", IOV_MFP_BIP, IOVF_SET_UP, 0, IOVT_BUFFER, 0},
+	{"bip", IOV_MFP_BIP, 0, 0, IOVT_BUFFER, 0},
 #endif
 #ifdef MFP_TEST
 	{"mfp_sa_query", IOV_MFP_SA_QUERY, IOVF_SET_UP, 0, IOVT_INT32, 0},
@@ -165,6 +165,8 @@ static const bcm_iovar_t mfp_iovars[] = {
 
 /* prototypes - forward reference */
 
+static int wlc_mfp_down(void *ctx);
+
 /* sa query */
 static void* mfp_send_sa_query(wlc_mfp_info_t *mfp, struct scb *scb,
 	uint8 action, uint16 id);
@@ -176,13 +178,15 @@ static void mfp_init_ipn(wlc_mfp_info_t *mfp, wlc_bsscfg_t *bsscfg,
 /* utils */
 
 /* is category robust */
-static bool mfp_robust_cat(uint8 cat);
+static bool mfp_robust_cat(const wlc_bsscfg_t *bsscfg, uint8 cat);
 
 /* IE mgmt */
 #ifdef AP
 static uint wlc_mfp_calc_to_ie_len(void *ctx, wlc_iem_calc_data_t *data);
 static int wlc_mfp_write_to_ie(void *ctx, wlc_iem_build_data_t *data);
 #endif
+static int mfp_bsscfg_init(void* ctx, wlc_bsscfg_t *bsscfg);
+static void mfp_bsscfg_deinit(void* ctx, wlc_bsscfg_t *bsscfg);
 
 /* end prototypes */
 
@@ -249,18 +253,12 @@ mfp_doiovar(void *ctx, uint32 actionid,
 		bsscfg->flags2 &= ~(WLC_BSSCFG_FL2_MFP_REQUIRED|WLC_BSSCFG_FL2_MFP_CAPABLE);
 		switch (flag) {
 		case WL_MFP_NONE:
-#ifdef AP
-			bss_mfp->bip_type = WPA_CIPHER_NONE;
-#endif /* AP */
 			break;
 		case WL_MFP_REQUIRED:
 			bsscfg->flags2 |= WLC_BSSCFG_FL2_MFP_REQUIRED;
 			/* fall through */
 		case WL_MFP_CAPABLE:
-#ifdef AP
-			bss_mfp->bip_type = WPA_CIPHER_BIP;
-#endif /* AP */
-		bsscfg->flags2 |= WLC_BSSCFG_FL2_MFP_CAPABLE;
+			bsscfg->flags2 |= WLC_BSSCFG_FL2_MFP_CAPABLE;
 			break;
 		default:
 			err = BCME_BADARG;
@@ -294,7 +292,7 @@ mfp_doiovar(void *ctx, uint32 actionid,
 #endif /* AP */
 	default:
 #ifdef MFP_TEST
-		err = mfp_test_doiovar(mfp->wlc, vi, mfp_test_iov(actionid), name,
+		err =  mfp_test_doiovar(mfp->wlc, mfp_test_iov(actionid),
 			params, p_len, arg, len, val_size, wlcif);
 #else
 		err = BCME_UNSUPPORTED;
@@ -305,7 +303,45 @@ mfp_doiovar(void *ctx, uint32 actionid,
 	return err;
 }
 
+static int
+wlc_mfp_down(void *ctx)
+{
+	wlc_mfp_info_t *mfp = (wlc_mfp_info_t *)ctx;
+	wlc_info_t	*wlc;
+	struct scb_iter scbiter;
+	struct scb *scb;
+	mfp_scb_t* scb_mfp;
+
+	wlc = mfp->wlc;
+	/* Clean up timers and cubby (some may not have been
+	 * cleaned in scb_free - NIC offloads on sleep or assoc_recreate()
+	 * with WLC_BSSCFG_PRESERVE, those marked permanent)
+	 */
+	FOREACHSCB(wlc->scbstate, &scbiter, scb) {
+		scb_mfp = MFP_SCB(mfp, scb);
+		if (scb_mfp->saq.timer)  {
+			if (scb_mfp->saq.started != FALSE) {
+				wl_del_timer(mfp->wlc->wl, scb_mfp->saq.timer);
+			}
+			wl_free_timer(mfp->wlc->wl, scb_mfp->saq.timer);
+		}
+		memset(scb_mfp, 0, sizeof(*scb_mfp));
+	}
+	return BCME_OK;
+}
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+mfp_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_mfp_info_t* mfp = (wlc_mfp_info_t*)ctx;
+	mfp_bsscfg_t* bss_mfp = MFP_BSSCFG(mfp, cfg);
+
+	bcm_bprintf(b, "\tbip: %02x\n", bss_mfp->bip_type);
+}
+#else
 #define mfp_bsscfg_dump NULL
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static int
 mfp_scb_init(void* ctx, struct scb* scb)
@@ -331,7 +367,21 @@ mfp_scb_deinit(void* ctx, struct scb* scb)
 	memset(scb_mfp, 0, sizeof(*scb_mfp));
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+mfp_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_mfp_info_t* mfp = (wlc_mfp_info_t*)ctx;
+	mfp_scb_t* scb_mfp = MFP_SCB(mfp, scb);
+	sa_query_t *saq = &scb_mfp->saq;
+
+	bcm_bprintf(b, "\tsa query: %s in progress\n", (saq->started ? "": "none"));
+	if (saq->started)
+		bcm_bprintf(b, "\t\tid: 0x%04x timeouts: %lu\n", saq->id, saq->timeouts);
+}
+#else
 #define mfp_scb_dump NULL
+#endif
 
 /* attach */
 wlc_mfp_info_t *
@@ -361,12 +411,12 @@ BCMATTACHFN(wlc_mfp_attach)(wlc_info_t *wlc)
 
 	mfp->wlc = wlc;
 	if (wlc_module_register(wlc->pub, mfp_iovars, "mfp", mfp, mfp_doiovar,
-		NULL /* wdog */, NULL /* up */, NULL /* down */) != BCME_OK)
+		NULL /* wdog */, NULL /* up */, wlc_mfp_down /* down */) != BCME_OK)
 		goto err;
 
 	/* not cleared configuration during init/deinit */
 	mfp->h_bsscfg = wlc_bsscfg_cubby_reserve(wlc, sizeof(mfp_bsscfg_t),
-		NULL, NULL, mfp_bsscfg_dump, (void*)mfp);
+		mfp_bsscfg_init, mfp_bsscfg_deinit, mfp_bsscfg_dump, (void*)mfp);
 	if (mfp->h_bsscfg < 0)
 		goto err;
 
@@ -797,9 +847,15 @@ static const uint8 mfp_robust_categories[] = {
 };
 
 static INLINE bool
-mfp_robust_cat(uint8 cat)
+mfp_robust_cat(const wlc_bsscfg_t *bsscfg, uint8 cat)
 {
-	return isset(mfp_robust_categories, cat);
+	BCM_REFERENCE(bsscfg);
+#if defined(WL_PROXDETECT) && defined(WL_FTM)
+	if (WLC_BSSCFG_SECURE_FTM(bsscfg) && !cat) {
+		return FALSE;
+	} else
+#endif
+		return isset(mfp_robust_categories, cat);
 }
 
 #ifdef AP
@@ -899,6 +955,16 @@ mfp_get_bip(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, wpa_suite_t *bip)
 	return TRUE;
 }
 
+bool
+mfp_has_bip(wlc_bsscfg_t *bsscfg)
+{
+	wlc_info_t *wlc = bsscfg->wlc;
+	mfp_bsscfg_t* bss_mfp = MFP_BSSCFG(wlc->mfp, bsscfg);
+
+	/* Group Management Cipher Suite cannot be zero */
+	return (bss_mfp ? (bss_mfp->bip_type != 0) : FALSE);
+}
+
 static bool
 mfp_needs_mfp(wlc_mfp_info_t *mfp, wlc_bsscfg_t *bsscfg,
 	const struct ether_addr* da, uint16 fc, uint8 cat,
@@ -921,7 +987,7 @@ mfp_needs_mfp(wlc_mfp_info_t *mfp, wlc_bsscfg_t *bsscfg,
 		if (fc != FC_DEAUTH && fc !=  FC_DISASSOC && fc != FC_ACTION)
 			break;
 
-		if ((fc == FC_ACTION) && !mfp_robust_cat(cat))
+		if ((fc == FC_ACTION) && !mfp_robust_cat(bsscfg, cat))
 			break;
 
 		if (BSSCFG_AP(bsscfg) && ETHER_ISMULTI(da)) {
@@ -992,7 +1058,7 @@ wlc_mfp_rx(wlc_mfp_info_t *mfp, const wlc_bsscfg_t *bsscfg, struct scb *scb,
 	int body_offset;
 	wlc_key_info_t key_info;
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	char ea_str[ETHER_ADDR_STR_LEN];
 #endif
 
@@ -1068,7 +1134,7 @@ wlc_mfp_rx(wlc_mfp_info_t *mfp, const wlc_bsscfg_t *bsscfg, struct scb *scb,
 		body_len -= (key_info.iv_len + key_info.icv_len);
 
 		if (fk == FC_ACTION) /* action must be robust */
-			ret = (body_len > 0) && mfp_robust_cat(body[0]);
+			ret = (body_len > 0) && mfp_robust_cat(bsscfg, body[0]);
 		if (!ret) {
 			WL_WSEC(("wl%d: %s: received encrypted non-robust "
 				"action frame from %s, toss\n",
@@ -1100,7 +1166,7 @@ wlc_mfp_rx(wlc_mfp_info_t *mfp, const wlc_bsscfg_t *bsscfg, struct scb *scb,
 			break;
 		}
 
-		if (mfp_robust_cat(body[0])) {
+		if (mfp_robust_cat(bsscfg, body[0])) {
 			WL_WSEC(("wl%d: %s: received robust action frame unprotected from "
 				"%s, toss\n", WLCWLUNIT(wlc), __FUNCTION__,
 				bcm_ether_ntoa(&hdr->sa, ea_str)));
@@ -1129,6 +1195,9 @@ wlc_mfp_frame_get_mgmt(wlc_mfp_info_t *mfp, uint16 fc, uint8 cat,
 	wlc_bsscfg_t *bsscfg;
 	wlc_info_t *wlc = mfp->wlc;
 	bool needs_mfp;
+#ifdef BCMDBG
+	char ea_str[ETHER_ADDR_STR_LEN];
+#endif
 
 	bsscfg = wlc_bsscfg_find_by_hwaddr_bssid(wlc, sa, bssid);
 	if (bsscfg == NULL)
@@ -1178,4 +1247,18 @@ mfp_test_iov(const int mfp_iov)
 	return iov;
 }
 #endif /* MFP_TEST */
+static int
+mfp_bsscfg_init(void* ctx, wlc_bsscfg_t *bsscfg)
+{
+	if (WLC_MFP_ENAB(bsscfg->wlc->pub) && wlc_bsscfg_mfp_supported(bsscfg))
+		bsscfg->flags2 |= WLC_BSSCFG_FL2_MFP_CAPABLE;
+	return BCME_OK;
+}
+
+static void
+mfp_bsscfg_deinit(void* ctx, wlc_bsscfg_t *bsscfg)
+{
+	if (WLC_MFP_ENAB(bsscfg->wlc->pub) && wlc_bsscfg_mfp_supported(bsscfg))
+		bsscfg->flags2 &= ~WLC_BSSCFG_FL2_MFP_CAPABLE;
+}
 #endif /* MFP */

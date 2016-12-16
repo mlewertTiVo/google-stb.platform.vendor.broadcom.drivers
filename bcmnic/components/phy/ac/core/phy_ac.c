@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac.c 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac.c 659637 2016-09-15 09:12:12Z $
  */
 
 #include <typedefs.h>
@@ -47,6 +47,7 @@
 #include <phy_ac_tof.h>
 #include <phy_ac_chanmgr.h>
 #include <phy_papdcal.h>
+#include <phy_ac_nap.h>
 
 #include "phy_type.h"
 #include <phy_ac.h>
@@ -56,7 +57,6 @@
 #include "phy_type_ac_ioct.h"
 #include "phy_shared.h"
 #include <phy_ac.h>
-#include <wlc_phy_ac_gains.h>
 
 #include <phy_utils_radio.h>
 #include <phy_utils_reg.h>
@@ -72,6 +72,10 @@
 #include <phy_rstr.h>
 #include <phy_utils_var.h>
 #include <wlc_radioreg_20693.h>
+#include <phy_shared.h>
+#include "phy_ac_hc.h"
+#include <phy_ac_vasip.h>
+#include "phy_ac_stf.h"
 
 /* local functions */
 static int phy_ac_attach_ext(phy_info_t *pi, int bandtype);
@@ -80,14 +84,15 @@ static void phy_ac_unregister_impl(phy_info_t *pi, phy_type_info_t *ti);
 static void phy_ac_nvram_attach(phy_ac_info_t *aci);
 static void phy_ac_std_params_attach(phy_ac_info_t *aci);
 static void phy_ac_reset_impl(phy_info_t *pi, phy_type_info_t *ti);
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 static uint16 phy_ac_read_phyreg(phy_info_t *pi, phy_type_info_t *ti, uint addr);
 static int phy_ac_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b);
 #else
 #define	phy_ac_read_phyreg	NULL
 #define	phy_ac_dump_phyregs	NULL
-#endif /* BCMDBG, BCMDBG_DUMP, BCMINTERNAL, DBG_PHY_IOV, BCMDBG_PHYDUMP */
+#endif 
+static void phy_ac_info_init(phy_info_t *pi);
 
 /* ============= Function Definitions ============= */
 
@@ -126,8 +131,6 @@ BCMATTACHFN(phy_ac_attach)(phy_info_t *pi, int bandtype)
 	uint32 idcode;
 	int ref_count;
 
-	acphy_lpfCT_phyregs_t *ac_lpfCT_phyregs_orig = NULL;
-
 	PHY_TRACE(("%s: band %d\n", __FUNCTION__, bandtype));
 
 	/* Extend phy_attach() here to initialize ACPHY specific stuff */
@@ -149,27 +152,23 @@ BCMATTACHFN(phy_ac_attach)(phy_info_t *pi, int bandtype)
 
 	pi->u.pi_acphy = phy_malloc(pi, sizeof(phy_info_acphy_t));
 
-	if ((ac_lpfCT_phyregs_orig = phy_malloc(pi, sizeof(*ac_lpfCT_phyregs_orig))) == NULL) {
-		PHY_ERROR(("%s: ac_lpfCT_phyregs_orig malloc failed\n", __FUNCTION__));
-		return FALSE;
-	}
-
 	if (pi->u.pi_acphy == NULL) {
 		PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n", pi->sh->unit,
-		           __FUNCTION__, MALLOCED(pi->sh->osh)));
+			__FUNCTION__, MALLOCED(pi->sh->osh)));
 		return NULL;
 	}
 	aci = pi->u.pi_acphy;
-	aci->ac_lpfCT_phyregs_orig = ac_lpfCT_phyregs_orig;
 
-	if (USE_HW_MINORVERSION(pi->pubpi->phy_rev))
-		pi->u.pi_acphy->phy_minor_rev = READ_PHYREG(pi, MinorVersion);
-	else
+	if (USE_HW_MINORVERSION(pi->pubpi->phy_rev)) {
+		pi->u.pi_acphy->phy_minor_rev = READ_PHYREGFLD(pi, MinorVersion, minorversion);
+	} else {
 		pi->u.pi_acphy->phy_minor_rev = GET_SW_ACMINORREV(pi->pubpi->phy_rev);
+	}
 
-	aci->phy_minor_rev = pi->u.pi_acphy->phy_minor_rev;
-
+	pi->pubpi->phy_minor_rev = aci->phy_minor_rev = pi->u.pi_acphy->phy_minor_rev;
 	aci->pi = pi;
+
+	phy_ac_info_init(pi);
 
 	/* Note: phy_corenum is set after reading the ACPHY_PhyCapability0 register */
 	/* Find out the number of cores contained in this ACPHY */
@@ -247,7 +246,7 @@ BCMATTACHFN(phy_ac_attach)(phy_info_t *pi, int bandtype)
 			sizeof(acphy_srom_info_t))) == NULL) {
 
 			PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
-			pi->sh->unit, __FUNCTION__, MALLOCED(pi->sh->osh)));
+				pi->sh->unit, __FUNCTION__, MALLOCED(pi->sh->osh)));
 			return NULL;
 		}
 
@@ -261,29 +260,13 @@ BCMATTACHFN(phy_ac_attach)(phy_info_t *pi, int bandtype)
 
 	phy_ac_nvram_attach(aci);
 
-	/* update txpwr settings */
-	phy_ac_tpc_ipa_upd(pi);
-
 	if (ACMAJORREV_4(pi->pubpi->phy_rev)) {
 		/* update corenum and coremask state variables */
 		phy_ac_update_phycorestate(pi);
-		/* JIRA:SW4349-294 WAR for register access problems in MIMO and 80P80 modes in 4349
-		 */
 		phy_regaccess_war_acphy(pi);
 	}
 
 	phy_ac_std_params_attach(aci);
-
-	/* The dependency needs to be investigated */
-
-	/* set the gain tables for tiny radio */
-	if (TINY_RADIO(pi) || IS_4364_3x3(pi))
-		wlc_phy_set_txgain_tbls(aci);
-
-	if (!TINY_RADIO(pi) && !wlc_phy_attach_farrow(pi)) {
-		PHY_ERROR(("%s: wlc_phy_attach_farrow failed\n", __FUNCTION__));
-		return NULL;
-	}
 
 	/* register PHY type implementation entry points */
 	bzero(&fns, sizeof(fns));
@@ -306,44 +289,11 @@ BCMATTACHFN(phy_ac_detach)(phy_type_info_t *ti)
 {
 	phy_ac_info_t *aci = (phy_ac_info_t *)ti;
 	phy_info_t *pi = aci->pi;
-	int num_bw;
-#ifdef ACPHY_1X1_ONLY
-	num_bw = 1;
-#else
-	num_bw = ACPHY_NUM_BW;
-#endif
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
-	wlc_phy_ac_delete_gain_tbl(pi);
-
-	if (pi->u.pi_acphy->tx_farrow != NULL)
-		phy_mfree(pi, pi->u.pi_acphy->tx_farrow,
-		      num_bw * sizeof(*(pi->u.pi_acphy->tx_farrow)));
-	if (pi->u.pi_acphy->rx_farrow != NULL)
-		phy_mfree(pi, pi->u.pi_acphy->rx_farrow,
-		      num_bw * sizeof(*(pi->u.pi_acphy->rx_farrow)));
-
-	if (RADIOID_IS(pi->pubpi->radioid, BCM2069_ID)) {
-		if (RADIO2069_MAJORREV(pi->pubpi->radiorev) == 1) {
-			if (PHY_XTAL_IS52M(pi)) {
-				if (pi->u.pi_acphy->chan_tuning != NULL) {
-					phy_mfree(pi, pi->u.pi_acphy->chan_tuning,
-						NUM_ROWS_CHAN_TUNING *
-						sizeof(chan_info_radio2069revGE25_52MHz_t));
-				}
-			}
-
-		} else if (RADIO2069_MAJORREV(pi->pubpi->radiorev) == 2) {
-			if (pi->u.pi_acphy->chan_tuning != NULL) {
-				phy_mfree(pi, pi->u.pi_acphy->chan_tuning,
-				      NUM_ROWS_CHAN_TUNING *
-				      sizeof(chan_info_radio2069revGE32_t));
-			}
-		}
-	}
 	if ((pi->u.pi_acphy->sromi != NULL) && (pi->u.pi_acphy->sromi->swctrlmap4 != NULL) &&
-			wlapi_obj_registry_islast(pi->sh->physhim)) {
+		wlapi_obj_registry_islast(pi->sh->physhim)) {
 		phy_mfree(pi, pi->u.pi_acphy->sromi->swctrlmap4,
 			sizeof(*(pi->u.pi_acphy->sromi->swctrlmap4)));
 		pi->u.pi_acphy->sromi->swctrlmap4 = NULL;
@@ -357,12 +307,47 @@ BCMATTACHFN(phy_ac_detach)(phy_type_info_t *ti)
 
 	if (aci->paramsi != NULL) {
 		phy_mfree(pi, aci->paramsi, sizeof(phy_param_info_t));
-		pi->paramsi = NULL;
+	}
+	if (pi->paprrmcsgain2g != NULL) {
+			phy_mfree(pi, pi->paprrmcsgain2g, (sizeof(uint8) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgain5g20 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgain5g20, (sizeof(uint8) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgain5g40 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgain5g40, (sizeof(uint8) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgain5g80 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgain5g80, (sizeof(uint8) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgamma2g != NULL) {
+			phy_mfree(pi, pi->paprrmcsgamma2g, (sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgamma5g20 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgamma5g20, (sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgamma5g40 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgamma5g40, (sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgamma5g80 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgamma5g80, (sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
 	}
 
-	if (pi->u.pi_acphy->ac_lpfCT_phyregs_orig != NULL) {
-		phy_mfree(pi, pi->u.pi_acphy->ac_lpfCT_phyregs_orig,
-			sizeof(*pi->u.pi_acphy->ac_lpfCT_phyregs_orig));
+	if (pi->paprrmcsgamma2g_ch1 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgamma2g_ch1,
+				(sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgain2g_ch1 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgain2g_ch1,
+				(sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgamma2g_ch13 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgamma2g_ch13,
+				(sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
+	}
+	if (pi->paprrmcsgain2g_ch13 != NULL) {
+			phy_mfree(pi, pi->paprrmcsgain2g_ch13,
+				(sizeof(int16) * NUM_MCS_PAPRR_GAMMA));
 	}
 
 	phy_mfree(pi, aci, sizeof(phy_ac_info_t));
@@ -380,9 +365,9 @@ BCMATTACHFN(phy_ac_attach_ext)(phy_info_t *pi, int bandtype)
 		/* set ePa value, iPa will override value later on, */
 		/* at this point IS_IPA(pi) is not valid */
 		pi->min_txpower = PHY_TXPWR_MIN_ACPHY1X1EPA;
-	} else if (ACMAJORREV_4(pi->pubpi->phy_rev)) {
-		pi->min_txpower = pi->olpci->olpc_thresh2g;
-		pi->min_txpower_5g = pi->olpci->olpc_thresh5g;
+	} else if (ACMAJORREV_4(pi->pubpi->phy_rev) || IS_4364(pi)) {
+		pi->min_txpower = PHY_TXPWR_MIN_ACPHY_EPA_2G;
+		pi->min_txpower_5g = PHY_TXPWR_MIN_ACPHY_EPA_5G;
 	} else {
 		pi->min_txpower = PHY_TXPWR_MIN_ACPHY;
 	}
@@ -674,6 +659,29 @@ BCMATTACHFN(phy_ac_register_impl)(phy_info_t *pi, phy_type_info_t *ti, int bandt
 	}
 #endif
 
+#ifdef RADIO_HEALTH_CHECK
+	/* Register with Health check module */
+	if (pi->hci != NULL &&
+	    (aci->hci = phy_ac_hc_register_impl(pi, aci, pi->hci)) == NULL) {
+		PHY_ERROR(("%s: phy_ac_hc_register_impl failed\n", __FUNCTION__));
+		goto fail;
+	}
+#endif /* RADIO_HEALTH_CHECK */
+
+	/* Register with VASIP module */
+	if (pi->vasipi != NULL &&
+	    (aci->vasipi = phy_ac_vasip_register_impl(pi, aci, pi->vasipi)) == NULL) {
+		PHY_ERROR(("%s: phy_ac_vasip_register_impl failed\n", __FUNCTION__));
+		goto fail;
+	}
+
+	/* Register with STF module */
+	if (pi->stfi != NULL &&
+		(aci->stfi = phy_ac_stf_register_impl(pi, aci, pi->stfi)) == NULL) {
+			PHY_ERROR(("%s: phy_ac_stf_register_impl failed\n", __FUNCTION__));
+			goto fail;
+	}
+
 	/* ...Add your module registration here... */
 	return BCME_OK;
 
@@ -689,6 +697,20 @@ BCMATTACHFN(phy_ac_unregister_impl)(phy_info_t *pi, phy_type_info_t *ti)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	/* ...Add your module unregistration here... */
+
+	/* Unregister from STF module */
+	if (aci->stfi != NULL)
+		phy_ac_stf_unregister_impl(aci->stfi);
+
+	/* Unregister from MISC module */
+	if (aci->vasipi != NULL)
+		phy_ac_vasip_unregister_impl(aci->vasipi);
+
+#ifdef RADIO_HEALTH_CHECK
+	/* Unregister from health check module */
+	if (aci->hci != NULL)
+		phy_ac_hc_unregister_impl(aci->hci);
+#endif /* RADIO_HEALTH_CHECK */
 
 	/* Unregister from envelope tracking module */
 	if (aci->eti != NULL)
@@ -894,9 +916,6 @@ BCMATTACHFN(phy_ac_std_params_attach)(phy_ac_info_t *aci)
 {
 	phy_info_t *pi = aci->pi;
 	aci->init = FALSE;
-	aci->band2g_init_done = FALSE;
-	aci->band5g_init_done = FALSE;
-	aci->dac_mode = 1;
 	pi->n_preamble_override = WLC_N_PREAMBLE_MIXEDMODE;
 	/* Get xtal frequency from PMU */
 #if !defined(XTAL_FREQ)
@@ -906,6 +925,17 @@ BCMATTACHFN(phy_ac_std_params_attach)(phy_ac_info_t *aci)
 	PHY_INFORM(("wl%d: %s: using %d.%d MHz xtalfreq for RF PLL\n",
 		pi->sh->unit, __FUNCTION__,
 		PHY_XTALFREQ(pi->xtalfreq) / 1000000, PHY_XTALFREQ(pi->xtalfreq) % 1000000));
+}
+
+static void
+BCMATTACHFN(phy_ac_info_init)(phy_info_t *pi)
+{
+	/* Dual band support */
+#ifdef DBAND
+	pi->ff->_dband = TRUE;
+#else
+	pi->ff->_dband = FALSE;
+#endif /* DBAND */
 }
 
 /* reset implementation (s/w) */
@@ -918,23 +948,148 @@ phy_ac_reset_impl(phy_info_t *pi, phy_type_info_t *ti)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	for (i = 0; i < PHY_CORE_MAX; i++) {
-		if (ACMAJORREV_1(pi->pubpi->phy_rev))
+		if (ACMAJORREV_1(pi->pubpi->phy_rev)) {
 			aci->txpwrindex[i] = 60;
-		else if (ACMAJORREV_4(pi->pubpi->phy_rev))
+		} else if (ACMAJORREV_4(pi->pubpi->phy_rev)) {
 			aci->txpwrindex[i] = 100;
-		else if (ACMAJORREV_32(pi->pubpi->phy_rev) ||
+		} else if (ACMAJORREV_32(pi->pubpi->phy_rev) ||
 			ACMAJORREV_33(pi->pubpi->phy_rev) ||
-			ACMAJORREV_37(pi->pubpi->phy_rev))
+			ACMAJORREV_37(pi->pubpi->phy_rev)) {
 			aci->txpwrindex[i] = 48;
-		else
+		} else {
 			aci->txpwrindex[i] = 64;
+		}
 	}
 }
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
-
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 /* These tables are generated using the phydefs2drv.pl tool */
+
+/* 43012 specific reg list */
+static phy_regs_t acphy36_regs[] = {
+	{ 0x000,	0x005 },	/* 0x000 - 0x004 */
+	{ 0x007,	0x001 },	/* 0x007 - 0x007 */
+	{ 0x009,	0x004 },	/* 0x009 - 0x00c */
+	{ 0x00e,	0x013 },	/* 0x00e - 0x020 */
+	{ 0x022,	0x00b },	/* 0x022 - 0x02c */
+	{ 0x030,	0x001 },	/* 0x030 - 0x030 */
+	{ 0x040,	0x007 },	/* 0x040 - 0x046 */
+	{ 0x049,	0x009 },	/* 0x049 - 0x051 */
+	{ 0x060,	0x005 },	/* 0x060 - 0x064 */
+	{ 0x070,	0x00d },	/* 0x070 - 0x07c */
+	{ 0x080,	0x00c },	/* 0x080 - 0x08b */
+	{ 0x0a2,	0x007 },	/* 0x0a2 - 0x0a8 */
+	{ 0x0b0,	0x00a },	/* 0x0b0 - 0x0b9 */
+	{ 0x100,	0x00a },	/* 0x100 - 0x109 */
+	{ 0x11e,	0x003 },	/* 0x11e - 0x120 */
+	{ 0x124,	0x001 },	/* 0x124 - 0x124 */
+	{ 0x130,	0x00b },	/* 0x130 - 0x13a */
+	{ 0x140,	0x014 },	/* 0x140 - 0x153 */
+	{ 0x155,	0x001 },	/* 0x155 - 0x155 */
+	{ 0x157,	0x002 },	/* 0x157 - 0x158 */
+	{ 0x15a,	0x013 },	/* 0x15a - 0x16c */
+	{ 0x16e,	0x00c },	/* 0x16e - 0x179 */
+	{ 0x17c,	0x005 },	/* 0x17c - 0x180 */
+	{ 0x195,	0x017 },	/* 0x195 - 0x1ab */
+	{ 0x1ae,	0x016 },	/* 0x1ae - 0x1c3 */
+	{ 0x1ca,	0x003 },	/* 0x1ca - 0x1cc */
+	{ 0x1ce,	0x036 },	/* 0x1ce - 0x203 */
+	{ 0x210,	0x003 },	/* 0x210 - 0x212 */
+	{ 0x218,	0x002 },	/* 0x218 - 0x219 */
+	{ 0x230,	0x00a },	/* 0x230 - 0x239 */
+	{ 0x240,	0x00b },	/* 0x240 - 0x24a */
+	{ 0x250,	0x00a },	/* 0x250 - 0x259 */
+	{ 0x25b,	0x00e },	/* 0x25b - 0x268 */
+	{ 0x270,	0x006 },	/* 0x270 - 0x275 */
+	{ 0x280,	0x024 },	/* 0x280 - 0x2a3 */
+	{ 0x2b0,	0x00e },	/* 0x2b0 - 0x2bd */
+	{ 0x2c0,	0x001 },	/* 0x2c0 - 0x2c0 */
+	{ 0x2d0,	0x00c },	/* 0x2d0 - 0x2db */
+	{ 0x2dd,	0x00c },	/* 0x2dd - 0x2e8 */
+	{ 0x2ea,	0x010 },	/* 0x2ea - 0x2f9 */
+	{ 0x2fe,	0x022 },	/* 0x2fe - 0x31f */
+	{ 0x321,	0x02a },	/* 0x321 - 0x34a */
+	{ 0x34d,	0x018 },	/* 0x34d - 0x364 */
+	{ 0x366,	0x004 },	/* 0x366 - 0x369 */
+	{ 0x370,	0x008 },	/* 0x370 - 0x377 */
+	{ 0x380,	0x004 },	/* 0x380 - 0x383 */
+	{ 0x390,	0x00b },	/* 0x390 - 0x39a */
+	{ 0x39c,	0x001 },	/* 0x39c - 0x39c */
+	{ 0x3a1,	0x052 },	/* 0x3a1 - 0x3f2 */
+	{ 0x400,	0x01e },	/* 0x400 - 0x41d */
+	{ 0x420,	0x007 },	/* 0x420 - 0x426 */
+	{ 0x429,	0x005 },	/* 0x429 - 0x42d */
+	{ 0x430,	0x002 },	/* 0x430 - 0x431 */
+	{ 0x442,	0x042 },	/* 0x442 - 0x483 */
+	{ 0x48e,	0x001 },	/* 0x48e - 0x48e */
+	{ 0x490,	0x001 },	/* 0x490 - 0x490 */
+	{ 0x496,	0x001 },	/* 0x496 - 0x496 */
+	{ 0x49d,	0x001 },	/* 0x49d - 0x49d */
+	{ 0x4b8,	0x001 },	/* 0x4b8 - 0x4b8 */
+	{ 0x4d6,	0x001 },	/* 0x4d6 - 0x4d6 */
+	{ 0x4f4,	0x003 },	/* 0x4f4 - 0x4f6 */
+	{ 0x4f8,	0x003 },	/* 0x4f8 - 0x4fa */
+	{ 0x500,	0x003 },	/* 0x500 - 0x502 */
+	{ 0x510,	0x001 },	/* 0x510 - 0x510 */
+	{ 0x520,	0x00c },	/* 0x520 - 0x52b */
+	{ 0x550,	0x00c },	/* 0x550 - 0x55b */
+	{ 0x580,	0x001 },	/* 0x580 - 0x580 */
+	{ 0x582,	0x01c },	/* 0x582 - 0x59d */
+	{ 0x5a0,	0x02b },	/* 0x5a0 - 0x5ca */
+	{ 0x5d0,	0x00a },	/* 0x5d0 - 0x5d9 */
+	{ 0x600,	0x018 },	/* 0x600 - 0x617 */
+	{ 0x620,	0x005 },	/* 0x620 - 0x624 */
+	{ 0x640,	0x010 },	/* 0x640 - 0x64f */
+	{ 0x660,	0x003 },	/* 0x660 - 0x662 */
+	{ 0x665,	0x001 },	/* 0x665 - 0x665 */
+	{ 0x670,	0x016 },	/* 0x670 - 0x685 */
+	{ 0x690,	0x007 },	/* 0x690 - 0x696 */
+	{ 0x698,	0x025 },	/* 0x698 - 0x6bc */
+	{ 0x6c0,	0x00c },	/* 0x6c0 - 0x6cb */
+	{ 0x6d0,	0x025 },	/* 0x6d0 - 0x6f4 */
+	{ 0x6f7,	0x009 },	/* 0x6f7 - 0x6ff */
+	{ 0x710,	0x004 },	/* 0x710 - 0x713 */
+	{ 0x720,	0x00a },	/* 0x720 - 0x729 */
+	{ 0x730,	0x00f },	/* 0x730 - 0x73e */
+	{ 0x741,	0x018 },	/* 0x741 - 0x758 */
+	{ 0x767,	0x001 },	/* 0x767 - 0x767 */
+	{ 0x769,	0x001 },	/* 0x769 - 0x769 */
+	{ 0x77a,	0x005 },	/* 0x77a - 0x77e */
+	{ 0x780,	0x01a },	/* 0x780 - 0x799 */
+	{ 0x7a0,	0x00e },	/* 0x7a0 - 0x7ad */
+	{ 0x7b0,	0x003 },	/* 0x7b0 - 0x7b2 */
+	{ 0x7b5,	0x002 },	/* 0x7b5 - 0x7b6 */
+	{ 0x7b9,	0x025 },	/* 0x7b9 - 0x7dd */
+	{ 0x7e0,	0x00b },	/* 0x7e0 - 0x7ea */
+	{ 0x7f5,	0x009 },	/* 0x7f5 - 0x7fd */
+	{ 0x805,	0x004 },	/* 0x805 - 0x808 */
+	{ 0x830,	0x010 },	/* 0x830 - 0x83f */
+	{ 0x850,	0x00e },	/* 0x850 - 0x85d */
+	{ 0x900,	0x002 },	/* 0x900 - 0x901 */
+	{ 0xb03,	0x00a },	/* 0xb03 - 0xb0c */
+	{ 0xb6a,	0x002 },	/* 0xb6a - 0xb6b */
+	{ 0xb6d,	0x004 },	/* 0xb6d - 0xb70 */
+	{ 0xb73,	0x001 },	/* 0xb73 - 0xb73 */
+	{ 0xbc0,	0x01e },	/* 0xbc0 - 0xbdd */
+	{ 0xbdf,	0x003 },	/* 0xbdf - 0xbe1 */
+	{ 0xbf0,	0x014 },	/* 0xbf0 - 0xc03 */
+	{ 0xc05,	0x007 },	/* 0xc05 - 0xc0b */
+	{ 0xc10,	0x009 },	/* 0xc10 - 0xc18 */
+	{ 0xc20,	0x01f },	/* 0xc20 - 0xc3e */
+	{ 0xc40,	0x006 },	/* 0xc40 - 0xc45 */
+	{ 0xc50,	0x01f },	/* 0xc50 - 0xc6e */
+	{ 0xc90,	0x010 },	/* 0xc90 - 0xc9f */
+	{ 0xca1,	0x004 },	/* 0xca1 - 0xca4 */
+	{ 0xd00,	0x003 },	/* 0xd00 - 0xd02 */
+	{ 0xd11,	0x013 },	/* 0xd11 - 0xd23 */
+	{ 0xd30,	0x008 },	/* 0xd30 - 0xd37 */
+	{ 0xd40,	0x018 },	/* 0xd40 - 0xd57 */
+	{ 0xdb0,	0x008 },	/* 0xdb0 - 0xdb7 */
+	{ 0xdc0,	0x003 },	/* 0xdc0 - 0xdc2 */
+	{ 0,	0 }
+};
+
 /* 4347 mode specific reg list */
 static phy_regs_t acphy40_regs[] = {
 	{ 0x000,	0x006 },	/* 0x000 - 0x005 */
@@ -944,7 +1099,7 @@ static phy_regs_t acphy40_regs[] = {
 	{ 0x038,	0x019 },	/* 0x038 - 0x050 */
 	{ 0x052,	0x00c },	/* 0x052 - 0x05d */
 	{ 0x060,	0x008 },	/* 0x060 - 0x067 */
-	{ 0x070,	0x00f },	/* 0x070 - 0x07e */
+	{ 0x070,	0x00e },	/* 0x070 - 0x07d */
 	{ 0x080,	0x029 },	/* 0x080 - 0x0a8 */
 	{ 0x0b0,	0x05d },	/* 0x0b0 - 0x10c */
 	{ 0x120,	0x00b },	/* 0x120 - 0x12a */
@@ -1035,13 +1190,15 @@ static phy_regs_t acphy40_regs[] = {
 	{ 0xe52,	0x008 },	/* 0xe52 - 0xe59 */
 	{ 0x1000,	0x010 },	/* 0x1000 - 0x100f */
 	{ 0x1020,	0x00e },	/* 0x1020 - 0x102d */
-	{ 0x1030,	0x023 },	/* 0x1030 - 0x1052 */
+	{ 0x1030,	0x019 },	/* 0x1030 - 0x1048 exclude VASIP section */
 	{ 0x1060,	0x009 },	/* 0x1060 - 0x1068 */
 	{ 0x1070,	0x005 },	/* 0x1070 - 0x1074 */
 	{ 0x1081,	0x00e },	/* 0x1081 - 0x108e */
-	{ 0x1090,	0x018 },	/* 0x1090 - 0x10a7 */
-	{ 0x10b0,	0x043 },	/* 0x10b0 - 0x10f2 */
-	{ 0x10f4,	0x026 },	/* 0x10f4 - 0x1119 */
+	{ 0x1090,	0x004 },	/* 0x1090 - 0x1093 exclude VASIP section */
+	{ 0x10a0,	0x008 },	/* 0x10a0 - 0x10a7 */
+	{ 0x10b0,	0x030 },	/* 0x10b0 - 0x10df exclude bfr/VASIP section */
+	{ 0x10f0,	0x003 },	/* 0x10f0 - 0x10f2 */
+	{ 0x10f4,	0x01c },	/* 0x10f4 - 0x110f exclude VASIP section */
 	{ 0x1120,	0x013 },	/* 0x1120 - 0x1132 */
 	{ 0x1138,	0x005 },	/* 0x1138 - 0x113c */
 	{ 0x1140,	0x036 },	/* 0x1140 - 0x1175 */
@@ -1082,6 +1239,184 @@ static phy_regs_t acphy40_regs[] = {
 	{ 0x1850,	0x002 },	/* 0x1850 - 0x1851 */
 	{ 0x1853,	0x004 },	/* 0x1853 - 0x1856 */
 	{ 0x1860,	0x03c },	/* 0x1860 - 0x189b */
+	{ 0x18a0,	0x00a },	/* 0x18a0 - 0x18a9 */
+	{ 0x18b0,	0x00d },	/* 0x18b0 - 0x18bc */
+	{ 0x18c0,	0x01a },	/* 0x18c0 - 0x18d9 */
+	{ 0x18de,	0x002 },	/* 0x18de - 0x18df */
+	{ 0x18f0,	0x023 },	/* 0x18f0 - 0x1912 */
+	{ 0x1920,	0x01b },	/* 0x1920 - 0x193a */
+	{ 0x1940,	0x018 },	/* 0x1940 - 0x1957 */
+	{ 0x1960,	0x006 },	/* 0x1960 - 0x1965 */
+	{ 0x1970,	0x009 },	/* 0x1970 - 0x1978 */
+	{ 0x1980,	0x00e },	/* 0x1980 - 0x198d */
+	{ 0,	0 }
+};
+
+static phy_regs_t acphy40_aux_regs[] = {
+	{ 0x000,	0x006 },	/* 0x000 - 0x005 */
+	{ 0x007,	0x001 },	/* 0x007 - 0x007 */
+	{ 0x009,	0x004 },	/* 0x009 - 0x00c */
+	{ 0x011,	0x020 },	/* 0x011 - 0x030 */
+	{ 0x038,	0x019 },	/* 0x038 - 0x050 */
+	{ 0x052,	0x00c },	/* 0x052 - 0x05d */
+	{ 0x060,	0x008 },	/* 0x060 - 0x067 */
+	{ 0x070,	0x00e },	/* 0x070 - 0x07d */
+	{ 0x080,	0x00c },	/* 0x080 - 0x08b exclude 20in40, 20in80 */
+	{ 0x0a2,	0x007 },	/* 0x0a2 - 0x0a8 */
+	{ 0x0b0,	0x00a },	/* 0x0b0 - 0x0b9 exclude 20in40, 20in80 */
+	{ 0x0ec,	0x00a },	/* 0x0ec - 0x0f5 exclude 20in40, 20in80 */
+	{ 0x10a,	0x003 },	/* 0x10a - 0x10c */
+	{ 0x120,	0x00b },	/* 0x120 - 0x12a */
+	{ 0x130,	0x00a },	/* 0x130 - 0x139 */
+	{ 0x140,	0x01f },	/* 0x140 - 0x15e */
+	{ 0x160,	0x01a },	/* 0x160 - 0x179 */
+	{ 0x17c,	0x005 },	/* 0x17c - 0x180 */
+	{ 0x195,	0x011 },	/* 0x195 - 0x1a5 */
+	{ 0x1a8,	0x004 },	/* 0x1a8 - 0x1ab */
+	{ 0x1ae,	0x05f },	/* 0x1ae - 0x20c */
+	{ 0x210,	0x003 },	/* 0x210 - 0x212 */
+	{ 0x218,	0x005 },	/* 0x218 - 0x21c */
+	{ 0x230,	0x00a },	/* 0x230 - 0x239 */
+	{ 0x240,	0x00b },	/* 0x240 - 0x24a */
+	{ 0x250,	0x026 },	/* 0x250 - 0x275 */
+	{ 0x280,	0x03f },	/* 0x280 - 0x2be */
+	{ 0x2c0,	0x029 },	/* 0x2c0 - 0x2e8 */
+	{ 0x2ee,	0x004 },	/* 0x2ee - 0x2f1 */
+	{ 0x30e,	0x006 },	/* 0x30e - 0x313 */
+	{ 0x320,	0x001 },	/* 0x320 - 0x320 */
+	{ 0x324,	0x003 },	/* 0x324 - 0x326 */
+	{ 0x330,	0x003 },	/* 0x330 - 0x332 */
+	{ 0x339,	0x001 },	/* 0x339 - 0x339 */
+	{ 0x34a,	0x001 },	/* 0x34a - 0x34a */
+	{ 0x34d,	0x01b },	/* 0x34d - 0x367 */
+	{ 0x370,	0x00a },	/* 0x370 - 0x379 */
+	{ 0x380,	0x004 },	/* 0x380 - 0x383 */
+	{ 0x390,	0x00e },	/* 0x390 - 0x39d */
+	{ 0x3a1,	0x053 },	/* 0x3a1 - 0x3f3 */
+	{ 0x400,	0x01c },	/* 0x400 - 0x41b */
+	{ 0x41e,	0x009 },	/* 0x41e - 0x426 */
+	{ 0x429,	0x005 },	/* 0x429 - 0x42d */
+	{ 0x430,	0x045 },	/* 0x430 - 0x474 */
+	{ 0x476,	0x023 },	/* 0x476 - 0x498 */
+	{ 0x49b,	0x006 },	/* 0x49b - 0x4a0 */
+	{ 0x4b7,	0x002 },	/* 0x4b7 - 0x4b8 */
+	{ 0x4d6,	0x001 },	/* 0x4d6 - 0x4d6 */
+	{ 0x4db,	0x002 },	/* 0x4db - 0x4dc */
+	{ 0x4e1,	0x001 },	/* 0x4e1 - 0x4e1 */
+	{ 0x4e5,	0x001 },	/* 0x4e5 - 0x4e5 */
+	{ 0x4f2,	0x00c },	/* 0x4f2 - 0x4fd */
+	{ 0x500,	0x003 },	/* 0x500 - 0x502 */
+	{ 0x510,	0x001 },	/* 0x510 - 0x510 */
+	{ 0x520,	0x00d },	/* 0x520 - 0x52c */
+	{ 0x530,	0x012 },	/* 0x530 - 0x541 */
+	{ 0x550,	0x00c },	/* 0x550 - 0x55b */
+	{ 0x570,	0x005 },	/* 0x570 - 0x574 */
+	{ 0x578,	0x027 },	/* 0x578 - 0x59e */
+	{ 0x5a0,	0x016 },	/* 0x5a0 - 0x5b5 */
+	{ 0x5c0,	0x00c },	/* 0x5c0 - 0x5cb */
+	{ 0x5d0,	0x00a },	/* 0x5d0 - 0x5d9 */
+	{ 0x5e0,	0x001 },	/* 0x5e0 - 0x5e0 */
+	{ 0x5e3,	0x016 },	/* 0x5e3 - 0x5f8 */
+	{ 0x600,	0x010 },	/* 0x600 - 0x60f */
+	{ 0x63f,	0x011 },	/* 0x63f - 0x64f */
+	{ 0x660,	0x003 },	/* 0x660 - 0x662 */
+	{ 0x66a,	0x002 },	/* 0x66a - 0x66b */
+	{ 0x670,	0x015 },	/* 0x670 - 0x684 */
+	{ 0x688,	0x003 },	/* 0x688 - 0x68a */
+	{ 0x690,	0x007 },	/* 0x690 - 0x696 */
+	{ 0x698,	0x021 },	/* 0x698 - 0x6b8 */
+	{ 0x6ba,	0x003 },	/* 0x6ba - 0x6bc */
+	{ 0x6c0,	0x00c },	/* 0x6c0 - 0x6cb */
+	{ 0x6d0,	0x03e },	/* 0x6d0 - 0x70d */
+	{ 0x710,	0x001 },	/* 0x710 - 0x710 */
+	{ 0x712,	0x001 },	/* 0x712 - 0x712 */
+	{ 0x714,	0x016 },	/* 0x714 - 0x729 */
+	{ 0x730,	0x00f },	/* 0x730 - 0x73e */
+	{ 0x741,	0x029 },	/* 0x741 - 0x769 */
+	{ 0x770,	0x00e },	/* 0x770 - 0x77d */
+	{ 0x780,	0x01a },	/* 0x780 - 0x799 */
+	{ 0x79d,	0x001 },	/* 0x79d - 0x79d */
+	{ 0x7a0,	0x040 },	/* 0x7a0 - 0x7df */
+	{ 0x7e2,	0x001 },	/* 0x7e2 - 0x7e2 */
+	{ 0x7f0,	0x020 },	/* 0x7f0 - 0x80f */
+	{ 0x83f,	0x011 },	/* 0x83f - 0x84f */
+	{ 0x860,	0x003 },	/* 0x860 - 0x862 */
+	{ 0x86a,	0x002 },	/* 0x86a - 0x86b */
+	{ 0x870,	0x015 },	/* 0x870 - 0x884 */
+	{ 0x888,	0x003 },	/* 0x888 - 0x88a */
+	{ 0x890,	0x007 },	/* 0x890 - 0x896 */
+	{ 0x898,	0x021 },	/* 0x898 - 0x8b8 */
+	{ 0x8ba,	0x003 },	/* 0x8ba - 0x8bc */
+	{ 0x8c0,	0x00c },	/* 0x8c0 - 0x8cb */
+	{ 0x8d0,	0x03d },	/* 0x8d0 - 0x90c */
+	{ 0x910,	0x001 },	/* 0x910 - 0x910 */
+	{ 0x912,	0x001 },	/* 0x912 - 0x912 */
+	{ 0x914,	0x016 },	/* 0x914 - 0x929 */
+	{ 0x930,	0x00f },	/* 0x930 - 0x93e */
+	{ 0x941,	0x029 },	/* 0x941 - 0x969 */
+	{ 0x970,	0x00e },	/* 0x970 - 0x97d */
+	{ 0x980,	0x01a },	/* 0x980 - 0x999 */
+	{ 0x99d,	0x001 },	/* 0x99d - 0x99d */
+	{ 0x9a0,	0x040 },	/* 0x9a0 - 0x9df */
+	{ 0x9e2,	0x001 },	/* 0x9e2 - 0x9e2 */
+	{ 0x9f0,	0x010 },	/* 0x9f0 - 0x9ff */
+	{ 0xe50,	0x001 },	/* 0xe50 - 0xe50 */
+	{ 0xe52,	0x008 },	/* 0xe52 - 0xe59 */
+	{ 0x1000,	0x010 },	/* 0x1000 - 0x100f */
+	{ 0x1020,	0x00e },	/* 0x1020 - 0x102d */
+	{ 0x1030,	0x019 },	/* 0x1030 - 0x1048 exclude VASIP section */
+	{ 0x1060,	0x009 },	/* 0x1060 - 0x1068 */
+	{ 0x1070,	0x005 },	/* 0x1070 - 0x1074 */
+	{ 0x1081,	0x00e },	/* 0x1081 - 0x108e */
+	{ 0x1090,	0x004 },	/* 0x1090 - 0x1093 exclude VASIP section */
+	{ 0x10a0,	0x004 },	/* 0x10a0 - 0x10a3 */
+	{ 0x10a5,	0x003 },	/* 0x10a5 - 0x10a7 */
+	{ 0x10b0,	0x010 },	/* 0x10b0 - 0x10bf */
+	{ 0x10c3,	0x01d },	/* 0x10c3 - 0x10df */
+	{ 0x10f0,	0x003 },	/* 0x10f0 - 0x10f2 */
+	{ 0x10f4,	0x01c },	/* 0x10f4 - 0x110f exclude VASIP section */
+	{ 0x1120,	0x013 },	/* 0x1120 - 0x1132 */
+	{ 0x1138,	0x005 },	/* 0x1138 - 0x113c */
+	{ 0x1140,	0x036 },	/* 0x1140 - 0x1175 */
+	{ 0x1178,	0x008 },	/* 0x1178 - 0x117f */
+	{ 0x11b0,	0x00a },	/* 0x11b0 - 0x11b9 */
+	{ 0x11c0,	0x003 },	/* 0x11c0 - 0x11c2 */
+	{ 0x11d0,	0x007 },	/* 0x11d0 - 0x11d6 */
+	{ 0x11e0,	0x015 },	/* 0x11e0 - 0x11f4 */
+	{ 0x1220,	0x01c },	/* 0x1220 - 0x123b */
+	{ 0x1240,	0x004 },	/* 0x1240 - 0x1243 */
+	{ 0x1248,	0x005 },	/* 0x1248 - 0x124c */
+	{ 0x1259,	0x003 },	/* 0x1259 - 0x125b */
+	{ 0x1260,	0x005 },	/* 0x1260 - 0x1264 */
+	{ 0x1280,	0x00e },	/* 0x1280 - 0x128d */
+	{ 0x128f,	0x001 },	/* 0x128f - 0x128f */
+	{ 0x1620,	0x00d },	/* 0x1620 - 0x162c */
+	{ 0x1630,	0x001 },	/* 0x1630 - 0x1630 */
+	{ 0x1632,	0x001 },	/* 0x1632 - 0x1632 */
+	{ 0x1636,	0x002 },	/* 0x1636 - 0x1637 */
+	{ 0x1640,	0x006 },	/* 0x1640 - 0x1645 */
+	{ 0x1650,	0x002 },	/* 0x1650 - 0x1651 */
+	{ 0x1653,	0x004 },	/* 0x1653 - 0x1656 */
+	{ 0x1660,	0x01e },	/* 0x1660 - 0x167d */
+	{ 0x1680,	0x01c },	/* 0x1680 - 0x169b */
+	{ 0x16a0,	0x00a },	/* 0x16a0 - 0x16a9 */
+	{ 0x16b0,	0x00d },	/* 0x16b0 - 0x16bc */
+	{ 0x16c0,	0x01a },	/* 0x16c0 - 0x16d9 */
+	{ 0x16de,	0x002 },	/* 0x16de - 0x16df */
+	{ 0x16f0,	0x023 },	/* 0x16f0 - 0x1712 */
+	{ 0x1720,	0x01b },	/* 0x1720 - 0x173a */
+	{ 0x1740,	0x018 },	/* 0x1740 - 0x1757 */
+	{ 0x1760,	0x006 },	/* 0x1760 - 0x1765 */
+	{ 0x1770,	0x009 },	/* 0x1770 - 0x1778 */
+	{ 0x1820,	0x00d },	/* 0x1820 - 0x182c */
+	{ 0x1830,	0x001 },	/* 0x1830 - 0x1830 */
+	{ 0x1832,	0x001 },	/* 0x1832 - 0x1832 */
+	{ 0x1836,	0x002 },	/* 0x1836 - 0x1837 */
+	{ 0x1840,	0x006 },	/* 0x1840 - 0x1845 */
+	{ 0x1850,	0x002 },	/* 0x1850 - 0x1851 */
+	{ 0x1853,	0x004 },	/* 0x1853 - 0x1856 */
+	{ 0x1860,	0x01e },	/* 0x1860 - 0x187d */
+	{ 0x1880,	0x01c },	/* 0x1860 - 0x189b */
 	{ 0x18a0,	0x00a },	/* 0x18a0 - 0x18a9 */
 	{ 0x18b0,	0x00d },	/* 0x18b0 - 0x18bc */
 	{ 0x18c0,	0x01a },	/* 0x18c0 - 0x18d9 */
@@ -2348,10 +2683,11 @@ phy_ac_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b)
 {
 	phy_regs_t *rl = NULL;
 
-	wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
-		rl = acphy40_regs;
+		rl = (wlapi_si_coreunit(pi->sh->physhim) == DUALMAC_AUX) ?
+			acphy40_aux_regs: acphy40_regs;
 	} else if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
 		rl = acphy32_regs;
 	} else if (ACMAJORREV_37(pi->pubpi->phy_rev)) {
@@ -2376,16 +2712,18 @@ phy_ac_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b)
 		rl = acphy2_regs;
 	} else if (ACMAJORREV_0(pi->pubpi->phy_rev)) {
 		rl = acphy0_regs;
+	} else if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
+		rl = acphy36_regs;
 	} else {
 		ASSERT(0);
 	}
 	phy_dump_phyregs(pi, "acphy", rl, 0, b);
 
-	wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	return BCME_OK;
 }
-#endif /* BCMDBG, BCMDBG_DUMP, BCMINTERNAL, DBG_PHY_IOV, BCMDBG_PHYDUMP */
+#endif 
 
 void
 phy_ac_update_phycorestate(phy_info_t *pi)
@@ -2416,7 +2754,6 @@ phy_ac_update_phycorestate(phy_info_t *pi)
 		pi->sh->unit, pi->pubpi->phy_corenum, pi->pubpi->phy_coremask));
 }
 
-/* JIRA:SW4349-294 WAR for register access problems in MIMO and 80P80 modes in 4349 */
 void phy_regaccess_war_acphy(phy_info_t *pi)
 {
 	uint16 phymode = phy_get_phymode(pi);

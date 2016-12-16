@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_iovt.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_iovt.c 657044 2016-08-30 21:37:55Z $
  */
 
 #include <phy_cfg.h>
@@ -23,11 +23,13 @@
 #include "phy_iovt.h"
 #include <phy_btcx_iov.h>
 #include <phy_chanmgr_iov.h>
+#include <phy_calmgr_iov.h>
 #include <phy_hirssi_iov.h>
 #include <phy_radar_iov.h>
 #include <phy_temp_iov.h>
 #include <phy_dsi_iov.h>
 #include <phy_misc_iov.h>
+#include <phy_noise_iov.h>
 #include <phy_tpc_iov.h>
 #include <phy_rxgcrs_iov.h>
 #include <phy_antdiv_iov.h>
@@ -42,6 +44,12 @@
 #ifdef WLC_TXPWRCAP
 #include <phy_txpwrcap_iov.h>
 #endif
+#ifdef IQPLAY_DEBUG
+#include <phy_samp_iov.h>
+#endif /* IQPLAY_DEBUG */
+#ifdef RADIO_HEALTH_CHECK
+#include <phy_hc_iov.h>
+#endif /* RADIO_HEALTH_CHECK */
 
 /* local functions */
 
@@ -141,6 +149,12 @@ BCMATTACHFN(phy_register_iovt)(phy_info_t *pi, wlc_iocv_info_t *ii)
 		goto fail;
 	}
 
+	/* Register Cal Manager common iovar tables/handlers */
+	if (phy_calmgr_register_iovt(pi, ii) != BCME_OK) {
+		PHY_ERROR(("%s: phy_calmgr_register_iovt failed\n", __FUNCTION__));
+		goto fail;
+	}
+
 	/* Register FCBS module common iovar table/handlers */
 	if (phy_fcbs_register_iovt(pi, ii) != BCME_OK) {
 		PHY_ERROR(("%s: phy_fcbs_register_iovt failed\n", __FUNCTION__));
@@ -171,11 +185,33 @@ BCMATTACHFN(phy_register_iovt)(phy_info_t *pi, wlc_iocv_info_t *ii)
 		goto fail;
 	}
 
+	/* Register NOISEmeasure module common iovar table/handlers */
+	if (phy_noise_register_iovt(pi, ii) != BCME_OK) {
+		PHY_ERROR(("%s: phy_rxspur_register_iovt failed\n", __FUNCTION__));
+		goto fail;
+	}
+
 	/* Register Rx Spur canceller module common iovar table/handlers */
 	if (phy_rxspur_register_iovt(pi, ii) != BCME_OK) {
 		PHY_ERROR(("%s: phy_rxspur_register_iovt failed\n", __FUNCTION__));
 		goto fail;
 	}
+
+#ifdef IQPLAY_DEBUG
+	/* Register sample play  module common iovar table/handlers */
+	if (phy_samp_register_iovt(pi, ii) != BCME_OK) {
+		PHY_ERROR(("%s: phy_samp_register_iovt failed\n", __FUNCTION__));
+		goto fail;
+	}
+#endif /* IQPLAY_DEBUG */
+
+#ifdef RADIO_HEALTH_CHECK
+	/* Register health check common iovar table/handlers */
+	if (phy_hc_register_iovt(pi, ii) != BCME_OK) {
+		PHY_ERROR(("%s: phy_hc_register_iovt failed\n", __FUNCTION__));
+		goto fail;
+	}
+#endif /* RADIO_HEALTH_CHECK */
 
 	/* Register other modules' common iovar tables/dispatchers here ... */
 

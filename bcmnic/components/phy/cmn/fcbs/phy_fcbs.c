@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_fcbs.c 612466 2016-01-14 02:49:29Z jqliu $
+ * $Id: phy_fcbs.c 657351 2016-08-31 23:00:22Z $
  */
 
 #include <phy_cfg.h>
@@ -899,7 +899,8 @@ bool wlc_phy_fcbs_uninit(wlc_phy_t *ppi, chanspec_t chanspec)
 static int
 phy_fcbs_dump(void *ctx, struct bcmstrbuf *b)
 {
-	phy_info_t *pi = ctx;
+	phy_fcbs_info_t *fcbsi = (phy_fcbs_info_t *)ctx;
+	phy_info_t *pi = fcbsi->pi;
 	uint shmem_radioreg, shmem_phytbl16, shmem_phytbl32;
 	uint shmem_phyreg, shmem_bphyctrl, shmem_cache_ptr;
 	int bwidx[2];

@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ltecx.c 638403 2016-05-17 19:01:20Z $
+ * $Id: wlc_ltecx.c 664328 2016-10-12 06:05:06Z $
  */
 
 /**
@@ -87,6 +87,8 @@
 #include <ulp.h>
 #include <wlc_ulp.h>
 #endif /* BCMULP */
+#include <phy_ocl_api.h>
+#include <phy_noise_api.h>
 
 #ifdef BCMLTECOEX
 enum {
@@ -397,6 +399,7 @@ BCMATTACHFN(wlc_ltecx_attach)(wlc_info_t *wlc)
 	ltecx->mws_oclmap.bitmap_5g_lo = MWS_OCLMAP_DEFAULT_5G_LO;
 	ltecx->mws_oclmap.bitmap_5g_mid = MWS_OCLMAP_DEFAULT_5G_MID;
 	ltecx->mws_oclmap.bitmap_5g_high = MWS_OCLMAP_DEFAULT_5G_HIGH;
+	ltecx->mws_ltecx_txind = TRUE;
 	return ltecx;
 
 fail:
@@ -481,8 +484,10 @@ BCMINITFN(wlc_ltecx_init)(wlc_ltecx_info_t *ltecx)
 	ltecx->mws_wifi_sensi_prev	= 0;
 	ltecx->mws_im3_prot_prev	= 0;
 	ltecx->mws_rxbreak_dis = FALSE;
-	ltecx->antmap_in_use.wlan_txmap = MWS_ANTMAP_DEFAULT;
-	ltecx->antmap_in_use.wlan_rxmap = MWS_ANTMAP_DEFAULT;
+	ltecx->antmap_in_use.wlan_txmap2g = MWS_ANTMAP_DEFAULT;
+	ltecx->antmap_in_use.wlan_txmap5g = MWS_ANTMAP_DEFAULT;
+	ltecx->antmap_in_use.wlan_rxmap2g = MWS_ANTMAP_DEFAULT;
+	ltecx->antmap_in_use.wlan_rxmap5g = MWS_ANTMAP_DEFAULT;
 
 	/* If INVALID, set baud_rate to default */
 	if (ltecx->baud_rate == LTECX_WCI2_INVALID_BAUD) {
@@ -669,6 +674,14 @@ wlc_ltecx_doiovar(void *ctx, uint32 actionid,
 	case IOV_SVAL(IOV_LTECX_WCI2_CONFIG):
 		bcopy((char *)params, &ltecx->cmn->wci2_config,
 		sizeof(wci2_config_t));
+		/* update the WCI2 configuration */
+		if (wlc_hw->up) {
+			wlc_bmac_suspend_mac_and_wait(wlc_hw);
+		}
+		wlc_ltecx_update_wci2_config(ltecx);
+		if (wlc_hw->up) {
+			wlc_bmac_enable_mac(wlc_hw);
+		}
 		break;
 	case IOV_GVAL(IOV_LTECX_MWS_NOISE_MEAS):
 		if (len >= sizeof(uint16))
@@ -1021,8 +1034,7 @@ wlc_ltecx_doiovar(void *ctx, uint32 actionid,
 			else
 				cellstatus = cellstatus & 0x1;
 
-			ant_tx = (wlc_bmac_read_shm(wlc->hw, wlc->hw->btc->bt_shm_addr +
-				M_LTECX_FLAGS) &
+			ant_tx = (wlc_bmac_read_shm(wlc->hw, M_LTECX_FLAGS(wlc->hw)) &
 				(LTECX_CELLANT_TX_MASK << C_LTECX_FLAGS_MWS_TYPE7_CELL_TX_ANT)) >>
 				C_LTECX_FLAGS_MWS_TYPE7_CELL_TX_ANT;
 			*ret_int_ptr = (((uint8)ant_tx & 0xF) << 4) | ((uint8)cellstatus & 0xF);
@@ -1135,7 +1147,11 @@ wlc_ltecx_watchdog(void *arg)
 {
 	wlc_ltecx_info_t *ltecx = (wlc_ltecx_info_t *)arg;
 	wlc_info_t *wlc = ltecx->wlc;
+	int noise_delta = 0;
+	int noise_lte = 0;
 	BCM_REFERENCE(wlc);
+	int noise = wlc_lq_noise_ma_upd(wlc,
+		phy_noise_avg(WLC_PI(wlc)));
 	if (BCMLTECOEX_ENAB(wlc->pub)) {
 		wlc_ltecx_update_all_states(ltecx);
 
@@ -1200,6 +1216,21 @@ wlc_ltecx_watchdog(void *arg)
 			}
 		}
 		wlc_btcx_ltecx_apply_agg_state(wlc);
+		if (wlc->hw->btc->bt_shm_addr) {
+			wlc_bmac_write_shm(wlc->hw, M_LTECX_TXNOISE_CNT(wlc),
+				LTECX_TXNOISE_CNT);
+		}
+		/* update noise delta = noise_lte!=0 ? noise_lte - noise : 0 */
+		noise_lte = wlc_lq_read_noise_lte(wlc);
+		if (noise_lte && noise)
+			noise_delta = noise_lte - noise;
+		if (wlc->hw->btc->bt_shm_addr) {
+			if (WLCISACPHY(wlc->band)) {
+				/* For DCF ucode, M_LTECX_NOISE_DELTA location does not exist */
+				wlc_bmac_write_shm(wlc->hw, M_LTECX_NOISE_DELTA(wlc),
+					noise_delta);
+			}
+		}
 	}
 }
 
@@ -1239,6 +1270,8 @@ wlc_ltecx_update_all_states(wlc_ltecx_info_t *ltecx)
 	/* update the LTE frame configuration */
 	wlc_ltecx_update_frame_config(ltecx);
 	wlc_ltecx_update_seci_rxbreak(ltecx);
+	/* update the WCI2 configuration */
+	wlc_ltecx_update_wci2_config(ltecx);
 }
 
 void wlc_ltecx_update_seci_rxbreak(wlc_ltecx_info_t *ltecx)
@@ -1271,21 +1304,40 @@ wlc_ltecx_update_frame_config(wlc_ltecx_info_t *ltecx)
 	if (!(wlc_hw->up)) {
 		return;
 	}
-	/* Write the actual  LTE tx duration into the shm */
-	txdur = ltecx->cmn->mws_frame_config.mws_period_dur[LTECX_FRAME_UPLINK_TYPE];
-	while (i < LTECX_MAX_NUM_PERIOD_TYPES) {
-		if (ltecx->cmn->mws_frame_config.mws_period_type[i] == LTECX_FRAME_UPLINK_TYPE) {
-			/* Update the shm incase of a change in the IOVAR */
-			if (txdur != ltecx->mws_ltetx_dur_prev) {
-				wlc_bmac_write_shm(wlc_hw,
-					ltecx->ltecx_shm_addr +
-					M_LTECX_ACTUALTX_DURATION_OFFSET(ltecx->wlc),
-					ltecx->cmn->mws_frame_config.mws_period_dur[i]);
-				ltecx->mws_ltetx_dur_prev = txdur;
+
+	/* Add Framesync Assert Offset to Type6 Prot Adv Time */
+	if (ltecx->ltecx_shm_addr) {
+		wlc_bmac_write_shm(wlc_hw, M_LTECX_FS_OFFSET(wlc_hw),
+			-(ltecx->cmn->mws_frame_config.mws_framesync_assert_offset));
+
+		while (i < LTECX_MAX_NUM_PERIOD_TYPES) {
+			if (ltecx->cmn->mws_frame_config.mws_period_type[i] ==
+				LTECX_FRAME_UPLINK_TYPE) {
+				/* Write the actual LTE tx duration into the shm */
+				txdur = ltecx->cmn->mws_frame_config.mws_period_dur[i];
+				/* Update the shm incase of a change in the IOVAR */
+				if (txdur != ltecx->mws_ltetx_dur_prev) {
+					wlc_bmac_write_shm(wlc_hw,
+						ltecx->ltecx_shm_addr +
+						M_LTECX_ACTUALTX_DURATION_OFFSET(ltecx->wlc),
+						ltecx->cmn->mws_frame_config.mws_period_dur[i]);
+					ltecx->mws_ltetx_dur_prev = txdur;
+				}
 			}
+			i++;
 		}
-		i++;
 	}
+}
+
+void wlc_ltecx_update_wci2_config(wlc_ltecx_info_t *ltecx)
+{
+	wlc_hw_info_t *wlc_hw = ltecx->wlc->hw;
+
+	if (!(wlc_hw->up)) {
+		return;
+	}
+	ltecx->ltetx_adv = -(ltecx->cmn->wci2_config.mws_tx_assert_offset);
+	wlc_ltecx_update_ltetx_adv(ltecx);
 }
 
 void wlc_ltecx_check_tscoex_chmap(wlc_ltecx_info_t *ltecx)
@@ -1707,33 +1759,49 @@ static int wlc_mws_lte_ant_errcheck(mws_ant_map_t *antmap)
 	}
 	return BCME_OK;
 }
-static mws_wlan_ant_map_t wlc_get_antmap(uint16 antcombo)
+static mws_wlan_ant_map_t wlc_get_antmap(uint16 antcombo1, uint16 antcombo2)
 {
-	/* Returns UL Antenna Map in format <A3 A2 A1 A0> */
+	/* Returns 2G UL Antenna Map in format <A3 A2 A1 A0> */
 	mws_wlan_ant_map_t antmap;
-	antmap.wlan_txmap = (antcombo & UL_ANT_MASK_ANT0) >> 10;
-	antmap.wlan_txmap = antmap.wlan_txmap | ((antcombo & UL_ANT_MASK_ANT1) >> 8);
-	antmap.wlan_txmap = antmap.wlan_txmap | (antcombo & UL_ANT_MASK_ANT2) >> 4;
+	antmap.wlan_txmap2g = (antcombo1 & UL_ANT_MASK_ANT0) >> 10;
+	antmap.wlan_txmap2g = antmap.wlan_txmap2g | ((antcombo1 & UL_ANT_MASK_ANT1) >> 8);
+	antmap.wlan_txmap2g = antmap.wlan_txmap2g | (antcombo1 & UL_ANT_MASK_ANT2) >> 4;
 
-	/* Returns UL Antenna Map in format */
-	antmap.wlan_rxmap = (antcombo & DL_ANT_MASK_ANT0) >> 3;
-	antmap.wlan_rxmap = antmap.wlan_rxmap | ((antcombo & DL_ANT_MASK_ANT1) >> 1);
-	antmap.wlan_rxmap = antmap.wlan_rxmap | ((antcombo & DL_ANT_MASK_ANT2) << 3);
+	/* Returns 2G DL Antenna Map in format */
+	antmap.wlan_rxmap2g = (antcombo1 & DL_ANT_MASK_ANT0) >> 3;
+	antmap.wlan_rxmap2g = antmap.wlan_rxmap2g | ((antcombo1 & DL_ANT_MASK_ANT1) >> 1);
+	antmap.wlan_rxmap2g = antmap.wlan_rxmap2g | ((antcombo1 & DL_ANT_MASK_ANT2) << 3);
+
+	/* Returns 5G UL Antenna Map in format <A3 A2 A1 A0> */
+	antmap.wlan_txmap5g = (antcombo2 & UL_ANT_MASK_ANT0) >> 10;
+	antmap.wlan_txmap5g = antmap.wlan_txmap5g | ((antcombo2 & UL_ANT_MASK_ANT1) >> 8);
+	antmap.wlan_txmap5g = antmap.wlan_txmap5g | (antcombo2 & UL_ANT_MASK_ANT2) >> 4;
+
+	/* Returns 5G DL Antenna Map in format */
+	antmap.wlan_rxmap5g = (antcombo2 & DL_ANT_MASK_ANT0) >> 3;
+	antmap.wlan_rxmap5g = antmap.wlan_rxmap5g | ((antcombo2 & DL_ANT_MASK_ANT1) >> 1);
+	antmap.wlan_rxmap5g = antmap.wlan_rxmap5g | ((antcombo2 & DL_ANT_MASK_ANT2) << 3);
 
 	return antmap;
 }
 
-static int wlc_mws_lte_ant(wlc_ltecx_info_t *ltecx, uint32 txantmap, uint32 rxantmap)
+static int wlc_mws_lte_ant(wlc_ltecx_info_t *ltecx, uint16 txantmap2g, uint16 rxantmap2g,
+		uint16 txantmap5g, uint16 rxantmap5g)
 {
 	wlc_info_t *wlc = ltecx->wlc;
 	int ret_ant_sel = BCME_OK;
-
-	if ((ret_ant_sel = wlc_stf_mws_set(wlc, txantmap, rxantmap)) != BCME_OK)
-		return ret_ant_sel;
+	if (BAND_2G(wlc->band->bandtype)) {
+		if ((ret_ant_sel = wlc_stf_mws_set(wlc, txantmap2g, rxantmap2g)) != BCME_OK)
+			return ret_ant_sel;
+	}
+	else {
+		if ((ret_ant_sel = wlc_stf_mws_set(wlc, txantmap5g, rxantmap5g)) != BCME_OK)
+			return ret_ant_sel;
+	}
 #ifdef WLC_SW_DIVERSITY
 	if (WLSWDIV_ENAB(wlc)) {
 		ret_ant_sel = wlc_swdiv_antpref_update(wlc->swdiv, SWDIV_REQ_FROM_LTE,
-			rxantmap, rxantmap, txantmap, txantmap);
+			rxantmap2g, rxantmap5g, txantmap2g, txantmap5g);
 	}
 #endif
 	return ret_ant_sel;
@@ -1762,37 +1830,30 @@ void wlc_ltecx_ant_update(wlc_ltecx_info_t *ltecx)
 		(LTECX_CELLANT_TX_MASK << C_LTECX_FLAGS_MWS_TYPE7_CELL_TX_ANT))
 		>> C_LTECX_FLAGS_MWS_TYPE7_CELL_TX_ANT;
 	if (cellstatus & LTECX_CELLSTATUS_UKNOWN || (!(cellstatus & LTECX_CELLSTATUS_ON))) {
-		antmap.wlan_txmap =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
-		antmap.wlan_rxmap =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
+		antmap.wlan_txmap2g =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
+		antmap.wlan_txmap5g =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
+		antmap.wlan_rxmap2g =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
+		antmap.wlan_rxmap5g =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
 	}
 	else {
-		/* band 2G */
-		if (BAND_2G(wlc->band->bandtype)) {
-			if (ant_tx == 0) {
-				antmap = wlc_get_antmap(ltecx->mws_antmap.combo1);
-			}
-			else {
-				antmap = wlc_get_antmap(ltecx->mws_antmap.combo2);
-			}
+		if (ant_tx == 0) {
+			antmap = wlc_get_antmap(ltecx->mws_antmap.combo1, ltecx->mws_antmap.combo3);
 		}
 		else {
-			if (ant_tx == 0) {
-				antmap = wlc_get_antmap(ltecx->mws_antmap.combo3);
-			}
-			else {
-				antmap = wlc_get_antmap(ltecx->mws_antmap.combo4);
-			}
+			antmap = wlc_get_antmap(ltecx->mws_antmap.combo2, ltecx->mws_antmap.combo4);
 		}
 	}
-	if (antmap.wlan_txmap == 0)
-		antmap.wlan_txmap =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
-	if (antmap.wlan_rxmap == 0)
-		antmap.wlan_rxmap =  MWS_ANTMAP_DEFAULT; /* default selection by wifi */
-	if ((wlc->ltecx->antmap_in_use.wlan_txmap != antmap.wlan_txmap) ||
-		(wlc->ltecx->antmap_in_use.wlan_rxmap != antmap.wlan_rxmap)) {
-			wlc->ltecx->antmap_in_use.wlan_txmap = antmap.wlan_txmap;
-			wlc->ltecx->antmap_in_use.wlan_rxmap = antmap.wlan_rxmap;
-			lte_ant_ret = wlc_mws_lte_ant(ltecx, antmap.wlan_txmap, antmap.wlan_rxmap);
+	if ((wlc->ltecx->antmap_in_use.wlan_txmap2g != antmap.wlan_txmap2g) ||
+		(wlc->ltecx->antmap_in_use.wlan_rxmap2g != antmap.wlan_rxmap2g) ||
+			(wlc->ltecx->antmap_in_use.wlan_txmap5g != antmap.wlan_txmap5g) ||
+			(wlc->ltecx->antmap_in_use.wlan_rxmap5g != antmap.wlan_rxmap5g)) {
+			wlc->ltecx->antmap_in_use.wlan_txmap2g = antmap.wlan_txmap2g;
+			wlc->ltecx->antmap_in_use.wlan_rxmap2g = antmap.wlan_rxmap2g;
+			wlc->ltecx->antmap_in_use.wlan_txmap5g = antmap.wlan_txmap5g;
+			wlc->ltecx->antmap_in_use.wlan_rxmap5g = antmap.wlan_rxmap5g;
+			lte_ant_ret = wlc_mws_lte_ant(ltecx, antmap.wlan_txmap2g,
+					antmap.wlan_rxmap2g, antmap.wlan_txmap5g,
+					antmap.wlan_rxmap5g);
 			if (lte_ant_ret != BCME_OK)
 				WL_INFORM(("lte_ant_ret %d\n", lte_ant_ret));
 	}
@@ -1897,14 +1958,14 @@ wlc_stf_ocl_lte(wlc_info_t *wlc, bool disable)
 	bool bit_present;
 	uint16 bits;
 
-	wlc_phy_ocl_status_get(pih, &bits, NULL, NULL);
+	phy_ocl_status_get(pih, &bits, NULL, NULL);
 
 	bit_present = !!(OCL_DISABLED_LTEC  & bits);
 
 	/* if changing state then get stats snapshot */
 	if ((disable && !bit_present) || (!disable && bit_present)) {
 		wlc_mimo_siso_metrics_snapshot(wlc, FALSE, WL_MIMOPS_METRICS_SNAPSHOT_OCL);
-		wlc_phy_ocl_disable_req_set(pih, OCL_DISABLED_LTEC,
+		phy_ocl_disable_req_set(pih, OCL_DISABLED_LTEC,
 			disable, WLC_OCL_REQ_LTEC);
 	}
 }
@@ -2235,13 +2296,15 @@ wlc_ltecx_update_debug_msg(wlc_ltecx_info_t *ltecx)
 }
 
 #define GCI_INTMASK_RXFIFO_NOTEMPTY 0x4000
+#define NO_OF_RETRIES 3
 void
 wlc_ltecx_update_debug_mode(wlc_ltecx_info_t *ltecx)
 {
 	wlc_info_t *wlc = ltecx->wlc;
 	wlc_hw_info_t *wlc_hw = ltecx->wlc->hw;
 	si_t *sih = wlc_hw->sih;
-	uint16 ltecx_state;
+	uint16 ltecx_flags;
+	uint no_of_writes = 0;
 	if (!si_iscoreup(sih)) {
 		return;
 	}
@@ -2249,8 +2312,8 @@ wlc_ltecx_update_debug_mode(wlc_ltecx_info_t *ltecx)
 	if (CHSPEC_IS2G(wlc->chanspec) && (ltecx->ltecx_shm_addr) &&
 		(ltecx->mws_debug_mode != ltecx->mws_debug_mode_prev)) {
 		ltecx->mws_debug_mode_prev = ltecx->mws_debug_mode;
-		ltecx_state = wlc_bmac_read_shm(wlc_hw,
-			ltecx->ltecx_shm_addr + M_LTECX_STATE_OFFSET(wlc));
+		ltecx_flags = wlc_bmac_read_shm(wlc_hw,
+			ltecx->ltecx_shm_addr + M_LTECX_FLAGS_OFFSET(wlc));
 		if (ltecx->mws_debug_mode) {
 			/* Disable inbandIntMask for FrmSync, LTE_Rx and LTE_Tx
 			  * Note: FrameSync, LTE Rx & LTE Tx happen to share the same REGIDX
@@ -2271,7 +2334,7 @@ wlc_ltecx_update_debug_mode(wlc_ltecx_info_t *ltecx)
 			/* Route Rx-data through RXFIFO */
 			si_gci_direct(wlc_hw->sih, OFFSETOF(chipcregs_t, gci_rxfifo_common_ctrl),
 				ALLONES_32, 0xFF00);
-			ltecx_state |= (1 << C_LTECX_ST_CRTI_DEBUG_MODE_TMP);
+			ltecx_flags |= (1 << C_LTECX_FLAGS_CRTI_DEBUG_MODE);
 			/*
 			 * Refer to Jira#80092 To avoid FW crush because ucode is not
 			 * available during loopback test, we have to bailout watchdog
@@ -2298,11 +2361,25 @@ wlc_ltecx_update_debug_mode(wlc_ltecx_info_t *ltecx)
 			/* Route Rx-data through AUX register */
 			si_gci_direct(wlc_hw->sih, OFFSETOF(chipcregs_t, gci_rxfifo_common_ctrl),
 				ALLONES_32, 0xFF);
-			ltecx_state &= ~(1 << C_LTECX_ST_CRTI_DEBUG_MODE_TMP);
+			ltecx_flags &= ~(1 << C_LTECX_FLAGS_CRTI_DEBUG_MODE);
 			wlc_req_wd_block(wlc, WLC_BIT_CLEAR, WD_BLOCK_REQ_LTECX);
 		}
-		wlc_bmac_write_shm(wlc_hw,
-			ltecx->ltecx_shm_addr + M_LTECX_STATE_OFFSET(wlc_hw), ltecx_state);
+		do {
+			wlc_bmac_write_shm(wlc_hw,
+				ltecx->ltecx_shm_addr + M_LTECX_FLAGS_OFFSET(wlc_hw), ltecx_flags);
+			++no_of_writes; //performing upto 3 re-tries
+		} while (((ltecx_flags & (1 << C_LTECX_FLAGS_CRTI_DEBUG_MODE)) !=
+				(wlc_bmac_read_shm(wlc_hw, ltecx->ltecx_shm_addr +
+				M_LTECX_FLAGS_OFFSET(wlc_hw)) &
+				(1 << C_LTECX_FLAGS_CRTI_DEBUG_MODE))) &&
+				(no_of_writes < NO_OF_RETRIES));
+		if ((ltecx_flags & (1 << C_LTECX_FLAGS_CRTI_DEBUG_MODE)) !=
+			(wlc_bmac_read_shm(wlc_hw, ltecx->ltecx_shm_addr +
+			M_LTECX_FLAGS_OFFSET(wlc_hw)) &
+			(1 << C_LTECX_FLAGS_CRTI_DEBUG_MODE))) {
+			wlc_bmac_mctrl(wlc->hw, MCTL_PSM_RUN, 0);
+			WLC_FATAL_ERROR(wlc);
+		}
 	}
 }
 
@@ -2430,11 +2507,9 @@ void wlc_ltecx_interface_disable(wlc_hw_info_t *wlc_hw)
 	if (si_iscoreup(wlc_hw->sih) && wlc_hw->btc->bt_shm_addr) {
 		uint16 ltecx_flags;
 		ltecx_flags = wlc_bmac_read_shm(wlc_hw,
-				wlc_hw->btc->bt_shm_addr + M_LTECX_FLAGS);
+				M_LTECX_FLAGS(wlc_hw));
 		ltecx_flags &= ~(1<<C_LTECX_FLAGS_WCI2_4TXPWRCAP);
-		wlc_bmac_write_shm(wlc_hw,
-				wlc_hw->btc->bt_shm_addr + M_LTECX_FLAGS,
-				ltecx_flags);
+		wlc_bmac_write_shm(wlc_hw, M_LTECX_FLAGS(wlc_hw), ltecx_flags);
 	}
 }
 

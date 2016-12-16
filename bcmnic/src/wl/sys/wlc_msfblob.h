@@ -40,6 +40,7 @@ typedef struct wlc_blob_segment {
 	uint32 type;
 	uint8  *data;
 	uint32 length;
+	uint32 flags;
 } wlc_blob_segment_t;
 
 typedef struct wlc_blob_info {

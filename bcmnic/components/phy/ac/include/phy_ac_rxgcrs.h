@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_rxgcrs.h 650807 2016-07-22 15:01:33Z mvermeid $
+ * $Id: phy_ac_rxgcrs.h 669455 2016-11-09 14:26:01Z $
  */
 
 #ifndef _phy_ac_rxgcrs_h_
@@ -30,6 +30,10 @@ typedef struct phy_ac_rxgcrs_info phy_ac_rxgcrs_info_t;
 phy_ac_rxgcrs_info_t *phy_ac_rxgcrs_register_impl(phy_info_t *pi,
 	phy_ac_info_t *aci, phy_rxgcrs_info_t *cmn_info);
 void phy_ac_rxgcrs_unregister_impl(phy_ac_rxgcrs_info_t *ac_info);
+
+/* inter-module data API */
+bool phy_ac_rxgcrs_get_md_trtx(phy_ac_rxgcrs_info_t *rxgcrsi);
+uint16 phy_ac_rxgcrs_get_deaf_count(phy_ac_rxgcrs_info_t *rxgcrsi);
 
 /* ************************************************************************* */
 /* ************************************************************************* */
@@ -49,8 +53,10 @@ void phy_ac_rxgcrs_unregister_impl(phy_ac_rxgcrs_info_t *ac_info);
 	(ACPHY_INIT_GAIN - ACPHY_INIT_GAIN_TINY))
 #define CRSMIN_DELTA_BW (3 * (CHSPEC_IS10(pi->radio_chanspec)) +		\
 	6 * (CHSPEC_IS5(pi->radio_chanspec)) + 9 * (CHSPEC_IS2P5(pi->radio_chanspec)))
-#define ACPHY_CRSMIN_DEFAULT (ACPHY_CRSMIN_DEFAULT_NON_TINY - CRSMIN_DELTA_GAIN_DIFF \
-	- CRSMIN_DELTA_BW)
+#define ACPHY_CRSMIN_DEFAULT ((ACMAJORREV_32(pi->pubpi->phy_rev) || \
+	ACMAJORREV_33(pi->pubpi->phy_rev)) ? 54 : \
+	(ACPHY_CRSMIN_DEFAULT_NON_TINY - CRSMIN_DELTA_GAIN_DIFF \
+	- CRSMIN_DELTA_BW))
 
 #define ACPHY_CRSMIN_GAINHI  0x20
 #define ACPHY_MAX_LNA1_IDX 5
@@ -63,8 +69,9 @@ void phy_ac_rxgcrs_unregister_impl(phy_ac_rxgcrs_info_t *ac_info);
 #define ACPHY_LESISCALE_DEFAULT 64
 #define ACPHY_LO_NF_MODE_ELNA_TINY(pi) (RADIOID_IS(pi->pubpi->radioid, BCM20693_ID) && \
 	((CHSPEC_IS2G(pi->radio_chanspec)) ? BF_ELNA_2G(pi->u.pi_acphy) :              \
-	BF_ELNA_5G(pi->u.pi_acphy)))
-#define ACPHY_LO_NF_MODE_ELNA_28NM(pi) (ACMAJORREV_36(pi->pubpi->phy_rev) && \
+	BF_ELNA_5G(pi->u.pi_acphy)) && !(ACMAJORREV_32(pi->pubpi->phy_rev) || \
+	ACMAJORREV_33(pi->pubpi->phy_rev)))
+#define ACPHY_LO_NF_MODE_ELNA_28NM(pi) (IS_28NM_RADIO(pi) && \
 		((CHSPEC_IS2G(pi->radio_chanspec)) ? BF_ELNA_2G(pi->u.pi_acphy) : \
 		BF_ELNA_5G(pi->u.pi_acphy)) && pi->u.pi_acphy->rxgcrsi->lonf_elna_mode)
 /* Following MACROS will be used by GBD only.
@@ -87,7 +94,7 @@ void phy_ac_rxgcrs_unregister_impl(phy_ac_rxgcrs_info_t *ac_info);
 #define ACPHY_20695_MAX_LNA2_IDX 2
 #define ACPHY_4365_MAX_LNA2_IDX 2
 #define MAX_ANALOG_RX_GAIN_TINY (ACPHY_LO_NF_MODE_ELNA_TINY(pi) ? 61 : 55)
-#define MAX_ANALOG_RX_GAIN_28NM_ULP 62
+#define MAX_ANALOG_RX_GAIN_28NM_ULP 65
 #define MAX_ANALOG_RX_GAIN_28NM_ULP_LONF 65
 
 /* Programming this value into gainlimittable for an index prevents AGC from using it */
@@ -198,6 +205,8 @@ extern void wlc_phy_rxgainctrl_gainctrl_acphy(phy_info_t *pi);
 extern void wlc_phy_upd_lna1_lna2_gains_acphy(phy_info_t *pi);
 extern void wlc_phy_upd_lna1_lna2_gaintbls_acphy(phy_info_t *pi, uint8 lna12);
 extern void wlc_phy_upd_lna1_lna2_gainlimittbls_acphy(phy_info_t *pi, uint8 lna12);
+extern void wlc_phy_upd_lna1_lna2_gainlimittbls_28nm(phy_info_t *pi, uint8 lna12,
+		uint16 gainlimitid, uint8 core);
 extern void wlc_phy_upd_lna1_bypass_acphy(phy_info_t *pi, uint8 core);
 void phy_ac_rxgcrs_upd_mix_gains(phy_ac_rxgcrs_info_t *rxgcrsi);
 extern void wlc_phy_rfctrl_override_rxgain_acphy(phy_info_t *pi, uint8 restore,
@@ -220,6 +229,7 @@ extern void wlc_phy_rxgainctrl_set_gaintbls_acphy_28nm(phy_info_t *pi, uint8 cor
 	uint16 gain_tblid, uint16 gainbits_tblid);
 extern void wlc_phy_set_trloss_reg_acphy(phy_info_t *pi, int8 core);
 extern void wlc_phy_set_lna1byp_reg_acphy(phy_info_t *pi, int8 core);
+extern void wlc_phy_rxgain_adj_forrssi_acphy(phy_info_t *pi, int8 core, uint8 force_gain_type);
 extern void wlc_phy_set_agc_gaintbls_acphy(phy_info_t *pi, uint32 gain_tblid, const void *gain,
 	uint32 gainbits_tblid, const void *gainbits, uint32 gainlimits_tblid,
 	const void *gainlimits_ofdm, const void *gainlimits_cck, uint32 offset, uint32 len);
@@ -233,10 +243,10 @@ extern void phy_ac_agc_config(phy_info_t *pi, uint8 agc_type);
 extern void wlc_phy_force_crsmin_acphy(phy_info_t *pi, void *p);
 void phy_ac_rxgcrs_force_lesiscale(phy_ac_rxgcrs_info_t *rxgcrsi, void *p);
 extern void wlc_phy_crs_min_pwr_cal_acphy(phy_info_t *pi, uint8 crsmin_cal_mode);
-extern void wlc_phy_set_crs_min_pwr_acphy(phy_info_t *pi, uint8 ac_th, int8 offset_1,
-	int8 offset_2, int8 offset_3);
+int8 phy_ac_rxgcrs_get_avg_noisepwr(int8 noisepwr_array[]);
+extern void wlc_phy_set_crs_min_pwr_acphy(phy_info_t *pi, uint8 ac_th, int8 offset_0,
+	int8 offset_1, int8 offset_2, int8 offset_3);
 void phy_ac_rxgcrs_set_lesiscale(phy_ac_rxgcrs_info_t *rxgcrsi, int8 *lesi_scale);
-extern void wlc_phy_stay_in_carriersearch_acphy(phy_info_t *pi, bool enable);
 extern void wlc_phy_force_gainlevel_acphy(phy_info_t *pi, int16 int_val);
 extern void wlc_phy_set_srom_eu_edthresh_acphy(phy_info_t *pi);
 void phy_ac_rxgcrs_lesi(phy_ac_rxgcrs_info_t *rxgcrsi, bool on);
@@ -249,11 +259,12 @@ extern void chanspec_setup_rxgcrs(phy_info_t *pi);
 void phy_ac_rxgcrs_ulb_cal(phy_ac_rxgcrs_info_t *rxgcrsi, uint8 enULB);
 #endif /* WL11ULB */
 void phy_ac_rxgcrs_cal(phy_ac_rxgcrs_info_t *rxgcrsi, uint8 enULB);
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST)
-uint8 phy_ac_rxgcrs_get_crsmincal_run(phy_ac_rxgcrs_info_t* rxgcrs_info);
-#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST) */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void phy_ac_rxgcrs_cal_dump(phy_ac_rxgcrs_info_t* rxgcrsi, struct bcmstrbuf *b);
+#endif 
 void phy_ac_rxgcrs_set_desense(phy_ac_rxgcrs_info_t *rxgcrs_info, acphy_desense_values_t *desense,
 	phy_ac_desense_type_t type);
 acphy_desense_values_t phy_ac_rxgcrs_get_desense(phy_ac_rxgcrs_info_t *rxgcrs_info,
 	phy_ac_desense_type_t type);
+void phy_ac_rxgcrs_clean_noise_array(phy_ac_rxgcrs_info_t *rxgcrsi);
 #endif /* _phy_ac_rxgcrs_h_ */

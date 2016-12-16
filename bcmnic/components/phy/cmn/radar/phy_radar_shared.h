@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_radar_shared.h 603346 2015-12-01 23:05:11Z chihap $
+ * $Id: phy_radar_shared.h 649994 2016-07-20 05:45:38Z $
  */
 
 #ifndef _phy_radar_shared_h_
@@ -46,6 +46,7 @@
 /*
  * Run the radar detect algorithm.
  */
-uint8 phy_radar_run_nphy(phy_info_t *pi, radar_detected_info_t *radar_detected);
+uint8 phy_radar_run_nphy(phy_info_t *pi, radar_detected_info_t *radar_detected,
+bool sec_pll, bool bw80_80_mode);
 
 #endif /* _phy_radar_shared_h_ */

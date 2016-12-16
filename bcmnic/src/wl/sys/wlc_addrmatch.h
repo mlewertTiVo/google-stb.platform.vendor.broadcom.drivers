@@ -56,8 +56,8 @@ uint16 wlc_clear_addrmatch(wlc_info_t *wlc, int idx);
 int wlc_get_valid_amt_count(wlc_info_t *wlc);
 #endif /* (defined(BCMULP) && defined(BCMFCBS)) */
 
-#if defined(WL_BEAMFORMING) || defined(ACKSUPR_MAC_FILTER) || (defined(BCMULP) && \
-	defined(BCMFCBS))
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WL_BEAMFORMING) || \
+	defined(ACKSUPR_MAC_FILTER) || (defined(BCMULP) && defined(BCMFCBS))
 /* get info for the address match entry. For AMT, both address and
  * the attributes are returned. For RCMTA, address is returned and
  * attributes are set to AMT_ATTR_VALID for non-NULL ether address

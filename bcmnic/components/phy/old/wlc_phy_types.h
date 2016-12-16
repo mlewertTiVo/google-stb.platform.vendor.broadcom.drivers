@@ -13,13 +13,12 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_types.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: wlc_phy_types.h 657925 2016-09-03 03:04:35Z $
  */
 
 #ifndef _wlc_phy_types_h_
 #define _wlc_phy_types_h_
 
-typedef struct phy_info phy_info_t;
-typedef struct phytbl_info phytbl_info_t;
+/* DON"T ADD ANYTHING, FILE TO BE REMOVED! */
 
 #endif

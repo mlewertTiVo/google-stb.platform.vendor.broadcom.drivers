@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ampdu.h 643064 2016-06-13 07:04:03Z $
+ * $Id: wlc_ampdu.h 663645 2016-10-06 09:20:15Z $
 */
 
 
@@ -26,7 +26,7 @@
 
 typedef enum {
 				BTCX_MODULE,
-				AWDL_MODULE,
+				SLOTTED_BSS_MODULE,
 				P2P_MODULE,
 				NUM_MODULES
 } scb_ampdu_module_t;
@@ -60,7 +60,7 @@ extern void wlc_ampdu_tx_reset(ampdu_tx_info_t *ampdu_tx);
 extern void wlc_ampdu_macaddr_upd(wlc_info_t *wlc);
 extern uint8 wlc_ampdu_null_delim_cnt(ampdu_tx_info_t *ampdu_tx, struct scb *scb,
 	ratespec_t rspec, int phylen, uint16* minbytes);
-extern bool wlc_ampdu_frameburst_override(ampdu_tx_info_t *ampdu_tx);
+extern bool wlc_ampdu_frameburst_override(ampdu_tx_info_t *ampdu_tx, struct scb *scb);
 extern void wlc_ampdu_tx_set_bsscfg_aggr_override(ampdu_tx_info_t *ampdu_tx,
 	wlc_bsscfg_t *bsscfg, int8 txaggr);
 extern uint16 wlc_ampdu_tx_get_bsscfg_aggr(ampdu_tx_info_t *ampdu_tx, wlc_bsscfg_t *bsscfg);
@@ -96,7 +96,7 @@ extern void wlc_ampdu_fill_percache_info(ampdu_tx_info_t *ampdu_tx, struct scb *
 	uint8 tid, wlc_d11txh_cache_info_u cache_info);
 #ifdef WL_MUPKTENG
 extern void wlc_ampdu_mupkteng_fill_percache_info(ampdu_tx_info_t *ampdu_tx, struct scb *scb,
-        uint8 tid, d11actxh_t *txh);
+        uint8 tid, wlc_d11txh_cache_info_u txh_cache_info);
 #endif /* WL_MUPKTENG */
 #endif /* WLAMPDU_MAC */
 
@@ -125,8 +125,14 @@ extern void wlc_ampdu_recv_addba_req_ini(ampdu_tx_info_t *ampdu_tx, struct scb *
 extern void wlc_ampdu_recv_addba_resp(ampdu_tx_info_t *ampdu_tx, struct scb *scb,
 	uint8 *body, int body_len);
 
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
 extern int wlc_ampdu_tx_dump(ampdu_tx_info_t *ampdu_tx, struct bcmstrbuf *b);
+#if defined(EVENT_LOG_COMPILE)
+extern int wlc_ampdu_txmcs_counter_report(ampdu_tx_info_t *ampdu_tx, uint16 tag);
+#ifdef ECOUNTERS
+extern int wlc_ampdu_ecounter_tx_dump(ampdu_tx_info_t *ampdu_tx, uint16 tag);
+#endif
+#endif /* EVENT_LOG_COMPILE */
 #endif 
 
 extern void wlc_ampdu_tx_set_mpdu_density(ampdu_tx_info_t *ampdu_tx, uint8 mpdu_density);
@@ -177,23 +183,6 @@ extern void wlc_ampdu_txrates_get(ampdu_tx_info_t *ampdu_tx, wifi_rate_stat_t *r
 extern void wlc_ampdu_print_txstuck(wlc_info_t *wlc, struct bcmstrbuf *b);
 #endif /* BCMDBG_TXSTUCK */
 
-#ifdef WLCXO_CTRL
-extern void wlc_cxo_ctrl_tsc_ampdu_init(ampdu_tx_info_t *ampdu_tx, struct scb *scb, uint8 tid,
-	wlc_cx_scb_ampdu_t *cx_scb_ampdu, wlc_cx_tid_ini_t *cx_ini);
-extern void wlc_cxo_ctrl_ses_ctx_ampdu_ini_upd(ampdu_tx_info_t *ampdu_tx, struct scb *scb,
-	wlc_cx_ses_ctx_t *ses);
-extern void wlc_cxo_ctrl_ampdu_add(wlc_info_t *wlc, ampdu_tx_info_t *ampdu);
-extern void wlc_cxo_ctrl_ampdu_state_update(ampdu_tx_info_t *ampdu_tx, struct scb *scb, int8 tid);
-extern int32 wlc_cxo_ctrl_tsc_ini_add(wlc_info_t *wlc, struct scb *scb, uint8 tid);
-
-extern void *wlc_cxo_ctrl_scb_ini(ampdu_tx_info_t *ampdu_tx, struct scb *scb, uint8 tid);
-extern void wlc_cxo_ctrl_scb_tx_ses_add(wlc_info_t *wlc, struct scb *scb);
-extern void wlc_cxo_ctrl_ampdu_ini_upd_sched(ampdu_tx_info_t *ampdu_tx, struct scb *scb, int8 tid,
-	uint8 state);
-extern void wlc_cxo_ctrl_ampdu_atf_rbytes(wlc_info_t *wlc, struct scb *scb, uint8 tid,
-	uint32 *rbytes_min, uint32 *rbytes_max);
-#endif /* WLCXO_CTRL */
-
 struct pktq * scb_ampdu_prec_pktq(wlc_info_t* wlc, struct scb* scb);
 
 #ifdef WLATF
@@ -203,6 +192,9 @@ extern void wlc_ampdu_atf_rate_override(wlc_info_t *, ratespec_t, wlcband_t *);
 extern void wlc_ampdu_atf_scb_rate_override(ampdu_tx_info_t *, struct scb *, ratespec_t);
 #endif /* WLATF */
 
+extern void scb_ampdu_update_config(ampdu_tx_info_t *ampdu_tx, struct scb *scb);
+extern void scb_ampdu_update_config_all(ampdu_tx_info_t *ampdu_tx);
+
 #ifdef PROP_TXSTATUS
 #ifdef WL_NATOE
 extern int wlc_ampdu_upd_last_suppr_seq(wlc_info_t *wlc, void *p, uint16 seq);
@@ -210,4 +202,20 @@ extern int wlc_ampdu_cleanup_last_suppr_seq(wlc_info_t *wlc, wlc_bsscfg_t *bsscf
 #endif /* WL_NATOE */
 #endif /* PROP_TXSTATUS */
 
+typedef struct ampdu_tx_scb_stats {
+	uint32 tx_pkts[NUMPRIO];
+	uint32 tx_bytes[NUMPRIO];
+	uint32 tx_pkts_total[NUMPRIO];
+	uint32 tx_bytes_total[NUMPRIO];
+} ampdu_tx_scb_stats_t;
+
+extern bool wlc_ampdu_scbstats_get_and_clr(wlc_info_t *wlc, struct scb *scb,
+	ampdu_tx_scb_stats_t *ampdu_scb_stats);
+#if defined(WL_MU_TX)
+#ifdef WLCNT
+extern void BCMFASTPATH
+wlc_ampdu_aqm_mutx_dotxinterm_status(ampdu_tx_info_t *ampdu_tx, tx_status_t *txs);
+#endif
+#endif /* defined(WL_MU_TX) */
+extern void wlc_ampdu_reset_txnoprog(ampdu_tx_info_t *ampdu_tx);
 #endif /* _wlc_ampdu_tx_h_ */

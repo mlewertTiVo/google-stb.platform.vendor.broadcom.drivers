@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_dsi_data.h 612293 2016-01-13 13:01:29Z nahegde $
+ * $Id: phy_ac_dsi_data.h 650019 2016-07-20 07:13:54Z $
  */
 
 #ifndef _PHY_AC_DSI_DATA_H_
@@ -32,6 +32,7 @@ extern fcbs_input_data_t rom_maj36_min0_beDeaf[];
 extern fcbs_input_data_t rom_maj36_min0_retFrmDeaf[];
 extern fcbs_input_data_t rom_maj36_min0_tbl_access_setup[];
 extern fcbs_input_data_t rom_maj36_min0_tbl_access_cleanup[];
+extern fcbs_input_data_t ram_20695_maj1_min0_chan_tune[];
 extern fcbs_input_data_t rom_maj36_min0_phy_rst[];
 extern fcbs_input_data_t rom_maj36_min0_napping[];
 
@@ -48,6 +49,7 @@ extern fcbs_input_data_t rom_maj36_min1_beDeaf[];
 extern fcbs_input_data_t rom_maj36_min1_retFrmDeaf[];
 extern fcbs_input_data_t rom_maj36_min1_tbl_access_setup[];
 extern fcbs_input_data_t rom_maj36_min1_tbl_access_cleanup[];
+extern fcbs_input_data_t ram_20695_maj2_min0_chan_tune[];
 extern fcbs_input_data_t rom_maj36_min1_phy_rst[];
 extern fcbs_input_data_t rom_maj36_min1_napping[];
 

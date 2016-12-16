@@ -1,3 +1,4 @@
+
 /*
  * RadarDetect module implementation - iovar table/handlers & registration
  *
@@ -12,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_radar_iov.c 619527 2016-02-17 05:54:49Z renukad $
+ * $Id: phy_radar_iov.c 657811 2016-09-02 17:48:43Z $
  */
 
 #include <phy_cfg.h>
@@ -27,6 +28,7 @@
 
 #include <wlc_iocv_types.h>
 #include <wlc_iocv_reg.h>
+#include <phy_ac_info.h>
 
 #ifndef ALL_NEW_PHY_MOD
 #include <wlc_phy_int.h>
@@ -39,7 +41,12 @@ enum {
 	IOV_RADAR_THRS = 3,
 	IOV_PHY_DFS_LP_BUFFER = 4,
 	IOV_RADAR_STATUS = 5,
-	IOV_CLEAR_RADAR_STATUS = 6
+	IOV_CLEAR_RADAR_STATUS = 6,
+	IOV_RADAR_THRS2 = 7,
+	IOV_RADAR_SC_STATUS = 8,
+	IOV_CLEAR_RADAR_SC_STATUS = 9,
+	IOV_RADAR_SUBBAND_STATUS = 10
+
 };
 
 /* iovar table */
@@ -50,9 +57,14 @@ static const bcm_iovar_t phy_radar_iovt[] = {
 	{"radar_status", IOV_RADAR_STATUS, (0), 0, IOVT_BUFFER, sizeof(wl_radar_status_t)},
 	{"clear_radar_status", IOV_CLEAR_RADAR_STATUS, (IOVF_SET_UP), 0, IOVT_BUFFER,
 	sizeof(wl_radar_status_t)},
-#if defined(BCMDBG) || defined(BCMINTERNAL) || defined(WLTEST)
+	{"radarthrs2", IOV_RADAR_THRS2, (IOVF_SET_UP), 0, IOVT_BUFFER, sizeof(wl_radar_thr2_t)},
+	{"radar_sc_status", IOV_RADAR_SC_STATUS, (0), 0, IOVT_BUFFER, sizeof(wl_radar_status_t)},
+	{"clear_radar_sc_status", IOV_CLEAR_RADAR_SC_STATUS, (IOVF_SET_UP), 0, IOVT_BUFFER,
+	sizeof(wl_radar_status_t)},
+	{"radar_subband_status", IOV_RADAR_SUBBAND_STATUS, (0), 0, IOVT_UINT16, 0},
+#if defined(BCMDBG)
 	{"phy_dfs_lp_buffer", IOV_PHY_DFS_LP_BUFFER, 0, 0, IOVT_UINT8, 0},
-#endif /* if defined(BCMDBG) || defined(BCMINTERNAL) || defined(WLTEST) */
+#endif 
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -93,27 +105,7 @@ phy_radar_doiovar(void *ctx, uint32 aid, void *p, uint plen, void *a, uint alen,
 		/* len is check done before gets here */
 		bzero(&radar_thr, sizeof(wl_radar_thr_t));
 		bcopy(p, &radar_thr, sizeof(wl_radar_thr_t));
-		if (radar_thr.version != WL_RADAR_THR_VERSION) {
-			err = BCME_VERSION;
-			break;
-		}
-		st->rparams.radar_thrs.thresh0_20_lo = radar_thr.thresh0_20_lo;
-		st->rparams.radar_thrs.thresh1_20_lo = radar_thr.thresh1_20_lo;
-		st->rparams.radar_thrs.thresh0_20_hi = radar_thr.thresh0_20_hi;
-		st->rparams.radar_thrs.thresh1_20_hi = radar_thr.thresh1_20_hi;
-		if (ISNPHY(pi) || ISHTPHY(pi) || ISACPHY(pi)) {
-			st->rparams.radar_thrs.thresh0_40_lo = radar_thr.thresh0_40_lo;
-			st->rparams.radar_thrs.thresh1_40_lo = radar_thr.thresh1_40_lo;
-			st->rparams.radar_thrs.thresh0_40_hi = radar_thr.thresh0_40_hi;
-			st->rparams.radar_thrs.thresh1_40_hi = radar_thr.thresh1_40_hi;
-		}
-		if (ISACPHY(pi)) {
-			st->rparams.radar_thrs.thresh0_80_lo = radar_thr.thresh0_80_lo;
-			st->rparams.radar_thrs.thresh1_80_lo = radar_thr.thresh1_80_lo;
-			st->rparams.radar_thrs.thresh0_80_hi = radar_thr.thresh0_80_hi;
-			st->rparams.radar_thrs.thresh1_80_hi = radar_thr.thresh1_80_hi;
-		}
-		phy_radar_detect_enable(pi, pi->sh->radar);
+		err = phy_radar_set_thresholds(pi->radari, &radar_thr);
 		break;
 	}
 	case IOV_SVAL(IOV_RADAR_ARGS): {
@@ -138,6 +130,10 @@ phy_radar_doiovar(void *ctx, uint32 aid, void *p, uint plen, void *a, uint alen,
 	case IOV_SVAL(IOV_PHY_DFS_LP_BUFFER):
 		if (ISNPHY(pi) || ISHTPHY(pi) || ISACPHY(pi)) {
 			pi->dfs_lp_buffer_nphy = bool_val;
+			if (PHY_SUPPORT_SCANCORE(pi) ||
+				PHY_SUPPORT_BW80P80(pi)) {
+				pi->dfs_lp_buffer_nphy_sc = bool_val;
+			}
 		} else
 			err = BCME_UNSUPPORTED;
 		break;
@@ -156,6 +152,95 @@ phy_radar_doiovar(void *ctx, uint32 aid, void *p, uint plen, void *a, uint alen,
 		} else
 			err = BCME_UNSUPPORTED;
 		break;
+	case IOV_GVAL(IOV_RADAR_THRS2):
+		bcopy(&st->rparams.radar_thrs2, a, sizeof(wl_radar_thr2_t));
+		break;
+
+	case IOV_SVAL(IOV_RADAR_THRS2): {
+		wl_radar_thr2_t radar_thr2;
+
+		/* len is check done before gets here */
+		bzero(&radar_thr2, sizeof(wl_radar_thr2_t));
+		bcopy(p, &radar_thr2, sizeof(wl_radar_thr2_t));
+		if (radar_thr2.version != WL_RADAR_THR_VERSION ||
+			!(PHY_SUPPORT_SCANCORE(pi) ||
+			PHY_SUPPORT_BW80P80(pi))) {
+			err = BCME_VERSION;
+			break;
+		}
+		if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
+			st->rparams.radar_thrs2.thresh0_sc_20_lo =
+				radar_thr2.thresh0_sc_20_lo;
+			st->rparams.radar_thrs2.thresh1_sc_20_lo =
+				radar_thr2.thresh1_sc_20_lo;
+			st->rparams.radar_thrs2.thresh0_sc_20_hi =
+				radar_thr2.thresh0_sc_20_hi;
+			st->rparams.radar_thrs2.thresh1_sc_20_hi =
+				radar_thr2.thresh1_sc_20_hi;
+			st->rparams.radar_thrs2.thresh0_sc_40_lo =
+				radar_thr2.thresh0_sc_40_lo;
+			st->rparams.radar_thrs2.thresh1_sc_40_lo =
+				radar_thr2.thresh1_sc_40_lo;
+			st->rparams.radar_thrs2.thresh0_sc_40_hi =
+				radar_thr2.thresh0_sc_40_hi;
+			st->rparams.radar_thrs2.thresh1_sc_40_hi =
+				radar_thr2.thresh1_sc_40_hi;
+			st->rparams.radar_thrs2.thresh0_sc_80_lo =
+				radar_thr2.thresh0_sc_80_lo;
+			st->rparams.radar_thrs2.thresh1_sc_80_lo =
+				radar_thr2.thresh1_sc_80_lo;
+			st->rparams.radar_thrs2.thresh0_sc_80_hi =
+				radar_thr2.thresh0_sc_80_hi;
+			st->rparams.radar_thrs2.thresh1_sc_80_hi =
+				radar_thr2.thresh1_sc_80_hi;
+			st->rparams.radar_thrs2.fc_varth_sb =
+				radar_thr2.fc_varth_sb;
+			st->rparams.radar_thrs2.fc_varth_bin5_sb =
+				radar_thr2.fc_varth_bin5_sb;
+			st->rparams.radar_thrs2.notradar_enb =
+				radar_thr2.notradar_enb;
+			st->rparams.radar_thrs2.max_notradar_lp =
+				radar_thr2.max_notradar_lp;
+			st->rparams.radar_thrs2.max_notradar =
+				radar_thr2.max_notradar;
+			st->rparams.radar_thrs2.max_notradar_lp_sc =
+				radar_thr2.max_notradar_lp_sc;
+			st->rparams.radar_thrs2.max_notradar_sc =
+				radar_thr2.max_notradar_sc;
+			st->rparams.radar_thrs2.highpow_war_enb =
+				radar_thr2.highpow_war_enb;
+			st->rparams.radar_thrs2.highpow_sp_ratio =
+				radar_thr2.highpow_sp_ratio;
+		}
+
+		phy_radar_detect_enable(pi, pi->sh->radar);
+		break;
+
+		case IOV_GVAL(IOV_RADAR_SC_STATUS):
+			if (PHY_SUPPORT_SCANCORE(pi) ||
+				PHY_SUPPORT_BW80P80(pi)) {
+				bcopy(st->radar_status_sc, a, sizeof(wl_radar_status_t));
+			} else
+				err = BCME_UNSUPPORTED;
+			break;
+
+		case IOV_GVAL(IOV_RADAR_SUBBAND_STATUS):
+			if (ISACPHY(pi)) {
+				bcopy(&st->subband_result, a, sizeof(int));
+			} else
+				err = BCME_UNSUPPORTED;
+			break;
+
+		case IOV_SVAL(IOV_CLEAR_RADAR_SC_STATUS):
+			if (PHY_SUPPORT_SCANCORE(pi) ||
+				PHY_SUPPORT_BW80P80(pi)) {
+				st->radar_status_sc->detected = FALSE;
+				st->radar_status_sc->count = 0;
+			} else
+				err = BCME_UNSUPPORTED;
+			break;
+
+	}
 
 	default:
 		err = BCME_UNSUPPORTED;

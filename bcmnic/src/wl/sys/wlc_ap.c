@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ap.c 645620 2016-06-24 22:29:00Z $
+ * $Id: wlc_ap.c 665171 2016-10-15 15:40:29Z $
  */
 
 #include <wlc_cfg.h>
@@ -61,6 +61,7 @@
 #include <wlc_ap.h>
 #include <wlc_scan.h>
 #include <wlc_ampdu_cmn.h>
+#include <wlc_ampdu.h>
 #include <wlc_amsdu.h>
 #ifdef	WLCAC
 #include <wlc_cac.h>
@@ -96,6 +97,7 @@
 #include <wlc_prot.h>
 #include <wlc_mux_utils.h>
 #include <wlc_ampdu.h>
+#include <wlc_bcmc_txq.h>
 #ifdef PROP_TXSTATUS
 #include <wlc_wlfc.h>
 #endif /* PROP_TXSTATUS */
@@ -104,6 +106,7 @@
 #include <wlc_vht.h>
 #include <wlc_txbf.h>
 #endif
+#include <wlc_he.h>
 #ifdef TRAFFIC_MGMT
 #include <wlc_traffic_mgmt.h>
 #endif
@@ -122,6 +125,7 @@
 #include <wlc_ie_mgmt.h>
 #include <wlc_ie_mgmt_ft.h>
 #include <wlc_ie_mgmt_vs.h>
+#include <wlc_ie_helper.h>
 #ifdef WLWNM
 #include <wlc_wnm.h>
 #endif
@@ -143,13 +147,11 @@
 #include <wlc_macfltr.h>
 #endif /* WLAUTHRESP_MAC_FILTER */
 #ifdef PROP_TXSTATUS
-#include <wlfc_proto.h>
 #include <wlc_ampdu.h>
 #include <wlc_apps.h>
 #include <wlc_wlfc.h>
 #endif /* PROP_TXSTATUS */
 #include <wlc_smfs.h>
-#include <wlc_ulb.h>
 #include <wlc_pspretend.h>
 #include <wlc_msch.h>
 #include <wlc_qoscfg.h>
@@ -165,6 +167,8 @@
 #include <wlc_rx.h>
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
+#include <phy_chanmgr_api.h>
+#include <phy_calmgr_api.h>
 
 /* Default pre tbtt time for non mbss case */
 #define	PRE_TBTT_DEFAULT_us		2
@@ -228,21 +232,6 @@ typedef struct wlc_radio_pwrsave {
 	wlc_pwrsave_t pwrsave;
 } wlc_radio_pwrsave_t;
 
-#ifdef TXQ_MUX
-/**
- * @brief cubby for BCMC mux source and queue
- */
-#define BCMC_CUBBY(appvt, cfg) (wlc_bcmc_cubby((appvt), (cfg)))
-#define BCMC_MUXSRC(appvt, cfg)(wlc_bcmc_muxsrc((appvt), (cfg)))
-#define BCMC_QUEUE(appvt, cfg) (wlc_bcmc_queue((appvt), (cfg)))
-
-typedef struct bcmc_cubby {
-	/* TXQ_MUX broadcast/multicast mux source and queue for the bss */
-	mux_srcs_t *msrc; /**< Mux source pointer */
-	struct pktq queue; /**< BCMC packet queue */
-} bcmc_cubby_t;
-#endif /* TXQ_MUX */
-
 #ifndef AIDMAPSZ
 #define AIDMAPSZ	(ROUNDUP(MAXSCB, NBBY)/NBBY)	/**< aid bitmap size in bytes */
 #endif
@@ -292,9 +281,6 @@ typedef struct ap_bsscfg_cubby {
 	 * acceptance with the BSS.
 	 */
 	opmode_cap_t opmode_cap_reqd;
-#ifdef TXQ_MUX
-	bcmc_cubby_t bcmc_cubby;
-#endif
 	bool ap_up_pending;
 	bool authresp_macfltr;	/* enable/disable suppressing auth resp by MAC filter */
 	uint8 *aidmap;		/**< aid map */
@@ -311,6 +297,10 @@ typedef struct ap_bsscfg_cubby {
 #define	WLC_MSCH_OFFCHANNEL_PREP	0x2
 #define	WLC_MSCH_SUSPEND_FIFO_PEND	0x5
 #define	WLC_MSCH_OFFCHANNEL		0x6
+
+static wlc_bsscfg_t* wlc_ap_iface_create(void *if_module_ctx, wl_interface_create_t *if_buf,
+	wl_interface_info_t *wl_info, int32 *err);
+static int32 wlc_ap_iface_remove(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg);
 
 /** Private AP data structure */
 typedef struct
@@ -392,57 +382,50 @@ typedef struct {
  * table and by the wlc_ap_doiovar() function.  No ordering is imposed:
  * the table is keyed by name, and the function uses a switch.
  */
-enum {
+enum wlc_ap_iov {
 	IOV_AP_ISOLATE = 1,
-	IOV_SCB_ACTIVITY_TIME,
-	IOV_AUTHE_STA_LIST,
-	IOV_AUTHO_STA_LIST,
-	IOV_WME_STA_LIST,
-	IOV_BSS,
-	IOV_MAXASSOC,
-	IOV_BSS_MAXASSOC,
-	IOV_CLOSEDNET,
-	IOV_AP,
-	IOV_APSTA,		/**< enable simultaneously active AP/STA */
-	IOV_AP_ASSERT,		/**< User forced crash */
-#ifdef RXCHAIN_PWRSAVE
-	IOV_RXCHAIN_PWRSAVE_ENABLE,		/**< Power Save with single rxchain enable */
-	IOV_RXCHAIN_PWRSAVE_QUIET_TIME,		/**< Power Save with single rxchain quiet time */
-	IOV_RXCHAIN_PWRSAVE_PPS,		/**< single rxchain packets per second */
-	IOV_RXCHAIN_PWRSAVE,		/**< Current power save mode */
-	IOV_RXCHAIN_PWRSAVE_STAS_ASSOC_CHECK,	/**< Whether to check for associated stas */
-#endif
-#ifdef RADIO_PWRSAVE
-	IOV_RADIO_PWRSAVE_ENABLE,		/**< Radio duty cycle Power Save enable */
-	IOV_RADIO_PWRSAVE_QUIET_TIME,		/**< Radio duty cycle Power Save */
-	IOV_RADIO_PWRSAVE_PPS,		/**< Radio power save packets per second */
-	IOV_RADIO_PWRSAVE,		/**< Whether currently in power save or not */
-	IOV_RADIO_PWRSAVE_LEVEL,		/**< Radio power save duty cycle on time */
-	IOV_RADIO_PWRSAVE_STAS_ASSOC_CHECK,	/**< Whether to check for associated stas */
-#endif
-	IOV_AP_RESET,	/**< User forced reset */
-	IOV_BCMDCS, 	/**< dynamic channel switch (management) */
-	IOV_DYNBCN,	/**< Dynamic beaconing */
-	IOV_SCB_LASTUSED,	/**< time (s) elapsed since any of the associated scb is used */
-	IOV_SCB_PROBE,		/**< get/set scb probe parameters */
-	IOV_SCB_ASSOCED,	/**< if it has associated SCBs at phy if level */
-	IOV_ACS_UPDATE,		/**< update after acs_scan and chanspec selection */
-	IOV_PROBE_RESP_INFO,	/**< get probe response management packet */
-	IOV_MODE_REQD,		/*
+	IOV_SCB_ACTIVITY_TIME = 2,
+	IOV_AUTHE_STA_LIST = 3,
+	IOV_AUTHO_STA_LIST = 4,
+	IOV_WME_STA_LIST = 5,
+	IOV_BSS = 6,
+	IOV_MAXASSOC = 7,
+	IOV_BSS_MAXASSOC = 8,
+	IOV_CLOSEDNET = 9,
+	IOV_AP = 10,
+	IOV_APSTA = 11,				/**< enable simultaneously active AP/STA */
+	IOV_AP_ASSERT = 12,			/**< User forced crash */
+	IOV_RXCHAIN_PWRSAVE_ENABLE = 13,	/**< Power Save with single rxchain enable */
+	IOV_RXCHAIN_PWRSAVE_QUIET_TIME = 14,	/**< Power Save with single rxchain quiet time */
+	IOV_RXCHAIN_PWRSAVE_PPS = 15,		/**< single rxchain packets per second */
+	IOV_RXCHAIN_PWRSAVE = 16,		/**< Current power save mode */
+	IOV_RXCHAIN_PWRSAVE_STAS_ASSOC_CHECK = 17,	/**< Whether to check for associated stas */
+	IOV_RADIO_PWRSAVE_ENABLE = 18,		/**< Radio duty cycle Power Save enable */
+	IOV_RADIO_PWRSAVE_QUIET_TIME = 19,	/**< Radio duty cycle Power Save */
+	IOV_RADIO_PWRSAVE_PPS = 20,		/**< Radio power save packets per second */
+	IOV_RADIO_PWRSAVE = 21,			/**< Whether currently in power save or not */
+	IOV_RADIO_PWRSAVE_LEVEL = 22,		/**< Radio power save duty cycle on time */
+	IOV_RADIO_PWRSAVE_STAS_ASSOC_CHECK = 23,	/**< Whether to check for associated stas */
+	IOV_AP_RESET = 24,	/**< User forced reset */
+	IOV_BCMDCS = 25,	/**< dynamic channel switch (management) */
+	IOV_DYNBCN = 26,	/**< Dynamic beaconing */
+	IOV_SCB_LASTUSED = 27,	/**< time (s) elapsed since any of the associated scb is used */
+	IOV_SCB_PROBE = 28,	/**< get/set scb probe parameters */
+	IOV_SCB_ASSOCED = 29,	/**< if it has associated SCBs at phy if level */
+	IOV_ACS_UPDATE = 30,		/**< update after acs_scan and chanspec selection */
+	IOV_PROBE_RESP_INFO = 31,	/**< get probe response management packet */
+	IOV_MODE_REQD = 32,	/*
 				 * operational mode capabilities required for STA
 				 * association acceptance with the BSS
 				 */
-	IOV_BSS_RATESET,	/**< Set rateset per BSS */
-	IOV_FORCE_BCN_RSPEC,	/**< Setup Beacon rate from lowest basic to specific basic rate */
-	IOV_WLANCOEX,		/**< Setup dual radio usbap coex function on/off */
-#ifdef WLAUTHRESP_MAC_FILTER
-	IOV_AUTHRESP_MACFLTR,	/**< enable/disable suppressing auth resp by MAC filter */
-#endif /* WLAUTHRESP_MAC_FILTER */
-	IOV_PROXY_ARP_ADVERTISE,    /**< Update beacon, probe response frames for proxy arp bit */
-	IOV_WOWL_PKT,		/**< Generate a wakeup packet */
-	IOV_SET_RADAR,		/* Set radar. Convert IOCTL to IOVAR for RSDB. */
+	IOV_BSS_RATESET = 33,		/**< Set rateset per BSS */
+	IOV_FORCE_BCN_RSPEC = 34, /**< Setup Beacon rate from lowest basic to specific basic rate */
+	IOV_WLANCOEX = 35,		/**< Setup dual radio usbap coex function on/off */
+	IOV_AUTHRESP_MACFLTR = 36,	/**< enable/disable suppressing auth resp by MAC filter */
+	IOV_PROXY_ARP_ADVERTISE = 37, /**< Update beacon, probe response frames for proxy arp bit */
+	IOV_WOWL_PKT = 38,		/**< Generate a wakeup packet */
+	IOV_SET_RADAR = 39,		/* Set radar. Convert IOCTL to IOVAR for RSDB. */
 	IOV_LAST,		/**< In case of a need to check max ID number */
-
 };
 
 /** AP IO Vars */
@@ -575,6 +558,18 @@ static int wlc_authorized_sta_check_cb(struct scb *scb);
 static int wlc_wme_sta_check_cb(struct scb *scb);
 static int wlc_sta_list_get(wlc_ap_info_t *ap, wlc_bsscfg_t *cfg, uint8 *buf,
                             int len, int (*sta_check)(struct scb *scb));
+#ifdef BCMDBG
+static int wlc_dump_ap(wlc_ap_info_t *ap, struct bcmstrbuf *b);
+#ifdef RXCHAIN_PWRSAVE
+static int wlc_dump_rxchain_pwrsave(wlc_ap_info_t *ap, struct bcmstrbuf *b);
+#endif
+#ifdef RADIO_PWRSAVE
+static int wlc_dump_radio_pwrsave(wlc_ap_info_t *ap, struct bcmstrbuf *b);
+#endif
+#if defined(RXCHAIN_PWRSAVE) || defined(RADIO_PWRSAVE)
+static void wlc_dump_pwrsave(wlc_pwrsave_t *pwrsave, struct bcmstrbuf *b);
+#endif
+#endif /* BCMDBG */
 
 static int wlc_ap_doiovar(void *hdl, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
@@ -633,15 +628,6 @@ static bool wlc_ap_on_radarchan(wlc_ap_info_t *ap);
 static int wlc_force_bcn_rspec_upd(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_ap_info_t *ap,
 	ratespec_t rspec);
 
-#ifdef TXQ_MUX
-static void wlc_bcmc_mux_free(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg);
-static int wlc_bcmc_mux_alloc(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg);
-static void wlc_bcmc_stop_mux_sources(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg);
-static void wlc_bcmc_start_mux_sources(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg);
-static INLINE bcmc_cubby_t *wlc_bcmc_cubby(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg);
-static INLINE mux_srcs_t *wlc_bcmc_muxsrc(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg);
-static INLINE struct pktq *wlc_bcmc_queue(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg);
-#endif
 static bool wlc_ap_assreq_verify_rates(wlc_assoc_req_t *param, wlc_iem_ft_pparm_t *ftpparm,
 	opmode_cap_t opmode_cap_reqd, uint16 capability, wlc_rateset_t *req_rates);
 static bool wlc_ap_assreq_verify_authmode(wlc_info_t *wlc, struct scb *scb,
@@ -700,12 +686,10 @@ BCMATTACHFN(wlc_ap_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-	if (wlc_apps_attach(wlc)) {
-		WL_ERROR(("%s: wlc_apps_attach failed\n", __FUNCTION__));
-		goto fail;
-	}
-
 #ifdef RXCHAIN_PWRSAVE
+#ifdef BCMDBG
+	wlc_dump_register(pub, "rxchain_pwrsave", (dump_fn_t)wlc_dump_rxchain_pwrsave, (void *)ap);
+#endif
 	var = getvar(NULL, "wl_nonassoc_rxchain_pwrsave_enable");
 	if (var) {
 		if (!bcm_strtoul(var, NULL, 0))
@@ -721,8 +705,14 @@ BCMATTACHFN(wlc_ap_attach)(wlc_info_t *wlc)
 		WL_ERROR(("%s: wl_init_timer for radio powersave timer failed\n", __FUNCTION__));
 		goto fail;
 	}
+#ifdef BCMDBG
+	wlc_dump_register(pub, "radio_pwrsave", (dump_fn_t)wlc_dump_radio_pwrsave, (void *)ap);
+#endif
 #endif /* RADIO_PWRSAVE */
 
+#ifdef BCMDBG
+	wlc_dump_register(pub, "ap", (dump_fn_t)wlc_dump_ap, (void *)ap);
+#endif
 	err = wlc_module_register(pub, wlc_ap_iovars, "ap", appvt, wlc_ap_doiovar,
 	                          wlc_ap_watchdog, wlc_ap_wlc_up, NULL);
 	if (err) {
@@ -759,6 +749,12 @@ BCMATTACHFN(wlc_ap_attach)(wlc_info_t *wlc)
 	err = wlc_pcb_fn_set(wlc->pcb, 0, WLF2_PCB1_STA_PRB, wlc_ap_probe_complete);
 	if (err != BCME_OK) {
 		WL_ERROR(("%s: wlc_pcb_fn_set err=%d\n", __FUNCTION__, err));
+		goto fail;
+	}
+
+	/* Attach APPS module */
+	if (wlc_apps_attach(wlc)) {
+		WL_ERROR(("%s: wlc_apps_attach failed\n", __FUNCTION__));
 		goto fail;
 	}
 
@@ -827,6 +823,15 @@ BCMATTACHFN(wlc_ap_attach)(wlc_info_t *wlc)
 
 	appvt->txbcn_timeout = (getintvar(pub->vars, "watchdog") / 1000);
 
+
+	/* Add callback function for AP interface creation */
+	if (wlc_bsscfg_iface_register(wlc, WL_INTERFACE_TYPE_AP, wlc_ap_iface_create,
+		wlc_ap_iface_remove, appvt) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bsscfg_iface_register() failed\n",
+			WLCWLUNIT(wlc), __FUNCTION__));
+		goto fail;
+	}
+
 	return (wlc_ap_info_t*)appvt;
 
 fail:
@@ -857,6 +862,12 @@ BCMATTACHFN(wlc_ap_detach)(wlc_ap_info_t *ap)
 		appvt->radio_pwrsave.timer = NULL;
 	}
 #endif
+
+	/* Unregister the AP interface during detach */
+	if (wlc_bsscfg_iface_unregister(wlc, WL_INTERFACE_TYPE_AP) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bsscfg_iface_unregister() failed\n",
+			WLCWLUNIT(wlc), __FUNCTION__));
+	}
 
 	wlc_module_unregister(pub, "ap", appvt);
 
@@ -908,16 +919,16 @@ wlc_ap_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 	wlc_info_t *wlc = appvt->wlc;
 	wlcband_t *band;
 	wlc_bss_info_t *target_bss = bsscfg->target_bss;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 #ifdef WLMCHAN
 	chanspec_t chspec;
 #endif
 
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_INFORM)
 	char chanbuf[CHANSPEC_STR_LEN];
-#endif 
+#endif /* BCMDBG || BCMDBG_ERR || WLMSG_INFORM */
 	int ret = BCME_OK;
 	chanspec_t radar_chanspec;
 
@@ -926,6 +937,11 @@ wlc_ap_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 	/* adopt the default BSS params as the target's BSS params */
 	bcopy(wlc->default_bss, target_bss, sizeof(wlc_bss_info_t));
 
+	/* Initialize the rateset as per the band settings of this wlc.
+	* This is required because default_bss is shared and can
+	* be init'ed from any wlc.
+	*/
+	wlc_default_rateset(wlc, &target_bss->rateset);
 	/* set some values to be appropriate for AP operation */
 	target_bss->bss_type = DOT11_BSSTYPE_INFRASTRUCTURE;
 	target_bss->atim_window = 0;
@@ -975,7 +991,8 @@ wlc_ap_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 				CHSPEC_CHANNEL(target_bss->chanspec),
 				CHSPEC_CHANNEL(wlc->home_chanspec)));
 			/* Force 2G operation for the AP */
-			target_bss->chanspec = wlc_channel_2g_chanspec(wlc->cmi);
+			target_bss->chanspec = wlc_default_chanspec_by_band(wlc->cmi,
+				BAND_2G_INDEX);
 			wlc->default_bss->chanspec = target_bss->chanspec;
 			if (target_bss->chanspec == INVCHANSPEC) {
 				return BCME_ERROR;
@@ -1060,7 +1077,7 @@ wlc_ap_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 	     (wlc_channel_locale_flags_in_band(wlc->cmi, band->bandunit) & WLC_NO_40MHZ) ||
 	     !WL_BW_CAP_40MHZ(band->bw_cap))) {
 		uint channel = wf_chspec_ctlchan(target_bss->chanspec);
-		target_bss->chanspec = BSSCFG_MINBW_CHSPEC(wlc, bsscfg, channel);
+		target_bss->chanspec = CH20MHZ_CHSPEC(channel);
 		WL_INFORM(("wl%d: use 20Mhz channel width in BSS %s\n",
 		           wlc->pub->unit, bcm_ether_ntoa(&target_bss->BSSID, eabuf)));
 	}
@@ -1096,6 +1113,7 @@ sradar_check:
 	}
 
 exit:
+
 	return ret;
 }
 
@@ -1163,7 +1181,9 @@ wlc_ap_down(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 	WL_APSTA_UPDN(("Reporting link down on config %d (AP disabled)\n",
 		WLC_BSSCFG_IDX(bsscfg)));
 
-	wlc_link(wlc, FALSE, &bsscfg->cur_etheraddr, bsscfg, WLC_E_LINK_BSSCFG_DIS);
+	if (!BSSCFG_IS_RSDB_CLONE(bsscfg)) {
+		wlc_link(wlc, FALSE, &bsscfg->cur_etheraddr, bsscfg, WLC_E_LINK_BSSCFG_DIS);
+	}
 
 
 #ifdef RADIO_PWRSAVE
@@ -1261,7 +1281,6 @@ wlc_ap_stas_timeout(wlc_ap_info_t *ap)
 	struct scb *scb;
 	struct scb_iter scbiter;
 
-
 	WL_INFORM(("%s: run at time = %d\n", __FUNCTION__, wlc->pub->now));
 	FOREACHSCB(wlc->scbstate, &scbiter, scb) {
 		wlc_bsscfg_t *cfg = SCB_BSSCFG(scb);
@@ -1319,25 +1338,6 @@ wlc_ap_stas_associated(wlc_ap_info_t *ap)
 	return count;
 }
 
-static void
-wlc_auth_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data)
-{
-	BCM_REFERENCE(ctx);
-
-	if (WL_INFORM_ON()) {
-		printf("%s: no parser\n", __FUNCTION__);
-		prhex("IE", data->ie, data->ie_len);
-	}
-}
-
-static uint8
-wlc_auth_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data)
-{
-	wlc_info_t *wlc = (wlc_info_t *)ctx;
-
-	return wlc_iem_vs_get_id(wlc->iemi, data->ie);
-}
-
 void
 wlc_ap_authresp(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 	struct dot11_management_header *hdr,  uint8 *body, uint body_len,
@@ -1357,16 +1357,16 @@ wlc_ap_authresp(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 	wlc_iem_ft_pparm_t ftpparm;
 	wlc_iem_pparm_t pparm;
 	wlc_key_t *key;
-	int32 scbpktpend[MAXBANDS] = {0};
 
-#if defined(WLMSG_ASSOC) || defined(WLMSG_BTA)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_ASSOC) || \
+	defined(WLMSG_BTA)
 	char eabuf[ETHER_ADDR_STR_LEN], *sa;
 #endif
-	BCM_REFERENCE(scbpktpend);
 
 	WL_TRACE(("wl%d: wlc_authresp_ap\n", WLCWLUNIT(wlc)));
 
-#if defined(WLMSG_ASSOC) || defined(WLMSG_BTA)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_ASSOC) || \
+	defined(WLMSG_BTA)
 	sa = bcm_ether_ntoa(&hdr->sa, eabuf);
 #endif
 
@@ -1524,7 +1524,7 @@ wlc_ap_authresp(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 	case 1:
 		for (i = 0; i < (int)NBANDS(wlc); i++) {
 			/* Use band 1 for single band 11a */
-			if (IS_SINGLEBAND_5G(wlc->deviceid))
+			if (IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap))
 				i = BAND_5G_INDEX;
 
 			scb = wlc_scbfindband(wlc, bsscfg, (struct ether_addr *)&hdr->sa, i);
@@ -1535,9 +1535,7 @@ wlc_ap_authresp(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 				 * for scb before wlc_scbfree; then record
 				 * remaining pktpend cnt.
 				 */
-
-				scbpktpend[i] = SCBPKTPENDGET(wlc, scb);
-				wlc_scbfree_pktpend(wlc, scb, &scbpktpend[i]);
+				wlc_scbfree(wlc, scb);
 			}
 		}
 
@@ -1548,20 +1546,6 @@ wlc_ap_authresp(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 			status = SMFS_CODE_MALFORMED;
 			goto smf_stats;
 		}
-
-#ifdef WLCXO_CTRL
-		if (WLCXO_ENAB(wlc->pub)) {
-			uint32 bandunit;
-			bandunit = CHSPEC_WLCBANDUNIT(bsscfg->current_bss->chanspec);
-			/* Transfer scb txpktpend to new scb */
-			if (scbpktpend[bandunit] > 0) {
-				SCBPKTPENDSET(wlc, scb, scbpktpend[bandunit]);
-				WL_ERROR(("wl%d: %s: bandunit %d new scbpktpend %d\n",
-				          wlc->pub->unit, __FUNCTION__, bandunit,
-				          scbpktpend[bandunit]));
-			}
-		}
-#endif
 
 		if (scb->flags & SCB_MYAP) {
 			if (APSTA_ENAB(wlc->pub)) {
@@ -1574,7 +1558,6 @@ wlc_ap_authresp(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 		}
 
 		wlc_scb_disassoc_cleanup(wlc, scb);
-
 
 		/* auth_alg is coming from the STA, not us */
 		scb->auth_alg = (uint8)auth_alg;
@@ -1630,10 +1613,7 @@ wlc_ap_authresp(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 
 parse_ies:
 	/* prepare IE mgmt calls */
-	bzero(&upp, sizeof(upp));
-	upp.notif_fn = wlc_auth_nhdlr_cb;
-	upp.vsie_fn = wlc_auth_vsie_cb;
-	upp.ctx = wlc;
+	wlc_iem_parse_upp_init(wlc->iemi, &upp);
 	bzero(&ftpparm, sizeof(ftpparm));
 	ftpparm.auth.alg = auth_alg;
 	ftpparm.auth.seq = auth_seq;
@@ -1670,25 +1650,6 @@ smf_stats:
 	if (BSS_SMFS_ENAB(wlc, bsscfg)) {
 		(void)wlc_smfs_update(wlc->smfs, bsscfg, SMFS_TYPE_AUTH, status);
 	}
-}
-
-static void
-wlc_assoc_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data)
-{
-	BCM_REFERENCE(ctx);
-
-	if (WL_INFORM_ON()) {
-		printf("%s: no parser\n", __FUNCTION__);
-		prhex("IE", data->ie, data->ie_len);
-	}
-}
-
-static uint8
-wlc_assoc_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data)
-{
-	wlc_info_t *wlc = (wlc_info_t *)ctx;
-
-	return wlc_iem_vs_get_id(wlc->iemi, data->ie);
 }
 
 static void wlc_ap_process_assocreq_next(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
@@ -1734,7 +1695,7 @@ wlc_ap_assreq_verify_rates(wlc_assoc_req_t *param, wlc_iem_ft_pparm_t *ftpparm,
 	uint8 req_rates_lookup[WLC_MAXRATE+1];
 	uint i;
 	uint8 r;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG_ERR) || defined(WLMSG_ASSOC)
 	struct dot11_management_header *hdr = param->hdr;
 	char eabuf[ETHER_ADDR_STR_LEN], *sa = bcm_ether_ntoa(&hdr->sa, eabuf);
 #endif
@@ -1848,7 +1809,7 @@ wlc_ap_assreq_verify_authmode(wlc_info_t *wlc, struct scb *scb, wlc_bsscfg_t *bs
 	uint16 capability, bool akm_ie_included, struct dot11_management_header *hdr)
 {
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG_ERR) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN], *sa = bcm_ether_ntoa(&hdr->sa, eabuf);
 #endif
 if ((bsscfg->WPA_auth != WPA_AUTH_DISABLED && WSEC_ENABLED(bsscfg->wsec)) ||
@@ -1900,7 +1861,7 @@ wlc_ap_process_assocreq(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *) ap;
 	wlc_info_t *wlc = appvt->wlc;
 	ap_bsscfg_cubby_t *ap_cfg;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG_ERR) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN], *sa = bcm_ether_ntoa(&hdr->sa, eabuf);
 #endif
 	struct dot11_assoc_req *req = (struct dot11_assoc_req *) body;
@@ -2012,10 +1973,7 @@ wlc_ap_process_assocreq(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 	}
 
 	/* prepare IE mgmt parse calls */
-	bzero(&upp, sizeof(upp));
-	upp.notif_fn = wlc_assoc_nhdlr_cb;
-	upp.vsie_fn = wlc_assoc_vsie_cb;
-	upp.ctx = wlc;
+	wlc_iem_parse_upp_init(wlc->iemi, &upp);
 	bzero(&ftpparm, sizeof(ftpparm));
 	ftpparm.assocreq.sup = &sup_rates;
 	ftpparm.assocreq.ext = &ext_rates;
@@ -2192,7 +2150,7 @@ wlc_ap_process_assocreq(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 		goto done;
 	}
 	/* check the max association limit */
-	if (wlc_assocscb_getcnt(wlc) >= appvt->maxassoc) {
+	if (wlc_ap_stas_associated(wlc->ap) >= appvt->maxassoc) {
 		WL_ERROR(("wl%d: %s denied association due to max association limit\n",
 		          wlc->pub->unit, sa));
 		status = DOT11_SC_ASSOC_BUSY_FAIL;
@@ -2279,7 +2237,10 @@ static void wlc_ap_process_assocreq_next(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
 	struct dot11_assoc_req *req;
 
 	uint16 capability;
-#if  defined(WLMSG_ASSOC)
+#if defined(BCMDBG_ERR)
+	char dabuf[ETHER_ADDR_STR_LEN], *da = bcm_ether_ntoa(&dc->da, dabuf);
+#endif
+#if  defined(BCMDBG_ERR) || defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char sabuf[ETHER_ADDR_STR_LEN], *sa;
 #endif
 
@@ -2292,7 +2253,7 @@ static void wlc_ap_process_assocreq_next(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
 	ap = wlc->ap;
 
 
-#if  defined(WLMSG_ASSOC)
+#if  defined(BCMDBG_ERR) || defined(BCMDBG) || defined(WLMSG_ASSOC)
 	sa = bcm_ether_ntoa(&param->hdr->sa, sabuf);
 #endif
 
@@ -2456,7 +2417,7 @@ static void wlc_ap_process_assocreq_done(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg
 {
 	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *) ap;
 	wlc_info_t *wlc = appvt->wlc;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN], *sa = bcm_ether_ntoa(&hdr->sa, eabuf);
 #endif
 	struct dot11_assoc_req *req = (struct dot11_assoc_req *) body;
@@ -2639,7 +2600,6 @@ static void wlc_ap_process_assocreq_done(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg
 	 */
 	wlc_scb_ratesel_init(wlc, scb);
 
-
 	wlc_scb_setstatebit(wlc, scb, ASSOCIATED);
 
 	/* Start beaconing if this is first STA */
@@ -2690,7 +2650,8 @@ static void wlc_ap_process_assocreq_exit(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg
 	reassoc = ((ltoh16(hdr->fc) & FC_KIND_MASK) == FC_REASSOC_REQ);
 	/* send WLC_E_REASSOC_IND/WLC_E_ASSOC_IND to interested App and/or non-WIN7 OS */
 	wlc_bss_mac_event(wlc, bsscfg, reassoc ? WLC_E_REASSOC_IND : WLC_E_ASSOC_IND,
-		&hdr->sa, WLC_E_STATUS_SUCCESS, param->status, 0, param->e_data, param->e_datalen);
+		&hdr->sa, WLC_E_STATUS_SUCCESS, param->status, scb->auth_alg,
+		param->e_data, param->e_datalen);
 	/* Suspend STA sniffing if it is associated to AP  */
 	if (STAMON_ENAB(wlc->pub) && STA_MONITORING(wlc, &hdr->sa))
 		wlc_stamon_sta_sniff_enab(wlc->stamon_info, &hdr->sa, FALSE);
@@ -3097,6 +3058,8 @@ wlc_bss_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 	struct scb_iter scbiter;
 	struct scb *scb;
 #endif
+	chanspec_t chanspec;
+
 	WL_TRACE(("wl%d: %s:\n", wlc->pub->unit, __FUNCTION__));
 
 #ifdef WL11N
@@ -3123,6 +3086,11 @@ wlc_bss_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 
 	wlc_led_event(wlc->ledh);
 
+	chanspec = wlc_get_home_chanspec(bsscfg);
+
+#ifdef PHYCAL_CACHING
+	phy_chanmgr_create_ctx((phy_info_t *) WLC_PI(wlc), chanspec);
+#endif
 	wlc_full_phy_cal(wlc, bsscfg, PHY_PERICAL_UP_BSS);
 
 	/* Indicate AP is now up */
@@ -3138,7 +3106,6 @@ wlc_bss_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
 	}
 #endif
 	if (WLEXTSTA_ENAB(wlc->pub)) {
-		chanspec_t chanspec = wlc_get_home_chanspec(bsscfg);
 		/* indicate AP starting with channel spec info */
 		wlc_bss_mac_event(wlc, bsscfg, WLC_E_AP_STARTED, NULL,
 			WLC_E_STATUS_SUCCESS, 0, 0, &chanspec, sizeof(chanspec));
@@ -3264,6 +3231,9 @@ wlc_roam_check(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg, struct ether_header *eh,
 {
 	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *) ap;
 	wlc_info_t *wlc = appvt->wlc;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 	struct lu_reassoc_pkt *lu = (struct lu_reassoc_pkt *) eh;
 	struct csco_reassoc_pkt *csco = (struct csco_reassoc_pkt *) eh;
 	struct ether_addr *sta = NULL;
@@ -3512,9 +3482,6 @@ wlc_ap_sta_probe_complete(wlc_info_t *wlc, uint txstatus, struct scb *scb, void 
 	wlc_ap_info_t *ap = wlc->ap;
 	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)ap;
 	ap_scb_cubby_t *ap_scb;
-#if defined(WLMSG_INFORM)
-	char eabuf[ETHER_ADDR_STR_LEN];
-#endif
 
 	ASSERT(scb != NULL);
 
@@ -3577,8 +3544,8 @@ wlc_ap_sta_probe_complete(wlc_info_t *wlc, uint txstatus, struct scb *scb, void 
 		return;
 	}
 
-	WL_INFORM(("wl%d: wlc_ap_sta_probe_complete: no ACK from %s for Null Data\n",
-		wlc->pub->unit, bcm_ether_ntoa(&scb->ea, eabuf)));
+	WL_ASSOC(("wl%d: wlc_ap_sta_probe_complete: no ACK from "MACF" for Null Data\n",
+	          wlc->pub->unit, ETHER_TO_MACF(scb->ea)));
 
 	if (SCB_AUTHENTICATED(scb)) {
 		/* If SCB is in authenticated state then clear the ASSOCIATED, AUTHENTICATED and
@@ -3659,6 +3626,71 @@ wlc_ap_get_bcnprb(wlc_info_t *wlc, wlc_bsscfg_t *cfg, bool bcn, void *buf, uint 
 	return rc;
 }
 
+#ifdef BCMDBG
+static int
+wlc_dump_ap(wlc_ap_info_t *ap, struct bcmstrbuf *b)
+{
+	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *) ap;
+	wlc_info_t *wlc = appvt->wlc;
+
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, " shortslot_restrict %d scb_timeout %d\n",
+		ap->shortslot_restrict, appvt->scb_timeout);
+
+	bcm_bprintf(b, "tbtt %d pre-tbtt-us %u. max latency %u. "
+		"min threshold %u. block datafifo %d "
+		"\n",
+		WLCNTVAL(wlc->pub->_cnt->tbtt),
+		appvt->pre_tbtt_us, MBSS_PRE_TBTT_MAX_LATENCY_us,
+		MBSS_PRE_TBTT_MIN_THRESH_us, wlc->block_datafifo);
+
+	return 0;
+}
+
+#ifdef RXCHAIN_PWRSAVE
+static int
+wlc_dump_rxchain_pwrsave(wlc_ap_info_t *ap, struct bcmstrbuf *b)
+{
+	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *) ap;
+
+	wlc_dump_pwrsave(&appvt->rxchain_pwrsave.pwrsave, b);
+
+	return 0;
+}
+#endif /* RXCHAIN_PWRSAVE */
+
+#ifdef RADIO_PWRSAVE
+static int
+wlc_dump_radio_pwrsave(wlc_ap_info_t *ap, struct bcmstrbuf *b)
+{
+	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *) ap;
+
+	wlc_dump_pwrsave(&appvt->radio_pwrsave.pwrsave, b);
+
+	return 0;
+}
+#endif /* RADIO_PWRSAVE */
+
+#if defined(RXCHAIN_PWRSAVE) || defined(RADIO_PWRSAVE)
+static void
+wlc_dump_pwrsave(wlc_pwrsave_t *pwrsave, struct bcmstrbuf *b)
+{
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, " in_power_save %d\n",
+		pwrsave->in_power_save);
+
+	bcm_bprintf(b, " no: of times in power save mode %d\n",
+		pwrsave->in_power_save_counter);
+
+	bcm_bprintf(b, " power save time (in secs) %d\n",
+		pwrsave->in_power_save_secs);
+
+	return;
+}
+#endif /* RXCHAIN_PWRSAVE or RADIO_PWRSAVE */
+#endif /* BCMDBG */
 
 #if defined(STA)
 bool
@@ -3666,18 +3698,31 @@ wlc_apup_allowed(wlc_info_t *wlc)
 {
 	bool modesw_in_prog = FALSE;
 	bool busy = FALSE;
+	wlc_bsscfg_t *as_cfg;
 #if defined(WL_MODESW) && !defined(WL_MODESW_DISABLED)
 	modesw_in_prog = (WLC_MODESW_ENAB(wlc->pub) && MODE_SWITCH_IN_PROGRESS(wlc->modesw)) ?
 	TRUE:FALSE;
 #endif /* WL_MODESW && !WL_MODESW_DISABLED */
-	busy = AS_IN_PROGRESS(wlc) ||
-		ANY_SCAN_IN_PROGRESS(wlc->scan) ||
+	busy = ANY_SCAN_IN_PROGRESS(wlc->scan) ||
 #ifdef WL11K
 		wlc_rrm_inprog(wlc) ||
 #endif /* WL11K */
 		WLC_RM_IN_PROGRESS(wlc) ||
 		modesw_in_prog;
+	as_cfg = AS_IN_PROGRESS_CFG(wlc);
+	busy = busy || (AS_IN_PROGRESS(wlc) &&
+		(as_cfg->assoc->state != AS_WAIT_FOR_AP_CSA) &&
+		(as_cfg->assoc->state != AS_WAIT_FOR_AP_CSA_ROAM_FAIL));
 
+#ifdef BCMDBG
+	if (busy) {
+		WL_APSTA_UPDN(("wl%d: wlc_apup_allowed: defer AP UP, STA associating: "
+			"stas/aps/associated %d/%d/%d, AS_IN_PROGRESS() %d, scan %d, rm %d"
+			"modesw = %d\n", wlc->pub->unit, wlc->stas_associated, wlc->aps_associated,
+			wlc->pub->associated, AS_IN_PROGRESS(wlc), SCAN_IN_PROGRESS(wlc->scan),
+			WLC_RM_IN_PROGRESS(wlc), modesw_in_prog));
+	}
+#endif
 	return !busy;
 }
 #endif /* STA */
@@ -3941,6 +3986,23 @@ wlc_ap_ioctl(void *hdl, uint cmd, void *arg, uint len, struct wlc_if *wlcif)
 			bcmerror = BCME_NOTAP;
 		break;
 
+#ifdef BCMDBG
+	case WLC_GET_IGNORE_BCNS:
+		if (AP_ENAB(wlc->pub)) {
+			ASSERT(pval != NULL);
+			*pval = wlc->ignore_bcns;
+		} else {
+			bcmerror = BCME_NOTAP;
+		}
+		break;
+
+	case WLC_SET_IGNORE_BCNS:
+		if (AP_ENAB(wlc->pub))
+			wlc->ignore_bcns = bool_val;
+		else
+			bcmerror = BCME_NOTAP;
+		break;
+#endif /* BCMDBG */
 
 	case WLC_GET_SCB_TIMEOUT:
 		if (AP_ENAB(wlc->pub)) {
@@ -4128,9 +4190,8 @@ wlc_ap_doiovar(void *hdl, uint32 actionid,
 #endif /* defined(STA) && defined(AP) */
 
 	case IOV_SVAL(IOV_AP_ISOLATE):
-#ifndef BCMPCIEDEV_ENABLED
-		bsscfg->ap_isolate = (uint8)int_val;
-#endif
+		if (!BCMPCIEDEV_ENAB())
+			bsscfg->ap_isolate = (uint8)int_val;
 		break;
 	case IOV_GVAL(IOV_SCB_ACTIVITY_TIME):
 		*ret_int_ptr = (int32)appvt->scb_activity_time;
@@ -4990,15 +5051,6 @@ static int wlc_ap_bsscfg_init(void *context, wlc_bsscfg_t *cfg)
 	ap_cfg->opmode_cap_reqd = OMC_NONE;
 
 	if (BSSCFG_AP(cfg)) {
-
-#if defined(TXQ_MUX)
-		/* Allocate BCMC mux context */
-		if (wlc_bcmc_mux_alloc(appvt, cfg)) {
-			WL_ERROR(("wl%d: %s: wlc_bcmc_mux_alloc failed\n",
-				appvt->wlc->pub->unit, __FUNCTION__));
-			return BCME_NOMEM;
-		}
-#endif /* TXQ_MUX */
 		/* allocate the AID map */
 		if ((ap_cfg->aidmap = (uint8 *) MALLOCZ(appvt->wlc->osh, AIDMAPSZ)) == NULL) {
 			WL_ERROR(("%s: failed to malloc aidmap\n", __FUNCTION__));
@@ -5017,14 +5069,6 @@ wlc_ap_bsscfg_deinit(void *context, wlc_bsscfg_t *cfg)
 
 	ASSERT(appvt != NULL);
 	ASSERT(cfg != NULL);
-
-#if defined(TXQ_MUX)
-	/* Deallocate BCMC context */
-	if (BCMC_MUXSRC(appvt, cfg)) {
-		/* Free bcmc mux queue */
-		wlc_bcmc_mux_free(appvt, cfg);
-	};
-#endif
 
 	ap_cfg = AP_BSSCFG_CUBBY(appvt, cfg);
 	if (ap_cfg == NULL)
@@ -5108,9 +5152,9 @@ wlc_ap_scb_deinit(void *context, struct scb *scb)
 	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t*)context;
 	wlc_info_t *wlc = appvt->wlc;
 	wlc_bsscfg_t *bsscfg = SCB_BSSCFG(scb);
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN], *ea = bcm_ether_ntoa(&scb->ea, eabuf);
-#endif 
+#endif /* BCMDBG */
 	ap_scb_cubby_t *ap_scb = AP_SCB_CUBBY(appvt, scb);
 	ap_bsscfg_cubby_t *ap_cfg = AP_BSSCFG_CUBBY(appvt, bsscfg);
 
@@ -5650,7 +5694,7 @@ wlc_assoc_parse_ssid_ie(void *ctx, wlc_iem_parse_data_t *data)
 	wlc_info_t *wlc = (wlc_info_t *)ctx;
 	wlc_bsscfg_t *cfg = data->cfg;
 	wlc_iem_ft_pparm_t *ftpparm = data->pparm->ft;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 
@@ -5664,7 +5708,7 @@ wlc_assoc_parse_ssid_ie(void *ctx, wlc_iem_parse_data_t *data)
 	/* failure if the SSID does not match any active AP config */
 	if (!WLC_IS_MATCH_SSID(wlc, cfg->SSID, &data->ie[TLV_BODY_OFF],
 	                       cfg->SSID_len, data->ie[TLV_LEN_OFF])) {
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		char ssidbuf[SSID_FMT_BUF_LEN];
 
 		wlc_format_ssid(ssidbuf, &data->ie[TLV_BODY_OFF], data->ie[TLV_LEN_OFF]);
@@ -5692,7 +5736,7 @@ wlc_assoc_parse_sup_rates_ie(void *ctx, wlc_iem_parse_data_t *data)
 	bzero(sup, sizeof(*sup));
 
 	if (data->ie == NULL || data->ie_len <= TLV_BODY_OFF) {
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		char eabuf[ETHER_ADDR_STR_LEN];
 		struct scb *scb = ftpparm->assocreq.scb;
 		wlc_info_t *wlc = (wlc_info_t *)ctx;
@@ -5703,6 +5747,14 @@ wlc_assoc_parse_sup_rates_ie(void *ctx, wlc_iem_parse_data_t *data)
 		return BCME_OK;
 	}
 
+#ifdef BCMDBG
+	if (data->ie[TLV_LEN_OFF] > WLC_NUMRATES) {
+		wlc_info_t *wlc = (wlc_info_t *)ctx;
+
+		WL_ERROR(("wl%d: %s: IE contains too many rates, truncate\n",
+		          wlc->pub->unit, __FUNCTION__));
+	}
+#endif
 
 	sup->count = MIN(data->ie[TLV_LEN_OFF], WLC_NUMRATES);
 	bcopy(&data->ie[TLV_BODY_OFF], sup->rates, sup->count);
@@ -5722,7 +5774,7 @@ wlc_assoc_parse_ext_rates_ie(void *ctx, wlc_iem_parse_data_t *data)
 	bzero(ext, sizeof(*ext));
 
 	if (data->ie == NULL || data->ie_len <= TLV_BODY_OFF) {
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		char eabuf[ETHER_ADDR_STR_LEN];
 		struct scb *scb = ftpparm->assocreq.scb;
 		wlc_info_t *wlc = (wlc_info_t *)ctx;
@@ -5733,6 +5785,14 @@ wlc_assoc_parse_ext_rates_ie(void *ctx, wlc_iem_parse_data_t *data)
 		return BCME_OK;
 	}
 
+#ifdef BCMDBG
+	if (data->ie[TLV_LEN_OFF] > WLC_NUMRATES) {
+		wlc_info_t *wlc = (wlc_info_t *)ctx;
+
+		WL_ERROR(("wl%d: %s: IE contains too many rates, truncate\n",
+		          wlc->pub->unit, __FUNCTION__));
+	}
+#endif
 
 	ext->count = MIN(data->ie[TLV_LEN_OFF], WLC_NUMRATES);
 	bcopy(&data->ie[TLV_BODY_OFF], ext->rates, ext->count);
@@ -5756,6 +5816,9 @@ wlc_assoc_parse_wps_ie(void *ctx, wlc_iem_parse_data_t *data)
 			return BCME_OK;
 
 		if (wpsie->len < 5) {
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+			char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 			WL_ERROR(("wl%d: wlc_assocresp: unsupported request in WPS IE from %s\n",
 			          wlc->pub->unit, bcm_ether_ntoa(&scb->ea, eabuf)));
 			ftpparm->assocreq.status = DOT11_SC_ASSOC_FAIL;
@@ -5818,591 +5881,6 @@ wlc_force_bcn_rspec_upd(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_ap_info_t *ap, r
 	return BCME_OK;
 }
 
-#if defined(TXQ_MUX)
-/**
- * @brief Inlined cubby functions for BCMC code.
- *
- * This is an alternative to macros with the additional
- * benefit of type checking
- *
- * @param appvt   AP private context strucuture
- * @param cfg     BSS Config pointer
- *
- * @return        wlc_bcmc_cubby returns bcmccubby pointer
- *                wlc_bcmc_muxsrc returns the BCMC mux source handle
- *                wlc_bcmc_queue returns the BCMC packet queue
- */
-static INLINE bcmc_cubby_t *wlc_bcmc_cubby(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg)
-{
-	return &(AP_BSSCFG_CUBBY(appvt, cfg)->bcmc_cubby);
-}
-
-static INLINE mux_srcs_t *wlc_bcmc_muxsrc(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg)
-{
-	return (wlc_bcmc_cubby(appvt, cfg))->msrc;
-}
-static  void wlc_bcmc_set_muxsrc(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg, mux_srcs_t *msrc)
-{
-	(wlc_bcmc_cubby(appvt, cfg))->msrc = msrc;
-}
-static INLINE struct pktq *wlc_bcmc_queue(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg)
-{
-	return &((wlc_bcmc_cubby(appvt, cfg))->queue);
-}
-/**
- * @brief Function to wake a BCMC mux source once data is queued.
- *
- * If the BSS has nodes in powersave, the BCMC queue is woken up,
- * otherwise the approporate fifo for that AC is woken up
- *
- * @param cfg     BSS config structure
- * @param muxq    Pointer to mux queue associated with that BSS
- * @param ac      FIFO access class
- *
- * @return        No return value
- */
-static void
-wlc_bcmc_wake_mux_source(wlc_bsscfg_t *cfg, mux_srcs_t *msrcs, int ac)
-{
-	wlc_msrc_wake(msrcs, WLC_BCMC_PSMODE(cfg->wlc, cfg) ? MUX_SRC_BCMC : ac);
-}
-
-/**
- * @brief Function to stop all BCMC mux sources in the given BSS.
- *
- * @param cfg	  BSS config structure
- *
- * @return        No return value
- */
-static void
-wlc_bcmc_stop_mux_sources(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg)
-{
-	wlc_msrc_group_stop(BCMC_MUXSRC(appvt, cfg), MUX_GRP_DATA|MUX_GRP_BCMC);
-}
-
-/**
- * @brief Function to globally stop all BCMC mux sources on every BSS.
- *
- * @param wlc     wlc structure
- *
- * @return        No return value
- */
-void
-wlc_bcmc_global_stop_mux_sources(wlc_info_t *wlc)
-{
-	int idx;
-	wlc_bsscfg_t *cfg;
-	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)wlc->ap;
-
-	FOREACH_BSS(wlc, idx, cfg) {
-		if (BCMC_MUXSRC(appvt, cfg)) {
-			wlc_bcmc_stop_mux_sources(appvt, cfg);
-		}
-	}
-}
-
-/**
- * @brief Function to start all BSS BCMC mux sources.
- *
- * If the BSS has nodes in powersave, the BCMC queue is woken up,
- * otherwise the approporate fifo for that AC is woken up
- *
- * @param cfg     BSS config structure
- *
- * @return        No return value
- */
-static void
-wlc_bcmc_start_mux_sources(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg)
-{
-	/*
-	 * Stop all mux sources and then start appropriate source
-	 * depending on PS state.
-	 */
-	wlc_bcmc_stop_mux_sources(appvt, cfg);
-	wlc_bcmc_set_powersave(cfg, WLC_BCMC_PSMODE(cfg->wlc, cfg));
-}
-
-/**
- * @brief Function to globally start all BCMC mux sources on every BSS.
- *
- * @param wlc     wlc structure
- *
- * @return        No return value
- */
-void
-wlc_bcmc_global_start_mux_sources(wlc_info_t *wlc)
-{
-	int idx;
-	wlc_bsscfg_t *cfg;
-	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)wlc->ap;
-
-	FOREACH_BSS(wlc, idx, cfg) {
-		if (BCMC_MUXSRC(appvt, cfg)) {
-			wlc_bcmc_start_mux_sources(appvt, cfg);
-		}
-	}
-}
-
-/**
- * @brief Enqueue a Broadcast/Multicast packet. Exported function.
- *
- * Enqueue a Broadcast/Multicast packet for the given bsscfg context.
- *
- * @param wlc     Pointer to wlc structure
- * @param cfg     Pointer to BSS configuration
- * @param pkt     Packet to be queued
- * @param prec    Precedence of packet to be queued
- *
- * @return        TRUE if successful or FALSE if not
- */
-bool
-wlc_bcmc_enqueue(wlc_info_t *wlc, wlc_bsscfg_t *cfg, void *pkt, uint prec)
-{
-	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)wlc->ap;
-	mux_srcs_t *msrcs = BCMC_MUXSRC(appvt, cfg);
-
-	ASSERT(msrcs);
-
-	if (wlc_prec_enq_head(wlc, BCMC_QUEUE(appvt, cfg), pkt, prec, FALSE)) {
-		/* convert prec to ac fifo number, 4 precs per ac fifo */
-		int ac_idx = prec / (WLC_PREC_COUNT / AC_COUNT);
-
-#ifdef BCMC_MUX_DEBUG
-		WL_ERROR(("%s() scb:0x%p pkt:0x%p len:%d prec:0x%x\n",
-			__FUNCTION__, OSL_OBFUSCATE_BUF(WLPKTTAGSCBGET(pkt)),
-			OSL_OBFUSCATE_BUF(pkt), PKTLEN(wlc->osh, pkt), prec));
-		prhex(__FUNCTION__, PKTDATA(wlc->osh, pkt), PKTLEN(wlc->osh, pkt));
-#endif
-
-		wlc_bcmc_wake_mux_source(cfg, msrcs, ac_idx);
-
-		/* kick the low txq */
-		wlc_send_q(wlc, wlc->active_queue);
-
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-/**
- * @brief Set powersave state of BCMC queues. Exported function.
- *
- * This routine informs the BCMC packet processing logic when any of the nodes
- * in the BSS enter powersave.
- * The 802.11 spec mandates that all BCMC packets to be sent at DTIM.
- * The 4 AC data fifo mux sources are disabled and the BCMC fifo mux is enabled.
- *
- * @param muxq         Pointer to BSS configuration
- * @param ps_enable    TRUE if any of the nodes have entered powersave.
- *
- * @return             No return value
- */
-void
-wlc_bcmc_set_powersave(wlc_bsscfg_t *cfg, bool ps_enable)
-{
-	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)cfg->wlc->ap;
-	mux_srcs_t *msrcs = BCMC_MUXSRC(appvt, cfg);
-
-	ASSERT(msrcs);
-
-	if (WLC_BSS_DATA_FC_ON(cfg)) {
-		/* Flow control event in progress, exit */
-		WL_INFORM(("%s() wl%d: Flowcontrol block_datafifo: 0x%x\n",
-			__FUNCTION__, cfg->wlc->pub->unit, cfg->wlc->block_datafifo));
-		return;
-	}
-
-	if (ps_enable) {
-	/*
-	 * PS ON
-	 * turn ON bcmc mux source that drains into BCM FIFO
-	 * turn OFF bcmc mux sources feeding into he data FIFOS
-	*/
-		/* Stop DATA mux sources */
-		wlc_msrc_group_stop(msrcs, MUX_GRP_DATA);
-		/* Start BCMC mux source */
-		wlc_msrc_start(msrcs, MUX_SRC_BCMC);
-	} else {
-	/*
-	 * PS OFF
-	 * turn OFF bcmc mux source that drains into BCM FIFO
-	 * turn ON bcmc mux sources feeding into the data FIFOS
-	*/
-		/* Stop BCMC mux source */
-		wlc_msrc_stop(msrcs, MUX_SRC_BCMC);
-		/* Start DATA mux sources */
-		wlc_msrc_group_start(msrcs, MUX_GRP_DATA);
-	}
-}
-
-/**
- * @brief This is the output function of the BCMC MUX.
- *
- * This retrieves packets from the specified BCMC mux sources.
- * If the BCMC mux source is activated it dequeues all the data from the 4AC data queues
- * up to the requested time limit.
- *
- * @param ctx             Context pointer to BSS configuration
- * @param ac              Access class to dequeue packets from
- * @param request_time    Requested time duration of the dequeued packets
- * @output_q              Pointer to queued of retireved packets.
- *                        Valid only if the function returns TRUE.
- *
- * @return                supplied_time if function completed successfully,
- *                        and output_q contains a valid chain of packets
- *                        0 if there is an error.
- */
-static uint
-wlc_bcmc_mux_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
-{
-	wlc_bsscfg_t *cfg = (wlc_bsscfg_t *)ctx;
-	wlc_info_t *wlc = cfg->wlc;
-	struct pktq *q;
-	osl_t *osh;
-	ratespec_t rspec;
-	wlcband_t *band;
-	uint supplied_time = 0;
-	DBGONLY(uint supplied_count = 0; )
-	timecalc_t timecalc;
-	uint current_pktlen = 0;
-	uint current_pkttime = 0;
-	wlc_pkttag_t *pkttag;
-	void *pkt[DOT11_MAXNUMFRAGS] = {0};
-	uint16 prec_map = 0;
-	int prec;
-	int count;
-	int i;
-#ifdef WLAMPDU_MAC
-	bool check_epoch = TRUE;
-#endif /* WLAMPDU_MAC */
-
-	BCM_REFERENCE(pkttag);
-
-#ifdef BCMC_MUX_DEBUG
-	WL_ERROR(("%s() req_time:%u  ac:%d muxq:0x%p\n",
-		__FUNCTION__, request_time, ac, OSL_OBFUSCATE_BUF(BCMC_MUXSRC(cfg))));
-#endif
-
-	ASSERT(ac < AC_COUNT || (ac == MUX_SRC_BCMC));
-
-	if (ac == MUX_SRC_BCMC) {
-		/*
-		 * Setup prec map to dequeue all bcmc frames into the BCMC fifo
-		 * Packets already dequeued into the low txq will be suppressed by ucode
-		 */
-		for (i = 0; i < AC_COUNT; i++) {
-			prec_map |= wlc->fifo2prec_map[i];
-		}
-	} else {
-		prec_map = wlc->fifo2prec_map[ac];
-	}
-
-	band = wlc->band;
-	rspec = WLC_LOWEST_BAND_RSPEC(band);
-	q = BCMC_QUEUE(((wlc_ap_info_pvt_t *)wlc->ap), cfg);
-	osh = wlc->osh;
-
-	timecalc.rspec = rspec;
-	timecalc.fixed_overhead_us = wlc_tx_mpdu_frame_seq_overhead(rspec, cfg, band, ac);
-	timecalc.is2g = BAND_2G(band->bandtype);
-
-	/* Determine the preamble type */
-	if (RSPEC_ISLEGACY(rspec)) {
-		/* For legacy reates calc the short/long preamble.
-		 * Only applicable for 2, 5.5, and 11.
-		 * Check the bss config and other overrides.
-		 */
-
-		uint mac_rate = (rspec & RATE_MASK);
-
-		if ((mac_rate == WLC_RATE_2M ||
-		     mac_rate == WLC_RATE_5M5 ||
-		     mac_rate == WLC_RATE_11M) &&
-		    WLC_PROT_CFG_SHORTPREAMBLE(wlc->prot, cfg) &&
-		    (cfg->PLCPHdr_override != WLC_PLCP_LONG)) {
-			timecalc.short_preamble = 1;
-		} else {
-			timecalc.short_preamble = 0;
-		}
-	} else {
-		/* For VHT, always MM, for HT, assume MM and don't bother with Greenfield */
-		timecalc.short_preamble = 0;
-	}
-
-	while (supplied_time < request_time && (pkt[0] = pktq_mdeq(q, prec_map, &prec))) {
-		wlc_txh_info_t txh_info;
-		uint pktlen;
-		uint pkttime;
-		int err;
-		uint fifo; /* is this param needed anymore ? */
-		struct scb *scb = WLPKTTAGSCBGET(pkt[0]);
-
-		pkttag = WLPKTTAG(pkt[0]);
-
-#ifdef BCMC_MUX_DEBUG
-		{
-		void * tmp_pkt = pkt[0];
-
-		while (tmp_pkt) {
-			prhex(__FUNCTION__, PKTDATA(wlc->osh, tmp_pkt), PKTLEN(wlc->osh, tmp_pkt));
-			tmp_pkt = PKTNEXT(wlc->osh, tmp_pkt);
-			}
-		}
-#endif
-
-		/* separate packet preparation and time calculation for
-		 * MPDU (802.11 formatted packet with txparams), and
-		 * MSDU (Ethernet or 802.3 stack packet)
-		 */
-
-		ASSERT((pkttag->flags & WLF_MPDU) == 0);
-		/*
-		 * MSDU packet prep
-		 */
-
-		err = wlc_prep_sdu(wlc, scb, pkt, &count, &fifo);
-		if (err) {
-			WL_ERROR(("%s(%d) wlc_prep_sdu=%d, fifo=%d count=%d scb:0x%p %s\n",
-				__FUNCTION__, __LINE__, err, fifo, count, OSL_OBFUSCATE_BUF(scb),
-				SCB_INTERNAL(scb) ? " Internal": ""));
-		}
-		if (err == BCME_OK) {
-			if (count == 1) {
-				/* optimization: skip the txtime calculation if the total
-				 * pkt len is the same as the last time through the loop
-				 */
-				pktlen = pkttotlen(osh, pkt[0]);
-				if (current_pktlen == pktlen) {
-					pkttime = current_pkttime;
-				} else {
-					wlc_get_txh_info(wlc, pkt[0], &txh_info);
-
-					/* calculate and store the estimated pkt tx time */
-					pkttime = wlc_scbq_timecalc(&timecalc,
-						txh_info.d11FrameSize);
-					current_pktlen = pktlen;
-					current_pkttime = pkttime;
-				}
-
-				WLPKTTIME(pkt[0]) = (uint16)pkttime;
-			} else {
-				uint fragtime = 0;
-				pkttime = 0;
-				for (i = 0; i < count; i++) {
-					wlc_get_txh_info(wlc, pkt[i], &txh_info);
-
-					/* calculate and store the estimated pkt tx time */
-					fragtime = wlc_scbq_timecalc(&timecalc,
-						txh_info.d11FrameSize);
-					WLPKTTIME(pkt[i]) = (uint16)fragtime;
-					pkttime += fragtime;
-				}
-			}
-		} else {
-			if (err == BCME_ERROR) {
-				/* BCME_ERROR indicates a tossed packet */
-
-				/* pkt[] should be invalid and count zero */
-				ASSERT(count == 0);
-
-				/* let the code finish the loop adding no time
-				 * for this dequeued packet, and enqueue nothing to
-				 * output_q since count == 0
-				 */
-				pkttime = 0;
-			} else {
-				/* should be no other errors */
-				ASSERT((err == BCME_OK));
-				PKTFREE(osh, pkt[0], TRUE);
-				pkttime = 0;
-				count = 0;
-			}
-		}
-		supplied_time += pkttime;
-		DBGONLY(supplied_count++; )
-
-		for (i = 0; i < count; i++) {
-#ifdef WLAMPDU_MAC
-			/* For AQM AMPDU Aggregation:
-			 * If there is a transition from A-MPDU aggregation frames to a
-			 * non-aggregation frame, the epoch needs to change. Otherwise the
-			 * non-agg frames may get included in an A-MPDU.
-			 */
-			if (check_epoch && AMPDU_AQM_ENAB(wlc->pub)) {
-				/* Once we check the condition,
-				 * we don't need to check again since
-				 * we are enqueuing an non_ampdu frame
-				 * so wlc_ampdu_was_ampdu() will be false.
-				 */
-				check_epoch = FALSE;
-				/* if the previous frame in the fifo was an ampdu mpdu,
-				 * change the epoch
-				 */
-				if (wlc_ampdu_was_ampdu(wlc->ampdu_tx, ac)) {
-					bool epoch;
-
-					wlc_get_txh_info(wlc, pkt[i], &txh_info);
-					epoch = wlc_ampdu_chgnsav_epoch(wlc->ampdu_tx,
-					    ac,
-					    AMU_EPOCH_CHG_MPDU,
-					    scb,
-					    (uint8)PKTPRIO(pkt[i]),
-					    &txh_info);
-					wlc_txh_set_epoch(wlc, txh_info.tsoHdrPtr, epoch);
-				}
-			}
-#endif /* WLAMPDU_MAC */
-
-			/* add this pkt to the output queue */
-#ifdef BCMC_MUX_DEBUG
-			WL_ERROR(("%s() pkttime=%d  pkt[%d]=0x%p\n",
-				__FUNCTION__, supplied_time, i, OSL_OBFUSCATE_BUF(pkt[i])));
-#endif
-			ASSERT(pkt[i]);
-			spktenq(output_q, pkt[i]);
-		}
-	}
-
-#ifdef WLAMPDU_MAC
-	/* For Ucode/HW AMPDU Aggregation:
-	 * If there are non-aggreation packets added to a fifo, make sure the epoch will
-	 * change the next time entries are made to the aggregation info side-channel.
-	 * Otherwise, the agg logic may include the non-aggreation packets into an A-AMPDU.
-	 */
-	if (spktq_n_pkts(output_q) > 0 &&
-		AMPDU_MAC_ENAB(wlc->pub) && !AMPDU_AQM_ENAB(wlc->pub)) {
-		wlc_ampdu_change_epoch(wlc->ampdu_tx, ac, AMU_EPOCH_CHG_MPDU);
-	}
-#endif /* WLAMPDU_MAC */
-
-	/* Return with output packets on 'output_q', and tx time estimate as return value */
-
-	WL_TMP(("%s: exit ac %u supplied %dus, %u pkts\n", __FUNCTION__,
-		ac, supplied_time, supplied_count));
-
-	return supplied_time;
-}
-/**
- * @brief De-initialize BCMC MUX queue.
- *
- * This de-initializes the 4AC data mux sources plus the BCMC mux source
- *
- * @param queue  Pointer TXQ to be de-initialized
- *
- */
-static void
-wlc_bcmc_mux_queue_deinit(struct pktq *queue)
-{
-	pktq_deinit(queue);
-}
-/**
- * @brief Initialize BCMC MUX queue.
- *
- * This initializes the 4AC data mux sources plus the BCMC mux source
- *
- * @param pub    Pointer to wlc_pub_t
- * @param queue  Pointer TXQ to be initialized
- *
- * @return       TRUE if  completed successfully,
- *               FALSE otherwise
- */
-static bool
-wlc_bcmc_mux_queue_init(wlc_pub_t *pub, struct pktq *queue)
-{
-	/* Set the overall queue packet limit to the max, just rely on per-prec limits */
-	if (pktq_init(queue, WLC_PREC_COUNT, PKTQ_LEN_MAX)) {
-		uint i;
-
-		/* Have enough room for control packets along with HI watermark */
-		/* Also, add room to txq for total psq packets if all the SCBs leave PS mode */
-		/* The watermark for flowcontrol to OS packets will remain the same */
-		for (i = 0; i < WLC_PREC_COUNT; i++) {
-			pktq_set_max_plen(queue, i, (2 * pub->tunables->datahiwat) +
-			PKTQ_LEN_DEFAULT + pub->psq_pkts_total);
-		}
-		return TRUE;
-
-	} else {
-		return FALSE;
-	};
-}
-
-
-/**
- * @brief Allocate BCMC MUX sources.
- *
- * This allocates the 4AC data mux sources plus the BCMC mux source
- *
- * @param cfg    BSS config pointer
- *
- * @return       0 if function completed successfully,
- *               BCME_NOMEM if allocation fails
- *               BCME_ERROR if queue init fails
- */
-static int
-wlc_bcmc_mux_alloc(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg)
-{
-	if (wlc_bcmc_mux_queue_init(cfg->wlc->pub, BCMC_QUEUE(appvt, cfg)) == FALSE)
-	{
-		return BCME_ERROR;
-	}
-
-	wlc_bcmc_set_muxsrc(appvt, cfg,
-		wlc_msrc_alloc(cfg->wlc, cfg->wlcif->qi->ac_mux,
-		wlc_txq_nfifo(cfg->wlcif->qi->low_txq),
-		cfg, wlc_bcmc_mux_output, MUX_GRP_DATA|MUX_GRP_BCMC));
-
-	if (BCMC_MUXSRC(appvt, cfg)) {
-		/*
-		 * Set BCMC PS MUX state to OFF,
-		 * this  turns ON the BCMC muxes connected to the data fifos and
-		 * turns OFF the mux connected to the BCMC FIFO.
-		*/
-		WLC_BCMC_PSOFF(cfg);
-		return 0;
-	} else {
-		wlc_bcmc_mux_queue_deinit(BCMC_QUEUE(appvt, cfg));
-		return BCME_NOMEM;
-	}
-}
-
-/**
- * @brief Deallocate BCMC MUX queues and sources.
- *
- * This deallocates the 4AC data mux sources and the BCMC mux source
- *
- * @param cfg    BSS config pointer
- */
-static void
-wlc_bcmc_mux_free(wlc_ap_info_pvt_t *appvt, wlc_bsscfg_t *cfg)
-{
-	if (BCMC_MUXSRC(appvt, cfg)) {
-		struct pktq *q = BCMC_QUEUE(appvt, cfg);
-		wlc_info_t *wlc = cfg->wlc;
-		osl_t *osh = wlc->osh;
-		void *pkt;
-
-		ASSERT(q);
-
-		/* Flush BCMC queue */
-		while ((pkt = pktq_deq(q, NULL))) {
-#ifdef PROP_TXSTATUS
-			if (PROP_TXSTATUS_ENAB(wlc->pub)) {
-				wlc_process_wlhdr_txstatus(wlc,
-					WLFC_CTL_PKTFLAG_DISCARD, pkt, FALSE);
-			}
-#endif /* PROP_TXSTATUS */
-			PKTFREE(osh, pkt, TRUE);
-		}
-
-		wlc_msrc_free(wlc, osh, BCMC_MUXSRC(appvt, cfg));
-		wlc_bcmc_mux_queue_deinit(q);
-		wlc_bcmc_set_muxsrc(appvt, cfg, NULL);
-	}
-}
-#endif /* TXQ_MUX */
-
 
 int
 wlc_ap_sendauth(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
@@ -6413,11 +5891,11 @@ wlc_ap_sendauth(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *) ap;
 	wlc_info_t *wlc = appvt->wlc;
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN], *sa;
 #endif
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	sa = bcm_ether_ntoa(&scb->ea, eabuf);
 #endif
 	BCM_REFERENCE(challenge_text);
@@ -6548,6 +6026,9 @@ wlc_auth_write_chlng_ie(void *ctx, wlc_iem_build_data_t *data)
 			uint8 *chlng;
 			wlc_bsscfg_t *cfg = data->cfg;
 			struct scb *scb;
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+			char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 			uint i;
 			ap_scb_cubby_t *ap_scb;
 
@@ -6586,6 +6067,11 @@ wlc_auth_write_chlng_ie(void *ctx, wlc_iem_build_data_t *data)
 
 			/* write to frame */
 			bcopy(chlng, data->buf, 2 + DOT11_CHALLENGE_LEN);
+#ifdef BCMDBG
+			if (WL_ASSOC_ON()) {
+				prhex("Auth challenge text #2", chlng, 2 + DOT11_CHALLENGE_LEN);
+			}
+#endif
 			ap_scb->challenge = chlng;
 
 		exit:
@@ -6610,7 +6096,7 @@ wlc_auth_parse_chlng_ie(void *ctx, wlc_iem_parse_data_t *data)
 		if (ftpparm->auth.seq == 3) {
 			wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)wlc->ap;
 			uint8 *chlng = data->ie;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_ASSOC)
 			char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 			struct scb *scb;
@@ -6769,7 +6255,7 @@ wlc_assoc_parse_psta_ie(void *ctx, wlc_iem_parse_data_t *data)
 	struct scb *scb = ftpparm->assocreq.scb;
 	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)wlc->ap;
 	ap_scb_cubby_t *ap_scb = AP_SCB_CUBBY(appvt, scb);
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 
@@ -7023,6 +6509,7 @@ wlc_ap_timeslot_update(wlc_bsscfg_t *bsscfg, uint32 start_tsf, uint32 interval)
 	wlc_msch_timeslot_update(wlc->msch_info, ap_cfg->msch_req_hdl, req, update_mask);
 }
 
+/** Called back by the multichannel scheduler (msch) */
 static int
 wlc_ap_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 {
@@ -7034,7 +6521,7 @@ wlc_ap_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 	DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
 
 	if (!cfg || !cfg->up || !cfg->associated) {
-		/* The requeset is been cancelled, ignore the Clbk */
+		/* The request has been cancelled, ignore the Clbk */
 		return BCME_OK;
 	}
 
@@ -7062,7 +6549,10 @@ wlc_ap_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 #endif /* WLMCHN */
 
 	if (type & MSCH_CT_REQ_START) {
-		wlc_full_phy_cal(wlc, cfg, PHY_PERICAL_JOIN_BSS);
+#ifdef PHYCAL_CACHING
+		phy_chanmgr_create_ctx((phy_info_t *) WLC_PI(wlc), cb_info->chanspec);
+#endif
+		wlc_full_phy_cal(wlc, cfg, PHY_PERICAL_UP_BSS);
 	}
 
 	if (type & MSCH_CT_ON_CHAN) {
@@ -7148,13 +6638,13 @@ wlc_ap_prepare_off_channel(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 			WLFC_CTL_TYPE_INTERFACE_CLOSE, FALSE);
 	}
 #endif /* PROP_TXSTATUS */
+	wlc_he_on_switch_bsscfg(wlc->hei, cfg, BSSCOLOR_DIS);
 }
 
 static void
 wlc_ap_return_home_channel(wlc_bsscfg_t *cfg)
 {
 	wlc_info_t *wlc = cfg->wlc;
-	wlc_txq_info_t *qi = cfg->wlcif->qi;
 #ifdef WLMCHAN
 	int btc_flags = wlc_bmac_btc_flags_get(wlc->hw);
 	uint16 protections = 0;
@@ -7244,14 +6734,8 @@ wlc_ap_return_home_channel(wlc_bsscfg_t *cfg)
 		wlc_btc_set_ps_protection(wlc, cfg); /* enable */
 
 	wlc_enable_mac(wlc);
-
-	wlc_txflowcontrol_override(wlc, qi, OFF, TXQ_STOP_FOR_MSCH_FLOW_CNTRL);
-
-	/* run txq if not empty */
-	if (WLC_TXQ_OCCUPIED(wlc)) {
-		wlc_send_q(wlc, wlc->active_queue);
-	}
-}
+	wlc_he_on_switch_bsscfg(wlc->hei, cfg, BSSCOLOR_EN);
+} /* wlc_ap_return_home_channel */
 
 /* prepare to leave home channel */
 static void
@@ -7267,9 +6751,6 @@ wlc_ap_off_channel_done(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 		wlfc_sendup_ctl_info_now(wlc->wlfc);
 	}
 #endif /* PROP_TXSTATUS */
-
-	wlc_txflowcontrol_override(wlc, cfg->wlcif->qi, ON,
-		TXQ_STOP_FOR_MSCH_FLOW_CNTRL);
 
 	/* If we are switching away from radar home_chanspec
 	 * because STA scans (normal/Join/Roam) with
@@ -7349,4 +6830,74 @@ wlc_ap_verify_basic_mcs(wlc_ap_info_t *ap, const uint8 *mcs, uint32 len)
 		}
 	}
 	return BCME_OK;
+}
+
+bool
+wlc_ap_on_chan(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg)
+{
+	wlc_ap_info_pvt_t *appvt = (wlc_ap_info_pvt_t *)ap;
+	ap_bsscfg_cubby_t *ap_cfg = AP_BSSCFG_CUBBY(appvt, bsscfg);
+
+	ASSERT(ap_cfg);
+
+	return (ap_cfg->msch_state == WLC_MSCH_ON_CHANNEL);
+}
+
+/*
+ * Function:	wlc_ap_iface_create
+ *
+ * Purpose:	Function to create ap interface through interface create command.
+ *
+ * Parameters:
+ * module_ctx	: Module context
+ * if_buf	: interface create buffer
+ * wl_info	: out parameter of created interface
+ * err		: pointer to store the error status
+ *
+ * Returns:	cfg pointer - If success
+ *		NULL on failure
+ */
+static wlc_bsscfg_t*
+wlc_ap_iface_create(void *if_module_ctx, wl_interface_create_t *if_buf,
+	wl_interface_info_t *wl_info, int32 *err)
+{
+	wlc_bsscfg_t *cfg;
+	wlc_ap_info_pvt_t *appvt = if_module_ctx;
+	wlc_bsscfg_type_t type = {BSSCFG_TYPE_GENERIC, BSSCFG_GENERIC_AP};
+
+	ASSERT(appvt->wlc);
+
+	cfg = wlc_iface_create_generic_bsscfg(appvt->wlc, if_buf, &type, err);
+
+	return (cfg);
+}
+
+/*
+ * Function:	wlc_ap_iface_remove
+ *
+ * Purpose:	Function to remove ap interface(s) through interface_remove IOVAR.
+ *
+ * Input Parameters:
+ *	wlc	: Pointer to wlc
+ *	bsscfg	: Pointer to bsscfg corresponding to the interface
+ *
+ * Returns:	BCME_OK - If success
+ *		Respective error code on failures.
+ */
+static int32
+wlc_ap_iface_remove(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
+{
+	int32 ret;
+
+	if (bsscfg->subtype != BSSCFG_GENERIC_AP) {
+		ret = BCME_NOTAP;
+	} else {
+		if (bsscfg->enable) {
+			wlc_bsscfg_disable(wlc, bsscfg);
+		}
+		wlc_bsscfg_free(wlc, bsscfg);
+		ret = BCME_OK;
+	}
+
+	return (ret);
 }

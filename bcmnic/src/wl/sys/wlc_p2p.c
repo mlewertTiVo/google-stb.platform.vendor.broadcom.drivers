@@ -25,7 +25,7 @@
  * CTWindow takes precedence over HPS of NoA absence and HPS of NoA absence
  * takes precedence over non-CTWindow.
  *
- * $Id: wlc_p2p.c 659389 2016-09-14 02:41:12Z $
+ * $Id: wlc_p2p.c 667150 2016-10-26 05:37:26Z $
  */
 
 
@@ -68,7 +68,6 @@
 #include <wlc_p2p.h>
 #ifdef PROP_TXSTATUS
 #include <wlc_ampdu.h>
-#include <wlfc_proto.h>
 #include <wlc_wlfc.h>
 #endif
 #include <wlc_probresp.h>
@@ -85,16 +84,15 @@
 #include <wlc_event.h>
 #include <wlc_bsscfg_psq.h>
 #include <wlc_bsscfg_viel.h>
-#if defined(WL_NAN_PD_P2P)
-#include <wlc_nan.h>
-#include <wlc_tsmap.h>
-#endif /* WL_NAN_PD_P2P */
 #include <wlc_assoc.h>
 #include <wlc_pm.h>
 #include <wlc_hw.h>
 #include <wlc_event_utils.h>
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
+#ifdef AP
+#include <wlc_ap.h>
+#endif /* AP */
 
 #ifndef USE_DEF_P2P_IE
 #define USE_DEF_P2P_IE 0
@@ -120,6 +118,11 @@ enum {
 	IOV_P2P_IF,		/**< query "p2p interface" bsscfg index */
 	IOV_P2P_OPS,		/**< set/clear OppPS & CTWindow */
 	IOV_P2P_NOA,		/**< set/clear NoA schedule */
+#ifdef BCMDBG
+	IOV_P2P_DEBUG,
+	IOV_P2P_SEND_NOA,
+	IOV_P2P_NEXT_PRD,	/**< move to the next 2^31 period */
+#endif
 	IOV_P2P_IFUPD,		/**< set "p2p interface" property */
 	IOV_P2P_DEFIE,		/**< Insert default p2p ies */
 	IOV_P2P_FEATURES,	/**< set get some feature flags */
@@ -142,6 +145,11 @@ static const bcm_iovar_t p2p_iovars[] = {
 	{"p2p_if", IOV_P2P_IF, 0, 0, IOVT_BUFFER, ETHER_ADDR_LEN},
 	{"p2p_ops", IOV_P2P_OPS, 0, 0, IOVT_BUFFER, sizeof(wl_p2p_ops_t)},
 	{"p2p_noa", IOV_P2P_NOA, 0, 0, IOVT_BUFFER, WL_P2P_SCHED_FIXED_LEN},
+#ifdef BCMDBG
+	{"p2p_dbg", IOV_P2P_DEBUG, 0, 0, IOVT_UINT32, 0},
+	{"p2p_send_noa", IOV_P2P_SEND_NOA, 0, 0, IOVT_BOOL, 0},
+	{"p2p_next_prd", IOV_P2P_NEXT_PRD, 0, 0, IOVT_BOOL, 0},
+#endif
 	{"p2p_ifupd", IOV_P2P_IFUPD, 0, 0, IOVT_BUFFER, ETHER_ADDR_LEN + 1},
 	{"p2p_defie", IOV_P2P_DEFIE, 0, 0, IOVT_BOOL, 0},
 	{"p2p_features", IOV_P2P_FEATURES, 0, 0, IOVT_UINT32, 0},
@@ -202,6 +210,14 @@ typedef struct wlc_p2p_data {
 #if USE_DEF_P2P_IE
 	bool		insert_def_p2pie;
 #endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	uint32		prbreq;		/**< # probe requests received */
+	uint32		prbresp;	/**< # probe reqs responded */
+	uint32		p2pprbreq;	/**< # p2p probe requests received */
+#ifdef BCMDBG
+	uint32		debug;
+#endif
+#endif	/* BCMDBG || BCMDBG_DUMP */
 } wlc_p2p_data_t;
 
 /** P2P module instance state */
@@ -219,7 +235,11 @@ struct wlc_p2p_info {
 #define P2P_FLAG_SCAN_ALL	0x02	/**< scan both P2P and legacy devices in SCAN phase */
 #define WLC_P2P_INFO_FLAG_WFDS_HASH 0x4 /**< 'hash' attr exists in probe req */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define DISCCNTINC(pm, ctr)	((pm)->p2p_data->ctr ++)
+#else
 #define DISCCNTINC(pm, ctr)
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* As of now, on GO there is only one peridic schedule max at any given time;
  * on Client there is one periodic schedule plus one one-tiem requested schedule max.
@@ -268,6 +288,13 @@ typedef struct {
 	wlc_p2p_noa_cb_t send_noa_cb;
 	void *send_noa_cb_arg;
 /* ==== please keep these debug stuff at the bottom ==== */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	uint32 tbtt;
+	uint32 pretbtt;
+	uint32 ctwend;
+	uint32 abs;
+	uint32 prs;
+#endif
 } bss_p2p_info_t;
 
 /* bss_p2p_info_t 'flags' */
@@ -289,7 +316,11 @@ typedef struct {
 #define WLC_P2P_NOA_ABS		0	/**< scheduled Absence */
 #define WLC_P2P_NOA_REQ_ABS	1	/**< requested Absence */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define INTRCNTINC(p2p, ctr)	((p2p)->ctr ++)
+#else
 #define INTRCNTINC(p2p, ctr)
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* p2p info accessor */
 #define P2P_BSSCFG_CUBBY_LOC(pm, cfg) ((bss_p2p_info_t **)BSSCFG_CUBBY((cfg), (pm)->cfgh))
@@ -308,6 +339,39 @@ typedef struct {
 #define BSS_P2P_CMN_INFO(pm, cfg) ((bss_p2p_cmn_info_t *)BSSCFG_CUBBY((cfg), (pm)->cfgh_cmn))
 
 /* debug */
+#ifdef BCMDBG
+/* over the air */
+#define P2P_OTA_DBG_TBTT	0x10000
+#define P2P_OTA_DBG_CTW		0x20000
+#define P2P_OTA_DBG_PSC		0x40000
+/* printf */
+#define P2P_DBG_TSF	0x1
+#define P2P_DBG_INTR	0x2
+#define P2P_DBG_PRB	0x4
+#define P2P_DBG_AS	0x8
+#endif
+#ifdef BCMDBG
+#define WL_P2P_TSF(pm, x)	do { \
+		if (WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_TSF)) \
+			WL_PRINT(x); \
+	} while (0)
+#define WL_P2P_INTR(pm, x)	do { \
+		if (WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_INTR)) \
+			WL_PRINT(x); \
+	} while (0)
+#define WL_P2P_PRB(pm, x)	do { \
+		if (WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_PRB)) \
+			WL_PRINT(x); \
+	} while (0)
+#define WL_P2P_AS(pm, x)	do { \
+		if (WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_AS)) \
+			WL_PRINT(x); \
+	} while (0)
+#define WL_P2P_TSF_ON(pm)	(WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_TSF))
+#define WL_P2P_INTR_ON(pm)	(WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_INTR))
+#define WL_P2P_PRB_ON(pm)	(WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_PRB))
+#define WL_P2P_AS_ON(pm)	(WL_P2P_ON() && ((pm)->p2p_data->debug & P2P_DBG_AS))
+#else
 #define WL_P2P_TSF(pm, x)
 #define WL_P2P_INTR(pm, x)
 #define WL_P2P_PRB(pm, x)
@@ -316,6 +380,7 @@ typedef struct {
 #define WL_P2P_INTR_ON(pm)	FALSE
 #define WL_P2P_PRB_ON(pm)	FALSE
 #define WL_P2P_AS_ON(pm)	FALSE
+#endif /* BCMDBG */
 #define WL_P2P_TS(wlc)		(wlc->clk ? R_REG(wlc->osh, &wlc->regs->tsf_timerlow) : 0xDEADDAED)
 
 /* d11 SHM BSS block schedule limitations */
@@ -359,23 +424,6 @@ typedef struct p2p_scb_cubby {
 #define LONG_LISTEN_BG_SCAN_PASSIVE_TIME			80
 #define MARGIN_FROM_ONESHOT_TO_BG_PASSIVE			30
 
-#if defined(WL_NAN_PD_P2P)
-#define CMD_FLAG_GET    0x01
-#define CMD_FLAG_SET    0x02
-
-typedef int
-(p2p_nan_ioc_handler_t)(wlc_p2p_info_t *p2pinfo, void *params,
-        uint16 paramlen, void *result, uint16 buflen, bool set);
-
-/* list of "wl p2p_nan" <cmd> handlers  */
-typedef struct p2p_nan_ioc_cmd {
-	uint16 cmd;
-	uint16 flags;    /* set, get, for validation and other */
-	uint16 min_len;  /* for ioctl param validaton */
-	p2p_nan_ioc_handler_t *handler;
-} p2p_nan_ioc_cmd_t;
-#endif /* WL_NAN_PD_P2P */
-
 /* local prototypes */
 
 /* module */
@@ -386,7 +434,11 @@ static int wlc_p2p_up(void *context);
 /* scb cubby */
 static int wlc_p2p_scb_init(void *context, struct scb *scb);
 static void wlc_p2p_scb_deinit(void *context, struct scb *scb);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_p2p_scb_dump(void *context, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_p2p_scb_dump NULL
+#endif
 
 static int wlc_p2p_enab(wlc_p2p_info_t *pm, bool enable);
 static void wlc_p2p_da_set(wlc_p2p_info_t *pm);
@@ -438,10 +490,18 @@ static void wlc_p2p_tbtt_cb(void *ctx, wlc_tbtt_ent_data_t *notif_data);
 /* bsscfg cubby */
 static int wlc_p2p_info_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_p2p_info_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_p2p_info_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_p2p_info_dump NULL
+#endif
 static bss_p2p_info_t *wlc_p2p_info_alloc(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg);
 static void wlc_p2p_info_free(wlc_p2p_info_t *pm, bss_p2p_info_t *p2p);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_p2p_cmn_info_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_p2p_cmn_info_dump NULL
+#endif
 
 /* bsscfg up/down */
 static void wlc_p2p_bss_updn(void *ctx, bsscfg_up_down_event_data_t *evt);
@@ -452,6 +512,9 @@ static void wlc_p2p_abs_q_upd(wlc_p2p_info_t *pm, bss_p2p_info_t *p2p, uint8 sta
 /* others */
 static bool wlc_p2p_other_active(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_p2p_dump(void *context, struct bcmstrbuf *b);
+#endif
 
 static int wlc_p2p_vndr_ie_getlen(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint16 ft, uint32 pktflag);
 #ifdef WLPROBRESP_SW
@@ -476,21 +539,6 @@ static int wlc_p2p_ver_1_02_attr_test(wlc_p2p_info_t *p2p, wlc_bsscfg_t *cfg);
 #endif
 static int wlc_p2p_calc_advt_ie_len(wlc_p2p_info_t *pm, int len);
 static int wlc_p2p_add_advt_ie(wlc_p2p_info_t *pm, wifi_p2p_ie_t *ie, uint8 *buf, int len);
-#if defined(WL_NAN_PD_P2P)
-static const p2p_nan_ioc_cmd_t *wlc_p2p_nan_find_cmd_handler(
-	const p2p_nan_ioc_cmd_t *cmd_tab, uint16 cmd);
-static int
-wlc_p2p_nan_config(wlc_p2p_info_t *pm, void *params,
-        uint16 paramlen, void *result, uint16 buflen, bool set);
-static int
-wlc_p2p_nan_del_config(wlc_p2p_info_t *pm, void *params,
-        uint16 paramlen, void *result, uint16 buflen, bool set);
-static int
-wlc_p2p_nan_get_svc_inst_list(wlc_p2p_info_t *pm, void *params, uint16 paramlen,
-        void *result, uint16 buflen, bool set);
-static void wlc_p2p_window_sched_upd(void *ctx, wlc_nan_sched_upd_data_t *notif_data);
-static uint16 getentries_p2p_nan_ioctls(void);
-#endif /* WL_NAN_PD_P2P */
 
 static void wlc_p2p_noa_upd_notif(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg);
 static bool wlc_p2p_noa_desc_upd_notif(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
@@ -636,26 +684,6 @@ static uint8* BCMRAMFN(get_def_gen_wfds_hash)(void)
 	return (uint8 *)def_gen_wfds_hash;
 }
 #endif /* WLWFDS */
-
-#if defined(WL_NAN_PD_P2P)
-/*  length of the ioc_cmd_t array  */
-#define TLEN(array)  (sizeof(array) / sizeof(*array))
-
-/*  all nan cmd ioctls for all nan submodules  */
-static const p2p_nan_ioc_cmd_t p2p_nan_ioctls[] = {
-	/* wl p2p_nan config */
-	{WL_P2P_NAN_CMD_CONFIG, (CMD_FLAG_GET | CMD_FLAG_SET),
-	OFFSETOF(wl_p2p_nan_config_t, ie), wlc_p2p_nan_config
-	},
-	{WL_P2P_NAN_CMD_DEL_CONFIG, (CMD_FLAG_SET),
-	0, wlc_p2p_nan_del_config
-	},
-	{WL_P2P_NAN_CMD_GET_INSTS, (CMD_FLAG_GET),
-	OFFSETOF(wl_nan_svc_inst_list_t, svc) + sizeof(wl_nan_svc_inst_t),
-	wlc_p2p_nan_get_svc_inst_list
-	}
-};
-#endif  /* WL_NAN_PD_P2P */
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -851,6 +879,9 @@ BCMATTACHFN(wlc_p2p_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "p2p", wlc_p2p_dump, (void *)pm);
+#endif
 
 	/* ENABLE P2P by default */
 	if (wlc_p2p_cap(pm) &&
@@ -1081,7 +1112,7 @@ wlc_p2p_info_init(void *ctx, wlc_bsscfg_t *cfg)
 	}
 
 	/* make sure gmode is not GMODE_LEGACY_B */
-	if (!IS_SINGLEBAND_5G(wlc->deviceid)) {
+	if (!IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)) {
 		gmode = wlc->bandstate[BAND_2G_INDEX]->gmode;
 	}
 	if (gmode == GMODE_LEGACY_B) {
@@ -1495,9 +1526,6 @@ wlc_p2p_doiovar(void *context, uint32 actionid,
 	wlc_bsscfg_t *bsscfg;
 	int32 int_val = 0;
 	int err = BCME_OK;
-#if defined(WL_NAN_PD_P2P)
-	wl_p2p_nan_ioc_t *p2pnanioc; /* p2p nan ioc header */
-#endif /* WL_NAN_PD_P2P */
 
 	BCM_REFERENCE(vsize);
 
@@ -1753,6 +1781,58 @@ wlc_p2p_doiovar(void *context, uint32 actionid,
 		err = wlc_p2p_noa_get(pm, bsscfg, (wl_p2p_sched_t *)a, alen);
 		break;
 
+#ifdef BCMDBG
+	case IOV_SVAL(IOV_P2P_DEBUG):
+		pd->debug = (uint)int_val;
+		break;
+	case IOV_SVAL(IOV_P2P_SEND_NOA): {
+		uint32 tsf_l;
+		uint32 bcnint;
+		wl_p2p_sched_desc_t noa;
+
+		if (!P2P_GO(wlc, bsscfg) || !bsscfg->up) {
+			err = BCME_ERROR;
+			break;
+		}
+
+		tsf_l = R_REG(wlc->osh, &wlc->regs->tsf_timerlow);
+		bcnint = bsscfg->current_bss->beacon_period;
+
+		wlc_p2p_build_noa(pm, &noa, tsf_l + (bcnint << 10),
+		                  (bcnint * 8) << 10, (bcnint * 8) << 10, 1);
+		err = wlc_p2p_send_noa(pm, bsscfg, &noa, &ether_bcast,
+		                       wlc_p2p_send_noa_complete, NULL);
+		break;
+	}
+	case IOV_SVAL(IOV_P2P_NEXT_PRD): {
+		bss_p2p_info_t *p2p;
+		uint32 now_h, now_l;
+		uint32 tsf_h, tsf_l;
+		uint32 tbtt_h, tbtt_l;
+		uint32 offset;
+		uint16 bcnint;
+
+		p2p = BSS_P2P_INFO(pm, bsscfg);
+		if (p2p == NULL) {
+			err = BCME_ERROR;
+			break;
+		}
+
+		wlc_read_tsf(wlc, &now_l, &now_h);
+		offset = wlc_p2p_noa_start_dist(pm, p2p, now_l);
+		tsf_h = now_h;
+		tsf_l = now_l;
+		wlc_uint64_add(&tsf_h, &tsf_l, 0, P2P_NOA_MAX_PRD - offset);
+		bcnint = bsscfg->current_bss->beacon_period;
+		tbtt_h = tsf_h;
+		tbtt_l = tsf_l;
+		wlc_tsf64_to_next_tbtt64(bcnint, &tbtt_h, &tbtt_l);
+		wlc_tsf_adj(wlc, bsscfg, tsf_h, tsf_l, now_h, now_l, tbtt_l, bcnint << 10, FALSE);
+		wlc_p2p_noa_resched(pm, p2p);
+
+		break;
+	}
+#endif /* BCMDBG */
 
 #if USE_DEF_P2P_IE
 	case IOV_SVAL(IOV_P2P_DEFIE):
@@ -1886,52 +1966,6 @@ wlc_p2p_doiovar(void *context, uint32 actionid,
 		break;
 #endif /* WLWFDS */
 
-#if defined(WL_NAN_PD_P2P)
-	case IOV_GVAL(IOV_P2P_NAN):
-	case IOV_SVAL(IOV_P2P_NAN):
-		{
-			const p2p_nan_ioc_cmd_t *p2pnancmd_ptr = NULL;
-			bool is_set;
-			if (p && (plen >= (uint)OFFSETOF(wl_p2p_nan_ioc_t, data))) {
-				p2pnanioc = p;
-
-				WL_ERROR(("got p2pnanioc : ver:%d, cmd_id:%d, len:%d, data:%d\n",
-					p2pnanioc->version, p2pnanioc->id, p2pnanioc->len,
-					p2pnanioc->data[0]));
-			} else {
-				WL_ERROR(("wl%d: %s: params:NULL | plen < ioc sz\n",
-					wlc->pub->unit, __FUNCTION__));
-				err = BCME_BADLEN;
-				break;
-			}
-			is_set = IOV_ISSET(actionid);
-
-			/* look up p2p nan cmd handler in each subcommand  */
-
-			if ((p2pnancmd_ptr = wlc_p2p_nan_find_cmd_handler(p2p_nan_ioctls,
-				p2pnanioc->id))) {
-				/* prep the result buf with ioc header */
-				wl_p2p_nan_ioc_t *ioc_result = a;
-				bcopy(p2pnanioc, ioc_result, sizeof(wl_p2p_nan_ioc_t));
-
-				if (!p2pnancmd_ptr->handler)  {
-					WL_ERROR(("wl%d: %s: handler is not implemented\n",
-						wlc->pub->unit, __FUNCTION__));
-					err = BCME_UNSUPPORTED;
-					break;
-				}
-
-				return p2pnancmd_ptr->handler(pm, p2pnanioc->data,
-					p2pnanioc->len, ioc_result->data, ioc_result->len, is_set);
-			} else {
-				WL_ERROR(("wl%d: %s: sub command %u not supported\n",
-					wlc->pub->unit, __FUNCTION__, p2pnanioc->id));
-				err = BCME_UNSUPPORTED;
-			}
-		}
-		break;
-#endif /* WL_NAN_PD_P2P */
-
 	default:
 		err = BCME_UNSUPPORTED;
 		break;
@@ -1974,6 +2008,14 @@ wlc_p2p_noa_dly(wlc_p2p_info_t *pm, bss_p2p_info_t *p2p, uint32 tsf)
 
 	if (p2p->flags & WLC_P2P_INFO_CUR) {
 		if (wlc_p2p_noa_start_dist(pm, p2p, tsf) > P2P_NOA_MAX_NXT) {
+#ifdef BCMDBG
+			wlc_info_t *wlc = pm->wlc;
+			uint32 start = wlc_mcnx_r2l_tsf32(wlc->mcnx, p2p->bsscfg, p2p->cur.start);
+
+			WL_NONE(("wl%d: need to delay absence schedule at tick 0x%x, "
+			        "start 0x%x (remote) 0x%x (local)\n",
+			         wlc->pub->unit, tsf, p2p->cur.start, start));
+#endif
 			return TRUE;
 		}
 	}
@@ -2155,6 +2197,11 @@ wlc_p2p_tbtt_cb(void *ctx, wlc_tbtt_ent_data_t *notif_data)
 	}
 	else /* if (P2P_CLIENT(wlc, cfg)) */ {
 		wlc_p2p_abs_q_upd(pm, p2p, ON);
+#ifdef BCMDBG
+		if (pm->p2p_data->debug & P2P_OTA_DBG_TBTT)
+			wlc_sendnulldata(wlc, cfg, &cfg->BSSID, 0, 0, PKTPRIO_NON_QOS_DEFAULT,
+				NULL, NULL);
+#endif
 	}
 }
 
@@ -2245,11 +2292,11 @@ wlc_p2p_pretbtt_query_cb(void *ctx, bss_pretbtt_query_data_t *notif_data)
 	if (!BSS_P2P_ENAB(wlc, cfg))
 		return;
 
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 	notif_data->pretbtt = 8000;
 #else
 	notif_data->pretbtt = 3000;
-#endif /* BCM7271 */
+#endif /* STB_SOC_WIFI */
 }
 
 static void
@@ -2308,6 +2355,11 @@ wlc_p2p_ctw_end_proc(wlc_p2p_info_t *pm, bss_p2p_info_t *p2p, uint32 ltsf_l, uin
 #endif
 			wlc_p2p_abs_q_upd(pm, p2p, OFF);
 		}
+#ifdef BCMDBG
+		if (pm->p2p_data->debug & P2P_OTA_DBG_CTW)
+			wlc_sendnulldata(wlc, cfg, &cfg->BSSID, 0, 0, PKTPRIO_NON_QOS_DEFAULT,
+				NULL, NULL);
+#endif
 	}
 }
 
@@ -2447,6 +2499,11 @@ wlc_p2p_psc_proc(wlc_p2p_info_t *pm, bss_p2p_info_t *p2p, uint32 ltsf_l, uint32 
 		wlc_p2p_tx_block(pm, cfg, FALSE);
 	}
 	else /* if (P2P_CLIENT(wlc, cfg)) */ {
+#ifdef BCMDBG
+		if (pm->p2p_data->debug & P2P_OTA_DBG_PSC)
+			wlc_sendnulldata(wlc, cfg, &cfg->BSSID, 0, 0, PKTPRIO_NON_QOS_DEFAULT,
+				NULL, NULL);
+#endif
 #ifdef WME
 		/* send APSD re-trigger if APSD USP hasn't ended */
 		if (WME_ENAB(wlc->pub) &&
@@ -2469,6 +2526,12 @@ wlc_p2p_psc_proc(wlc_p2p_info_t *pm, bss_p2p_info_t *p2p, uint32 ltsf_l, uint32 
 	if (wlc_mcnx_read_shm(mcnx, M_P2P_BSS_NOA_CNT(wlc, bss)) == 0) {
 		WL_P2P(("wl%d: %s: BSS %d NoA count down to 0\n",
 		        wlc->pub->unit, __FUNCTION__, bss));
+#ifdef BCMDBG
+		if (p2p->count != 0)
+			WL_ERROR(("wl%d: %s: BSS %d SHM and MEM NoA count mismatch, "
+			          "lost %u interrupts...\n",
+			          wlc->pub->unit, __FUNCTION__, bss, p2p->count));
+#endif
 		wlc_p2p_noa_resched(pm, p2p);
 	}
 
@@ -2984,6 +3047,12 @@ wlc_p2p_fixup_SSID(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, wlc_ssid_t *ssid)
 		return;
 
 	if (pd->state == WL_P2P_DISC_ST_SEARCH) {
+#ifdef BCMDBG
+		char ssidbuf[SSID_FMT_BUF_LEN];
+		wlc_format_ssid(ssidbuf, pd->ssid.SSID, pd->ssid.SSID_len);
+		WL_INFORM(("wl%d.%d: change wildcard SSID to %s\n",
+		        pm->wlc->pub->unit, WLC_BSSCFG_IDX(cfg), ssidbuf));
+#endif
 		bcopy(&pd->ssid, ssid, sizeof(wlc_ssid_t));
 	} else if (pd->state == WL_P2P_DISC_ST_SCAN) {
 		WL_INFORM(("wl%d.%d: SSID length is 0, set P2P_FLAG_SCAN_ALL flag\n",
@@ -3083,6 +3152,9 @@ wlc_p2p_write_ie_len(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, uint type)
 	bss_p2p_cmn_info_t *cmn;
 	wlc_p2p_sched_t *sched;
 	int len = 0;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	int cnt;
 	uint8 abs[] = {WLC_P2P_NOA_ABS, WLC_P2P_NOA_REQ_ABS};
 	uint i;
@@ -3130,6 +3202,13 @@ wlc_p2p_write_ie_len(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, uint type)
 			}
 		}
 
+#ifdef BCMDBG
+		if (((p2p->flags & WLC_P2P_INFO_OPS) && p2p->ops) || noa) {
+			WL_P2P_PRB(pm, ("wl%d: %s: length %u BSS %s\n",
+				wlc->pub->unit, __FUNCTION__, len,
+				bcm_ether_ntoa(&cfg->BSSID, eabuf)));
+		}
+#endif
 #ifdef WLWFDS
 	}
 #endif
@@ -3153,6 +3232,9 @@ wlc_p2p_write_ie(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, uint type, uint8 *buf)
 	bss_p2p_cmn_info_t *cmn;
 	wlc_p2p_sched_t *sched;
 	int len = 0;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	int cnt;
 	uint8 abs[] = {WLC_P2P_NOA_ABS, WLC_P2P_NOA_REQ_ABS};
 	uint i;
@@ -3240,6 +3322,13 @@ wlc_p2p_write_ie(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, uint type, uint8 *buf)
 		}
 	}
 
+#ifdef BCMDBG
+	if (((p2p->flags & WLC_P2P_INFO_OPS) && p2p->ops) || noa) {
+		WL_P2P_PRB(pm, ("wl%d: %s: length %u BSS %s\n",
+			wlc->pub->unit, __FUNCTION__, len,
+			bcm_ether_ntoa(&cfg->BSSID, eabuf)));
+	}
+#endif
 #ifdef WLWFDS
 	}
 #endif
@@ -3260,6 +3349,9 @@ wlc_p2p_write_ie_quiet_len(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, uint type)
 	bss_p2p_cmn_info_t *cmn;
 	wlc_p2p_sched_t *sched;
 	int len = 0;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	int cnt;
 
 	(void)wlc;
@@ -3305,6 +3397,9 @@ wlc_p2p_write_ie_quiet(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, uint type, uint8 *
 	bss_p2p_cmn_info_t *cmn;
 	wlc_p2p_sched_t *sched;
 	int len = 0;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	int cnt;
 
 	(void)wlc;
@@ -3920,6 +4015,19 @@ wlc_p2p_sched_upd(wlc_p2p_info_t *pm, bss_p2p_info_t *p2p)
 
 			sched->idx = idx;
 
+#ifdef BCMDBG
+			if (update && idx < sched->cnt) {
+				WL_P2P(("wl%d: sched %d desc %d at tick 0x%x: "
+				        "start 0x%x interval %u duration %u count %u\n",
+				        wlc->pub->unit, abs[i], idx, WL_P2P_TS(wlc),
+				        desc[idx].start, desc[idx].interval,
+				        desc[idx].duration, desc[idx].count));
+			}
+			else {
+				WL_P2P(("wl%d: sched %d: done all %d desc(s)\n",
+				        wlc->pub->unit, abs[i], sched->cnt));
+			}
+#endif
 		}
 	}
 
@@ -5120,17 +5228,20 @@ void
 wlc_p2p_sendprobe(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg, void *p)
 {
 	wlc_info_t *wlc = pm->wlc;
-	ratespec_t rate_override = 0;
-
+	ratespec_t rate_override;
 
 	/* always use 6Mbps unless it is for P2P SCAN in discovery */
-	if (wlc_p2p_no_cck_rates(pm, cfg))
-		rate_override = WLC_RATE_6M;
+	if (wlc_p2p_no_cck_rates(pm, cfg)) {
+		rate_override = OFDM_RSPEC(WLC_RATE_6M);
+	} else {
+		rate_override = WLC_LOWEST_BAND_RSPEC(wlc->band);
+	}
 
 
 	if (!wlc_queue_80211_frag(wlc, p, wlc->active_queue, NULL, cfg, FALSE, NULL,
 		rate_override)) {
-		WL_ERROR(("wl%d: %s: wlc_queue_80211_frag failed\n", wlc->pub->unit, __FUNCTION__));
+		WL_ERROR(("wl%d: %s: wlc_queue_80211_frag failed\n",
+		          wlc->pub->unit, __FUNCTION__));
 		return;
 	}
 }
@@ -5147,7 +5258,7 @@ wlc_p2p_send_prbresp(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
 	void *p;
 	uint8 *pbody;
 	int len = ETHER_MAX_LEN;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 	wlc_txq_info_t *qi;
@@ -5155,6 +5266,13 @@ wlc_p2p_send_prbresp(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
 	ASSERT(cfg != NULL);
 
 	ASSERT(wlc->pub->up);
+#ifdef AP
+	if (BSSCFG_AP(cfg) && !wlc_ap_on_chan(wlc->ap, cfg)) {
+		WL_ERROR(("wl%d.%d: %s: AP not ON channel. Not processing further\n",
+			wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__));
+		return;
+	}
+#endif
 
 	/* build response and send */
 	if ((p = wlc_frame_get_mgmt(wlc, FC_PROBE_RESP, da, &cfg->cur_etheraddr,
@@ -5184,8 +5302,7 @@ wlc_p2p_send_prbresp(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
 	wlc_lifetime_set(wlc, p, (LONG_LISTEN_DWELL_TIME_THRESHOLD*2)*1000);
 
 	/* use proper bcmc_scb to pass the band check in wlc_prep_pdu() */
-	WLPKTTAG(p)->flags |= WLF_PSDONTQ;
-	if (!wlc_queue_80211_frag(wlc, p, qi, cfg->bcmc_scb[band], cfg,
+	if (!wlc_queue_80211_frag(wlc, p, qi, cfg->bcmc_scb, cfg,
 		FALSE, NULL, LEGACY_RSPEC(WLC_RATE_6M))) {
 		WL_ERROR(("wl%d.%d: %s: wlc_queue_80211_frag failed\n",
 			wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__));
@@ -5303,6 +5420,10 @@ wlc_p2p_process_prbreq_ext(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
 	int gi_len;
 	wifi_p2p_cid_fixed_t *cid;
 	int cid_len;
+#if defined(BCMDBG)
+	char eabuf1[ETHER_ADDR_STR_LEN];
+	char eabuf2[ETHER_ADDR_STR_LEN];
+#endif
 #ifdef WLWFDS
 	wifi_p2p_serv_hash_se_t *wfds_p2p_serv_hash = NULL;
 	uint8 *wfds_hash = NULL;
@@ -5802,7 +5923,7 @@ wlc_p2p_recv_process_prbreq(wlc_p2p_info_t *pm, struct dot11_management_header *
 {
 	wlc_info_t *wlc = pm->wlc;
 	wlc_p2p_data_t *pd = pm->p2p_data;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 	wifi_p2p_info_se_t *cap = NULL;
@@ -5810,7 +5931,7 @@ wlc_p2p_recv_process_prbreq(wlc_p2p_info_t *pm, struct dot11_management_header *
 	bcm_tlv_t *ssid, *rs;
 	wlc_bsscfg_t *cfg = NULL;
 	bool p2pie = FALSE;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char ssidbuf[SSID_FMT_BUF_LEN];
 #endif
 	wl_event_rx_frame_data_t rxframe_data;
@@ -5835,7 +5956,7 @@ wlc_p2p_recv_process_prbreq(wlc_p2p_info_t *pm, struct dot11_management_header *
 		return TRUE;
 	}
 
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	wlc_format_ssid(ssidbuf, ssid->data, ssid->len);
 #endif
 
@@ -6513,6 +6634,9 @@ wlc_p2p_process_assocreq(wlc_p2p_info_t *pm, struct scb *scb,
 	uint8 *di_combined = NULL;
 	bool p2pie = FALSE;
 	p2p_scb_cubby_t *cubby;
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	(void)wlc;
 
@@ -6583,6 +6707,9 @@ wlc_p2p_process_assocresp(wlc_p2p_info_t *pm, struct scb *scb,
 	uint8 *tlvs, int tlvs_len)
 {
 	wlc_info_t *wlc = pm->wlc;
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	(void)wlc;
 
@@ -6712,6 +6839,9 @@ wlc_p2p_enab_upd(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg)
 	bss_p2p_info_t *p2p;
 	struct scb_iter scbiter;
 	struct scb *scb;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	ASSERT(cfg != NULL);
 	ASSERT(P2P_GO(wlc, cfg));
@@ -6784,6 +6914,9 @@ wlc_p2p_process_noa(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
 	wifi_p2p_noa_se_t *se = NULL;
 	uint8 *se_combined = NULL;
 	int se_len = 0;
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	BCM_REFERENCE(hdr);
 
@@ -6828,6 +6961,9 @@ wlc_p2p_process_presence_req(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
 	wlc_mcnx_info_t		*mcnx = wlc->mcnx;
 	bss_p2p_info_t		*p2p;
 	bool		is_go_rfa_avail = FALSE;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	(void)wlc;
 	ASSERT(cfg != NULL);
@@ -6908,7 +7044,7 @@ wlc_p2p_send_presence_req(wlc_p2p_info_t *pm, wlc_bsscfg_t *cfg,
 		wlc_p2p_sched_wl2se(noa, se->desc, 1);
 		qi = cfg->wlcif->qi;
 		if (!wlc_queue_80211_frag(wlc, p, qi, NULL, cfg, FALSE,
-			NULL, WLC_RATE_6M)) {
+			NULL, OFDM_RSPEC(WLC_RATE_6M))) {
 			WL_ERROR(("wl%d: %s: wlc_queue_80211_frag failed\n",
 					wlc->pub->unit, __FUNCTION__));
 			err = BCME_FRAG_Q_FAILED;
@@ -6927,6 +7063,9 @@ wlc_p2p_process_action(wlc_p2p_info_t *pm,
 	wlc_info_t *wlc = pm->wlc;
 	wifi_p2p_action_frame_t *af = (wifi_p2p_action_frame_t *)body;
 	wlc_bsscfg_t *cfg;
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	ASSERT(body_len >= P2P_AF_FIXED_LEN);
 	ASSERT(af->category == P2P_AF_CATEGORY);
@@ -7827,658 +7966,224 @@ wlc_p2p_ensure_disc_state(wlc_p2p_info_t *pm)
 }
 
 /* debug... */
-
-#if defined(WL_NAN_PD_P2P)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
 static void
-nan_p2p_op_attr_parse_fn_cb(void *ctx, wlc_nan_ie_attr_parse_cb_data_t *data)
+wlc_p2p_info_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
 {
-	wl_p2p_nan_inst_id_list_t *id = (wl_p2p_nan_inst_id_list_t *)ctx;
-	wlc_p2p_info_t *pm = NULL;
-	wlc_info_t *wlc = NULL;
-	wifi_nan_p2p_op_attr_t *p2pattr = NULL;
-	uint8 *cp = NULL;
-	chanspec_t chanspec = 0;
-	uint8 resolution = 0, repeat = 0, map_id = 0;
-	uint8 bmap_size = 0;
-	uint32 avail_bmp = 0;
+	wlc_p2p_info_t *pm = (wlc_p2p_info_t *)ctx;
+	wl_p2p_sched_desc_t *desc;
+	char flagstr[64];
+	uint i, o, s, a, d;
+	bss_p2p_info_t *p2p;
+	uint8 abs[] = {WLC_P2P_NOA_ABS, WLC_P2P_NOA_REQ_ABS};
+	const bcm_bit_desc_t p2p_flags[] = {
+		{WLC_P2P_INFO_CUR, "abs"},
+		{WLC_P2P_INFO_OPS, "ops"},
+		{WLC_P2P_INFO_ID, "id"},
+		{WLC_P2P_INFO_NET, "init"},
+		{WLC_P2P_INFO_STRT, "strt"},
+#ifdef WLMCHAN
+		{WLC_P2P_INFO_MCHAN_NOA, "mchanNoA"},
+#endif
+		{WLC_P2P_INFO_DLY, "dly"},
+		{WLC_P2P_INFO_IGN_SMPS, "ignSMPS"},
+		{WLC_P2P_INFO_APSD_RETRIG, "apsdReTrig"},
+		{WLC_P2P_INFO_PSPOLL_RESEND, "pspReSend"},
+		{0, NULL}
+	};
+	const bcm_bit_desc_t p2p_sfs[] = {
+		{WLC_P2P_SCHED_NORM, "norm"},
+		{WLC_P2P_SCHED_RUN, "run"},
+		{0, NULL}
+	};
+	const char *p2p_abs[] = {
+		"SchedAbsence",
+		"ReqAbsence"
+	};
+	const char *p2p_opt[] = {
+		"Normal",
+		"BcnIntPercentage",
+		"TSF+Offset"
+	};
+	const char *p2p_act[] = {
+		"None",
+		"Doze",
+		"GO-Off"
+	};
 
-	ASSERT(id != NULL);
-	ASSERT(ctx != NULL);
-	ASSERT(data != NULL);
-	ASSERT(data->attr_id == NAN_ATTR_P2P);
-	ASSERT(data->frm_types_bitmap & NAN_FRM_SVC_DISC);
-	ASSERT(data->hdr != NULL);
+	ASSERT(cfg != NULL);
 
-	pm = (wlc_p2p_info_t *) id->p2pinfo;
-	ASSERT(pm != NULL);
+	/* p2p info */
+	p2p = BSS_P2P_INFO(pm, cfg);
+	if (p2p == NULL)
+		return;
 
-	cp = data->buf;
-
-	wlc = ((wlc_p2p_info_t *)pm)->wlc;
-
-	if (pm->p2p_data->p2p_nan_cfg) {
-		p2pattr = (wifi_nan_p2p_op_attr_t *) cp;
-
-		map_id = p2pattr->map_ctrl & NAN_MAPCTRL_IDMASK;
-		repeat = (p2pattr->map_ctrl & NAN_MAPCTRL_REPEAT) >> NAN_MAPCTRL_REPEATSHIFT;
-
-		resolution = (p2pattr->map_ctrl & NAN_MAPCTRL_DURMASK) >> NAN_MAPCTRL_DURSHIFT;
-		switch (resolution)
-		{
-			case NAN_AVAIL_RES_32_TU:
-				bmap_size = 2;
-			break;
-			case NAN_AVAIL_RES_64_TU:
-				bmap_size = 1;
-			break;
-			default:
-				bmap_size = 4;
-		}
-		memcpy(&avail_bmp, &p2pattr->avail_bmp, bmap_size);
-		/* retrieve chanspec from FAM */
-		chanspec = wlc_tsmap_retrieve_chanspec(wlc, avail_bmp, resolution, map_id);
-
-		/* Generate p2p Attr event */
-		if (nan_event_p2p_availability(wlc->nan, p2pattr->dev_role, &data->hdr->sa,
-			&p2pattr->p2p_dev_addr, resolution,	repeat,
-			avail_bmp, chanspec) != BCME_OK) {
-			WL_ERROR(("wl%d: %s:failed to send p2p attr event of peer "
-				"%02x%02x%02x%02x%02x%02x\n", wlc->pub->unit, __FUNCTION__,
-				ETHERP_TO_MACF(&p2pattr->p2p_dev_addr)));
-			return;
-		}
+	bcm_format_flags(p2p_flags, p2p->flags, flagstr, sizeof(flagstr));
+	bcm_bprintf(b, "\tenable: %d flags: 0x%x [%s]\n",
+	            p2p->enable, p2p->flags, flagstr);
+	bcm_bprintf(b, "\tid: %u\n", p2p->id);
+	bcm_bprintf(b, "\tops: %u ctw: %u\n", p2p->ops, p2p->ctw);
+	for (i = 0; i < ARRAYSIZE(abs); i ++) {
+		s = abs[i];
+		bcm_bprintf(b, "\t%s:\n",
+		            s < ARRAYSIZE(p2p_abs)? p2p_abs[s] : "unknown");
+		o = p2p->sched[s].option;
+		bcm_bprintf(b, "\t\toption: %s\n",
+		            o < ARRAYSIZE(p2p_opt)? p2p_opt[o] : "unknown");
+		if (o == WL_P2P_SCHED_OPTION_BCNPCT)
+			bcm_bprintf(b, "\t\toffset: %u%% duration: %u%%\n",
+			            p2p->sched[s].start, p2p->sched[s].dur);
+		a = p2p->sched[s].action;
+		bcm_bprintf(b, "\t\taction: %s\n",
+		            a < ARRAYSIZE(p2p_act)? p2p_act[a] : "unknown");
+		bcm_format_flags(p2p_sfs, p2p->sched[s].flags, flagstr, sizeof(flagstr));
+		bcm_bprintf(b, "\t\tflags: 0x%x [%s]\n", p2p->sched[s].flags, flagstr);
+		bcm_bprintf(b, "\t\tidx: %u cnt: %u\n",
+		            p2p->sched[s].idx, p2p->sched[s].cnt);
+		desc = p2p->sched[s].desc;
+		for (d = 0; d < p2p->sched[s].cnt; d ++)
+			bcm_bprintf(b, "\t\tstart: 0x%x interval: %u duration: %u "
+			            "count: %u\n",
+			            desc[d].start, desc[d].interval,
+			            desc[d].duration, desc[d].count);
 	}
-	return;
-}
-
-static uint16 nan_p2p_op_attr_len_cb(void *ctx, wlc_nan_ie_attr_build_cb_data_t *data)
-{
-	wl_p2p_nan_inst_id_list_t *id = (wl_p2p_nan_inst_id_list_t *)ctx;
-	wlc_p2p_info_t *pm = NULL;
-	uint total_len = 0;
-	pm = (wlc_p2p_info_t *) id->p2pinfo;
-	uint8 bmp_size = 0;
-	ASSERT(pm != NULL);
-
-	if (data->attr_id == NAN_ATTR_P2P && pm && pm->p2p_data->p2p_nan_cfg) {
-		total_len = OFFSETOF(wifi_nan_p2p_op_attr_t, avail_bmp);
-		switch (pm->p2p_data->p2p_nan_cfg->resolution)
-		{
-			case NAN_AVAIL_RES_32_TU:
-				bmp_size = 2; /* two octets */
-				break;
-			case NAN_AVAIL_RES_64_TU:
-				bmp_size = 1; /* one octet */
-				break;
-			default:
-				bmp_size = 4; /* four octet */
-		}
-		total_len += bmp_size;
-	}
-
-	return total_len;
-}
-
-/* TODO: Add map id */
-static uint16 nan_p2p_op_attr_build_fn_cb(void *ctx, wlc_nan_ie_attr_build_cb_data_t *data)
-{
-	wl_p2p_nan_inst_id_list_t *id = (wl_p2p_nan_inst_id_list_t *)ctx;
-	wlc_p2p_info_t *pm = NULL;
-	wifi_nan_p2p_op_attr_t *p2pattr;
-	uint8 *cp = NULL;
-	uint16 total_len = 0;
-	uint8 bmap_size = 0;
-
-	ASSERT(id != NULL);
-	pm = (wlc_p2p_info_t *) id->p2pinfo;
-	ASSERT(pm != NULL);
-	ASSERT(data != NULL);
-	cp = data->buf;
-	ASSERT(cp != NULL);
-
-	if (pm->p2p_data->p2p_nan_cfg) {
-		p2pattr = (wifi_nan_p2p_op_attr_t *) cp;
-		p2pattr->id = NAN_ATTR_P2P;
-
-		total_len = nan_p2p_op_attr_len_cb(ctx, data);
-		htol16_ua_store((total_len-NAN_ATTR_HDR_LEN), &p2pattr->len);
-
-		p2pattr->dev_role = pm->p2p_data->p2p_nan_cfg->dev_role;
-
-		bcopy(&pm->p2p_data->p2p_nan_cfg->dev_mac, &p2pattr->p2p_dev_addr, ETHER_ADDR_LEN);
-	    /* TODO: Fix map id */
-		p2pattr->map_ctrl |= NAN_MAP_ID_2G;
-
-		p2pattr->map_ctrl |=
-			(pm->p2p_data->p2p_nan_cfg->resolution << NAN_MAPCTRL_DURSHIFT);
-		if (pm->p2p_data->p2p_nan_cfg->repeat)
-			p2pattr->map_ctrl |= NAN_MAPCTRL_REPEAT;
-
-		switch (pm->p2p_data->p2p_nan_cfg->resolution)
-		{
-			case NAN_AVAIL_RES_32_TU:
-				bmap_size = 2;
-			break;
-			case NAN_AVAIL_RES_64_TU:
-				bmap_size = 1;
-			break;
-			default:
-				bmap_size = 4;
-		}
-		memcpy(&p2pattr->avail_bmp, &pm->p2p_data->p2p_nan_cfg->avail_bmap, bmap_size);
-		return total_len;
-	} else {
-		return 0;
-	}
-}
-
-/*
- *  look up p2p_nan_ioc cmd handler
- */
-
-static uint16 BCMRAMFN(getentries_p2p_nan_ioctls)(void)
-{
-	return TLEN(p2p_nan_ioctls);
-}
-
-static const p2p_nan_ioc_cmd_t *wlc_p2p_nan_find_cmd_handler(const p2p_nan_ioc_cmd_t *cmd_tab,
-        uint16 cmd)
-{
-	const p2p_nan_ioc_cmd_t *ioc_cmd = NULL;
-	uint16 cmdtab_sz = getentries_p2p_nan_ioctls();
-
-	ASSERT(cmd_tab);
-
-	WL_TRACE((":p2p nan ioc_tab sz:%d\n", cmdtab_sz));
-
-	/* TODO: add validation for set/get and min size */
-
-	while (cmdtab_sz-- != 0) { /* valid cmd id can't be zero */
-		if (cmd_tab->cmd == cmd) {
-			WL_TRACE(("found cmd:%d, minlen:%d, cbfn:%p,\n",
-				cmd_tab->cmd, cmd_tab->min_len,
-				OSL_OBFUSCATE_BUF(cmd_tab->handler)));
-			/* found cmd descriptor  */
-			ioc_cmd = cmd_tab;
-			break;
-		}
-		cmd_tab++;
-	}
-	return ioc_cmd;
+	bcm_bprintf(b, "\tcurrent:\n");
+	bcm_bprintf(b, "\t\tsched: %u\n", p2p->sidx);
+	bcm_bprintf(b, "\t\tstart: 0x%x interval: %u duration: %u count: %u\n",
+	            p2p->cur.start, p2p->cur.interval,
+	            p2p->cur.duration, p2p->cur.count);
+	bcm_bprintf(b, "\t\tcount: %u\n", p2p->count);
+	if (p2p->flags & WLC_P2P_INFO_STRT)
+		bcm_bprintf(b, "\t\tcommence: 0x%x\n", p2p->start);
+	if (P2P_GO(pm->wlc, cfg))
+		bcm_bprintf(b, "\tps: %d\n", p2p->ps);
+	/* driver stats */
+	bcm_bprintf(b, "\tpretbtt: %u ctwend: %u abs: %u psc: %u tbtt: %u\n",
+	            p2p->pretbtt, p2p->ctwend, p2p->abs, p2p->prs, p2p->tbtt);
 }
 
 static void
-wlc_p2p_nan_fill_svc_list(wlc_p2p_info_t *pm, wl_nan_svc_inst_list_t *iocres, uint32 buflen)
+wlc_p2p_cmn_info_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
 {
-	wl_p2p_nan_inst_id_list_t *id = pm->p2p_data->ids_head;
-	uint32 cnt = 0, size = 0;
+	wlc_p2p_info_t *pm = (wlc_p2p_info_t *)ctx;
+	bss_p2p_cmn_info_t *cmn;
 
-	while (id && size < buflen) {
-		iocres->svc[cnt].inst_id = id->inst_id;
-		iocres->svc[cnt].inst_type = id->inst_type;
-		cnt++;
-		size += sizeof(wl_nan_svc_inst_t);
-		id = id->next;
-	}
-	iocres->count = cnt;
-}
+	ASSERT(cfg != NULL);
 
-static void
-wlc_p2p_nan_free_instance_id(wlc_p2p_info_t *pm, wl_p2p_nan_inst_id_list_t *id)
-{
-	wlc_nan_ie_attr_build_fn_unregister
-		(pm->wlc, id->nan_build_cb_handle);
-	wlc_nan_ie_attr_parse_fn_unregister
-		(pm->wlc, id->nan_parse_cb_handle);
-	MFREE(pm->wlc->osh, id, sizeof(wl_p2p_nan_inst_id_list_t));
-}
+	/* common p2p info */
+	cmn = BSS_P2P_CMN_INFO(pm, cfg);
+	ASSERT(cmn != NULL);
 
-static void
-wlc_p2p_nan_del_instance_id(wlc_p2p_info_t *pm, wl_nan_instance_id_t inst_id, uint8 inst_type)
-{
-	wl_p2p_nan_inst_id_list_t *id = pm->p2p_data->ids_head;
-	wl_p2p_nan_inst_id_list_t *prev_id = pm->p2p_data->ids_head;
-
-	while (id) {
-		if (id->inst_id == inst_id && id->inst_type == inst_type) {
-			if (id == pm->p2p_data->ids_head) {
-				pm->p2p_data->ids_head = id->next;
-				prev_id = id->next;
-				wlc_p2p_nan_free_instance_id(pm, id);
-				id = prev_id;
-			} else {
-				prev_id->next = id->next;
-				wlc_p2p_nan_free_instance_id(pm, id);
-				id = prev_id->next;
-			}
-		} else {
-			prev_id = id;
-			id = id->next;
-		}
-	}
-}
-
-static void
-wlc_p2p_nan_free_instance_id_list(wlc_p2p_info_t *pm)
-{
-	wl_p2p_nan_inst_id_list_t *cur = pm->p2p_data->ids_head;
-	wl_p2p_nan_inst_id_list_t *next = NULL;
-
-	while (cur) {
-		next = cur->next;
-		wlc_p2p_nan_free_instance_id(pm, cur);
-		cur = next;
-	}
-	pm->p2p_data->ids_head = NULL;
+	bcm_bprintf(b, "\tflags 0x%x\n", cmn->flags);
 }
 
 static int
-wlc_p2p_nan_add_instance_id(wlc_p2p_info_t *pm, wl_nan_instance_id_t inst_id, uint8 inst_type)
+wlc_p2p_dump(void *context, struct bcmstrbuf *b)
 {
-	wl_p2p_nan_inst_id_list_t *id = NULL;
-	wl_p2p_nan_inst_id_list_t *current = pm->p2p_data->ids_head;
-	wl_p2p_nan_inst_id_list_t *prev = NULL;
+	wlc_p2p_info_t *pm = (wlc_p2p_info_t *)context;
+	wlc_p2p_data_t *pd = pm->p2p_data;
 	wlc_info_t *wlc = pm->wlc;
-	int res = BCME_OK;
+	char flagstr[64];
+	char ssidbuf[SSID_FMT_BUF_LEN];
+	int idx;
+	wlc_bsscfg_t *cfg;
+	char eabuf[ETHER_ADDR_STR_LEN];
+	const bcm_bit_desc_t mod_flags[] = {
+		{P2P_FLAG_SCAN_ALL, "all"},
+		{0, NULL}
+	};
 
-	while (current != NULL) {
-		if (inst_id == current->inst_id &&
-			inst_type == current->inst_type) {
-			WL_ERROR(("wl%d: %s: inst id %u and type %u exist\n",
-				wlc->pub->unit, __FUNCTION__, inst_id, inst_type));
-			res = BCME_OK;
-			goto fail;
-		}
-		/* Store 'current' before updating it */
-		prev = current;
-		current = current->next;
+	bcm_bprintf(b, "<INFO>\n");
+	wlc_format_ssid(ssidbuf, pd->ssid.SSID, pd->ssid.SSID_len);
+	bcm_format_flags(mod_flags, pd->flags, flagstr, sizeof(flagstr));
+	bcm_bprintf(b, "\tp2p: %d ssid: '%s' flags: 0x%x [%s]\n",
+	            P2P_ENAB(wlc->pub), ssidbuf, pd->flags, flagstr);
+	bcm_bprintf(b, "\tprbreq: %u prbresp: %u p2pprbreq: %u\n",
+	            pd->prbreq, pd->prbresp, pd->p2pprbreq);
+	bcm_bprintf(b, "\tscb_timeout = %d\n", pd->scb_timeout);
+	bcm_bprintf(b, "<RESOURCE>\n");
+	bcm_bprintf(b, "\tprblen: %u\n", pd->prblen);
+	bcm_bprintf(b, "<DISC>\n");
+	if (wlc_p2p_disc_state(pm)) {
+		bcm_bprintf(b, "\tbsscfg: %u state: %d\n",
+		            WLC_BSSCFG_IDX(pd->devcfg), pd->state);
 	}
 
-	if ((id = MALLOCZ(wlc->osh, sizeof(wl_p2p_nan_inst_id_list_t))) == NULL) {
-		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
-			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
-		res = BCME_NOMEM;
-		goto fail;
+	/* local TSF */
+	bcm_bprintf(b, "<Time>\n");
+	if (wlc->clk) {
+		uint32 tsf_l, tsf_h;
+		wlc_read_tsf(wlc, &tsf_l, &tsf_h);
+		bcm_bprintf(b, "\tH/W TSF: 0x%x%08x\n", tsf_h, tsf_l);
 	}
-	id->p2pinfo = pm;
-	id->nan_build_cb_handle = wlc_nan_ie_attr_build_fn_register(wlc,
-		NAN_ATTR_P2P, (NAN_FRM_SVC_DISC),
-		NAN_ATTR_P2P, nan_p2p_op_attr_len_cb,
-		nan_p2p_op_attr_build_fn_cb, id, inst_id);
-	if (!id->nan_build_cb_handle) {
-		WL_ERROR(("wl%d: %s: wlc_nan_ie_attr_build_fn_register "
-			"for p2p failed \n", wlc->pub->unit, __FUNCTION__));
-		res = BCME_ERROR;
-		goto fail;
-	}
-	id->nan_parse_cb_handle = wlc_nan_ie_attr_parse_fn_register(wlc, wlc->nan,
-		NAN_ATTR_P2P, (NAN_FRM_SVC_DISC),
-		nan_p2p_op_attr_parse_fn_cb, id);
-	if (!id->nan_parse_cb_handle) {
-		WL_ERROR(("wl%d: %s: wlc_nan_ie_attr_parse_fn_register "
-			"for p2p failed \n", wlc->pub->unit, __FUNCTION__));
-		res = BCME_ERROR;
-		goto fail;
-	}
-	id->inst_id = inst_id;
-	id->inst_type = inst_type;
-	if (prev == NULL)
-		pm->p2p_data->ids_head = id;
-	else
-		prev->next = id;
 
-	return res;
-fail:
-	if (id)
-		MFREE(wlc->osh, id, sizeof(wl_p2p_nan_inst_id_list_t));
-	return res;
+	/* group owners SHM BSS blocks */
+	FOREACH_BSS(wlc, idx, cfg) {
+		if (!P2P_GO(wlc, cfg))
+			continue;
+		bcm_bprintf(b, "<GO %s bsscfg %d>\n",
+		            bcm_ether_ntoa(&cfg->cur_etheraddr, eabuf), WLC_BSSCFG_IDX(cfg));
+		wlc_p2p_info_dump(pm, cfg, b);
+	}
+
+	/* clients SHM BSS blocks */
+	FOREACH_BSS(wlc, idx, cfg) {
+		if (!P2P_CLIENT(wlc, cfg))
+			continue;
+		bcm_bprintf(b, "<Client %s bsscfg %d>\n",
+		            bcm_ether_ntoa(&cfg->cur_etheraddr, eabuf), WLC_BSSCFG_IDX(cfg));
+		wlc_p2p_info_dump(pm, cfg, b);
+	}
+
+	/* non-p2p SHM BSS blocks */
+	FOREACH_BSS(wlc, idx, cfg) {
+		if (P2P_IF(wlc, cfg))
+			continue;
+		bcm_bprintf(b, "<WLAN %s bsscfg %d>\n",
+		            bcm_ether_ntoa(&cfg->cur_etheraddr, eabuf), WLC_BSSCFG_IDX(cfg));
+		wlc_p2p_info_dump(pm, cfg, b);
+	}
+
+	return 0;
 }
 
-static int
-wlc_p2p_nan_handle_new_config(wlc_p2p_info_t *pm, wl_p2p_nan_config_t *config,
-	uint16 configlen)
+static void
+wlc_p2p_scb_dump(void *context, struct scb *scb, struct bcmstrbuf *b)
 {
+	wlc_p2p_info_t *pm = (wlc_p2p_info_t *)context;
+	p2p_scb_cubby_t *cubby;
+#if USE_DEF_P2P_IE
 	wlc_info_t *wlc = pm->wlc;
-	wl_nan_sched_svc_timeslot_t p2p_ts;
-	int  ret = BCME_OK;
+	bcm_tlv_t *ie;
+#endif
 
-	if (pm->p2p_data->p2p_nan_cfg) {
-		WL_ERROR(("wl%d: %s: Config exists, delete first or "
-			"use ADD/DEL config type\n",
-			wlc->pub->unit, __FUNCTION__));
-		return BCME_BADARG;
-	}
-	if ((pm->p2p_data->p2p_nan_cfg = (wl_p2p_nan_config_t*)
-		MALLOCZ(wlc->osh, configlen)) == NULL) {
-		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
-			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
-		return BCME_NOMEM;
-	}
-	/* Convert bitmap and channel to wl_nan_sched_svc_timeslot_t format */
-	memset(&p2p_ts, 0, sizeof(wl_nan_sched_svc_timeslot_t));
-	/* TODO: Change uint16 chanspec_t to uint32 allover */
-	if (wlc_convert_timeslot_format(0, 0, (chanspec_t)config->chanspec,
-		&p2p_ts, config->avail_bmap) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: Timeslot convertion failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		return BCME_BADARG;
-	}
-	if ((ret = postdisc_timeslot_reserve(wlc, &p2p_ts, NAN_ATTR_P2P))
-		!= BCME_OK) {
-		WL_ERROR(("wl%d: %s: Timeslot reservation failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		return BCME_BADARG;
-	}
+	BCM_REFERENCE(b);
 
-	pm->p2p_data->p2p_nan_cfg->version = config->version;
-	pm->p2p_data->p2p_nan_cfg->len = config->len;
-	pm->p2p_data->p2p_nan_cfg->dev_role = config->dev_role;
-	pm->p2p_data->p2p_nan_cfg->chanspec = config->chanspec;
-	pm->p2p_data->p2p_nan_cfg->resolution = config->resolution;
-	pm->p2p_data->p2p_nan_cfg->repeat = config->repeat;
-	memcpy(&pm->p2p_data->p2p_nan_cfg->dev_mac, &config->dev_mac,
-		sizeof(struct ether_addr));
-	pm->p2p_data->p2p_nan_cfg->avail_bmap = config->avail_bmap;
-	if (config->ie_len) {
-		memcpy(pm->p2p_data->p2p_nan_cfg->ie, config->ie, config->ie_len);
-	}
-	pm->p2p_data->p2p_nan_cfg->ie_len = config->ie_len;
-	if ((ret = wlc_p2p_nan_add_instance_id
-		(pm, config->inst_id, config->inst_type))
-		!= BCME_OK) {
-		WL_ERROR(("wl%d: %s: Adding instance id failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		if (pm->p2p_data->p2p_nan_cfg) {
-			MFREE(wlc->osh, pm->p2p_data->p2p_nan_cfg, configlen);
-			pm->p2p_data->p2p_nan_cfg = NULL;
+	cubby = P2P_SCB_CUBBY(pm, scb);
+	if (cubby == NULL)
+		return;
+
+#if USE_DEF_P2P_IE
+	if ((ie = (bcm_tlv_t *)cubby->as_ies) != NULL) {
+		int remain = cubby->as_ies_len;
+
+		bcm_bprintf(b, "     Assoc Req IEs:\n");
+		while (remain >= TLV_HDR_LEN) {
+			int ie_len = ie->len + TLV_HDR_LEN;
+
+			if (ie_len <= remain) {
+				bcm_bprintf(b, "\t");
+				wlc_dump_ie(wlc, ie, b);
+				bcm_bprintf(b, "\n");
+			}
+
+			ie = (bcm_tlv_t *)((uint8 *)ie + ie_len);
+
+			remain -= ie_len;
 		}
-		return ret;
 	}
-	/* indicates time slot avaialble and build/parse
-	 * function registering also successful. Schedule the availability window
-	 */
-	else {
-		pm->p2p_data->favail_sched_handle = (void *)wlc_postdisc_sched_timeslot(
-				pm->wlc, &p2p_ts, -1, 0,
-				wlc_p2p_window_sched_upd, pm);
-
-	}
-	return BCME_OK;
+#endif /* USE_DEF_P2P_IE */
 }
-
-static int
-wlc_p2p_nan_handle_add_config(wlc_p2p_info_t *pm, wl_p2p_nan_config_t *config,
-	uint16 configlen)
-{
-	wlc_info_t *wlc = pm->wlc;
-	BCM_REFERENCE(wlc);
-
-	if (!pm->p2p_data->p2p_nan_cfg) {
-		WL_ERROR(("wl%d: %s: Config does not exists use NEW "
-			"config type\n", wlc->pub->unit, __FUNCTION__));
-		return BCME_BADARG;
-	}
-	if (wlc_p2p_nan_add_instance_id
-		(pm, config->inst_id, config->inst_type)
-		!= BCME_OK) {
-		WL_ERROR(("wl%d: %s: Adding instance id failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		return BCME_ERROR;
-	}
-	return BCME_OK;
-}
-
-static int
-wlc_p2p_nan_handle_del_config(wlc_p2p_info_t *pm, wl_p2p_nan_config_t *config,
-	uint16 configlen)
-{
-	wlc_info_t *wlc = pm->wlc;
-	wl_nan_sched_svc_timeslot_t p2p_ts;
-	int alloc_size;
-
-	if (!pm->p2p_data->p2p_nan_cfg) {
-		WL_ERROR(("wl%d: %s: Config does not exists use NEW "
-			"config type\n", wlc->pub->unit,
-			__FUNCTION__));
-		return BCME_BADARG;
-	}
-	/* check if single instance id */
-	if (pm->p2p_data->ids_head &&
-		pm->p2p_data->ids_head->next == NULL &&
-		pm->p2p_data->ids_head->inst_id == config->inst_id &&
-		pm->p2p_data->ids_head->inst_type == config->inst_type) {
-		WL_ERROR(("wl%d: %s: Single instance id, delete full config\n",
-			wlc->pub->unit, __FUNCTION__));
-		/* Convert bitmap and channel to wl_nan_sched_svc_timeslot_t format */
-		memset(&p2p_ts, 0, sizeof(wl_nan_sched_svc_timeslot_t));
-		/* TODO: Change uint16 chanspec_t to uint32 allover */
-		if (wlc_convert_timeslot_format(0, 0,
-			(chanspec_t)pm->p2p_data->p2p_nan_cfg->chanspec, &p2p_ts,
-			pm->p2p_data->p2p_nan_cfg->avail_bmap) != BCME_OK) {
-			WL_ERROR(("wl%d: %s: Timeslot convertion failed\n",
-				wlc->pub->unit, __FUNCTION__));
-			return BCME_ERROR;
-		}
-		/* Release reserved timeslot */
-		if (postdisc_timeslot_release(wlc, &p2p_ts, NAN_ATTR_P2P)
-				!= BCME_OK) {
-			WL_ERROR(("wl%d: %s: Timeslot release failed\n",
-			wlc->pub->unit, __FUNCTION__));
-			return BCME_ERROR;
-		}
-		if (wlc_cancel_postdisc_timeslot(wlc, pm->p2p_data->favail_sched_handle)
-				!= BCME_OK) {
-			WL_ERROR(("wl%d: %s: postdisc timeslot cancel failed\n",
-			wlc->pub->unit, __FUNCTION__));
-			return BCME_ERROR;
-		}
-		wlc_p2p_nan_del_instance_id
-			(pm, config->inst_id, config->inst_type);
-		alloc_size = OFFSETOF(wl_p2p_nan_config_t, ie) +
-			pm->p2p_data->p2p_nan_cfg->ie_len;
-		MFREE(wlc->osh, pm->p2p_data->p2p_nan_cfg, alloc_size);
-		pm->p2p_data->p2p_nan_cfg = NULL;
-	} else {
-		wlc_p2p_nan_del_instance_id
-			(pm, config->inst_id, config->inst_type);
-	}
-	return BCME_OK;
-}
-
-static int
-wlc_p2p_nan_config(wlc_p2p_info_t *pm, void *params, uint16 paramlen,
-        void *result, uint16 buflen, bool set)
-{
-	wl_p2p_nan_config_t *config = params;
-	wl_p2p_nan_config_t *iocres = result;
-	wlc_info_t *wlc = NULL;
-	int len = 0;
-	int  ret = BCME_OK;
-
-	ASSERT(pm != NULL);
-	wlc = pm->wlc;
-	BCM_REFERENCE(wlc);
-
-	if (set) {
-		ASSERT(config != NULL);
-		/* TODO: If version mismatch is there handle it here */
-		if (config->version != WL_P2P_NAN_CONFIG_VERSION) {
-			WL_ERROR(("wl%d: %s: config version mismatch\n",
-				wlc->pub->unit, __FUNCTION__));
-			return BCME_BADARG;
-		}
-		WL_TRACE(("wl%d: %s:config len %u paramlen %u ie_len %u flags %u"
-			"role %0x chanspec 0x%x resol %u repeat %u bmap %0x\n",
-			wlc->pub->unit, __FUNCTION__, config->len, paramlen, config->ie_len,
-			config->flags, config->dev_role, config->chanspec, config->resolution,
-			config->repeat, config->avail_bmap));
-		/* length check */
-		if ((config->len != paramlen) ||
-			(config->ie_len != (paramlen - OFFSETOF(wl_p2p_nan_config_t, ie)))) {
-			WL_ERROR(("wl%d: %s: i/p len mismatch\n", wlc->pub->unit, __FUNCTION__));
-			return BCME_BADARG;
-		}
-
-		if (config->flags & WL_P2P_NAN_CONFIG_NEW) {
-			if ((ret = wlc_p2p_nan_handle_new_config(pm, config, paramlen))
-				!= BCME_OK) {
-				WL_ERROR(("wl%d: %s: new config handle failed\n", wlc->pub->unit,
-					__FUNCTION__));
-				return ret;
-			}
-		} else if (config->flags & WL_P2P_NAN_CONFIG_ADD) {
-			if ((ret = wlc_p2p_nan_handle_add_config(pm, config, paramlen))
-				!= BCME_OK) {
-				WL_ERROR(("wl%d: %s: add config handle failed\n", wlc->pub->unit,
-					__FUNCTION__));
-				return ret;
-			}
-		} else if (config->flags & WL_P2P_NAN_CONFIG_DEL) {
-			if ((ret = wlc_p2p_nan_handle_del_config(pm, config, paramlen))
-				!= BCME_OK) {
-				WL_ERROR(("wl%d: %s: del config handle failed\n", wlc->pub->unit,
-					__FUNCTION__));
-				return ret;
-			}
-		} else {
-			WL_ERROR(("wl%d: %s: Wrong config type %0x\n",
-				wlc->pub->unit, __FUNCTION__, config->flags));
-			return BCME_UNSUPPORTED;
-		}
-	} else { /* Get */
-		ASSERT(iocres != NULL);
-		bzero((char *)iocres, buflen);
-
-		if (pm->p2p_data->p2p_nan_cfg) {
-			len = OFFSETOF(wl_p2p_nan_config_t, ie)+ pm->p2p_data->p2p_nan_cfg->ie_len;
-			if (buflen < len)
-				return BCME_BUFTOOSHORT;
-			iocres->version = pm->p2p_data->p2p_nan_cfg->version;
-			iocres->len = pm->p2p_data->p2p_nan_cfg->len;
-			iocres->dev_role = pm->p2p_data->p2p_nan_cfg->dev_role;
-			iocres->chanspec = pm->p2p_data->p2p_nan_cfg->chanspec;
-			iocres->resolution = pm->p2p_data->p2p_nan_cfg->resolution;
-			iocres->repeat = pm->p2p_data->p2p_nan_cfg->repeat;
-			iocres->avail_bmap = pm->p2p_data->p2p_nan_cfg->avail_bmap;
-			memcpy(&iocres->dev_mac, &pm->p2p_data->p2p_nan_cfg->dev_mac,
-				sizeof(struct ether_addr));
-			iocres->ie_len = pm->p2p_data->p2p_nan_cfg->ie_len;
-			if (pm->p2p_data->p2p_nan_cfg->ie_len) {
-				memcpy(iocres->ie, pm->p2p_data->p2p_nan_cfg->ie,
-					pm->p2p_data->p2p_nan_cfg->ie_len);
-			}
-		}
-	}
-
-	return BCME_OK;
-}
-
-static int
-wlc_p2p_nan_del_config(wlc_p2p_info_t *pm, void *params,
-        uint16 paramlen, void *result, uint16 buflen, bool set)
-{
-	int alloc_size;
-	wlc_info_t *wlc = NULL;
-	wl_nan_sched_svc_timeslot_t p2p_ts;
-
-	ASSERT(pm != NULL);
-	wlc = pm->wlc;
-
-	if (set) {
-		if (pm->p2p_data->p2p_nan_cfg) {
-			/* Convert bitmap and channel to wl_nan_sched_svc_timeslot_t format */
-			memset(&p2p_ts, 0, sizeof(wl_nan_sched_svc_timeslot_t));
-			/* TODO: Change uint16 chanspec_t to uint32 allover */
-			if (wlc_convert_timeslot_format(0, 0,
-				(chanspec_t)pm->p2p_data->p2p_nan_cfg->chanspec, &p2p_ts,
-			        pm->p2p_data->p2p_nan_cfg->avail_bmap) != BCME_OK) {
-			        WL_ERROR(("wl%d: %s: Timeslot convertion failed\n",
-			                wlc->pub->unit, __FUNCTION__));
-			        return BCME_ERROR;
-			}
-			printf("bitmap %x res %u map id %u\n", p2p_ts.abitmap,
-				p2p_ts.res, p2p_ts.mapid);
-			/* Release reserved timeslot */
-			if (postdisc_timeslot_release(wlc, &p2p_ts, NAN_ATTR_P2P) != BCME_OK) {
-				WL_ERROR(("wl%d: %s: Timeslot release failed\n",
-					wlc->pub->unit, __FUNCTION__));
-				return BCME_ERROR;
-			}
-			if (wlc_cancel_postdisc_timeslot(wlc, pm->p2p_data->favail_sched_handle)
-				!= BCME_OK) {
-				WL_ERROR(("wl%d: %s: postdisc timeslot cancel failed\n",
-					wlc->pub->unit, __FUNCTION__));
-				return BCME_ERROR;
-			}
-			wlc_p2p_nan_free_instance_id_list(pm);
-			alloc_size = OFFSETOF(wl_p2p_nan_config_t, ie) +
-				pm->p2p_data->p2p_nan_cfg->ie_len;
-			MFREE(wlc->osh, pm->p2p_data->p2p_nan_cfg, alloc_size);
-			pm->p2p_data->p2p_nan_cfg = NULL;
-		}
-	} else {
-		return BCME_UNSUPPORTED;
-	}
-
-	return BCME_OK;
-}
-
-static int
-wlc_p2p_nan_get_svc_inst_list(wlc_p2p_info_t *pm, void *params, uint16 paramlen,
-        void *result, uint16 buflen, bool set)
-{
-	wl_nan_svc_inst_list_t *iocres = result;
-
-	ASSERT(pm != NULL);
-
-	if (set) {
-		return BCME_UNSUPPORTED;
-	} else { /* Get */
-		ASSERT(iocres != NULL);
-		bzero((char *)iocres, buflen);
-		if (pm->p2p_data->ids_head) {
-			if (buflen < (OFFSETOF(wl_nan_svc_inst_list_t, svc) +
-				sizeof(wl_nan_svc_inst_t)))
-				return BCME_BUFTOOSHORT;
-			wlc_p2p_nan_fill_svc_list(pm, iocres,
-				(buflen - OFFSETOF(wl_nan_svc_inst_list_t, svc)));
-		}
-	}
-
-	return BCME_OK;
-}
-
-static void wlc_p2p_window_sched_upd(void *ctx, wlc_nan_sched_upd_data_t *notif_data)
-{
-	wlc_p2p_info_t *pm = ctx;
-	uint8 *window_data = NULL; /* Todo: does the host need any data at beginning of window? */
-	uint16 window_len = 0;
-	wlc_nan_info_t *naninfo = pm->wlc->nan;
-	int res = BCME_OK;
-
-	switch (notif_data->state)
-	{
-		case WLC_NAN_STATE_FURTHER_AVAILABILITY_START:
-			pm->p2p_data->dw_counter++;
-			/* send event signifying beginning of availability window for post disc
-			operations
-			*/
-			res = nan_event_postdisc_window_begin(naninfo, window_data, window_len,
-				NAN_ATTR_P2P);
-			if (res != BCME_OK) {
-				/* Error in sending event */
-			}
-			/* to do at beginning of window */
-			break;
-		case WLC_NAN_STATE_FURTHER_AVAILABILITY_END:
-			/* Todo: At the end of the availability window */
-			break;
-		default:
-			break;
-	}
-
-}
-
-#endif	/* WL_NAN_PD_P2P */
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #endif	/* WLP2P */

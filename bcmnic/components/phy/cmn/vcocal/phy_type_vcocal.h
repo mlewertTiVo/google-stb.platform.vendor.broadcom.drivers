@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_vcocal.h 603319 2015-12-01 21:41:40Z vyass $
+ * $Id: phy_type_vcocal.h 656120 2016-08-25 08:17:57Z $
  */
 
 #ifndef _phy_type_vcocal_h_
@@ -33,8 +33,11 @@ typedef void phy_type_vcocal_ctx_t;
 typedef int (*phy_type_vcocal_init_fn_t)(phy_type_vcocal_ctx_t *ctx);
 typedef void (*phy_type_vcocal_force_fn_t)(phy_type_vcocal_ctx_t *ctx);
 typedef int (*phy_type_vcocal_dump_fn_t)(phy_type_vcocal_ctx_t *ctx, struct bcmstrbuf *b);
+typedef int (*phy_type_vcocal_status_fn_t)(phy_type_vcocal_ctx_t *ctx);
 typedef struct {
 	phy_type_vcocal_force_fn_t force;
+	/* vcocal status */
+	phy_type_vcocal_status_fn_t status;
 	phy_type_vcocal_ctx_t *ctx;
 } phy_type_vcocal_fns_t;
 

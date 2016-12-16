@@ -21,7 +21,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl_defs.h 655604 2016-08-22 16:49:21Z $
+ * $Id: wlioctl_defs.h 660256 2016-09-19 22:24:03Z $
  */
 
 
@@ -1239,7 +1239,6 @@
 #define WL_COEX_VAL		0x00000008
 #define WL_RTDC_VAL		0x00000010
 #define WL_PROTO_VAL		0x00000020
-#define WL_BTA_VAL		0x00000040
 #define WL_CHANINT_VAL		0x00000080
 #define WL_WMF_VAL		0x00000100
 #define WL_P2P_VAL		0x00000200
@@ -1632,7 +1631,6 @@
 #define APCS_IOCTL		1
 #define APCS_CHANIM		2
 #define APCS_CSTIMER		3
-#define APCS_BTA		4
 #define APCS_TXDLY		5
 #define APCS_NONACSD		6
 #define APCS_DFS_REENTRY	7

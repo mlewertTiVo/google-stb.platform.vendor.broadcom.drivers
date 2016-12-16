@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_obss.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_obss.c 659250 2016-09-13 12:08:30Z $
  */
 
 
@@ -47,11 +47,14 @@
 #include <wlc_mchan.h>
 #endif /* WLMCHAN */
 #include <wlc_prot_n.h>
-#include <wlc_ulb.h>
 #include <wlc_chanctxt.h>
 #include <wlc_dump.h>
 
 static uint8 wlc_ht_coex_ie_chk(wlc_info_t *wlc, bcm_tlv_t *tlv);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_dump_obss(wlc_obss_info_t *obss, struct bcmstrbuf *b);
+#endif /* BCMDBG || BCMDBG_DUMP */
 static void wlc_ht_coex_trigger_chk(wlc_bsscfg_t *cfg);
 static int wlc_ht_upd_coex_bits(wlc_bsscfg_t *cfg, uint8 bits, uint8 mask);
 
@@ -297,6 +300,9 @@ BCMATTACHFN(wlc_obss_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "obss", (dump_fn_t)wlc_dump_obss, (void *)obss);
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 #ifdef AP
 	/* bcn/prbrsp */
@@ -532,6 +538,20 @@ wlc_obss_doiovar(void *context, uint32 actionid,
 		case IOV_GVAL(IOV_OBSS_WIDTH20):
 			*ret_int_ptr = WLC_WIDTH20_OVRD(wlc, bsscfg) ? 1 : 0;
 			break;
+#ifdef BCMDBG
+		case IOV_SVAL(IOV_OBSS_WIDTH20):
+		{
+			uint8 bit = int_val ? WL_COEX_WIDTH20 : 0;
+
+			if (!N_ENAB(wlc->pub) || !COEX_ENAB(wlc)) {
+				err = BCME_UNSUPPORTED;
+				break;
+			}
+
+			err = wlc_ht_upd_coex_bits(bsscfg, bit, WL_COEX_WIDTH20);
+			break;
+		}
+#endif /* BCMDBG */
 		case IOV_GVAL(IOV_OBSS_SCAN_PARAMS):
 		{
 			obss_params_t *obss_params;
@@ -1247,6 +1267,13 @@ wlc_ht_send_action_obss_coex(wlc_bsscfg_t *cfg, uint8 coex_bits, uint8 *coex_map
 
 	ASSERT((end - pbody) == (int)body_len);
 
+#ifdef BCMDBG
+	{
+	char da[ETHER_ADDR_STR_LEN];
+	WL_COEX(("wl%d: %s: send action frame to %s\n", wlc->pub->unit, __FUNCTION__,
+		bcm_ether_ntoa(&scb->ea, da)));
+	}
+#endif
 
 	wlc_sendmgmt(wlc, p, SCB_WLCIFP(scb)->qi, scb);
 
@@ -1347,6 +1374,45 @@ wlc_get_BSSintol_2Gchanlist_len(wlc_info_t *wlc, uint8 *coex_map)
 	return len;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_dump_obss(wlc_obss_info_t *obssi, struct bcmstrbuf *b)
+{
+	int idx;
+	wlc_bsscfg_t *cfg;
+
+	bcm_bprintf(b, "num chans: %u\n", obssi->num_chan);
+	bcm_bprhex(b, "chanvec: ", TRUE, obssi->chanvec, OBSS_CHANVEC_SIZE);
+	bcm_bprhex(b, "map: ", TRUE, obssi->coex_map, CH_MAX_2G_CHANNEL);
+
+	FOREACH_AS_BSS(obssi->wlc, idx, cfg) {
+		wlc_obss_bss_info_t *obss = BSS_OBSS_INFO(obssi, cfg);
+
+		bcm_bprintf(b, "\nbsscfg: %d\n", WLC_BSSCFG_IDX(cfg));
+		bcm_bprintf(b, "enab: %d permit: %d detected: %u det ovrd: %u "
+		            "switch_bw_def: %d bits_buf: %u "
+		            "next scan: %u secs fid: %u te mask: 0x%x\n",
+		            obss->coex_enab, obss->coex_permit, obss->coex_det,
+		            obss->coex_ovrd,
+		            obss->switch_bw_deferred, obss->coex_bits_buffered,
+		            obss->scan_countdown, obss->fid_time, obss->coex_te_mask);
+		bcm_bprintf(b, "param: passive dwell %u active dwell %u bss width scan %u "
+		            "passive total %u active total %u chan width tran dly %u "
+		            "activity threshold %u\n",
+		            obss->params.passive_dwell, obss->params.active_dwell,
+		            obss->params.bss_widthscan_interval,
+		            obss->params.passive_total, obss->params.active_total,
+		            obss->params.chanwidth_transition_dly,
+		            obss->params.activity_threshold);
+#ifdef STA
+		/* AID */
+		bcm_bprintf(b, "\nAID = 0x%x\n", cfg->AID);
+#endif
+	}
+
+	return 0;
+}
+#endif	/* BCMDBG || BCMDBG_DUMP */
 
 static void
 wlc_ht_chanlist_2g_init(wlc_obss_info_t *obss)
@@ -1779,11 +1845,6 @@ wlc_ht_ap_coex_scan_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data)
 	FOREACH_UP_AP(wlc, idx, cfg) {
 		chanspec_t chspec = cfg->current_bss->chanspec;
 
-		/* If current BSS chanspec indicates ULB operation then no coex
-		 * related processing is done - Standalone ULB Mode
-		 */
-		if (CHSPEC_IS_ULB(wlc, chspec))
-			continue;
 		if (!COEX_ACTIVE(wlc->obss, cfg))
 			continue;
 		if (!CHSPEC_CTLOVLP(chspec, rxchspec, CH_20MHZ_APART))
@@ -1844,11 +1905,6 @@ wlc_ht_ap_coex_bcn_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data)
 	FOREACH_UP_AP(wlc, idx, cfg) {
 		chanspec_t chspec = cfg->current_bss->chanspec;
 
-		/* If current BSS chanspec indicates ULB operation then no coex
-		 * related processing is done - Standalone ULB Mode
-		 */
-		if (CHSPEC_IS_ULB(wlc, chspec))
-			continue;
 		if (!COEX_ACTIVE(wlc->obss, cfg))
 			continue;
 		if (!CHSPEC_CTLOVLP(chspec, rxchspec, CH_20MHZ_APART))
@@ -1987,9 +2043,7 @@ wlc_obss_watchdog(void *ctx)
 		/* OBSS COEX check for possible upgrade
 		 * only do it when it is currently 20MHz
 		 */
-		/* Upgrade attempt should be done only if not currently in ULB mode */
-		if (COEX_ACTIVE(obss, cfg) && CHSPEC_IS20(cfg->current_bss->chanspec) &&
-			!CHSPEC_IS_ULB(wlc, cfg->current_bss->chanspec)) {
+		if (COEX_ACTIVE(obss, cfg) && CHSPEC_IS20(cfg->current_bss->chanspec)) {
 			/* if any 40 intolerant still associated, don't upgrade */
 			if (wlc_prot_n_ht40int(wlc->prot_n, cfg))
 				wlc_ht_coex_update_fid_time(cfg);

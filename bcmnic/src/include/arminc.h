@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: arminc.h 615004 2016-01-25 22:49:06Z $
+ * $Id: arminc.h 659395 2016-09-14 03:09:14Z $
  */
 
 #ifndef	_ARMINC_H
@@ -97,6 +97,9 @@ var:	.word	val
 #define TEX_VAL_110	(6<<3)
 #define TEX_VAL_111	(7<<3)
 
+#define AP_VAL_MASK		(0x38)
+#define AP_VAL_SHIFT	(0x3)
+
 #define AP_VAL_000	(0<<8)
 #define AP_VAL_001	(1<<8)
 #define AP_VAL_010	(2<<8)
@@ -107,6 +110,46 @@ var:	.word	val
 #define AP_VAL_111	(7<<8)
 
 #define XN_BIT_ON	(1<<12)
+
+/* Region Size values */
+#define	RS_VAL_32B		(0x4)
+#define	RS_VAL_64B		(0x5)
+#define	RS_VAL_128B		(0x6)
+#define	RS_VAL_256B		(0x7)
+#define	RS_VAL_512B		(0x8)
+#define	RS_VAL_1KB		(0x9)
+#define	RS_VAL_2KB		(0xa)
+#define	RS_VAL_4KB		(0xb)
+#define	RS_VAL_8KB		(0xc)
+#define	RS_VAL_16KB		(0xd)
+#define	RS_VAL_32KB		(0xe)
+#define	RS_VAL_64KB		(0xf)
+#define	RS_VAL_128KB	(0x10)
+#define	RS_VAL_256KB	(0x11)
+#define	RS_VAL_512KB	(0x12)
+#define	RS_VAL_1MB		(0x13)
+#define	RS_VAL_2MB		(0x14)
+#define	RS_VAL_4MB		(0x15)
+#define	RS_VAL_8MB		(0x16)
+#define	RS_VAL_16MB		(0x17)
+#define	RS_VAL_32MB		(0x18)
+#define	RS_VAL_64MB		(0x19)
+#define	RS_VAL_128MB	(0x1a)
+#define	RS_VAL_256MB	(0x1b)
+#define	RS_VAL_512MB	(0x1c)
+#define	RS_VAL_1GB		(0x1d)
+#define	RS_VAL_2GB		(0x1e)
+#define	RS_VAL_4GB		(0x1f)
+
+/* Sub Regions */
+#define SUBR_VAL_1		(0x1<<8)
+#define SUBR_VAL_2		(0x2<<8)
+#define SUBR_VAL_3		(0x4<<8)
+#define SUBR_VAL_4		(0x8<<8)
+#define SUBR_VAL_5		(0x10<<8)
+#define SUBR_VAL_6		(0x20<<8)
+#define SUBR_VAL_7		(0x40<<8)
+#define SUBR_VAL_8		(0x80<<8)
 
 #endif	/* __ARM_ARCH_7R__ */
 

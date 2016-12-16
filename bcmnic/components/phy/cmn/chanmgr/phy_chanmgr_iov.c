@@ -12,13 +12,14 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_chanmgr_iov.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_chanmgr_iov.c 666266 2016-10-20 11:18:34Z $
  */
 
 #include <phy_chanmgr_iov.h>
 #include <phy_chanmgr.h>
 #include <phy_type_chanmgr.h>
 #include <wlc_iocv_reg.h>
+#include <phy_ac_info.h>
 
 #ifndef ALL_NEW_PHY_MOD
 /* < TODO: all these are going away... */
@@ -36,17 +37,17 @@ enum {
 static const bcm_iovar_t phy_chanmgr_iovars[] = {
 	{"band_range", IOV_BAND_RANGE, 0, 0, IOVT_INT8, 0},
 	{"subband_idx", IOV_BAND_RANGE_SUB, 0, 0, IOVT_INT8, 0},
-#if defined(WLTEST)
-	{"smth_enable", IOV_SMTH, (IOVF_SET_UP|IOVF_GET_UP), 0, IOVT_UINT8, 0},
-#endif /* defined(WLTEST) */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
 #include <wlc_patch.h>
 
 static int
 phy_chanmgr_doiovar(void *ctx, uint32 aid,
-
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
 {
 	phy_info_t *pi = (phy_info_t *)ctx;
@@ -67,18 +68,6 @@ phy_chanmgr_doiovar(void *ctx, uint32 aid,
 		bcopy(&int_val, a, vsize);
 		break;
 
-#if defined(WLTEST)
-	case IOV_SVAL(IOV_SMTH):
-	{
-		err = phy_chanmgr_set_smth(pi, (int8) int_val);
-		break;
-	}
-	case IOV_GVAL(IOV_SMTH):
-	{
-		err = phy_chanmgr_get_smth(pi, (int32 *) a);
-		break;
-	}
-#endif /* defined(WLTEST) */
 
 	default:
 		err = BCME_UNSUPPORTED;

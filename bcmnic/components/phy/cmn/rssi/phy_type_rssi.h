@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_rssi.h 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_type_rssi.h 663973 2016-10-07 18:16:09Z $
  */
 
 #ifndef _phy_type_rssi_h_
@@ -20,7 +20,7 @@
 
 #include <typedefs.h>
 #include <bcmutils.h>
-#include <d11.h>
+#include <hndd11.h>
 #include <phy_rssi.h>
 #include <wlioctl.h>
 
@@ -41,6 +41,7 @@ typedef int (*phy_type_rssi_get_pkteng_stats_fn_t)(phy_type_rssi_ctx_t *ctx, voi
 typedef int (*phy_type_rssi_gain_delta_fn_t)(phy_type_rssi_ctx_t *ctx, uint32 aid,
 	int8 *deltaValues);
 typedef int (*phy_type_rssi_int_fn_t)(phy_type_rssi_ctx_t *ctx, int8 *value);
+typedef int8 (*phy_type_rssi_get_rssi_fn_t)(phy_type_rssi_ctx_t *ctx, uint8 core);
 
 typedef struct {
 	phy_type_rssi_compute_fn_t compute;
@@ -56,6 +57,7 @@ typedef struct {
 	phy_type_rssi_gain_delta_fn_t get_gain_delta_2gb;
 	phy_type_rssi_int_fn_t set_cal_freq_2g;
 	phy_type_rssi_int_fn_t get_cal_freq_2g;
+	phy_type_rssi_get_rssi_fn_t get_rssi;
 	phy_type_rssi_ctx_t *ctx;
 } phy_type_rssi_fns_t;
 

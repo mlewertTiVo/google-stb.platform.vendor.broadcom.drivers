@@ -30,9 +30,19 @@
  */
 
 typedef void phy_type_ocl_ctx_t;
-typedef void (*phy_type_ocl_fn_t)(phy_info_t *pi, bool enable);
+typedef int (*phy_type_ocl_coremask_change_fn_t)(phy_type_ocl_ctx_t *ctx, uint8 coremask);
+typedef uint8 (*phy_type_ocl_get_coremask_fn_t)(phy_type_ocl_ctx_t *ctx);
+typedef int (*phy_type_ocl_status_get_fn_t)(phy_type_ocl_ctx_t *ctx,
+		uint16 *reqs, uint8 *coremask, bool *ocl_en);
+typedef int (*phy_type_ocl_disable_req_set_fn_t)(phy_type_ocl_ctx_t *ctx,
+		uint16 req, bool disable, uint8 req_id);
+
 typedef struct {
-	phy_type_ocl_fn_t ocl;
+	phy_type_ocl_coremask_change_fn_t	ocl_coremask_change;
+	phy_type_ocl_get_coremask_fn_t		ocl_get_coremask;
+	phy_type_ocl_status_get_fn_t		ocl_status_get;
+	phy_type_ocl_disable_req_set_fn_t	ocl_disable_req_set;
+
 	phy_type_ocl_ctx_t *ctx;
 } phy_type_ocl_fns_t;
 

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_temp.c 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_temp.c 670973 2016-11-18 10:18:04Z $
  */
 
 #include <typedefs.h>
@@ -27,17 +27,17 @@
 #include <phy_ac_calmgr.h>
 #include <phy_ac_info.h>
 #include <phy_utils_reg.h>
+#include <phy_utils_pmu.h>
+#include <phy_stf.h>
 
 #include "wlc_phy_radio.h"
 #include "wlc_phyreg_ac.h"
 #include "wlc_radioreg_20691.h"
 #include "wlc_radioreg_20693.h"
+#include "wlc_radioreg_20694.h"
 #include "wlc_radioreg_20695.h"
+#include "wlc_radioreg_20696.h"
 
-
-#ifdef ATE_BUILD
-#include <wl_ate.h>
-#endif
 
 #include <phy_rstr.h>
 #include <phy_utils_var.h>
@@ -52,8 +52,8 @@ struct phy_ac_temp_info {
 	acphy_tempsense_radioregs_t *ac_tempsense_radioregs_orig;
 	acphy_tempsense_phyregs_t   *ac_tempsense_phyregs_orig;
 	int16 current_temperature;
-/* add other variable size variables here at the end */
 	uint8 last_regulated;
+/* add other variable size variables here at the end */
 };
 
 /* local functions */
@@ -62,7 +62,8 @@ static void phy_ac_temp_nvram_attach(phy_ac_temp_info_t *tempi);
 static void phy_ac_temp_upd_gain(phy_type_temp_ctx_t *ctx, int16 *gain_err_temp_adj);
 static void phy_ac_temp_upd_gain_cal(phy_type_temp_ctx_t *ctx, int16 *gain_err_temp_adj);
 static int phy_ac_temp_get_(phy_type_temp_ctx_t *ctx);
-static uint8 phy_get_first_actv_core(uint8 coremask);
+static uint8 phy_ac_temp_get_first_actv_core(uint8 coremask);
+static int16 phy_ac_temp_do_tempsense(phy_type_temp_ctx_t *ctx);
 
 /* Register/unregister ACPHY specific implementation to common layer. */
 phy_ac_temp_info_t *
@@ -72,6 +73,7 @@ BCMATTACHFN(phy_ac_temp_register_impl)(phy_info_t *pi, phy_ac_info_t *aci, phy_t
 	phy_type_temp_fns_t fns;
 	acphy_tempsense_radioregs_t *ac_tempsense_radioregs_orig = NULL;
 	acphy_tempsense_phyregs_t   *ac_tempsense_phyregs_orig = NULL;
+	phy_txcore_temp_t *temp = NULL;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
@@ -108,7 +110,23 @@ BCMATTACHFN(phy_ac_temp_register_impl)(phy_info_t *pi, phy_ac_info_t *aci, phy_t
 	fns.get = phy_ac_temp_get_;
 	fns.upd_gain = phy_ac_temp_upd_gain;
 	fns.upd_gain_cal = phy_ac_temp_upd_gain_cal;
+	fns.do_tempsense = phy_ac_temp_do_tempsense;
 	fns.ctx = temp_info;
+
+	/* Initialize any common layer variable */
+	temp = phy_temp_get_st(ti);
+	ASSERT(temp);
+	if ((temp->disable_temp == 0) || (temp->disable_temp == 0xff)) {
+		temp->disable_temp = ACPHY_CHAIN_TX_DISABLE_TEMP;
+	}
+#if defined(BCM94360X51) && defined(BCM94360X52C)
+	if ((CHIPID(pi->sh->chip) == BCM4360_CHIP_ID) &&
+		((pi->sh->boardtype == BCM94360X51) ||
+		(pi->sh->boardtype == BCM94360X51P3) ||
+		(pi->sh->boardtype == BCM94360X52C))) {
+		temp->disable_temp = ACPHY_CHAIN_TX_DISABLE_TEMP_4360;
+	}
+#endif /* BCM94360X51 && BCM94360X52C */
 
 	phy_temp_register_impl(ti, &fns);
 
@@ -145,6 +163,7 @@ BCMATTACHFN(phy_ac_temp_unregister_impl)(phy_ac_temp_info_t *temp_info)
 	phy_mfree(pi, temp_info, sizeof(phy_ac_temp_info_t));
 }
 
+
 static uint16
 phy_ac_temp_throttle(phy_type_temp_ctx_t *ctx)
 {
@@ -152,10 +171,12 @@ phy_ac_temp_throttle(phy_type_temp_ctx_t *ctx)
 	phy_temp_info_t *ti = info->ti;
 	phy_info_t *pi = info->pi;
 	phy_txcore_temp_t *temp;
+
 	uint8 txcore_shutdown_lut[] = {1, 1, 2, 1, 4, 1, 2, 1,
 			8, 8, 2, 2, 4, 4, 4, 13};
-	uint8 phyrxchain = pi->sh->phyrxchain;
-	uint8 phytxchain = pi->sh->phytxchain;
+	uint8 txcore_shutdown_lut_4366[] = {1, 1, 2, 1, 4, 1, 2, 1,
+			8, 8, 2, 9, 4, 9, 4, 13};
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 	uint8 new_phytxchain;
 	int16 currtemp, delta_temp = 0;
 	uint16 duty_cycle_active_chains;
@@ -166,9 +187,10 @@ phy_ac_temp_throttle(phy_type_temp_ctx_t *ctx)
 	  */
 	if ((ACMAJORREV_4(pi->pubpi->phy_rev) ||
 		(ACMAJORREV_5(pi->pubpi->phy_rev) && ACMINORREV_2(pi))) && PUB_NOT_ASSOC(pi))
-		return pi->sh->hw_phytxchain;
+		return stf_shdata->hw_phytxchain;
 
 	temp = phy_temp_get_st(ti);
+
 	ASSERT(temp != NULL);
 
 	if (RADIOID_IS(pi->pubpi->radioid, BCM20691_ID))
@@ -176,7 +198,7 @@ phy_ac_temp_throttle(phy_type_temp_ctx_t *ctx)
 
 
 	if (RADIOID_IS(pi->pubpi->radioid, BCM20694_ID)) {
-		PHY_ERROR(("%s: TBD for BCM20694_ID\n", __FUNCTION__));
+		PHY_INFORM(("%s: TBD for BCM20694_ID\n", __FUNCTION__));
 		return 0;
 	}
 
@@ -185,7 +207,7 @@ phy_ac_temp_throttle(phy_type_temp_ctx_t *ctx)
 		return 0;
 	}
 
-	ASSERT(phytxchain);
+	ASSERT(stf_shdata->phytxchain);
 
 	currtemp = wlc_phy_tempsense_acphy(pi);
 	if (ACMAJORREV_4(pi->pubpi->phy_rev)) {
@@ -199,25 +221,33 @@ phy_ac_temp_throttle(phy_type_temp_ctx_t *ctx)
 			(currtemp - pi->cal_info->last_cal_temp) :
 			(pi->cal_info->last_cal_temp - currtemp));
 		/* Before triggering the cal make sure no cals are pending */
-		if ((pi->phycal_tempdelta) && (delta_temp > pi->phycal_tempdelta) &&
+		if ((temp->phycal_tempdelta) && (delta_temp > temp->phycal_tempdelta) &&
 			(!PHY_PERICAL_MPHASE_PENDING(pi))) {
 			pi->cal_info->last_cal_temp = currtemp;
 			wlc_phy_cals_acphy(pi->u.pi_acphy->calmgri, PHY_PERICAL_UNDEF,
 					PHY_CAL_SEARCHMODE_RESTART);
 		}
 	}
+
 #ifdef BCMDBG
 	if (pi->tempsense_override)
 		currtemp = pi->tempsense_override;
 #endif
+
 	if (currtemp >= temp->disable_temp) {
-		temp->heatedup = TRUE;
+		if (!ACMAJORREV_33(pi->pubpi->phy_rev))
+			temp->heatedup = TRUE;
 		if (phy_get_phymode(pi) == PHYMODE_MIMO) {
 			temp->duty_cycle = 100;
 			temp->duty_cycle_throttle_state = 0;
 			temp->duty_cycle_throttle_depth = 10;
-			new_phytxchain = txcore_shutdown_lut[phytxchain];
-			temp->bitmap = ((phyrxchain << 4) | new_phytxchain);
+			if (ACMAJORREV_32(pi->pubpi->phy_rev) ||
+				ACMAJORREV_33(pi->pubpi->phy_rev)) {
+				new_phytxchain = txcore_shutdown_lut_4366[stf_shdata->phytxchain];
+			} else {
+				new_phytxchain = txcore_shutdown_lut[stf_shdata->phytxchain];
+			}
+			temp->bitmap = ((stf_shdata->phyrxchain << 4) | new_phytxchain);
 		} else if(DCT_ENAB(pi)){ /* RSDB */
 			if (temp->duty_cycle_throttle_state < temp->duty_cycle_throttle_depth) {
 				if (!temp->duty_cycle_throttle_state) {
@@ -240,21 +270,25 @@ phy_ac_temp_throttle(phy_type_temp_ctx_t *ctx)
 					temp->duty_cycle += 5;
 					temp->duty_cycle_throttle_state--;
 					if (!temp->duty_cycle_throttle_state) {
-						new_phytxchain = pi->sh->hw_phytxchain;
-						temp->heatedup = FALSE;
-						temp->bitmap = ((phyrxchain << 4) | new_phytxchain);
+						new_phytxchain = stf_shdata->hw_phytxchain;
+						if (!ACMAJORREV_33(pi->pubpi->phy_rev))
+							temp->heatedup = FALSE;
+						temp->bitmap = ((stf_shdata->phyrxchain << 4) |
+								new_phytxchain);
 					}
 				}
 			} else {
-				new_phytxchain = pi->sh->hw_phytxchain;
-				temp->heatedup = FALSE;
-				temp->bitmap = ((phyrxchain << 4) | new_phytxchain);
+				new_phytxchain = stf_shdata->hw_phytxchain;
+				if (!ACMAJORREV_33(pi->pubpi->phy_rev))
+					temp->heatedup = FALSE;
+				temp->bitmap = ((stf_shdata->phyrxchain << 4) | new_phytxchain);
 				temp->duty_cycle = 100;
 				temp->duty_cycle_throttle_depth = 10;
 				temp->duty_cycle_throttle_state = 0;
 			}
 		}
 	}
+
 	duty_cycle_active_chains = temp->duty_cycle << 8 | temp->bitmap;
 	return duty_cycle_active_chains;
 }
@@ -279,11 +313,19 @@ BCMATTACHFN(phy_ac_temp_nvram_attach)(phy_ac_temp_info_t *tempi)
 	phy_info_t *pi = tempi->pi;
 	/* read in temperature at calibration time */
 	tempi->current_temperature = pi->srom_rawtempsense;
-	pi->sromi->rpcal2g = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal2g, 0);
-	pi->sromi->rpcal5gb0 = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb0, 0);
-	pi->sromi->rpcal5gb1 = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb1, 0);
-	pi->sromi->rpcal5gb2 = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb2, 0);
-	pi->sromi->rpcal5gb3 = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb3, 0);
+	pi->sromi->sw_txchain_mask =
+		(uint8)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_sw_txchain_mask, 0);
+	pi->sromi->sw_rxchain_mask =
+		(uint8)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_sw_rxchain_mask, 0);
+	pi->u.pi_acphy->sromi->rpcal2g = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal2g, 0);
+	pi->u.pi_acphy->sromi->rpcal5gb0 =
+	(uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb0, 0);
+	pi->u.pi_acphy->sromi->rpcal5gb1 =
+	(uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb1, 0);
+	pi->u.pi_acphy->sromi->rpcal5gb2 =
+	(uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb2, 0);
+	pi->u.pi_acphy->sromi->rpcal5gb3 =
+	(uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb3, 0);
 	pi->sromi->rpcal2gcore3 = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal2gcore3, 0);
 	pi->sromi->rpcal5gb0core3 = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb0core3, 0);
 	pi->sromi->rpcal5gb1core3 = (uint16)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_rpcal5gb1core3, 0);
@@ -327,6 +369,238 @@ static int32 wlc_phy_tempsense_radio_swap_28nm(phy_info_t *pi,
 	acphy_tempsense_cfg_opt_t type, uint8 swap);
 static int32 wlc_phy_tempsense_poll_adc_war_28nm(phy_info_t *pi,
 	bool init_adc_inside, int32 *measured_values);
+static int16 wlc_phy_tempsense_vbatsense_acphy_20694
+	(phy_info_t *pi, uint8 tempsense_vbatsense);
+static int16 wlc_phy_tempsense_vbatsense_acphy_20696
+	(phy_info_t *pi, uint8 tempsense_vbatsense);
+static int32 wlc_phy_tempsense_poll_adc_war_20694(phy_info_t *pi,
+	bool init_adc_inside, int16 *measured_values, uint8 core);
+static int32 wlc_phy_tempsense_poll_adc_war_20696(phy_info_t *pi,
+	bool init_adc_inside, int16 *measured_values, uint8 core);
+static int32 wlc_phy_tempsense_radio_swap_20694(phy_info_t *pi,
+	acphy_tempsense_cfg_opt_t type, uint8 swap, uint8 core);
+static int32 wlc_phy_tempsense_radio_swap_20696(phy_info_t *pi,
+	acphy_tempsense_cfg_opt_t type, uint8 swap, uint8 core);
+static void
+wlc_phy_tempsense_radio_setup_acphy_20694(phy_info_t *pi, uint16 Av, uint16 Vmid);
+static void
+wlc_phy_tempsense_radio_cleanup_acphy_20694(phy_info_t *pi);
+static void
+wlc_phy_tempsense_radio_setup_acphy_20696(phy_info_t *pi, uint16 Av, uint16 Vmid);
+static void
+wlc_phy_tempsense_radio_cleanup_acphy_20696(phy_info_t *pi);
+static void
+
+wlc_phy_tempsense_radio_setup_acphy_20694(phy_info_t *pi, uint16 Av, uint16 Vmid)
+{
+
+	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
+	uint8 core;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+	tempsense_radioregs_20694_t *porig =
+		&(pi_ac->tempi->ac_tempsense_radioregs_orig->u.acphy_tempsense_radioregs_20694);
+
+	BCM_REFERENCE(stf_shdata);
+
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
+		MOD_RADIO_REG_20694(pi, RF, IQCAL_OVR1, core, ovr_iqcal_PU_loopback_bias, 0x1);
+		MOD_RADIO_REG_20694(pi, RF, IQCAL_CFG5, core, loopback_bias_pu, 0x1);
+
+		porig->testbuf_ovr1[core] = READ_RADIO_REG_20694(pi, RF, TESTBUF_OVR1, core);
+		porig->testbuf_cfg1[core] = READ_RADIO_REG_20694(pi, RF, TESTBUF_CFG1, core);
+		porig->tempsense_ovr1[core] = READ_RADIO_REG_20694(pi, RF, TEMPSENSE_OVR1, core);
+		porig->tempsense_cfg[core] = READ_RADIO_REG_20694(pi, RF, TEMPSENSE_CFG, core);
+		porig->auxpga_ovr1[core] = READ_RADIO_REG_20694(pi, RF, AUXPGA_OVR1, core);
+		porig->auxpga_cfg1[core] = READ_RADIO_REG_20694(pi, RF, AUXPGA_CFG1, core);
+		porig->auxpga_vmid[core] = READ_RADIO_REG_20694(pi, RF, AUXPGA_VMID, core);
+		porig->tia_cfg1_ovr[core] = READ_RADIO_REG_20694(pi, RF, TIA_CFG1_OVR, core);
+		porig->tia_reg7[core] = READ_RADIO_REG_20694(pi, RF, TIA_REG7, core);
+		porig->lpf_ovr1[core] = READ_RADIO_REG_20694(pi, RF, LPF_OVR1, core);
+		porig->lpf_ovr2[core] = READ_RADIO_REG_20694(pi, RF, LPF_OVR2, core);
+		porig->lpf_reg7[core] = READ_RADIO_REG_20694(pi, RF, LPF_REG7, core);
+		porig->iqcal_cfg4[core] = READ_RADIO_REG_20694(pi, RF, IQCAL_CFG4, core);
+		porig->iqcal_cfg5[core] = READ_RADIO_REG_20694(pi, RF, IQCAL_CFG5, core);
+		porig->iqcal_ovr1[core] = READ_RADIO_REG_20694(pi, RF, IQCAL_OVR1, core);
+
+		if (core == 0) {
+		ACPHY_REG_LIST_START
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_OVR1, 0, ovr_testbuf_PU, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_CFG1, 0, testbuf_PU, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_CFG1, 0, testbuf_GPIO_EN, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_OVR1, 0, ovr_auxpga_i_pu, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_CFG1, 0, auxpga_i_pu, 0x1)
+
+			// setup Aux path
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, IQCAL_CFG4, 0, iqcal2adc, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, IQCAL_CFG4, 0, auxpga2adc, 0x1)
+
+			// setup tempsense
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TEMPSENSE_OVR1, 0, ovr_tempsense_pu, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TEMPSENSE_CFG, 0, tempsense_pu, 0x1)
+
+			// setup sel_test_port
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_OVR1, 0,
+				ovr_auxpga_i_sel_input, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_CFG1, 0,
+				auxpga_i_sel_input, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_OVR1, 0,
+				ovr_testbuf_sel_test_port, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_CFG1, 0,
+				testbuf_sel_test_port, 0x1)
+
+			// Mux AUX path to ADC
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_OVR2, 0, ovr_lpf_sw_bq1_adc, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_OVR2, 0, ovr_lpf_sw_aux_adc, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_OVR1, 0, ovr_lpf_sw_bq2_adc, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_REG7, 0, lpf_sw_bq1_adc, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_REG7, 0, lpf_sw_bq2_adc, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_REG7, 0, lpf_sw_aux_adc, 0x1)
+
+			// Turn off TIA
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TIA_CFG1_OVR, 0, ovr_tia_pu, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TIA_REG7, 0, tia_bq_pu, 0x0)
+		ACPHY_REG_LIST_EXECUTE(pi);
+		} else {
+		ACPHY_REG_LIST_START
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_OVR1, 1, ovr_testbuf_PU, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_CFG1, 1, testbuf_PU, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_CFG1, 1, testbuf_GPIO_EN, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_OVR1, 1, ovr_auxpga_i_pu, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_CFG1, 1, auxpga_i_pu, 0x1)
+
+			// setup Aux path
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, IQCAL_CFG4, 1, iqcal2adc, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, IQCAL_CFG4, 1, auxpga2adc, 0x1)
+
+			// setup tempsense
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TEMPSENSE_OVR1, 1, ovr_tempsense_pu, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TEMPSENSE_CFG, 1, tempsense_pu, 0x1)
+
+			// setup sel_test_port
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_OVR1, 1,
+				ovr_auxpga_i_sel_input, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, AUXPGA_CFG1, 1,
+				auxpga_i_sel_input, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_OVR1, 1,
+				ovr_testbuf_sel_test_port, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TESTBUF_CFG1, 1,
+				testbuf_sel_test_port, 0x1)
+
+			// Mux AUX path to ADC
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_OVR2, 1, ovr_lpf_sw_bq1_adc, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_OVR2, 1, ovr_lpf_sw_aux_adc, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_OVR1, 1, ovr_lpf_sw_bq2_adc, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_REG7, 1, lpf_sw_bq1_adc, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_REG7, 1, lpf_sw_bq2_adc, 0x0)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, LPF_REG7, 1, lpf_sw_aux_adc, 0x1)
+
+			// Turn off TIA
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TIA_CFG1_OVR, 1, ovr_tia_pu, 0x1)
+			MOD_RADIO_REG_20694_ENTRY(pi, RF, TIA_REG7, 1, tia_bq_pu, 0x0)
+		ACPHY_REG_LIST_EXECUTE(pi);
+		}
+
+		MOD_RADIO_REG_20694(pi, RF, AUXPGA_OVR1, core, ovr_auxpga_i_sel_vmid, 0x1);
+		WRITE_RADIO_REG_20694(pi, RF, AUXPGA_VMID, core, Vmid);
+		MOD_RADIO_REG_20694(pi, RF, AUXPGA_OVR1, core, ovr_auxpga_i_sel_gain, 0x1);
+		MOD_RADIO_REG_20694(pi, RF, AUXPGA_CFG1, core, auxpga_i_sel_gain, Av);
+		MOD_RADIO_REG_20694(pi, RF, AUXPGA_CFG1, core, auxpga_i_vcm_ctrl, 0);
+	}
+	return;
+}
+
+
+static void
+wlc_phy_tempsense_radio_setup_acphy_20696(phy_info_t *pi, uint16 Av, uint16 Vmid)
+{
+
+	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
+	uint8 core;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	phy_ac_reg_cache_save(pi_ac, RADIOREGS_TEMPSENSE_VBAT);
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
+		//should the pu be after or before the save&restore
+		//it was first before - now moved it after
+		MOD_RADIO_REG_20696(pi, IQCAL_OVR1, core, ovr_loopback_bias_pu, 0x1);
+		MOD_RADIO_REG_20696(pi, IQCAL_CFG5, core, loopback_bias_pu, 0x1);
+		MOD_RADIO_REG_20696(pi, TESTBUF_OVR1, core, ovr_testbuf_sel_test_port, 0x1);
+		MOD_RADIO_REG_20696(pi, TESTBUF_CFG1, core, testbuf_sel_test_port, 0x1);
+		MOD_RADIO_REG_20696(pi, TESTBUF_OVR1, core, ovr_testbuf_PU, 0x1);
+		MOD_RADIO_REG_20696(pi, TESTBUF_CFG1, core, testbuf_PU, 0x1);
+		MOD_RADIO_REG_20696(pi, TESTBUF_CFG1, core, testbuf_GPIO_EN, 0x0);
+		// setup Aux path
+		MOD_RADIO_REG_20696(pi, AUXPGA_OVR1, core, ovr_auxpga_i_pu, 0x1);
+		MOD_RADIO_REG_20696(pi, AUXPGA_CFG1, core, auxpga_i_pu, 0x1);
+		MOD_RADIO_REG_20696(pi, AUXPGA_OVR1, core, ovr_auxpga_i_sel_vmid, 0x1);
+		WRITE_RADIO_REG_20696(pi, AUXPGA_VMID, core, Vmid);
+		MOD_RADIO_REG_20696(pi, AUXPGA_OVR1, core, ovr_auxpga_i_sel_gain, 0x1);
+		MOD_RADIO_REG_20696(pi, AUXPGA_CFG1, core, auxpga_i_sel_gain, Av);
+		MOD_RADIO_REG_20696(pi, AUXPGA_CFG1, core, auxpga_i_vcm_ctrl, 0);
+		// setup tempsense
+		MOD_RADIO_REG_20696(pi, TEMPSENSE_OVR1, core, ovr_tempsense_pu, 0x1);
+		MOD_RADIO_REG_20696(pi, TEMPSENSE_CFG, core, tempsense_pu, 0x1);
+		// setup sel_test_port
+		MOD_RADIO_REG_20696(pi, AUXPGA_OVR1, core, ovr_auxpga_i_sel_input, 0x1);
+		MOD_RADIO_REG_20696(pi, AUXPGA_CFG1, core, auxpga_i_sel_input, 0x1);
+		//Setup Aux Path
+		MOD_RADIO_REG_20696(pi, IQCAL_CFG4, core, iqcal2adc, 0x0);
+		MOD_RADIO_REG_20696(pi, IQCAL_CFG4, core, auxpga2adc, 0x1);
+		// Mux AUX path to ADC
+		MOD_RADIO_REG_20696(pi, LPF_OVR2, core, ovr_lpf_sw_bq1_adc, 0x1);
+		MOD_RADIO_REG_20696(pi, LPF_OVR2, core, ovr_lpf_sw_aux_adc, 0x1);
+		MOD_RADIO_REG_20696(pi, LPF_OVR1, core, ovr_lpf_sw_bq2_adc, 0x1);
+		MOD_RADIO_REG_20696(pi, LPF_REG7, core, lpf_sw_bq1_adc, 0x0);
+		MOD_RADIO_REG_20696(pi, LPF_REG7, core, lpf_sw_bq2_adc, 0x0);
+		MOD_RADIO_REG_20696(pi, LPF_REG7, core, lpf_sw_aux_adc, 0x1);
+		// Turn off TIA
+		MOD_RADIO_REG_20696(pi, TIA_CFG1_OVR, core, ovr_tia_pu, 0x1);
+		MOD_RADIO_REG_20696(pi, TIA_REG7, core, tia_pu, 0x0);
+	}
+	return;
+}
+
+
+static void
+wlc_phy_tempsense_radio_cleanup_acphy_20694(phy_info_t *pi)
+{
+
+	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
+	uint8 core;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+	tempsense_radioregs_20694_t *porig =
+		&(pi_ac->tempi->ac_tempsense_radioregs_orig->u.acphy_tempsense_radioregs_20694);
+
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
+		WRITE_RADIO_REG_20694(pi, RF, TESTBUF_OVR1, core, porig->testbuf_ovr1[core]);
+		WRITE_RADIO_REG_20694(pi, RF, TESTBUF_CFG1, core, porig->testbuf_cfg1[core]);
+		WRITE_RADIO_REG_20694(pi, RF, TEMPSENSE_OVR1, core, porig->tempsense_ovr1[core]);
+		WRITE_RADIO_REG_20694(pi, RF, TEMPSENSE_CFG, core, porig->tempsense_cfg[core]);
+		WRITE_RADIO_REG_20694(pi, RF, AUXPGA_OVR1, core, porig->auxpga_ovr1[core]);
+		WRITE_RADIO_REG_20694(pi, RF, AUXPGA_CFG1, core, porig->auxpga_cfg1[core]);
+		WRITE_RADIO_REG_20694(pi, RF, AUXPGA_VMID, core, porig->auxpga_vmid[core]);
+		WRITE_RADIO_REG_20694(pi, RF, TIA_CFG1_OVR, core, porig->tia_cfg1_ovr[core]);
+		WRITE_RADIO_REG_20694(pi, RF, TIA_REG7, core, porig->tia_reg7[core]);
+		WRITE_RADIO_REG_20694(pi, RF, LPF_OVR1, core, porig->lpf_ovr1[core]);
+		WRITE_RADIO_REG_20694(pi, RF, LPF_OVR2, core, porig->lpf_ovr2[core]);
+		WRITE_RADIO_REG_20694(pi, RF, LPF_REG7, core, porig->lpf_reg7[core]);
+		WRITE_RADIO_REG_20694(pi, RF, IQCAL_CFG4, core, porig->iqcal_cfg4[core]);
+		WRITE_RADIO_REG_20694(pi, RF, IQCAL_CFG5, core, porig->iqcal_cfg5[core]);
+		WRITE_RADIO_REG_20694(pi, RF, IQCAL_OVR1, core, porig->iqcal_ovr1[core]);
+	}
+	return;
+}
+
+static void
+wlc_phy_tempsense_radio_cleanup_acphy_20696(phy_info_t *pi)
+{
+	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
+	/* restore radio config back */
+	phy_ac_reg_cache_restore(pi_ac, RADIOREGS_TEMPSENSE_VBAT);
+
+	return;
+}
+
 
 static void
 wlc_phy_tempsense_radio_setup_acphy(phy_info_t *pi, uint16 Av, uint16 Vmid)
@@ -335,9 +609,12 @@ wlc_phy_tempsense_radio_setup_acphy(phy_info_t *pi, uint16 Av, uint16 Vmid)
 	tempsense_radioregs_t *porig =
 		&(pi_ac->tempi->ac_tempsense_radioregs_orig->u.acphy_tempsense_radioregs);
 	uint8 core;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
 
 	ASSERT(RADIOID_IS(pi->pubpi->radioid, BCM2069_ID));
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		/* Reg conflict with 2069 rev 16 */
 		if (RADIO2069_MAJORREV(pi->pubpi->radiorev) == 0)
 			porig->OVR18[core]         = READ_RADIO_REGC(pi, RF, OVR18, core);
@@ -377,9 +654,12 @@ wlc_phy_tempsense_radio_cleanup_acphy(phy_info_t *pi)
 	tempsense_radioregs_t *porig =
 		&(pi_ac->tempi->ac_tempsense_radioregs_orig->u.acphy_tempsense_radioregs);
 	uint8 core;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
 
 	ASSERT(RADIOID_IS(pi->pubpi->radioid, BCM2069_ID));
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		/* Reg conflict with 2069 rev 16 */
 		if (RADIO2069_MAJORREV(pi->pubpi->radiorev) == 0)
 			phy_utils_write_radioreg(pi, RF_2069_OVR18(core), porig->OVR18[core]);
@@ -396,7 +676,7 @@ wlc_phy_tempsense_radio_cleanup_acphy(phy_info_t *pi)
 }
 
 static uint8
-phy_get_first_actv_core(uint8 coremask)
+phy_ac_temp_get_first_actv_core(uint8 coremask)
 {
 	/* Get the first active core */
 	switch (coremask & (256-coremask)) {
@@ -420,6 +700,9 @@ wlc_phy_tempsense_phy_setup_acphy(phy_info_t *pi)
 	acphy_tempsense_phyregs_t *porig = (pi_ac->tempi->ac_tempsense_phyregs_orig);
 	uint16 sdadc_config, mask;
 	uint8 core;
+	uint8 phyrxchain;
+
+	BCM_REFERENCE(phyrxchain);
 
 	if (CHSPEC_IS80(pi->radio_chanspec) || PHY_AS_80P80(pi, pi->radio_chanspec)) {
 		sdadc_config = sdadc_cfg80;
@@ -443,7 +726,8 @@ wlc_phy_tempsense_phy_setup_acphy(phy_info_t *pi)
 		MOD_PHYREG_ENTRY(pi, RxFeCtrl1, swap_iq2, 0)
 	ACPHY_REG_LIST_EXECUTE(pi);
 
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+	FOREACH_ACTV_CORE(pi, phyrxchain, core) {
 		mask = ACPHY_RfctrlIntc0_override_tr_sw_MASK(rev) |
 			ACPHY_RfctrlIntc0_tr_sw_tx_pu_MASK(rev);
 		porig->RfctrlIntc[core] = phy_utils_read_phyreg(pi,
@@ -482,10 +766,17 @@ wlc_phy_tempsense_phy_setup_acphy(phy_info_t *pi)
 
 		WRITE_PHYREGCE(pi, RfctrlCoreLpfSwtch, core,         0x154);
 		WRITE_PHYREGCE(pi, RfctrlOverrideLpfSwtch, core,     0x3ff);
-		wlc_phy_txcal_phy_setup_acphy_core_sd_adc(pi, core, sdadc_config);
+		if (!ACMAJORREV_37(pi->pubpi->phy_rev) && (!ACMAJORREV_40(pi->pubpi->phy_rev))) {
+			wlc_phy_txcal_phy_setup_acphy_core_sd_adc(pi, core, sdadc_config);
+		}
 
 		MOD_PHYREGCE(pi, RfctrlCoreLpfGain,      core, lpf_bq1_gain, 0);
 		MOD_PHYREGCE(pi, RfctrlOverrideGains,    core, lpf_bq1_gain, 1);
+	}
+	//need to enable dc bypass for 7271
+	if (ACMAJORREV_37(pi->pubpi->phy_rev)) {
+		MOD_PHYREG(pi, DcFiltAddress, dcBypass, 1);
+		MOD_PHYREG(pi, RxFeCtrl1, swap_iq3, 0);
 	}
 }
 
@@ -495,12 +786,15 @@ wlc_phy_tempsense_phy_cleanup_acphy(phy_info_t *pi)
 	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
 	acphy_tempsense_phyregs_t *porig = (pi_ac->tempi->ac_tempsense_phyregs_orig);
 	uint8 core;
+	uint8 phyrxchain;
+
+	BCM_REFERENCE(phyrxchain);
 
 	WRITE_PHYREG(pi, RxFeCtrl1, porig->RxFeCtrl1);
 
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+	FOREACH_ACTV_CORE(pi, phyrxchain, core) {
 		WRITE_PHYREGCE(pi, RfctrlIntc, core, porig->RfctrlIntc[core]);
-
 		WRITE_PHYREGCE(pi, RfctrlOverrideAuxTssi, core, porig->RfctrlOverrideAuxTssi[core]);
 		WRITE_PHYREGCE(pi, RfctrlCoreAuxTssi1, core, porig->RfctrlCoreAuxTssi1[core]);
 		WRITE_PHYREGCE(pi, RfctrlOverrideRxPus, core, porig->RfctrlOverrideRxPus[core]);
@@ -516,6 +810,11 @@ wlc_phy_tempsense_phy_cleanup_acphy(phy_info_t *pi)
 		WRITE_PHYREGCE(pi, RfctrlOverrideGains, core, porig->RfctrlOverrideGains[core]);
 		WRITE_PHYREGCE(pi, RfctrlCoreLpfGain, core, porig->RfctrlCoreLpfGain[core]);
 	}
+	//need to disable dc bypass for 7271
+	if (ACMAJORREV_37(pi->pubpi->phy_rev)) {
+		MOD_PHYREG(pi, DcFiltAddress, dcBypass, 0);
+		MOD_PHYREG(pi, RxFeCtrl1, swap_iq3, 1);
+	}
 }
 
 static int32
@@ -526,10 +825,6 @@ wlc_phy_tempsense_paldosense_phy_setup_acphy_tiny(phy_info_t *pi, uint8 tempsens
 	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
 	acphy_tempsense_phyregs_t *porig = (pi_ac->tempi->ac_tempsense_phyregs_orig);
 
-	if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
-		core = phy_get_first_actv_core(pi->sh->phyrxchain);
-		ASSERT(core < PHY_CORE_MAX);
-	}
 
 	/* Applicable # foreach core */
 	porig->RfctrlOverrideAuxTssi[core] = READ_PHYREGCE(pi, RfctrlOverrideAuxTssi, core);
@@ -853,10 +1148,6 @@ wlc_phy_tempsense_poll_adc_war_tiny(phy_info_t *pi, bool init_adc_inside, int32 
 , uint8 core)
 {
 	uint16 nsamp = 200;
-	if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
-		nsamp = 64;
-	}
-
 	wlc_phy_tempsense_radio_swap_tiny(pi, ACPHY_TEMPSENSE_VBE, 0, core);
 	measured_values[0] = wlc_phy_tempsense_poll_samps_tiny(pi, nsamp, init_adc_inside, core);
 
@@ -891,6 +1182,49 @@ wlc_phy_tempsense_poll_adc_war_28nm(phy_info_t *pi, bool init_adc_inside, int32 
 }
 
 static int32
+wlc_phy_tempsense_poll_adc_war_20694(phy_info_t *pi, bool init_adc_inside, int16 *measured_values,
+	uint8 core)
+{
+	int16 samp[PHY_CORE_MAX];
+
+	wlc_phy_tempsense_radio_swap_20694(pi, ACPHY_TEMPSENSE_VBE, 0, core);
+	wlc_phy_poll_samps_acphy(pi, samp, FALSE, 8, TRUE, core);
+	measured_values[0] = samp[core];
+
+	wlc_phy_tempsense_radio_swap_20694(pi, ACPHY_TEMPSENSE_VBG, 0, core);
+	wlc_phy_poll_samps_acphy(pi, samp, FALSE, 8, TRUE, core);
+	measured_values[1] = samp[core];
+
+	wlc_phy_tempsense_radio_swap_20694(pi, ACPHY_TEMPSENSE_VBE, 1, core);
+	wlc_phy_poll_samps_acphy(pi, samp, FALSE, 8, TRUE, core);
+	measured_values[2] = samp[core];
+
+	wlc_phy_tempsense_radio_swap_20694(pi, ACPHY_TEMPSENSE_VBG, 1, core);
+	wlc_phy_poll_samps_acphy(pi, samp, FALSE, 8, TRUE, core);
+	measured_values[3] = samp[core];
+
+	return BCME_OK;
+}
+
+static int32
+wlc_phy_tempsense_poll_adc_war_20696(phy_info_t *pi, bool init_adc_inside, int16 *measured_values,
+	uint8 core)
+{
+	wlc_phy_tempsense_radio_swap_20696(pi, ACPHY_TEMPSENSE_VBE, 0, core);
+	measured_values[0] = wlc_phy_tempsense_poll_samps_tiny(pi, 200, init_adc_inside, core);
+
+	wlc_phy_tempsense_radio_swap_20696(pi, ACPHY_TEMPSENSE_VBG, 0, core);
+	measured_values[1] = wlc_phy_tempsense_poll_samps_tiny(pi, 200, init_adc_inside, core);
+
+	wlc_phy_tempsense_radio_swap_20696(pi, ACPHY_TEMPSENSE_VBE, 1, core);
+	measured_values[2] = wlc_phy_tempsense_poll_samps_tiny(pi, 200, init_adc_inside, core);
+
+	wlc_phy_tempsense_radio_swap_20696(pi, ACPHY_TEMPSENSE_VBG, 1, core);
+	measured_values[3] = wlc_phy_tempsense_poll_samps_tiny(pi, 200, init_adc_inside, core);
+	return BCME_OK;
+}
+
+static int32
 wlc_phy_tempsense_poll_samps_tiny(phy_info_t *pi, uint16 samples, bool init_adc_inside
 , uint8 core)
 {
@@ -910,7 +1244,8 @@ wlc_phy_tempsense_poll_samps_tiny(phy_info_t *pi, uint16 samples, bool init_adc_
 		}
 	}
 	if (ACMAJORREV_4(pi->pubpi->phy_rev) || ACMAJORREV_36(pi->pubpi->phy_rev) ||
-		ACMAJORREV_32(pi->pubpi->phy_rev)|| ACMAJORREV_33(pi->pubpi->phy_rev)) {
+		ACMAJORREV_32(pi->pubpi->phy_rev)|| ACMAJORREV_33(pi->pubpi->phy_rev) ||
+		ACMAJORREV_37(pi->pubpi->phy_rev)) {
 		/* 13 bit signed to 16 bit signed conversion. */
 		mask = 0x1FFF;
 		signcheck = 0x1000;
@@ -927,14 +1262,19 @@ wlc_phy_tempsense_poll_samps_tiny(phy_info_t *pi, uint16 samples, bool init_adc_
 	OSL_DELAY(10);
 	if ((ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) &&
 		(core == 3)) {
-			phy_iq_est_t rx_iq_est[PHY_CORE_MAX];
-			MOD_PHYREG(pi, RxSdFeConfig6, rx_farrow_rshift_0, 1);
-			nsamps = 2*(1<<2*discardbits);
-			wlc_phy_rx_iq_est_acphy(pi, rx_iq_est,	nsamps, 32, 0, TRUE);
-			i_sum = (int32)
-				phy_utils_sqrt_int((uint32)(rx_iq_est[core].i_pwr))*4;
-			measured_voltage = 0 - i_sum;
-			//MOD_PHYREG(pi, RxSdFeConfig6, rx_farrow_rshift_0, 0);
+		phy_iq_est_t rx_iq_est[PHY_CORE_MAX];
+		MOD_PHYREG(pi, RxSdFeConfig6, rx_farrow_rshift_0, 1);
+		nsamps = 2 * (1 << 2 * discardbits);
+		wlc_phy_rx_iq_est_acphy(pi, rx_iq_est,	nsamps, 32, 0, TRUE);
+		i_sum = (int32)phy_utils_sqrt_int((uint32)(rx_iq_est[core].i_pwr)) * 4;
+		measured_voltage = 0 - i_sum;
+	} else if (ACMAJORREV_37(pi->pubpi->phy_rev)) {
+		phy_iq_est_t rx_iq_est[PHY_CORE_MAX];
+		MOD_PHYREG(pi, RxSdFeConfig6, rx_farrow_rshift_0, 1);
+		nsamps = 2 * (1 << 2 * discardbits);
+		wlc_phy_rx_iq_est_acphy(pi, rx_iq_est,	128, 32, 0, TRUE);
+		i_sum = (int32)(phy_utils_sqrt_int((uint32)(rx_iq_est[core].i_pwr) / 64));
+		measured_voltage = ((int32)(1 << 10) - i_sum) * 8;
 	} else {
 		for (i = 0; i < samples; i++) {
 			i_val = READ_PHYREG(pi, gpioHiOut);
@@ -1034,15 +1374,69 @@ wlc_phy_tempsense_radio_swap_28nm(phy_info_t *pi, acphy_tempsense_cfg_opt_t type
 }
 
 static int32
+wlc_phy_tempsense_radio_swap_20694(phy_info_t *pi, acphy_tempsense_cfg_opt_t type, uint8 swap,
+	uint8 core)
+{
+	/* Enable override */
+	MOD_RADIO_REG_20694(pi, RF, TEMPSENSE_OVR1, core, ovr_tempsense_sel_Vbe_Vbg, 1);
+	MOD_RADIO_REG_20694(pi, RF, TEMPSENSE_OVR1, core, ovr_tempsense_swap_amp, 1);
+
+	if (swap == 0) {
+		MOD_RADIO_REG_20694(pi, RF, TEMPSENSE_CFG, core, tempsense_swap_amp, 0);
+	} else if (swap == 1) {
+		MOD_RADIO_REG_20694(pi, RF, TEMPSENSE_CFG, core, tempsense_swap_amp, 1);
+	} else {
+		PHY_ERROR(("Unsupported, swap should be 0 or 1\n"));
+		return BCME_ERROR;
+	}
+	if (type == ACPHY_TEMPSENSE_VBG) {
+		MOD_RADIO_REG_20694(pi, RF, TEMPSENSE_CFG, core, tempsense_sel_Vbe_Vbg, 0);
+	} else if (type == ACPHY_TEMPSENSE_VBE) {
+		MOD_RADIO_REG_20694(pi, RF, TEMPSENSE_CFG, core, tempsense_sel_Vbe_Vbg, 1);
+	} else {
+		PHY_ERROR(("Unsupported, supported types are"));
+		PHY_ERROR((" ACPHY_TEMPSENSE_VBE/ACPHY_TEMPSENSE_VBG\n"));
+		return BCME_ERROR;
+	}
+	return BCME_OK;
+}
+
+
+static int32
+wlc_phy_tempsense_radio_swap_20696(phy_info_t *pi, acphy_tempsense_cfg_opt_t type, uint8 swap,
+	uint8 core)
+{
+	/* Enable override */
+	MOD_RADIO_REG_20696(pi, TEMPSENSE_OVR1, core, ovr_tempsense_sel_Vbe_Vbg, 1);
+	MOD_RADIO_REG_20696(pi, TEMPSENSE_OVR1, core, ovr_tempsense_swap_amp, 1);
+
+	if (swap == 0) {
+		MOD_RADIO_REG_20696(pi, TEMPSENSE_CFG, core, tempsense_swap_amp, 0);
+	} else if (swap == 1) {
+		MOD_RADIO_REG_20696(pi, TEMPSENSE_CFG, core, tempsense_swap_amp, 1);
+	} else {
+		PHY_ERROR(("Unsupported, swap should be 0 or 1\n"));
+		return BCME_ERROR;
+	}
+	if (type == ACPHY_TEMPSENSE_VBG) {
+		MOD_RADIO_REG_20696(pi, TEMPSENSE_CFG, core, tempsense_sel_Vbe_Vbg, 0);
+	} else if (type == ACPHY_TEMPSENSE_VBE) {
+		MOD_RADIO_REG_20696(pi, TEMPSENSE_CFG, core, tempsense_sel_Vbe_Vbg, 1);
+	} else {
+		PHY_ERROR(("Unsupported, supported types are"));
+		PHY_ERROR((" ACPHY_TEMPSENSE_VBE/ACPHY_TEMPSENSE_VBG\n"));
+		return BCME_ERROR;
+	}
+	return BCME_OK;
+}
+
+
+static int32
 wlc_phy_tempsense_paldosense_phy_cleanup_acphy_tiny(phy_info_t *pi, uint8 core)
 {
 	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
 	acphy_tempsense_phyregs_t *porig = (pi_ac->tempi->ac_tempsense_phyregs_orig);
 
-	if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
-		core = phy_get_first_actv_core(pi->sh->phyrxchain);
-		ASSERT(core < PHY_CORE_MAX);
-	}
 
 	// Additional settings for 4365 core3 GPIO WAR
 	if ((ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) &&
@@ -1136,12 +1530,17 @@ wlc_phy_tempsense_paldosense_radio_cleanup_acphy_tiny(phy_info_t *pi, uint8 temp
 			porig->rx_bb_2g_ovr_east[core]);
 		phy_utils_write_radioreg(pi, RADIO_REG(pi, TIA_CFG7, core),
 			porig->tia_cfg7[core]);
-		MOD_RADIO_REG_TINY(pi, TEMPSENSE_CFG, core, tempsense_pu, 0);
-		MOD_RADIO_REG_TINY(pi, TEMPSENSE_OVR1, core, ovr_tempsense_pu, 0);
-		MOD_RADIO_REG_TINY(pi, VBAT_CFG, core, vbat_monitor_pu, 0);
-		MOD_RADIO_REG_TINY(pi, VBAT_OVR1, core, ovr_vbat_monitor_pu, 0);
-		MOD_RADIO_REG_TINY(pi, AUXPGA_CFG1, core, auxpga_i_pu, 0);
-		MOD_RADIO_REG_TINY(pi, AUXPGA_OVR1, core, ovr_auxpga_i_pu, 0);
+		if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
+			MOD_RADIO_REG_TINY(pi, TEMPSENSE_OVR1, core, ovr_tempsense_pu, 1);
+			MOD_RADIO_REG_TINY(pi, TEMPSENSE_CFG, core, tempsense_pu, 0);
+		} else {
+			MOD_RADIO_REG_TINY(pi, TEMPSENSE_CFG, core, tempsense_pu, 0);
+			MOD_RADIO_REG_TINY(pi, TEMPSENSE_OVR1, core, ovr_tempsense_pu, 0);
+			MOD_RADIO_REG_TINY(pi, VBAT_CFG, core, vbat_monitor_pu, 0);
+			MOD_RADIO_REG_TINY(pi, VBAT_OVR1, core, ovr_vbat_monitor_pu, 0);
+			MOD_RADIO_REG_TINY(pi, AUXPGA_CFG1, core, auxpga_i_pu, 0);
+			MOD_RADIO_REG_TINY(pi, AUXPGA_OVR1, core, ovr_auxpga_i_pu, 0);
+		}
 		if (tempsense_paldosense) {
 			if (CHSPEC_IS2G(pi->radio_chanspec)) {
 				MOD_RADIO_REG_TINY(pi, TX_TOP_2G_OVR_EAST, core,
@@ -1207,17 +1606,18 @@ wlc_phy_tempsense_paldosense_acphy_tiny(phy_info_t *pi, uint8 tempsense_paldosen
 	uint8 enRx = 0;
 	uint8 enTx = 0;
 	uint8 core = 0;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 
 	if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
 		avbq_scale = 1200;
-		core = phy_get_first_actv_core(pi->sh->phyrxchain);
+		core = phy_ac_temp_get_first_actv_core(stf_shdata->phyrxchain);
 		ASSERT(core < PHY_CORE_MAX);
 		if (core < 3) {
 			auxPGA_Av = 0x5, auxPGA_Vmid = 0x7D;
-			t_slope = -2898; t_offset = 1345113;
+			t_slope = -3038; t_offset = 1621378;
 		} else {
 			auxPGA_Av = 0x5, auxPGA_Vmid = 0x9B;
-			t_slope = -3620; t_offset = 1330692;
+			t_slope = -3795; t_offset = 1606261;
 		}
 	}
 
@@ -1232,10 +1632,12 @@ wlc_phy_tempsense_paldosense_acphy_tiny(phy_info_t *pi, uint8 tempsense_paldosen
 	wlapi_suspend_mac_and_wait(pi->sh->physhim);
 	phy_utils_phyreg_enter(pi);
 
-	/* change Av and Vmid for paldosense */
-	if ((tempsense_paldosense)) {
-		auxPGA_Av = 0x7;
-		auxPGA_Vmid = 70;
+	if (!ACMAJORREV_32(pi->pubpi->phy_rev) && !ACMAJORREV_33(pi->pubpi->phy_rev)) {
+		/* change Av and Vmid for paldosense */
+		if ((tempsense_paldosense)) {
+			auxPGA_Av = 0x7;
+			auxPGA_Vmid = 70;
+		}
 	}
 
 	if (IS_4364_1x1(pi)) {
@@ -1250,7 +1652,7 @@ wlc_phy_tempsense_paldosense_acphy_tiny(phy_info_t *pi, uint8 tempsense_paldosen
 		t_offset = 1671660;
 	}
 	wlc_phy_update_rxchains((wlc_phy_t *)pi, &enRx, &enTx,
-		pi->sh->hw_phyrxchain, pi->sh->hw_phytxchain);
+		stf_shdata->hw_phyrxchain, stf_shdata->hw_phytxchain);
 	wlc_phy_tempsense_paldosense_phy_setup_acphy_tiny(pi, tempsense_paldosense, core);
 	wlc_phy_tempsense_paldosense_radio_setup_acphy_tiny(pi, auxPGA_Av, auxPGA_Vmid,
 	tempsense_paldosense, core);
@@ -1378,6 +1780,187 @@ wlc_phy_tempsense_paldosense_acphy_28nm(phy_ac_temp_info_t *ti, uint8 tempsense_
 /*				External Definitions					*/
 /* ********************************************* */
 int16
+wlc_phy_tempsense_vbatsense_acphy_20694(phy_info_t *pi, uint8 tempsense_vbatsense)
+{
+	int32 t_scale = 16384;
+	int32 t_slope = -6900;
+	int32 t_offset = 1751040;
+	int16 gpio_clk_en;
+	int16 Vout[4] = {0, 0, 0, 0};
+	int16 measured_voltage[3][4] = {{0}};
+	int32 radio_temp = 0;
+	uint8 core, core_cnt = 0;
+	int16 offset = (int16) pi->phy_tempsense_offset;
+	uint16 auxPGA_Av = 0x3, auxPGA_Vmid = 0x91;
+	uint16 save_afePuCtrl = 0, save_gpio = 0, save_gpioHiOutEn = 0;
+	uint16 fval2g_orig, fval5g_orig, fval2g, fval5g;
+	uint32 save_chipc = 0;
+	uint8  stall_val = 0;
+	bool ocl_en, ocl_core_mask_ovr = 0;
+	uint8 ocl_core_mask = 1;
+	phy_ac_temp_info_t *ti = pi->u.pi_acphy->tempi;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
+
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
+	phy_utils_phyreg_enter(pi);
+
+	// If OCL enabled, find out which core is listening
+	ocl_en = (READ_PHYREGFLD(pi, OCLControl1, ocl_mode_enable) == 1);
+	if (ocl_en) {
+		core_cnt = 1;
+		ocl_core_mask_ovr = (READ_PHYREGFLD(pi, OCLControl1, ocl_core_mask_ovr) == 1);
+		if (ocl_core_mask_ovr)
+			ocl_core_mask = READ_PHYREGFLD(pi, OCLControl1, ocl_rx_core_mask);
+	} else {
+		FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core)
+			core_cnt++;
+	}
+
+	/* Prepare Mac and Phy regs */
+	gpio_clk_en = READ_PHYREGFLD(pi, gpioClkControl, gpioEn);
+	MOD_PHYREG(pi, gpioClkControl, gpioEn, 1);
+
+	wlc_phy_tempsense_phy_setup_acphy(pi);
+	wlc_phy_tempsense_radio_setup_acphy_20694(pi, auxPGA_Av, auxPGA_Vmid);
+
+	wlc_phy_init_adc_read(pi, &save_afePuCtrl, &save_gpio,
+	                          &save_chipc, &fval2g_orig, &fval5g_orig,
+	                          &fval2g, &fval5g, &stall_val, &save_gpioHiOutEn);
+
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
+		if (!ocl_en || (ocl_en && ((ocl_core_mask >> core) & 0x01) == 1)) {
+			wlc_phy_tempsense_poll_adc_war_20694(pi, TRUE, measured_voltage[core],
+				core);
+
+			radio_temp += (int32)(((measured_voltage[core][0]
+					+ measured_voltage[core][2]
+					- measured_voltage[core][1]
+					- measured_voltage[core][3]) / 2))
+					* (t_slope / core_cnt);
+			// for PHY_THERMAL message
+			Vout[0] += measured_voltage[core][0] / core_cnt;
+			Vout[1] += measured_voltage[core][1] / core_cnt;
+			Vout[2] += measured_voltage[core][2] / core_cnt;
+			Vout[3] += measured_voltage[core][3] / core_cnt;
+		}
+	}
+	radio_temp = (radio_temp + t_offset)/t_scale;
+
+	PHY_THERMAL(("Tempsense\n\tAuxADC0 Av,Vmid = 0x%x,0x%x\n",
+	             auxPGA_Av, auxPGA_Vmid));
+	PHY_THERMAL(("\tCore0 Vref1,Vref2,Vctat1,Vctat2 = %d,%d,%d,%d\n",
+			measured_voltage[0][0], measured_voltage[0][2],
+			measured_voltage[0][1], measured_voltage[0][3]));
+	PHY_THERMAL(("\tCore1 Vref1,Vref2,Vctat1,Vctat2 = %d,%d,%d,%d\n",
+			measured_voltage[1][0], measured_voltage[1][2],
+			measured_voltage[1][1], measured_voltage[1][3]));
+	PHY_THERMAL(("\t^C Formula: (%d*(Vctat1+Vctat2-Vref1-Vref2)/2*-6900+%d)/%d\n",
+	             t_slope, t_offset, t_scale));
+	PHY_THERMAL(("\t^C = %d, applied offset = %d\n",
+	             radio_temp, offset));
+
+	/* restore registers and resume MAC */
+	wlc_phy_restore_after_adc_read(pi,	&save_afePuCtrl, &save_gpio,
+		&save_chipc,  &fval2g_orig,  &fval5g_orig,
+		&fval2g,  &fval5g, &stall_val, &save_gpioHiOutEn);
+
+	wlc_phy_tempsense_phy_cleanup_acphy(pi);
+	wlc_phy_tempsense_radio_cleanup_acphy_20694(pi);
+
+	MOD_PHYREG(pi, gpioClkControl, gpioEn, gpio_clk_en);
+
+	/* Store temperature and return value */
+	ti->current_temperature = (int16) radio_temp + offset;
+	//pi->u.pi_acphy->tempi->current_temperature = (int16) radio_temp + offset;
+
+
+	phy_utils_phyreg_exit(pi);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
+	wlapi_enable_mac(pi->sh->physhim);
+
+	return ((int16) radio_temp + offset);
+}
+
+int16
+wlc_phy_tempsense_vbatsense_acphy_20696(phy_info_t *pi, uint8 tempsense_vbatsense)
+{
+	const int32 t_scale = 16300;
+	const int32 t_slope = 2561;
+	const int32 t_offset = 1875200;
+	int16 gpio_clk_en;
+	int16 Vout[4] = {0, 0, 0, 0};
+	int16 measured_voltage[PHY_CORE_MAX][4] = {{0}};
+	int32 radio_temp = 0;
+	uint8 core, core_cnt = 0;
+	int16 offset = (int16) pi->phy_tempsense_offset;
+	const uint16 auxPGA_Av = 0, auxPGA_Vmid = 0x96;
+	uint16 save_afePuCtrl, save_gpio, save_gpioHiOutEn;
+	uint16 fval2g_orig, fval5g_orig, fval2g, fval5g;
+	uint32 save_chipc;
+	uint8  stall_val;
+	phy_ac_temp_info_t *ti = pi->u.pi_acphy->tempi;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
+	phy_utils_phyreg_enter(pi);
+
+
+	/* Prepare Mac and Phy regs */
+	gpio_clk_en = READ_PHYREGFLD(pi, gpioClkControl, gpioEn);
+	MOD_PHYREG(pi, gpioClkControl, gpioEn, 1);
+	wlc_phy_tempsense_phy_setup_acphy(pi);
+	wlc_phy_tempsense_radio_setup_acphy_20696(pi, auxPGA_Av, auxPGA_Vmid);
+
+	wlc_phy_init_adc_read(pi, &save_afePuCtrl, &save_gpio,
+	                          &save_chipc, &fval2g_orig, &fval5g_orig,
+	                          &fval2g, &fval5g, &stall_val, &save_gpioHiOutEn);
+
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
+		core_cnt++;
+	}
+
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
+		wlc_phy_tempsense_poll_adc_war_20696(pi, TRUE, measured_voltage[core], core);
+		radio_temp += (int32)(((measured_voltage[core][0]
+				+ measured_voltage[core][2]
+				- measured_voltage[core][1]
+				- measured_voltage[core][3]) / 2))
+					* (t_slope / core_cnt);
+		// for PHY_THERMAL message
+		Vout[0] += measured_voltage[core][0] / core_cnt;
+		Vout[1] += measured_voltage[core][1] / core_cnt;
+		Vout[2] += measured_voltage[core][2] / core_cnt;
+		Vout[3] += measured_voltage[core][3] / core_cnt;
+	}
+
+	radio_temp = ((radio_temp + t_offset) / t_scale);
+
+	/* restore registers and resume MAC */
+	wlc_phy_restore_after_adc_read(pi, &save_afePuCtrl, &save_gpio,
+		&save_chipc,  &fval2g_orig,  &fval5g_orig,
+		&fval2g,  &fval5g, &stall_val, &save_gpioHiOutEn);
+
+	wlc_phy_tempsense_phy_cleanup_acphy(pi);
+	wlc_phy_tempsense_radio_cleanup_acphy_20696(pi);
+
+	MOD_PHYREG(pi, gpioClkControl, gpioEn, gpio_clk_en);
+
+	/* Store temperature and return value */
+	ti->current_temperature = (int16) radio_temp + offset;
+
+
+	phy_utils_phyreg_exit(pi);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
+	wlapi_enable_mac(pi->sh->physhim);
+	return ((int16) radio_temp + offset);
+}
+
+
+int16
 wlc_phy_tempsense_acphy(phy_info_t *pi)
 {
 	uint8 core, core_cnt = 0;
@@ -1399,26 +1982,22 @@ wlc_phy_tempsense_acphy(phy_info_t *pi)
 	int32 k, tmp_samp, samp_accum;
 	phy_ac_info_t *pi_ac = pi->u.pi_acphy;
 	phy_ac_temp_info_t *ti = pi_ac->tempi;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 
 	/* return dummy temp */
 	if (NORADIO_ENAB(pi->pubpi)) {
+		ti->current_temperature = 25;
 		return 25;
 	}
-
-	if (RADIOID_IS(pi->pubpi->radioid, BCM20694_ID)) {
-		PHY_ERROR(("%s: TBD for BCM20694_ID\n", __FUNCTION__));
-		return 25;
-	}
-	if (RADIOID_IS(pi->pubpi->radioid, BCM20696_ID)) {
-		PHY_INFORM(("%s: TBD for BCM20696_ID\n", __FUNCTION__));
-		return 42;
-	}
-
 
 	if (TINY_RADIO(pi)) {
 			return wlc_phy_tempsense_paldosense_acphy_tiny(pi, SENSE_TEMP);
 	} else if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
 		return wlc_phy_tempsense_paldosense_acphy_28nm(ti, SENSE_TEMP);
+	} else if (ACMAJORREV_37(pi->pubpi->phy_rev)) {
+		return wlc_phy_tempsense_vbatsense_acphy_20696(pi, SENSE_TEMP);
+	} else if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		return wlc_phy_tempsense_vbatsense_acphy_20694(pi, SENSE_TEMP);
 	}
 
 	/* Prepare Mac and Phregs */
@@ -1444,7 +2023,7 @@ wlc_phy_tempsense_acphy(phy_info_t *pi)
 			&fval2g, &fval5g, &stall_val, &save_gpioHiOutEn);
 	wlc_phy_pulse_adc_reset_acphy(pi);
 
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 	  wlc_phy_gpiosel_acphy(pi, 16+core, 1);
 	  core_cnt++;
 	  for (idx = 0; idx < 4; idx++) {
@@ -1515,7 +2094,7 @@ wlc_phy_tempsense_acphy(phy_info_t *pi)
 		avbq_slope[1] = 1024;
 		t_scale			= 16384;
 
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+		FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 	        radio_temp += (int32)(((V[0][core] + V[2][core] - V[1][core] - V[3][core]) / 2))
 		                      * ((t_slope * avbq_scale) / (avbq_slope[core] * core_cnt));
 			Vout[0] += V[0][core] / core_cnt;
@@ -1530,7 +2109,7 @@ wlc_phy_tempsense_acphy(phy_info_t *pi)
 		offset = 0;
 
 	} else {
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+		FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 			radio_temp += (int32)(V[1][core] + V[3][core] - V[0][core] - V[2][core])
 					  * t_slope / 2 * avbq_scale / avbq_slope[core] / core_cnt;
 			Vout[0] += V[0][core] / core_cnt;
@@ -1561,10 +2140,6 @@ wlc_phy_tempsense_acphy(phy_info_t *pi)
 	/* Store temperature and return value */
 	ti->current_temperature = (int16) radio_temp + offset;
 
-#ifdef ATE_BUILD
-	wl_ate_set_buffer_regval(CURR_RADIO_TEMP, pi->u.pi_acphy->current_temperature, -1,
-	phy_get_current_core(pi), pi->sh->chip);
-#endif
 
 	return ((int16) radio_temp + offset);
 }
@@ -1601,28 +2176,28 @@ wlc_phy_vbat_monitoring_algorithm_acphy(phy_info_t *pi)
 	phy_ac_temp_info_t *ti = pi_ac->tempi;
 
 	/* setting the address for LDO and writing the 3p3 voltage */
-	wlc_si_pmu_regcontrol_access(pi, 4, &temp, 0);
+	phy_utils_pmu_regcontrol_access(pi, 4, &temp, 0);
 	temp = temp & 0xFFFF8FFF;
 	temp = temp | (paldo_data[0] << 12);
-	wlc_si_pmu_regcontrol_access(pi, 4, &temp, 1);
+	phy_utils_pmu_regcontrol_access(pi, 4, &temp, 1);
 	/* setting the address for PALDO and writing the 3p3 voltage */
-	wlc_si_pmu_regcontrol_access(pi, 7, &temp, 0);
+	phy_utils_pmu_regcontrol_access(pi, 7, &temp, 0);
 	temp = temp & 0xFFFFFFF8;
 	temp = temp | paldo_data[0];
-	wlc_si_pmu_regcontrol_access(pi, 7, &temp, 1);
+	phy_utils_pmu_regcontrol_access(pi, 7, &temp, 1);
 	read_high_voltage = wlc_phy_tempsense_paldosense_acphy_tiny(pi, SENSE_PALDO);
 	/* loop over to check till what point regulated conditon is seen */
 	for (i = 1; i < 5; i++) {
 		/* setting the address for LDO and writing the 3p3 voltage */
-		wlc_si_pmu_regcontrol_access(pi, 4, &temp, 0);
+		phy_utils_pmu_regcontrol_access(pi, 4, &temp, 0);
 		temp = temp & 0xFFFF8FFF;
 		temp = temp | (paldo_data[i] << 12);
-		wlc_si_pmu_regcontrol_access(pi, 4, &temp, 1);
+		phy_utils_pmu_regcontrol_access(pi, 4, &temp, 1);
 		/* setting the address for PALDO and writing the 3p3 voltage */
-		wlc_si_pmu_regcontrol_access(pi, 7, &temp, 0);
+		phy_utils_pmu_regcontrol_access(pi, 7, &temp, 0);
 		temp = temp & 0xFFFFFFF8;
 		temp = temp | paldo_data[i];
-		wlc_si_pmu_regcontrol_access(pi, 7, &temp, 1);
+		phy_utils_pmu_regcontrol_access(pi, 7, &temp, 1);
 		read_new_voltage = wlc_phy_tempsense_paldosense_acphy_tiny(pi, SENSE_PALDO);
 		if ((read_high_voltage - read_new_voltage) < threshold) {
 			read_high_voltage = read_new_voltage;
@@ -1632,26 +2207,26 @@ wlc_phy_vbat_monitoring_algorithm_acphy(phy_info_t *pi)
 	}
 	if (i != 6) {
 		/* setting the address for LDO and writing the 3p3 voltage */
-		wlc_si_pmu_regcontrol_access(pi, 4, &temp, 0);
+		phy_utils_pmu_regcontrol_access(pi, 4, &temp, 0);
 		temp = temp & 0xFFFF8FFF;
 		temp = temp | (paldo_data[i-1] << 12);
-		wlc_si_pmu_regcontrol_access(pi, 4, &temp, 1);
+		phy_utils_pmu_regcontrol_access(pi, 4, &temp, 1);
 		/* setting the address for PALDO and writing the 3p3 voltage */
-		wlc_si_pmu_regcontrol_access(pi, 7, &temp, 0);
+		phy_utils_pmu_regcontrol_access(pi, 7, &temp, 0);
 		temp = temp & 0xFFFFFFF8;
 		temp = temp | paldo_data[i-1];
-		wlc_si_pmu_regcontrol_access(pi, 7, &temp, 1);
+		phy_utils_pmu_regcontrol_access(pi, 7, &temp, 1);
 	} else {
 		/* setting the address for LDO and writing the 3p3 voltage */
-		wlc_si_pmu_regcontrol_access(pi, 4, &temp, 0);
+		phy_utils_pmu_regcontrol_access(pi, 4, &temp, 0);
 		temp = temp & 0xFFFF8FFF;
 		temp = temp | (paldo_data[i-2] << 12);
-		wlc_si_pmu_regcontrol_access(pi, 4, &temp, 1);
+		phy_utils_pmu_regcontrol_access(pi, 4, &temp, 1);
 		/* setting the address for PALDO and writing the 3p3 voltage */
-		wlc_si_pmu_regcontrol_access(pi, 7, &temp, 0);
+		phy_utils_pmu_regcontrol_access(pi, 7, &temp, 0);
 		temp = temp & 0xFFFFFFF8;
 		temp = temp | paldo_data[i-2];
-		wlc_si_pmu_regcontrol_access(pi, 7, &temp, 1);
+		phy_utils_pmu_regcontrol_access(pi, 7, &temp, 1);
 	}
 	if (i == ti->last_regulated)
 		do_cals = 0;
@@ -1744,4 +2319,12 @@ phy_ac_temp_upd_gain_cal(phy_type_temp_ctx_t *ctx, int16 *gain_err_temp_adj)
 	} else {
 		*gain_err_temp_adj = (temp_diff * gain_temp_slope*2 - 25)/50;
 	}
+}
+
+static int16
+phy_ac_temp_do_tempsense(phy_type_temp_ctx_t *ctx)
+{
+	phy_ac_temp_info_t *info = (phy_ac_temp_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+	return wlc_phy_tempsense_acphy(pi);
 }

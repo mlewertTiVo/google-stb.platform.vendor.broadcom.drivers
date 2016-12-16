@@ -13,11 +13,13 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_cfg.h 658824 2016-09-09 22:06:14Z $
+ * $Id: wlc_cfg.h 672288 2016-11-25 11:46:09Z $
  */
 
 #ifndef _wlc_cfg_h_
 #define _wlc_cfg_h_
+
+#define IEEE_P80211AX_D05
 
 #ifdef TXQ_MUX /* Enables to use per SCB MUX queues */
 #ifndef SCBQ_LEN_MAX
@@ -63,23 +65,6 @@
 #error "GSCAN needs WLPFN to be defined."
 #endif
 
-#ifdef WLCXO
-
-#if defined(WLCXO_CTRL) && !defined(WLCXO_DATA)
-#define WLCXO_CTRL_ONLY
-#endif
-
-#if !defined(WLCXO_CTRL) && defined(WLCXO_DATA)
-#define WLCXO_DATA_ONLY
-#endif
-
-#if defined(WLCXO_CTRL) && defined(WLCXO_DATA) && !defined(WLCXO_IPC) && \
-	defined(WLCXO_SIM)
-#define WLCXO_CTRL_DATA
-#endif
-
-#endif /* WLCXO */
-
 /* DUALBAND Support */
 #ifdef DBAND
 #define NBANDS(wlc) ((wlc)->pub->_nbands)
@@ -122,34 +107,32 @@
 #define _IS_SINGLEBAND_5G(device)\
 	(_IS_SINGLEBAND_5G_RELEASED_CHIPS(device) || _IS_SINGLEBAND_5G_UNRELEASED_CHIPS(device))
 
-int wlc_is_singleband_5g(unsigned int device);
-int wlc_bmac_is_singleband_5g(unsigned int device);
-	#define IS_SINGLEBAND_5G(device)	(bool)wlc_is_singleband_5g(device)
+int wlc_is_singleband_5g(unsigned int device, unsigned int corecap);
+int wlc_bmac_is_singleband_5g(unsigned int device, unsigned int corecap);
+	#define IS_SINGLEBAND_5G(device, corecap)	(bool)wlc_is_singleband_5g(device, corecap)
 
 #ifndef WLRXEXTHDROOM
-#ifdef WLCXO
-/* For CXO need headroom for both NIC and FD case */
-#define WLRXEXTHDROOM 128
-#else
 #define WLRXEXTHDROOM 0
-#endif
 #endif /* WLRXEXTHDROOM */
 
 /* **** Core type/rev defaults **** */
-#ifdef BCM7271
-#define D11_DEFAULT    0
-#define D11_DEFAULT2   0
-#ifdef UCODE_TOT_COREREV_66
-#define D11_DEFAULT3	0x00000004	/* Support D11 revs: 66 */
-#else
-#define D11_DEFAULT3	0x00000002	/* Support D11 revs: 65 */
-#endif /* UCODE_TOT_COREREV_66 */
-#else /* BCM7271 */
-#define D11_DEFAULT    0xff800000	/* Supported  D11 revs: 23-31 */
+
+#ifdef STB_SOC_WIFI
+#define D11_DEFAULT     0x00000000
+#define D11_DEFAULT2    0x00000000
+#define D11_DEFAULT3    0x00000004      /* Supported D11 revs: 66 */
+#define D11_DEFAULT4    0x00000000
+#define D11_DEFAULT5    0x00000000
+#else /* STB_SOC_WIFI */
+#define D11_DEFAULT     0xff800000	/* Supported  D11 revs: 23-31 */
 #define D11_DEFAULT2	0x227fff87	/* Supported  D11 revs: 32-34, 39, 40-54, 57, 61 */
 #define D11_DEFAULT3	0x00000007	/* Supported  D11 revs: 64-66 */
+#define D11_DEFAULT4	0x00000000	/* Supported  D11 revs: 0 */
+#define D11_DEFAULT5	0x00000000	/* Supported  D11 revs: 0 */
+#endif /* STB_SOC_WIFI */
+
 #define D11_MINOR_DEFAULT    0x00000003	/* Supported  D11 minor revs: 0-1 */
-#endif /* BCM7271 */
+
 /*
  * The supported PHYs are either specified explicitly in the wltunable_xxx.h file, or the
  * defaults are used.
@@ -168,17 +151,17 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #  endif
 #endif /* !PHYCONF_DEFAULTS */
 
-#ifdef BCM7271
 
+#ifdef STB_SOC_WIFI
 #define NPHY_DEFAULT       0x0
 #define HTPHY_DEFAULT      0x0
 #define LCNPHY_DEFAULT     0x0
 #define LCN40PHY_DEFAULT   0x0
 #define LCN20PHY_DEFAULT   0x0
 #define ACPHY_DEFAULT      0x0
-#define ACPHY_DEFAULT2     0x20		// 37  7271a0
+#define ACPHY_DEFAULT2     0x20         // 37  7271a0
 
-#else
+#else /* STB_SOC_WIFI */
 
 #define NPHY_DEFAULT	0x005f07ff	/* Supported nphy revs:
 					 *	0	4321a0
@@ -250,19 +233,21 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 						 *	33	4365c0
 						 *	36	43012a0
 						 *      36      4347a0 (Aux)
-						 *      37		7271a0
+						 *      37      7271a0
 						 *      40      4347a0 (Main)
 						 *      44      4369a0 (Main & Aux)
 						 */
-#endif /* BCM7271 */
 
 #define HEPHY_DEFAULT		1		/* Supported hephy revs:
 						 *	0	4369a0/4367a0/43684a0
 						 */
+#endif /* STB_SOC_WIFI */
 
 #define D11CONF1_BASE		0
 #define D11CONF2_BASE		32
 #define D11CONF3_BASE		64
+#define D11CONF4_BASE		96
+#define D11CONF5_BASE		128
 #define D11CONF_WIDTH		32
 #define D11CONF_CHK(val, base)	(((val) >= (base)) && ((val) < ((base) + D11CONF_WIDTH)))
 
@@ -293,6 +278,12 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #ifndef D11CONF3
 #define D11CONF3 D11_DEFAULT3
 #endif
+#ifndef D11CONF4
+#define D11CONF4 D11_DEFAULT4
+#endif
+#ifndef D11CONF5
+#define D11CONF5 D11_DEFAULT5
+#endif
 
 #ifndef D11CONF_MINOR
 #define D11CONF_MINOR	D11_MINOR_DEFAULT
@@ -303,12 +294,6 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #  ifndef NCONF
 #    define NCONF	NPHY_DEFAULT
 #  endif /* !NCONF */
-#  ifndef LCNCONF
-#    define LCNCONF	LCNPHY_DEFAULT
-#  endif /* !LCNCONF */
-#  ifndef LCN40CONF
-#    define LCN40CONF	LCN40PHY_DEFAULT
-#  endif /* !LCN40CONF */
 #  ifndef LCN20CONF
 #    define LCN20CONF	LCN20PHY_DEFAULT
 #  endif /* !LCN20CONF */
@@ -326,12 +311,6 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #  ifndef NCONF
 #    define NCONF	0
 #  endif /* !NCONF */
-#  ifndef LCNCONF
-#    define LCNCONF	0
-#  endif /* !LCNCONF */
-#  ifndef LCN40CONF
-#    define LCN40CONF	0
-#  endif /* !LCN40CONF */
 #  ifndef LCN20CONF
 #    define LCN20CONF	0
 #  endif /* !LCN20CONF */
@@ -355,6 +334,10 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #define LPCONF	0
 #undef SSLPNCONF
 #define SSLPNCONF	0
+#undef LCNCONF
+#define LCNCONF	0
+#undef LCN40CONF
+#define LCN40CONF	0
 
 /* support 2G band */
 #if NCONF || LCNCONF || HTCONF || LCN40CONF || LCN20CONF || ACCONF || ACCONF2
@@ -453,7 +436,6 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #endif
 
 
-
 #if defined(DWDS) && !defined(WDS)
 #error "WDS should be defined for DWDS"
 #endif
@@ -489,6 +471,16 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #endif
 
 
+/* BCM_SFD/WL11AC consistency check */
+#if defined(BCM_SFD) && !defined(WL11AC)
+#error "SFD format applies to WL11AC headers only"
+#endif
+
+/* BCM_SFD/RATE_CACHE_HDRSZ consistency check */
+#if defined(BCM_SFD) && !defined(RATE_CACHE_HDRSZ)
+#error "RATE_CACHE_HDRSZ should be defined for SFD"
+#endif
+
 /********************************************************************
  * Phy/Core Configuration.  Defines macros to to check core phy/rev *
  * compile-time configuration.  Defines default core support.       *
@@ -523,22 +515,6 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #define NCONF_GT(val)	CONF_GT(NCONF, val)
 #define NCONF_LT(val)	CONF_LT(NCONF, val)
 #define NCONF_LE(val)	CONF_LE(NCONF, val)
-
-#define LCNCONF_HAS(val)	CONF_HAS(LCNCONF, val)
-#define LCNCONF_MSK(mask)	CONF_MSK(LCNCONF, mask)
-#define LCNCONF_IS(val)		CONF_IS(LCNCONF, val)
-#define LCNCONF_GE(val)		CONF_GE(LCNCONF, val)
-#define LCNCONF_GT(val)		CONF_GT(LCNCONF, val)
-#define LCNCONF_LT(val)		CONF_LT(LCNCONF, val)
-#define LCNCONF_LE(val)		CONF_LE(LCNCONF, val)
-
-#define LCN40CONF_HAS(val)	CONF_HAS(LCN40CONF, val)
-#define LCN40CONF_MSK(mask)	CONF_MSK(LCN40CONF, mask)
-#define LCN40CONF_IS(val)	CONF_IS(LCN40CONF, val)
-#define LCN40CONF_GE(val)	CONF_GE(LCN40CONF, val)
-#define LCN40CONF_GT(val)	CONF_GT(LCN40CONF, val)
-#define LCN40CONF_LT(val)	CONF_LT(LCN40CONF, val)
-#define LCN40CONF_LE(val)	CONF_LE(LCN40CONF, val)
 
 #define LCN20CONF_HAS(val)	CONF_HAS(LCN20CONF, val)
 #define LCN20CONF_MSK(mask)	CONF_MSK(LCN20CONF, mask)
@@ -583,54 +559,63 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 	(ACCONF_CHK(val, ACCONF2_BASE) && CONF_LE(ACCONF2, ACCONF_REV(val, ACCONF2_BASE))) || \
 	(ACCONF_CHK(val, ACCONF2_BASE) && ACCONF))
 
-#define D11CONF_MSK(mask) CONF_MSK(D11CONF, mask)
-#define D11CONF2_MSK(mask) CONF_MSK(D11CONF2, mask)
-#define D11CONF_MSK2(lo, hi) (\
-	(((D11CONF_CHK(lo, D11CONF1_BASE)) && (D11CONF_CHK(hi, D11CONF1_BASE))) && \
-		CONF_MSK(D11CONF, MSK_RANGE(\
-			D11CONF_REV(lo, D11CONF1_BASE), D11CONF_REV(hi, D11CONF1_BASE)))) || \
-	(((D11CONF_CHK(lo, D11CONF2_BASE)) && (D11CONF_CHK(hi, D11CONF2_BASE))) && \
-		CONF_MSK(D11CONF2, MSK_RANGE(\
-			D11CONF_REV(lo, D11CONF2_BASE), D11CONF_REV(hi, D11CONF2_BASE)))) || \
-	(((D11CONF_CHK(lo, D11CONF1_BASE)) && (D11CONF_CHK(hi, D11CONF2_BASE))) && \
-		(CONF_MSK(D11CONF, MSK_RANGE(\
-			D11CONF_REV(lo, D11CONF1_BASE), (D11CONF_WIDTH - 1))) || \
-		CONF_MSK(D11CONF2, MSK_RANGE(0, D11CONF_REV(hi, D11CONF2_BASE))))))
 #define D11CONF_HAS(val) (\
 	(D11CONF_CHK(val, D11CONF1_BASE) && CONF_HAS(D11CONF, D11CONF_REV(val, D11CONF1_BASE))) ||\
 	(D11CONF_CHK(val, D11CONF2_BASE) && CONF_HAS(D11CONF2, D11CONF_REV(val, D11CONF2_BASE))) ||\
-	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_HAS(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))))
+	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_HAS(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))) ||\
+	(D11CONF_CHK(val, D11CONF4_BASE) && CONF_HAS(D11CONF4, D11CONF_REV(val, D11CONF4_BASE))) ||\
+	(D11CONF_CHK(val, D11CONF5_BASE) && CONF_HAS(D11CONF5, D11CONF_REV(val, D11CONF5_BASE))))
 #define D11CONF_IS(val) (\
-	(D11CONF_CHK(val, D11CONF1_BASE) &&	\
-	 !D11CONF2 && !D11CONF3 && CONF_IS(D11CONF, D11CONF_REV(val, D11CONF1_BASE))) ||	\
-	(D11CONF_CHK(val, D11CONF2_BASE) &&	\
-	 !D11CONF && ! D11CONF3 && CONF_IS(D11CONF2, D11CONF_REV(val, D11CONF2_BASE))) ||	\
-	(D11CONF_CHK(val, D11CONF3_BASE) &&	\
-	 !D11CONF && ! D11CONF2 && CONF_IS(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))))
+	(D11CONF_CHK(val, D11CONF1_BASE) && !D11CONF2 && !D11CONF3 && !D11CONF4 && !D11CONF5 &&	\
+	 CONF_IS(D11CONF, D11CONF_REV(val, D11CONF1_BASE))) ||	\
+	(D11CONF_CHK(val, D11CONF2_BASE) && !D11CONF && ! D11CONF3 && !D11CONF4 && !D11CONF5 &&	\
+	 CONF_IS(D11CONF2, D11CONF_REV(val, D11CONF2_BASE))) ||	\
+	(D11CONF_CHK(val, D11CONF3_BASE) && !D11CONF && ! D11CONF2 && !D11CONF4 && !D11CONF5 &&	\
+	 CONF_IS(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))) ||	\
+	(D11CONF_CHK(val, D11CONF4_BASE) && !D11CONF && ! D11CONF2 && !D11CONF3 && !D11CONF5 &&	\
+	 CONF_IS(D11CONF4, D11CONF_REV(val, D11CONF4_BASE))) ||	\
+	(D11CONF_CHK(val, D11CONF5_BASE) && !D11CONF && ! D11CONF2 && !D11CONF3 && !D11CONF4 &&	\
+	 CONF_IS(D11CONF5, D11CONF_REV(val, D11CONF5_BASE))))
 #define D11CONF_GE(val) (\
 	(D11CONF_CHK(val, D11CONF1_BASE) && CONF_GE(D11CONF, D11CONF_REV(val, D11CONF1_BASE))) || \
-	(D11CONF_CHK(val, D11CONF1_BASE) && (D11CONF2 || D11CONF3)) || \
+	(D11CONF_CHK(val, D11CONF1_BASE) && (D11CONF2 || D11CONF3 || D11CONF4 || D11CONF5)) || \
 	(D11CONF_CHK(val, D11CONF2_BASE) && CONF_GE(D11CONF2, D11CONF_REV(val, D11CONF2_BASE))) || \
-	(D11CONF_CHK(val, D11CONF2_BASE) && D11CONF3) || \
-	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_GE(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))))
+	(D11CONF_CHK(val, D11CONF2_BASE) && (D11CONF3 || D11CONF4 || D11CONF5)) || \
+	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_GE(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))) || \
+	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF4 ||D11CONF5)) || \
+	(D11CONF_CHK(val, D11CONF4_BASE) && CONF_GE(D11CONF4, D11CONF_REV(val, D11CONF4_BASE))) || \
+	(D11CONF_CHK(val, D11CONF4_BASE) && D11CONF5) || \
+	(D11CONF_CHK(val, D11CONF5_BASE) && CONF_GE(D11CONF5, D11CONF_REV(val, D11CONF5_BASE))))
 #define D11CONF_GT(val) (\
 	(D11CONF_CHK(val, D11CONF1_BASE) && CONF_GT(D11CONF, D11CONF_REV(val, D11CONF1_BASE))) || \
-	(D11CONF_CHK(val, D11CONF1_BASE) && (D11CONF2 || D11CONF3)) || \
+	(D11CONF_CHK(val, D11CONF1_BASE) && (D11CONF2 || D11CONF3 || D11CONF4 || D11CONF5)) || \
 	(D11CONF_CHK(val, D11CONF2_BASE) && CONF_GT(D11CONF2, D11CONF_REV(val, D11CONF2_BASE))) || \
-	(D11CONF_CHK(val, D11CONF2_BASE) && D11CONF3) || \
-	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_GT(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))))
+	(D11CONF_CHK(val, D11CONF2_BASE) && (D11CONF3 || D11CONF4 || D11CONF5)) || \
+	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_GT(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))) || \
+	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF4 ||D11CONF5)) || \
+	(D11CONF_CHK(val, D11CONF4_BASE) && CONF_GT(D11CONF4, D11CONF_REV(val, D11CONF4_BASE))) || \
+	(D11CONF_CHK(val, D11CONF4_BASE) && D11CONF5) || \
+	(D11CONF_CHK(val, D11CONF5_BASE) && CONF_GT(D11CONF5, D11CONF_REV(val, D11CONF5_BASE))))
 #define D11CONF_LT(val) (\
 	(D11CONF_CHK(val, D11CONF1_BASE) && CONF_LT(D11CONF, D11CONF_REV(val, D11CONF1_BASE))) || \
 	(D11CONF_CHK(val, D11CONF2_BASE) && CONF_LT(D11CONF2, D11CONF_REV(val, D11CONF2_BASE))) || \
 	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_LT(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))) || \
+	(D11CONF_CHK(val, D11CONF4_BASE) && CONF_LT(D11CONF4, D11CONF_REV(val, D11CONF4_BASE))) || \
+	(D11CONF_CHK(val, D11CONF5_BASE) && CONF_LT(D11CONF5, D11CONF_REV(val, D11CONF5_BASE))) || \
 	(D11CONF_CHK(val, D11CONF2_BASE) && D11CONF) || \
-	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF || D11CONF2)))
+	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF || D11CONF2)) || \
+	(D11CONF_CHK(val, D11CONF4_BASE) && (D11CONF || D11CONF2 || D11CONF3)) || \
+	(D11CONF_CHK(val, D11CONF5_BASE) && (D11CONF || D11CONF2 || D11CONF3 || D11CONF4)))
 #define D11CONF_LE(val) (\
 	(D11CONF_CHK(val, D11CONF1_BASE) && CONF_LE(D11CONF, D11CONF_REV(val, D11CONF1_BASE))) || \
 	(D11CONF_CHK(val, D11CONF2_BASE) && CONF_LE(D11CONF2, D11CONF_REV(val, D11CONF2_BASE))) || \
 	(D11CONF_CHK(val, D11CONF3_BASE) && CONF_LE(D11CONF3, D11CONF_REV(val, D11CONF3_BASE))) || \
+	(D11CONF_CHK(val, D11CONF4_BASE) && CONF_LE(D11CONF4, D11CONF_REV(val, D11CONF4_BASE))) || \
+	(D11CONF_CHK(val, D11CONF5_BASE) && CONF_LE(D11CONF5, D11CONF_REV(val, D11CONF5_BASE))) || \
 	(D11CONF_CHK(val, D11CONF2_BASE) && D11CONF) || \
-	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF || D11CONF2)))
+	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF || D11CONF2)) || \
+	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF || D11CONF2 || D11CONF3)) || \
+	(D11CONF_CHK(val, D11CONF3_BASE) && (D11CONF || D11CONF2 || D11CONF3 || D11CONF4)))
 
 #define D11CONF_MINOR_HAS(val) (\
 	(D11CONF_CHK(val, D11CONF1_BASE) && CONF_HAS(D11CONF_MINOR, \
@@ -688,34 +673,6 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #define HTREV_LE(var, val)	HTCONF_LE(val)
 #endif	/* IS_MULTI_REV(HTCONF) */
 
-#if IS_MULTI_REV(LCNCONF)
-#define LCNREV_IS(var, val)	(LCNCONF_HAS(val) && (var) == (val))
-#define LCNREV_GE(var, val)	(!LCNCONF_LT(val) || (var) >= (val))
-#define LCNREV_GT(var, val)	(!LCNCONF_LE(val) || (var) > (val))
-#define LCNREV_LT(var, val)	(!LCNCONF_GE(val) || (var) < (val))
-#define LCNREV_LE(var, val)	(!LCNCONF_GT(val) || (var) <= (val))
-#else
-#define LCNREV_IS(var, val)	LCNCONF_HAS(val)
-#define LCNREV_GE(var, val)	LCNCONF_GE(val)
-#define LCNREV_GT(var, val)	LCNCONF_GT(val)
-#define LCNREV_LT(var, val)	LCNCONF_LT(val)
-#define LCNREV_LE(var, val)	LCNCONF_LE(val)
-#endif	/* IS_MULTI_REV(LCNCONF) */
-
-#if IS_MULTI_REV(LCN40CONF)
-#define LCN40REV_IS(var, val)	(LCN40CONF_HAS(val) && (var) == (val))
-#define LCN40REV_GE(var, val)	(!LCN40CONF_LT(val) || (var) >= (val))
-#define LCN40REV_GT(var, val)	(!LCN40CONF_LE(val) || (var) > (val))
-#define LCN40REV_LT(var, val)	(!LCN40CONF_GE(val) || (var) < (val))
-#define LCN40REV_LE(var, val)	(!LCN40CONF_GT(val) || (var) <= (val))
-#else
-#define LCN40REV_IS(var, val)	LCN40CONF_HAS(val)
-#define LCN40REV_GE(var, val)	LCN40CONF_GE(val)
-#define LCN40REV_GT(var, val)	LCN40CONF_GT(val)
-#define LCN40REV_LT(var, val)	LCN40CONF_LT(val)
-#define LCN40REV_LE(var, val)	LCN40CONF_LE(val)
-#endif	/* IS_MULTI_REV(LCN40CONF) */
-
 #if IS_MULTI_REV(LCN20CONF)
 #define LCN20REV_IS(var, val)	(LCN20CONF_HAS(val) && (var) == (val))
 #define LCN20REV_GE(var, val)	(!LCN20CONF_LT(val) || (var) >= (val))
@@ -751,6 +708,17 @@ int wlc_bmac_is_singleband_5g(unsigned int device);
 #define D11REV_LE(var, val)	(D11CONF_LE(val) && (!D11CONF_GT(val) || ((var) <= (val))))
 
 #define PHYTYPE_IS(var, val)	(PHYCONF_HAS(val) && (PHYCONF_IS(val) || ((var) == (val))))
+
+#define D11MINORREV_IS(var, val)	\
+	(D11CONF_MINOR_HAS(val) && (D11CONF_MINOR_IS(val) || ((var) == (val))))
+#define D11MINORREV_GE(var, val)	\
+	(D11CONF_MINOR_GE(val) && (!D11CONF_MINOR_LT(val) || ((var) >= (val))))
+#define D11MINORREV_GT(var, val)	\
+	(D11CONF_MINOR_GT(val) && (!D11CONF_MINOR_LE(val) || ((var) > (val))))
+#define D11MINORREV_LT(var, val)	\
+	(D11CONF_MINOR_LT(val) && (!D11CONF_MINOR_GE(val) || ((var) < (val))))
+#define D11MINORREV_LE(var, val)	\
+	(D11CONF_MINOR_LE(val) && (!D11CONF_MINOR_GT(val) || ((var) <= (val))))
 
 /* First ACPHY rev where HECAP was introduced */
 #define HECAP_FIRST_ACREV	(44)
@@ -809,47 +777,31 @@ static const int acphy_hecap_rev[] = {
 
 #endif /* WL11AX */
 
-#define D11MINORREV_IS(var, val)	\
-	(D11CONF_MINOR_HAS(val) && (D11CONF_MINOR_IS(val) || ((var) == (val))))
-#define D11MINORREV_GE(var, val)	\
-	(D11CONF_MINOR_GE(val) && (!D11CONF_MINOR_LT(val) || ((var) >= (val))))
-#define D11MINORREV_GT(var, val)	\
-	(D11CONF_MINOR_GT(val) && (!D11CONF_MINOR_LE(val) || ((var) > (val))))
-#define D11MINORREV_LT(var, val)	\
-	(D11CONF_MINOR_LT(val) && (!D11CONF_MINOR_GE(val) || ((var) < (val))))
-#define D11MINORREV_LE(var, val)	\
-	(D11CONF_MINOR_LE(val) && (!D11CONF_MINOR_GT(val) || ((var) <= (val))))
-
-#if defined(BCM7271)
-#if D11CONF_GE(64)
-#define VASIP_HW_SUPPORT
-#define WL_HWKTAB
-#else
-#ifdef WL_MU_TX
-#undef WL_MU_TX
-#endif
-#endif /* D11CONF_GE(64) */
-#else /* !BCM7271 */
-#if D11CONF_GE(64)
-#define VASIP_HW_SUPPORT
+#if D11CONF_GE(64) && D11CONF_LT(80)
 #define VASIP_SPECTRUM_ANALYSIS
 #define WL_HWKTAB
 
 /* MU-PKTENG only for NIC Build */
 
-#if defined(WLC_HIGH) && defined(WLC_LOW)
 #if defined(AP) && defined(WL_BEAMFORMING) && defined(WL_MU_TX) && defined(WLPKTENG)
 #define WL_MUPKTENG
-#endif
 #endif 
 #else
 #ifdef WL_MU_TX
 #undef WL_MU_TX
 #endif
 #endif /* D11CONF_GE(64) */
-#endif /* BCM7271 */
 
-#define VASIP_PRESENT(rev)	D11REV_GE(rev, 64)
+#if D11CONF_GE(64) && D11CONF_LT(80) && !D11CONF_IS(66)
+#define WL_PSMX
+#define WL_AUXPMQ
+#endif
+
+#if (D11CONF_GE(64) || D11CONF_IS(61)) && !defined(STB_SOC_WIFI)
+#define WLVASIP
+#endif /* D11CONF_GE(64) || D11CONF_IS(61) */
+
+#define VASIP_PRESENT(rev)	(D11REV_GE(rev, 64) || D11REV_IS(rev, 61))
 #define RXS_SHORT_ENAB(rev)	(D11REV_GE(rev, 64) || \
 				D11REV_IS(rev, 60) || \
 				D11REV_IS(rev, 61) || \
@@ -883,11 +835,11 @@ static const int acphy_hecap_rev[] = {
 #endif
 
 /* *** Consistency checks *** */
-#if !D11CONF && !D11CONF2 && !D11CONF3
+#if !D11CONF && !D11CONF2 && !D11CONF3 && !D11CONF4 && !D11CONF5
 #error "No MAC revisions configured!"
 #endif
 
-#if !NCONF && !!LCNCONF && !HTCONF && !LCN40CONF && !LCN20CONF && !ACCONF && !ACCONF2
+#if !NCONF && !HTCONF && !LCN20CONF && !ACCONF && !ACCONF2
 #error "No PHY configured!"
 #endif
 
@@ -897,18 +849,6 @@ static const int acphy_hecap_rev[] = {
 #else
 #define _PHYCONF_N 0
 #endif /* NCONF */
-
-#if LCNCONF
-#define _PHYCONF_LCN (1U << PHY_TYPE_LCN)
-#else
-#define _PHYCONF_LCN 0
-#endif /* LCNCONF */
-
-#if LCN40CONF
-#define _PHYCONF_LCN40 (1U << PHY_TYPE_LCN40)
-#else
-#define _PHYCONF_LCN40 0
-#endif /* LCN40CONF */
 
 #if LCN20CONF
 #define _PHYCONF_LCN20 (1U << PHY_TYPE_LCN20)
@@ -928,25 +868,18 @@ static const int acphy_hecap_rev[] = {
 #define _PHYCONF_AC 0
 #endif /* ACCONF || ACCONF2 */
 
-#define PHYTYPE (_PHYCONF_N | _PHYCONF_HT | \
-	_PHYCONF_LCN | _PHYCONF_LCN40 | _PHYCONF_LCN20 | \
-	_PHYCONF_AC)
+#define PHYTYPE (_PHYCONF_N | _PHYCONF_HT | _PHYCONF_LCN20 | _PHYCONF_AC)
 
 /* Utility macro to identify 802.11n (HT) capable PHYs */
 #define PHYTYPE_11N_CAP(phytype) \
 	(PHYTYPE_IS(phytype, PHY_TYPE_N) ||	\
-	 PHYTYPE_IS(phytype, PHY_TYPE_LCN) ||	\
-	 PHYTYPE_IS(phytype, PHY_TYPE_LCN40) ||	\
 	 PHYTYPE_IS(phytype, PHY_TYPE_LCN20) ||	\
 	 PHYTYPE_IS(phytype, PHY_TYPE_AC) ||	\
 	 PHYTYPE_IS(phytype, PHY_TYPE_HT) || \
 	 0)
 
 /* Utility macro to identify MIMO capable PHYs */
-#define PHYTYPE_MIMO_CAP(phytype) \
-	(PHYTYPE_11N_CAP(phytype) && \
-	 !PHYTYPE_IS(phytype, PHY_TYPE_LCN) && \
-	 !PHYTYPE_IS(phytype, PHY_TYPE_LCN40))
+#define PHYTYPE_MIMO_CAP(phytype)	PHYTYPE_11N_CAP(phytype)
 
 #define PHYTYPE_HT_CAP(band) \
 	(PHYTYPE_IS((band)->phytype, PHY_TYPE_HT) ||	\
@@ -959,8 +892,6 @@ static const int acphy_hecap_rev[] = {
 
 /* Last but not least: shorter wlc-specific var checks */
 #define WLCISNPHY(band)		PHYTYPE_IS((band)->phytype, PHY_TYPE_N)
-#define WLCISLCNPHY(band)	PHYTYPE_IS((band)->phytype, PHY_TYPE_LCN)
-#define WLCISLCN40PHY(band)	PHYTYPE_IS((band)->phytype, PHY_TYPE_LCN40)
 #define WLCISLCN20PHY(band)	PHYTYPE_IS((band)->phytype, PHY_TYPE_LCN20)
 #define WLCISHTPHY(band)	PHYTYPE_IS((band)->phytype, PHY_TYPE_HT)
 #define WLCISACPHY(band)	PHYTYPE_IS((band)->phytype, PHY_TYPE_AC)
@@ -1246,6 +1177,22 @@ static const int acphy_hecap_rev[] = {
 #define AMPDU_PKTQ_FAVORED_LEN	1024
 #endif
 
+#ifndef NAN_MAX_PEERS
+#define NAN_MAX_PEERS	16
+#endif
+
+#ifndef NAN_MAX_AVAIL
+#ifdef WLRSDB
+#define NAN_MAX_AVAIL 2
+#else
+#define NAN_MAX_AVAIL 1
+#endif /* WLRSDB */
+#endif /* NAN_MAX_AVAIL */
+
+#ifndef NAN_MAX_NDC
+#define NAN_MAX_NDC 4
+#endif
+
 #ifndef RXPKTPOOLSZ
 #define RXPKTPOOLSZ		1280
 #endif
@@ -1319,6 +1266,17 @@ static const int acphy_hecap_rev[] = {
 #ifndef WLC_MAX_WAIT_CTXT_DELETE
 #define WLC_MAX_WAIT_CTXT_DELETE 2 /* Max wait(sec) to delete stale channel ctxt */
 #endif
+
+#ifndef WLC_MAX_ASSOC_SCAN_RESULTS
+/* Max number of assoc/roam scan results FW can hold */
+/* This also acts as a feature enab flag hence initialize to zero */
+#define WLC_MAX_ASSOC_SCAN_RESULTS	0
+#endif /* WLC_MAX_ASSOC_SCAN_RESULTS */
+
+#ifndef WLC_MAX_SCANCACHE_RESULTS
+/* This also acts as a feature enab flag hence initialize to zero */
+#define WLC_MAX_SCANCACHE_RESULTS	0
+#endif /* WLC_MAX_SCANCACHE_RESULTS */
 
 #ifndef WLC_MAXMFPS
 #ifdef MFP
@@ -1457,22 +1415,6 @@ static const int acphy_hecap_rev[] = {
 #define NAN_NOTIF_CLNT_OBJS  0
 #endif
 
-#ifdef WLBMON
-#define BMON_NOTIF_SRVR_OBJS  1
-#define BMON_NOTIF_CLNT_OBJS  0
-#else
-#define BMON_NOTIF_SRVR_OBJS  0
-#define BMON_NOTIF_CLNT_OBJS  0
-#endif
-
-#ifdef WL11ULB
-#define ULB_NOTIF_SRVR_OBJS  2
-#define ULB_NOTIF_CLNT_OBJS  0
-#else
-#define ULB_NOTIF_SRVR_OBJS  0
-#define ULB_NOTIF_CLNT_OBJS  0
-#endif
-
 #ifdef WL_MODESW
 #define MODESW_NOTIF_SRVR_OBJS  1
 #define MODESW_NOTIF_CLNT_OBJS  0
@@ -1503,14 +1445,18 @@ static const int acphy_hecap_rev[] = {
 #define	SHUB_NOTIF_CLNT_OBJ	0
 #endif /* WL_SHIF */
 
+#ifdef WLMCHAN
+#define	MCHAN_NOTIF_CLNT_OBJ	3
+#else
+#define	MCHAN_NOTIF_CLNT_OBJ	0
+#endif /* WL_SHIF */
+
 /* Maximum number of notification servers. */
 #ifndef MAX_NOTIF_SERVERS
 #define MAX_NOTIF_SERVERS	(24 + \
 	IDSUP_NOTIF_SRVR_OBJS + \
 	RSDB_NOTIF_SRVR_OBJS + \
 	NAN_NOTIF_SRVR_OBJS + \
-	BMON_NOTIF_SRVR_OBJS + \
-	ULB_NOTIF_SRVR_OBJS + \
 	MODESW_NOTIF_SRVR_OBJS + \
 	RANDMAC_NOTIF_SRVR_OBJS + \
 	AIBSS_NOTIF_SRVR_OBJS + \
@@ -1519,17 +1465,16 @@ static const int acphy_hecap_rev[] = {
 
 /* Maximum number of notification clients. */
 #ifndef MAX_NOTIF_CLIENTS
-#define MAX_NOTIF_CLIENTS	(52 + \
+#define MAX_NOTIF_CLIENTS	(56 + \
 	IDSUP_NOTIF_CLNT_OBJS + \
 	RSDB_NOTIF_CLNT_OBJS + \
 	NAN_NOTIF_CLNT_OBJS + \
-	BMON_NOTIF_CLNT_OBJS + \
-	ULB_NOTIF_CLNT_OBJS + \
 	MODESW_NOTIF_CLNT_OBJS + \
 	RANDMAC_NOTIF_CLNT_OBJS + \
 	AIBSS_NOTIF_CLNT_OBJS + \
 	PROXD_NOTIF_CLNT_OBJS + \
-	SHUB_NOTIF_CLNT_OBJ)
+	SHUB_NOTIF_CLNT_OBJ + \
+	MCHAN_NOTIF_CLNT_OBJ)
 #endif
 
 /* Maximum number of memory pools. */
@@ -1631,12 +1576,12 @@ static const int acphy_hecap_rev[] = {
 #endif /* PROP_TXSTATUS */
 
 #if !defined(WLC_DISABLE_DFS_RADAR_SUPPORT)
-/* Radar support */
+/* Radar support AP, STA */
 #if defined(WL11H) && defined(BAND5G)
 #define RADAR
 #endif /* WL11H && BAND5G */
-/* DFS */
-#if defined(AP) && defined(RADAR)
+/* DFS AP, STA */
+#if (defined(AP) || defined(SLAVE_RADAR)) && defined(RADAR)
 #define WLDFS
 #endif /* AP && RADAR */
 #endif /* !WLC_DISABLE_DFS_RADAR_SUPPORT */
@@ -1755,24 +1700,15 @@ static const int acphy_hecap_rev[] = {
 		WL_NUMCHANSPECS_5G_80)
 
 /* Wave2 devices */
-#ifdef BCM7271
 #define IS_AC2_DEV(d) (((d) == BCM4366_D11AC_ID) || \
 	                 ((d) == BCM4366_D11AC2G_ID) || \
 	                 ((d) == BCM4366_D11AC5G_ID) || \
 	                 ((d) == BCM4365_D11AC_ID) || \
 	                 ((d) == BCM4365_D11AC2G_ID) || \
 	                 ((d) == BCM4365_D11AC5G_ID) || \
-					 ((d) == BCM7271_D11AC_ID) || \
-					 ((d) == BCM7271_D11AC2G_ID) || \
-					 ((d) == BCM7271_D11AC5G_ID))
-#else /* !BCM7271 */
-#define IS_AC2_DEV(d) (((d) == BCM4366_D11AC_ID) || \
-	                 ((d) == BCM4366_D11AC2G_ID) || \
-	                 ((d) == BCM4366_D11AC5G_ID) || \
-	                 ((d) == BCM4365_D11AC_ID) || \
-	                 ((d) == BCM4365_D11AC2G_ID) || \
-	                 ((d) == BCM4365_D11AC5G_ID))
-#endif /* BCM7271 */
+	                 ((d) == BCM7271_D11AC_ID) || \
+	                 ((d) == BCM7271_D11AC2G_ID) || \
+	                 ((d) == BCM7271_D11AC5G_ID))
 
 #define IS_DEV_AC3X3(d) (((d) == BCM4360_D11AC_ID) || \
 	                 ((d) == BCM4360_D11AC2G_ID) || \
@@ -1893,8 +1829,9 @@ static const int acphy_hecap_rev[] = {
 #endif /* BCMRESVFRAGPOOL */
 
 /* Derive WL_MACDBG */
-#if defined(BCMDBG_PHYDUMP) || defined(TDLS_TESTBED) || defined(BCMDBG_AMPDU) || \
-	defined(BCMDBG_TXBF) || defined(BCMDBG_DUMP_RSSI) || defined(MCHAN_MINIDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP) || \
+	defined(TDLS_TESTBED) || defined(BCMDBG_AMPDU) || defined(BCMDBG_TXBF) || \
+	defined(BCMDBG_DUMP_RSSI) || defined(MCHAN_MINIDUMP)
 #define WL_MACDBG 1
 #else
 #define WL_MACDBG 0
@@ -1967,5 +1904,9 @@ static const int acphy_hecap_rev[] = {
 #define NTXD_LFRAG_AUX NTXD_LFRAG
 #endif /* NTXD_LFRAG_AUX */
 #endif /* USE_RSDBAUXCORE_TUNE */
+
+#ifndef MAX_PFN_LIST_COUNT
+#define MAX_PFN_LIST_COUNT 64
+#endif /* MAX_PFN_LIST_COUNT */
 
 #endif /* _wlc_cfg_h_ */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_btcx.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_n_btcx.c 642720 2016-06-09 18:56:12Z $
  */
 
 #include <phy_cfg.h>

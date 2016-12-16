@@ -350,17 +350,10 @@ static data_dsc_t data_sources[] = {
 };
 
 
-/* Rate type table and related get/set macros */
-
-#ifdef WL_CLM_RATE_TYPE_SPARSE
-/* Legacy version */
-static char rate_type[WL_NUMRATES];
-#else
 /** Rate type by rate index. Values are from enum clm_rate_type, compressed to
  * 2-bits
  */
 static char rate_type[(WL_NUMRATES + 3)/4];
-#endif
 
 /* Gives rate type for given rate index. Use of named constants make this
  * expression too ugly
@@ -568,7 +561,6 @@ remove_extra_bits(unsigned int value, unsigned int mask)
  * not set
  */
 #define GET_DATA(ds_id, field) get_data(ds_id, OFFSETOF(clm_registry_t, field))
-
 
 /* Accessor function to avoid data_sources structure from getting into ROM.
  * Don't have this function in ROM.
@@ -1166,7 +1158,8 @@ fill_rate_types(void)
  * \param[in] BLOB major version
  * Returns TRUE if given major BLOB format version supported
  */
-static MY_BOOL is_blob_version_supported(int format_major)
+static MY_BOOL
+is_blob_version_supported(int format_major)
 {
 	return (format_major <= FORMAT_VERSION_MAJOR) &&
 		(format_major >= FORMAT_MIN_COMPAT_MAJOR);
@@ -1193,7 +1186,7 @@ data_init(const clm_data_header_t *header, data_source_id_t ds_id)
 		} else if (!is_blob_version_supported(header->format_major)) {
 			return CLM_RESULT_ERR;
 		}
-		ds->scr_idx_4 = (header->format_major == 16) || (header->format_major == 17);
+		ds->scr_idx_4 = header->format_major <= 17;
 		ds->relocation = (uintptr)((const char*)header -(const char*)header->self_pointer);
 		ds->data = (const clm_registry_t*)relocate_ptr(ds_id, header->data);
 		ds->registry_flags = has_registry_flags ? ds->data->flags : 0;
@@ -1476,8 +1469,7 @@ remap_regrev(data_source_id_t ds_id, clm_cc_rev4_t *ccrev)
 	const clm_regrev_cc_remap_set_t *regrev_remap_set =
 		get_data_sources(ds_id)->regrev_remap;
 	const clm_regrev_cc_remap_t *cc_remap =
-		(const clm_regrev_cc_remap_t *)relocate_ptr(ds_id,
-		regrev_remap_set->cc_remaps);
+		(const clm_regrev_cc_remap_t *)relocate_ptr(ds_id, regrev_remap_set->cc_remaps);
 	const clm_regrev_cc_remap_t *cc_remap_end = cc_remap + regrev_remap_set->num;
 
 	unsigned int num_regrevs;
@@ -1902,8 +1894,7 @@ clm_country_iter(clm_country_t *country, ccode_t cc, unsigned int *rev)
 			const clm_country_rev_definition_cd10_t *inc_country_definition;
 			for (i = 0;
 				(inc_country_definition =
-				get_country_def_by_idx(DS_INC, i, &num_inc_countries))
-				!= NULL;
+				get_country_def_by_idx(DS_INC, i, &num_inc_countries)) != NULL;
 				++i)
 			{
 				clm_cc_rev4_t inc_country_ccrev;
@@ -2100,7 +2091,7 @@ clm_country_flags(const clm_country_locales_t *locales, clm_band_t band,
 			bw_idx = bw_width_to_idx[flags & CLM_DATA_FLAG_WIDTH_MASK];
 #ifdef WL11ULB
 			if (flags2 & CLM_DATA_FLAG2_WIDTH_EXT) {
-				bw_idx =  get_bw_to_ulb(bw_idx);
+				bw_idx = get_bw_to_ulb(bw_idx);
 			}
 #endif /* WL11ULB */
 			if (bw_idx == CLM_BW_40) {
@@ -2368,15 +2359,17 @@ get_country_data(const clm_country_locales_t *locales,
 				continue;
 			}
 			blob_region_rules = (const clm_sub_chan_region_rules_inc_t *)
-			((const unsigned char *)relocate_ptr(ds_id, blob_rule_set->region_rules)
-			+ region_rules_offset);
+				((const unsigned char *)relocate_ptr(ds_id,
+				blob_rule_set->region_rules) + region_rules_offset);
+
 			country_data_rules_field->num = blob_region_rules->num;
 			country_data_rules_field->channel_rules =
 			relocate_ptr(ds_id, blob_region_rules->channel_rules);
+
 			*country_data_increments_field = (ds->registry_flags &
 			CLM_REGISTRY_FLAG_SUBCHAN_RULES_INC_SEPARATE) ?
-			(const unsigned char *)relocate_ptr(ds_id, blob_region_rules->increments) :
-			NULL;
+			(const unsigned char *)relocate_ptr(ds_id,
+			blob_region_rules->increments) : NULL;
 		}
 	}
 }
@@ -2460,6 +2453,189 @@ int bw, clm_limits_type_t limits_type)
  * type (i.e. subchannel ID)  is computed. Also computation of chan_offsets is
  * used to determine if bandwidth/limits_type pair is valid.
 */
+/** Compute power limits for one locale (base or HT)
+ * This function is formerly a part of clm_limits(), that become separate
+ * function in process of functions' size limiting action. Thus the above
+ * comment is actually related to both clm_limits() (that prepares various
+ * parameters and does the postprocessing) and compute_locale_limits() (that
+ * performs actual computation of power limits)
+ * \param[out] per_rate_limits Per-rate power limits being computed
+ * \param[out] valid_channel TRUE if there is at least one enabled power limit
+ * \param[in] params Miscellaneous power computation parameters, passed to
+ * clm_limits()
+ * \param[in] ant_gain Antenna gain in dBi (for use in EIRP limits computation)
+ * \param[in] loc_data Locale-specific helper data, precomputed in clm_limits()
+ * \param[in] channel_dsss Channel for DSSS rates of 20-in-40 power targets (0
+ * if irrelevant)
+ * \param[in] power_inc  Power increment from subchannel rule
+ * \param[in] bw_to_chan Maps bandwidths (elements of clm_bw_t enum) used in
+ * subchannel rule to channel numbers. Bandwidths not used in subchannel rule
+ * mapped to zero
+ */
+static void
+compute_locale_limits(clm_power_t per_rate_limits[WL_NUMRATES],
+	MY_BOOL *valid_channel, const clm_limits_params_t *params, int ant_gain,
+	const locale_data_t *loc_data, int channel_dsss, clm_power_t power_inc,
+	unsigned char bw_to_chan[CLM_BW_NUM])
+{
+	/* Transmission power records' sequence for current locale */
+	const unsigned char *tx_rec = loc_data->def_ptr;
+
+	/* Channel combs for given band - vector indexed by channel bandwidth */
+	const clm_channel_comb_set_t *const* comb_sets = loc_data->combs;
+
+	/* CLM_DATA_FLAG_ flags for current subsequence of transmission power
+	 * records' sequence
+	 */
+	unsigned char flags, flags2;
+
+	/* Loop over all transmission power subsequences */
+	do {
+		/* Number of records in subsequence */
+		int num_rec;
+
+		/* Bandwidth of records in subsequence */
+		clm_bandwidth_t pg_bw;
+
+		/* Channel combs for bandwidth used in subsequence.
+		 * NULL for 80+80 channel
+		 */
+		const clm_channel_comb_set_t *comb_set_for_bw;
+
+		/* Channel number to look for bandwidth used in this
+		 * subsequence
+		 */
+		int channel_for_bw;
+
+		/* Length of TX power records in current subsequence */
+		int tx_rec_len;
+
+		/* Index of TX power inside TX power record */
+		int tx_power_idx;
+
+		/* Base address for channel ranges for bandwidth used in this
+		 * subsequence
+		 */
+		const clm_channel_range_t *ranges;
+
+		/* Sequence of rate sets' definition for bw used in this
+		 * subsequence
+		 */
+		const unsigned char *rate_sets;
+
+		/* Base value for rates in current rate set */
+		unsigned int base_rate;
+
+		flags = *tx_rec++;
+		flags2 = (flags & CLM_DATA_FLAG_FLAG2) ? *tx_rec++ : 0;
+		pg_bw = (clm_bandwidth_t)bw_width_to_idx[flags & CLM_DATA_FLAG_WIDTH_MASK];
+#ifdef WL11ULB
+		if (flags2 & CLM_DATA_FLAG2_WIDTH_EXT) {
+			pg_bw = (clm_bandwidth_t)get_bw_to_ulb((unsigned char)pg_bw);
+		}
+#endif /* WL11ULB */
+		comb_set_for_bw = comb_sets[pg_bw];
+		channel_for_bw = bw_to_chan[pg_bw];
+		tx_rec_len = CLM_LOC_DSC_TX_REC_LEN +
+			((flags & CLM_DATA_FLAG_PER_ANT_MASK) >> CLM_DATA_FLAG_PER_ANT_SHIFT);
+		tx_power_idx = (tx_rec_len == CLM_LOC_DSC_TX_REC_LEN)
+			? CLM_LOC_DSC_POWER_IDX
+			: antenna_power_offsets[params->antenna_idx];
+		ranges = loc_data->chan_ranges_bw[pg_bw];
+		rate_sets = (flags2 & CLM_DATA_FLAG2_EXT_RATES)
+			? loc_data->ext_rate_sets_bw[pg_bw]
+			: loc_data->rate_sets_bw[pg_bw];
+		base_rate = (flags2 & CLM_DATA_FLAG2_EXT_RATES) ? BASE_EXT_RATE : 0;
+		/* Loop over all records in subsequence */
+		for (num_rec = (int)*tx_rec++; num_rec--; tx_rec += tx_rec_len)	{
+			/* Channel range for current transmission power record */
+			const clm_channel_range_t *range = ranges + tx_rec[CLM_LOC_DSC_RANGE_IDX];
+			/* Power targets for current transmission power record
+			 * - original and incremented per subchannel rule
+			 */
+			char qdbm, qdbm_inc;
+
+			/* Per-antenna record without a limit for given antenna
+			 * index?
+			 */
+			if (tx_power_idx >= tx_rec_len) {
+				/* At least check if channel is valid */
+				if (!*valid_channel && channel_for_bw &&
+					channel_in_range(channel_for_bw, range, comb_set_for_bw,
+					params->other_80_80_chan) &&
+					((unsigned char)tx_rec[CLM_LOC_DSC_POWER_IDX] !=
+					(unsigned char)CLM_DISABLED_POWER))
+				{
+					*valid_channel = TRUE;
+				}
+				/* Skip the rest - no limit for given antenna
+				 * index
+				 */
+				continue;
+			}
+			qdbm_inc = qdbm = (char)tx_rec[tx_power_idx];
+			if ((unsigned char)qdbm != (unsigned char)CLM_DISABLED_POWER) {
+				if ((flags & CLM_DATA_FLAG_MEAS_MASK) == CLM_DATA_FLAG_MEAS_EIRP) {
+					qdbm -= (char)ant_gain;
+					qdbm_inc = qdbm;
+				}
+				qdbm_inc += power_inc;
+				/* Apply SAR limit */
+				qdbm = (char)((qdbm > params->sar) ? params->sar : qdbm);
+				qdbm_inc = (char)((qdbm_inc > params->sar)
+					? params->sar : qdbm_inc);
+			}
+
+			/* If this record related to channel for this
+			 * bandwidth?
+			 */
+			if (channel_for_bw &&
+				channel_in_range(channel_for_bw, range, comb_set_for_bw,
+				params->other_80_80_chan))
+			{
+				/* Rate indices  for current records' rate set */
+				const unsigned char *rates = get_byte_string(rate_sets,
+					tx_rec[CLM_LOC_DSC_RATE_IDX]);
+				int num_rates = *rates++;
+				/* Loop over this tx power record's rate indices */
+				while (num_rates--) {
+					unsigned int rate_idx = *rates++ + base_rate;
+					clm_power_t *pp = per_rate_limits + rate_idx;
+					/* Looking for minimum power */
+					if ((!channel_dsss || (RATE_TYPE(rate_idx) != RT_DSSS)) &&
+						((*pp ==
+						(clm_power_t)(unsigned char)UNSPECIFIED_POWER) ||
+						((*pp > qdbm_inc) &&
+						(*pp !=
+						(clm_power_t)(unsigned char)CLM_DISABLED_POWER))))
+					{
+						*pp = qdbm_inc;
+					}
+				}
+				if ((unsigned char)qdbm_inc != (unsigned char)CLM_DISABLED_POWER) {
+					*valid_channel = TRUE;
+				}
+			}
+			/* If this rule related to 20-in-something DSSS channel? */
+			if (channel_dsss && (pg_bw == CLM_BW_20) &&
+				channel_in_range(channel_dsss, range, comb_sets[CLM_BW_20], 0))
+			{
+				/* Same as above */
+				const unsigned char *rates = get_byte_string(rate_sets,
+					tx_rec[CLM_LOC_DSC_RATE_IDX]);
+				int num_rates = *rates++;
+				while (num_rates--) {
+					unsigned int rate_idx = *rates++ + base_rate;
+					clm_power_t *pp = per_rate_limits + rate_idx;
+					if (RATE_TYPE(rate_idx) == RT_DSSS) {
+						*pp = qdbm;
+					}
+				}
+			}
+		}
+	} while (flags & CLM_DATA_FLAG_MORE);
+}
+
 extern clm_result_t
 clm_limits(const clm_country_locales_t *locales, clm_band_t band,
 	unsigned int channel, int ant_gain, clm_limits_type_t limits_type,
@@ -2542,19 +2718,6 @@ clm_limits(const clm_country_locales_t *locales, clm_band_t band,
 		/* Precomputed helper data for current locale */
 		const locale_data_t *loc_data = base_ht_loc_data + base_ht_idx;
 
-		/* Channel combs for given band - vector indexed by channel
-		 * bandwidth
-		 */
-		const clm_channel_comb_set_t *const* comb_sets = loc_data->combs;
-
-		/* Transmission power records' sequence for current locale */
-		const unsigned char *tx_rec = loc_data->def_ptr;
-
-		/* CLM_DATA_FLAG_ flags for current subsequence of transmission power
-		   records' sequence
-		 */
-		unsigned char flags, flags2;
-
 		/* Same as subchannels, but only has nonzeroes for bandwidths,
 		 * used by current subchannel rule
 		 */
@@ -2563,13 +2726,10 @@ clm_limits(const clm_country_locales_t *locales, clm_band_t band,
 		/* Power increment from subchannel rule */
 		clm_power_t power_inc = 0;
 
-		/* Base value for rates in current rate set */
-		unsigned int base_rate;
-
 		/* No transmission power records - nothing to do for this
 		 * locale
 		 */
-		if (!tx_rec) {
+		if (!loc_data->def_ptr) {
 			continue;
 		}
 
@@ -2627,162 +2787,8 @@ clm_limits(const clm_country_locales_t *locales, clm_band_t band,
 		}
 		/* bw_to_chan computed */
 
-		/* Loop over all transmission power subsequences */
-		do {
-			/* Number of records in subsequence */
-			int num_rec;
-			/* Bandwidth of records in subsequence */
-			clm_bandwidth_t pg_bw;
-			/* Channel combs for bandwidth used in subsequence.
-			 * NULL for 80+80 chan
-			 */
-			const clm_channel_comb_set_t *comb_set_for_bw;
-			/* Channel number to look for bandwidth used in this
-			 * subsequence
-			 */
-			int channel_for_bw;
-			/* Length of TX power records in current subsequence */
-			int tx_rec_len;
-			/* Index of TX power inside TX power record */
-			int tx_power_idx;
-			/* Base address for channel ranges for bandwidth used
-			 * in this subsequence
-			 */
-			const clm_channel_range_t *ranges;
-			/* Sequence of rate sets' definition for bw used in
-			 * this subsequence
-			 */
-			const unsigned char *rate_sets;
-
-			flags = *tx_rec++;
-			flags2 = (flags & CLM_DATA_FLAG_FLAG2) ? *tx_rec++ : 0;
-			pg_bw = (clm_bandwidth_t)bw_width_to_idx[flags & CLM_DATA_FLAG_WIDTH_MASK];
-#ifdef WL11ULB
-			if (flags2 & CLM_DATA_FLAG2_WIDTH_EXT) {
-				pg_bw = (clm_bandwidth_t)get_bw_to_ulb((unsigned char)pg_bw);
-			}
-#endif /* WL11ULB */
-			comb_set_for_bw = comb_sets[pg_bw];
-			channel_for_bw = bw_to_chan[pg_bw];
-			tx_rec_len = CLM_LOC_DSC_TX_REC_LEN +
-				((flags & CLM_DATA_FLAG_PER_ANT_MASK) >>
-				CLM_DATA_FLAG_PER_ANT_SHIFT);
-			tx_power_idx = (tx_rec_len == CLM_LOC_DSC_TX_REC_LEN)
-				? CLM_LOC_DSC_POWER_IDX
-				: antenna_power_offsets[params->antenna_idx];
-			ranges = loc_data->chan_ranges_bw[pg_bw];
-			rate_sets = (flags2 & CLM_DATA_FLAG2_EXT_RATES)
-				? loc_data->ext_rate_sets_bw[pg_bw]
-				: loc_data->rate_sets_bw[pg_bw];
-			base_rate = (flags2 & CLM_DATA_FLAG2_EXT_RATES) ? BASE_EXT_RATE : 0;
-			/* Loop over all records in subsequence */
-			for (num_rec = (int)*tx_rec++; num_rec--; tx_rec += tx_rec_len)
-			{
-				/* Channel range for current transmission power
-				 * record
-				 */
-				const clm_channel_range_t *range = ranges +
-					tx_rec[CLM_LOC_DSC_RANGE_IDX];
-				/* Power targets for current transmission power
-				 * record - original and incremented per
-				 * subchannel rule
-				 */
-				char qdbm, qdbm_inc;
-
-				/* Per-antenna record without a limit for given
-				 * antenna index?
-				 */
-				if (tx_power_idx >= tx_rec_len) {
-					/* At least check if chan is valid -
-					 * return OK if it is
-					 */
-					if (!valid_channel && channel_for_bw &&
-						channel_in_range(channel_for_bw, range,
-						comb_set_for_bw,
-						params->other_80_80_chan) &&
-						((unsigned char)tx_rec[0] !=
-						(unsigned char)CLM_DISABLED_POWER))
-					{
-						valid_channel = TRUE;
-					}
-					/* Skip the rest - no limit for given
-					 * antenna index
-					 */
-					continue;
-				}
-				qdbm_inc = qdbm = (char)tx_rec[tx_power_idx];
-				if ((unsigned char)qdbm != (unsigned char)CLM_DISABLED_POWER) {
-					if ((flags & CLM_DATA_FLAG_MEAS_MASK) ==
-						CLM_DATA_FLAG_MEAS_EIRP)
-					{
-						qdbm -= (char)ant_gain;
-						qdbm_inc = qdbm;
-					}
-					qdbm_inc += power_inc;
-					/* Apply SAR limit */
-					qdbm = (char)((qdbm > params->sar) ? params->sar : qdbm);
-					qdbm_inc = (char)((qdbm_inc > params->sar)
-						? params->sar : qdbm_inc);
-				}
-
-				/* If this record related to channel for this
-				 * bandwidth?
-				 */
-				if (channel_for_bw &&
-					channel_in_range(channel_for_bw, range,
-					comb_set_for_bw, params->other_80_80_chan))
-				{
-					/* Rate indices  for current records'
-					 * rate set
-					 */
-					const unsigned char *rates = get_byte_string(rate_sets,
-						tx_rec[CLM_LOC_DSC_RATE_IDX]);
-					int num_rates = *rates++;
-					/* Loop over this tx power record's
-					 * rate indices
-					 */
-					while (num_rates--) {
-						unsigned int rate_idx = *rates++ + base_rate;
-						clm_power_t *pp = &limits->limit[rate_idx];
-						/* Looking for minimum power */
-						if ((!channel_dsss ||
-							(RATE_TYPE(rate_idx) != RT_DSSS)) &&
-							((*pp == (clm_power_t)
-							(unsigned char)UNSPECIFIED_POWER) ||
-							((*pp > qdbm_inc) &&
-							(*pp != (clm_power_t)
-							(unsigned char)
-							CLM_DISABLED_POWER))))
-						{
-							*pp = qdbm_inc;
-						}
-					}
-					if ((unsigned char)qdbm_inc !=
-						(unsigned char)CLM_DISABLED_POWER) {
-						valid_channel = TRUE;
-					}
-				}
-				/* If this rule related to 20-in-something DSSS
-				 * channel?
-				 */
-				if (channel_dsss && (pg_bw == CLM_BW_20) &&
-					channel_in_range(channel_dsss, range,
-					comb_sets[CLM_BW_20], 0))
-				{
-					/* Same as above */
-					const unsigned char *rates = get_byte_string(rate_sets,
-						tx_rec[CLM_LOC_DSC_RATE_IDX]);
-					int num_rates = *rates++;
-					while (num_rates--) {
-						unsigned int rate_idx = *rates++ + base_rate;
-						clm_power_t *pp = &limits->limit[rate_idx];
-						if (RATE_TYPE(rate_idx) == RT_DSSS) {
-							*pp = qdbm;
-						}
-					}
-				}
-			}
-		} while (flags & CLM_DATA_FLAG_MORE);
+		compute_locale_limits(limits->limit, &valid_channel, params, ant_gain, loc_data,
+			channel_dsss, power_inc, bw_to_chan);
 	}
 	if (valid_channel) {
 		/* Converting CLM_DISABLED_POWER and UNSPECIFIED_POWER to

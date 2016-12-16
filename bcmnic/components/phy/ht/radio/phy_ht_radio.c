@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_radio.c 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_ht_radio.c 659421 2016-09-14 06:45:22Z $
  */
 
 #include <typedefs.h>
@@ -45,12 +45,12 @@ struct phy_ht_radio_info {
 static void phy_ht_radio_switch(phy_type_radio_ctx_t *ctx, bool on);
 static void phy_ht_radio_on(phy_type_radio_ctx_t *ctx);
 static void phy_ht_radio_off(phy_type_radio_ctx_t *ctx);
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 static int phy_ht_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b);
 #else
 #define phy_ht_radio_dump NULL
 #endif
+static uint32 _phy_ht_radio_query_idcode(phy_type_radio_ctx_t *ctx);
 
 /* Register/unregister HTPHY specific implementation to common layer. */
 phy_ht_radio_info_t *
@@ -84,6 +84,7 @@ BCMATTACHFN(phy_ht_radio_register_impl)(phy_info_t *pi, phy_ht_info_t *hti,
 	fns.bandx = phy_ht_radio_off;
 	fns.init = phy_ht_radio_off;
 	fns.dump = phy_ht_radio_dump;
+	fns.id = _phy_ht_radio_query_idcode;
 	fns.ctx = info;
 
 	phy_radio_register_impl(ri, &fns);
@@ -136,10 +137,28 @@ phy_ht_radio_off(phy_type_radio_ctx_t *ctx)
 }
 
 /* query radio idcode */
+static uint32
+_phy_ht_radio_query_idcode(phy_type_radio_ctx_t *ctx)
+{
+	phy_ht_radio_info_t *info = (phy_ht_radio_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+	uint32 idcode;
+
+	idcode = phy_ht_radio_query_idcode(pi);
+#ifdef BCMRADIOREV
+	if (ISSIM_ENAB(pi->sh->sih)) {
+		idcode = (idcode & ~IDCODE_REV_MASK) | (BCMRADIOREV << IDCODE_REV_SHIFT);
+	}
+#endif	/* BCMRADIOREV */
+
+	return idcode;
+}
+
 uint32
 phy_ht_radio_query_idcode(phy_info_t *pi)
 {
 	uint32 b0, b1, b2;
+	uint32 idcode;
 
 	W_REG(pi->sh->osh, &pi->regs->radioregaddr, 0);
 #ifdef __mips__
@@ -157,11 +176,13 @@ phy_ht_radio_query_idcode(phy_info_t *pi)
 #endif
 	b2 = (uint32)R_REG(pi->sh->osh, &pi->regs->radioregdata);
 
-	return ((b0  & 0xf) << 28) | (((b2 << 8) | b1) << 12) | ((b0 >> 4) & 0xf);
+	idcode = ((b0  & 0xf) << 28) | (((b2 << 8) | b1) << 12) | ((b0 >> 4) & 0xf);
+
+	return idcode;
 }
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 static int
 phy_ht_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b)
 {
@@ -205,5 +226,5 @@ phy_ht_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b)
 
 	return BCME_OK;
 }
-#endif /* BCMINTERNAL || DBG_PHY_IOV */
+#endif 
 #endif /* BCMDBG || BCMDBG_DUMP */

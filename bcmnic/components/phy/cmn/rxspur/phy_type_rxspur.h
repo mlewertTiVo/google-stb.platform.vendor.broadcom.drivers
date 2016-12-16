@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_rxspur.h 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_type_rxspur.h 657044 2016-08-30 21:37:55Z $
  */
 
 #ifndef _phy_type_rxspur_h_
@@ -31,11 +31,13 @@
 typedef void phy_type_rxspur_ctx_t;
 
 typedef int (*phy_type_rxspur_init_fn_t)(phy_type_rxspur_ctx_t *ctx);
+typedef void (*phy_type_rxspur_set_spurmode_fn_t)(phy_type_rxspur_ctx_t *ctx, uint16 freq);
 typedef int (*phy_type_rxspur_set_force_spurmode_fn_t)(phy_type_rxspur_ctx_t *ctx, int16 int_val);
 typedef int (*phy_type_rxspur_get_force_spurmode_fn_t)(phy_type_rxspur_ctx_t *ctx, int32 *int_ptr);
 typedef int (*phy_type_rxspur_dump_fn_t)(phy_type_rxspur_ctx_t *ctx, struct bcmstrbuf *b);
 typedef struct {
 	phy_type_rxspur_ctx_t *ctx;
+	phy_type_rxspur_set_spurmode_fn_t set_spurmode;
 	phy_type_rxspur_set_force_spurmode_fn_t set_force_spurmode;
 	phy_type_rxspur_get_force_spurmode_fn_t get_force_spurmode;
 } phy_type_rxspur_fns_t;

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_info.h 618416 2016-02-11 01:05:38Z guangjie $
+ * $Id: phy_n_info.h 658374 2016-09-07 19:38:20Z $
  */
 
 #ifndef _phy_n_info_h_
@@ -178,6 +178,9 @@ typedef struct _nphy_noise_cal {
 #include "phy_n_rxgcrs.h"
 #include "phy_n_btcx.h"
 #include "phy_n_lpc.h"
+#include "phy_n_rxspur.h"
+#include "phy_n_dbg.h"
+#include "phy_n_stf.h"
 /* ********************************************************* */
 
 struct phy_info_nphy {
@@ -202,7 +205,10 @@ struct phy_info_nphy {
 	phy_n_rxgcrs_info_t		*rxgcrsi;
 	phy_n_chanmgr_info_t	*chanmgri;
 	phy_n_btcx_info_t		*btcxi;
-	phy_n_lpc_info_t	*lpci;
+	phy_n_lpc_info_t		*lpci;
+	phy_n_rxspur_info_t		*rxspuri;
+	phy_n_dbg_info_t		*dbgi;
+	phy_n_stf_info_t		*stfi;
 /* ********************************************************* */
 	uint32 pstart; /* sample collect fifo begins */
 	uint32 pstop;  /* sample collect fifo ends */
@@ -405,7 +411,7 @@ struct phy_info_nphy {
 	int16 noisecal_rssi_offset[NPHY_CORE_NUM];
 	bool    nphy_cck_digloft_war_en; /* WAR for HW43242-62 */
 	bool    nphy_cck_filtbw_war_en;  /* WAR for HW43242-61 */
-	uint16 bphy_loft_correction[2];  /* JIRA:HW43242-61/62 */
+	uint16 bphy_loft_correction[2];
 	int8 sample_collect_gainadj;
 	uint8 gainindex;                 /* used for 4324B1 phyrxiqest -i option */
 	uint8 iqestgain;                /* used for 4324B1 phyrxiqest -i option */

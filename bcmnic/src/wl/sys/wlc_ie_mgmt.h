@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt.h 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_ie_mgmt.h 665073 2016-10-14 20:33:29Z $
  */
 
 #ifndef _wlc_ie_mgmt_h_
@@ -36,7 +36,7 @@
 #include <wlc_ie_mgmt_types.h>
 
 /*
- * special Frame Types
+ * special Frame Types supported by iem module.
  */
 #ifdef IEM_TEST
 /* Fake Frame Type for test */
@@ -66,7 +66,7 @@ extern void wlc_iem_detach(wlc_iem_info_t *iem);
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_add_build_fn(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
+extern int wlc_iem_add_build_fn(wlc_iem_info_t *iem, wlc_iem_ft_t ft, wlc_iem_tag_t tag,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx);
 
 /*
@@ -84,11 +84,11 @@ extern int wlc_iem_add_build_fn(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_add_build_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8 tag,
+extern int wlc_iem_add_build_fn_mft(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp, wlc_iem_tag_t tag,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx);
 
 /*
- * Register a pair of 'calc_len'/build_frame' callbacks for an Vendor Specific IE
+ * Register a pair of 'calc_len'/'build' callbacks for an Vendor Specific IE
  * in one frame type.
  *
  * Inputs:
@@ -96,7 +96,7 @@ extern int wlc_iem_add_build_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8 ta
  * - prio: Relative priority/position of Vendor Specific IE
  *
  * Known priorities are defined by WLC_IEM_VS_IE_PRIO_XXXX (0 at the first in the frame
- * while 249 at the last) in wlc_iem_vs.h.
+ * while 249 at the last) in wlc_ie_mgmt_vs.h.
  *
  * Positions of Vendor Specific IEs are undefined when the same 'prio' value is
  * used for multiple Vendor Specific IEs.
@@ -104,11 +104,11 @@ extern int wlc_iem_add_build_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8 ta
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_vs_add_build_fn(wlc_iem_info_t *iem, uint16 ft, uint8 prio,
+extern int wlc_iem_vs_add_build_fn(wlc_iem_info_t *iem, wlc_iem_ft_t ft, wlc_iem_tag_t prio,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx);
 
 /*
- * Register a pair of 'calc_len'/build_frame' callbacks for an Vendor Specific IE
+ * Register a pair of 'calc_len'/'build' callbacks for an Vendor Specific IE
  * in multiple frame types.
  *
  * Inputs:
@@ -120,7 +120,7 @@ extern int wlc_iem_vs_add_build_fn(wlc_iem_info_t *iem, uint16 ft, uint8 prio,
  * in 802.11.h. Use FT2BMP macro to convert a Frame Type to Frame Subtype Bitmap.
  *
  * Known priorities are defined by WLC_IEM_VS_IE_PRIO_XXXX (0 at the first in the frame
- * while 249 at the last) in wlc_iem_vs.h.
+ * while 249 at the last) in wlc_ie_mgmt_vs.h.
  *
  * Positions of Vendor Specific IEs are undefined when the same 'prio' value is
  * used for multiple Vendor Specific IEs.
@@ -128,7 +128,8 @@ extern int wlc_iem_vs_add_build_fn(wlc_iem_info_t *iem, uint16 ft, uint8 prio,
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_vs_add_build_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8 prio,
+extern int wlc_iem_vs_add_build_fn_mft(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp,
+	wlc_iem_tag_t prio,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx);
 
 /*
@@ -142,7 +143,7 @@ extern int wlc_iem_vs_add_build_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8
  * Return:
  * - IEs' total length in bytes
  */
-extern uint wlc_iem_calc_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
+extern uint wlc_iem_calc_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
 
 
@@ -158,23 +159,23 @@ extern uint wlc_iem_calc_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
  * Return:
  * - IE's length in bytes
  */
-extern uint wlc_iem_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
+extern uint wlc_iem_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
 
 /*
  * Calculate a Vendor Specific IE's length.
  *
  * Inputs:
  * - ft: Frame type FC_XXXX as defined in 802.11.h (see also WLC_IEM_FC_SCAN_XXXX)
- * - tag: non Vendor Specific IE's tag DOT11_MNG_XXXX as defined in 802.11.h
+ * - prio: Relative priority of Vendor Specific IE
  * - uiel: User supplied IEs list (IEs to be merged into the frame)
  * - cbparm: Parameters passed to the callback
  *
  * Return:
  * - IE's length in bytes
  */
-extern uint wlc_iem_vs_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
+extern uint wlc_iem_vs_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm);
 
 /*
  * Write all IEs in a frame into buffer.
@@ -192,7 +193,7 @@ extern uint wlc_iem_vs_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint1
  * Return:
  * - a negative return value indicates an error (BCME_XXXX).
  */
-extern int wlc_iem_build_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
+extern int wlc_iem_build_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len);
 
 /*
@@ -212,8 +213,9 @@ extern int wlc_iem_build_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft
  * Return:
  * - a negative return value indicates an error (BCME_XXXX).
  */
-extern int wlc_iem_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len);
+extern int wlc_iem_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
+	uint8 *buf, uint buf_len);
 
 /*
  * Write a Vendor Specific IE into a buffer.
@@ -232,8 +234,9 @@ extern int wlc_iem_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
  * Return:
  * - a negative return value indicates an error (BCME_XXXX).
  */
-extern int wlc_iem_vs_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len);
+extern int wlc_iem_vs_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
+	uint8 *buf, uint buf_len);
 
 /*
  * Register 'parse' callback for an non Vendor Specific IE 'tag'
@@ -248,7 +251,7 @@ extern int wlc_iem_vs_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_add_parse_fn(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
+extern int wlc_iem_add_parse_fn(wlc_iem_info_t *iem, wlc_iem_ft_t ft, wlc_iem_tag_t tag,
 	wlc_iem_parse_fn_t parse_fn, void *ctx);
 
 /*
@@ -268,7 +271,7 @@ extern int wlc_iem_add_parse_fn(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_add_parse_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8 tag,
+extern int wlc_iem_add_parse_fn_mft(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp, wlc_iem_tag_t tag,
 	wlc_iem_parse_fn_t parse_fn, void *ctx);
 
 /*
@@ -281,12 +284,12 @@ extern int wlc_iem_add_parse_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8 ta
  * - ft: Frame type FC_XXXX as defined in 802.11.h (see also WLC_IEM_FC_SCAN_XXXX)
  * - id: Vendor Specific IE ID
  *
- * Known IDs are defined by WLC_IEM_VS_IE_PRIO_XXXX in wlc_iem_vs.h.
+ * Known IDs are defined by WLC_IEM_VS_IE_PRIO_XXXX in wlc_ie_mgmt_vs.h.
  *
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_vs_add_parse_fn(wlc_iem_info_t *iem, uint16 ft, uint8 id,
+extern int wlc_iem_vs_add_parse_fn(wlc_iem_info_t *iem, wlc_iem_ft_t ft, wlc_iem_tag_t id,
 	wlc_iem_parse_fn_t parse_fn, void *ctx);
 
 /*
@@ -303,13 +306,13 @@ extern int wlc_iem_vs_add_parse_fn(wlc_iem_info_t *iem, uint16 ft, uint8 id,
  * Bit index in frame subtype bitmap is the frame subtype FC_SUBTYPE_XXXX as defined
  * in 802.11.h. Use FT2BMP() macro to convert a Frame Type to Frame Subtype Bitmap.
  *
- * Known IDs are defined by WLC_IEM_VS_IE_PRIO_XXXX in wlc_iem_vs.h.
+ * Known IDs are defined by WLC_IEM_VS_IE_PRIO_XXXX in wlc_ie_mgmt_vs.h.
  *
  * Return:
  * - a negative return value indicates an error.
  */
-extern int wlc_iem_vs_add_parse_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8 id,
-	wlc_iem_parse_fn_t parse_fn, void *ctx);
+extern int wlc_iem_vs_add_parse_fn_mft(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp,
+	wlc_iem_tag_t id, wlc_iem_parse_fn_t parse_fn, void *ctx);
 
 /*
  * Parse all IEs in a frame.
@@ -328,7 +331,7 @@ extern int wlc_iem_vs_add_parse_fn_mft(wlc_iem_info_t *iem, uint16 fstbmp, uint8
  * Return:
  * - a negative return value indicates an error (BCME_XXXX).
  */
-extern int wlc_iem_parse_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
+extern int wlc_iem_parse_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_upp_t *upp, wlc_iem_pparm_t *pparm, uint8 *buf, uint buf_len);
 
 #endif /* _wlc_ie_mgmt_h_ */

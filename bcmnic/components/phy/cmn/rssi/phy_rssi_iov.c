@@ -22,37 +22,15 @@
 
 static const bcm_iovar_t phy_rssi_iovars[] = {
 	{"phy_rssi_gain_delta_2g", IOV_PHY_RSSI_GAIN_DELTA_2G,
-	(IOVF_GET_UP | IOVF_SET_UP), 0, IOVT_BUFFER, 18*sizeof(int8)},
-#ifdef WLTEST
-	{"phy_rssi_gain_delta_2gh", IOV_PHY_RSSI_GAIN_DELTA_2GH,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 18*sizeof(int8)},
-	{"phy_rssi_gain_delta_2ghh", IOV_PHY_RSSI_GAIN_DELTA_2GHH,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 18*sizeof(int8)},
-	{"rssi_cal_freq_grp_2g", IOV_PHY_RSSI_CAL_FREQ_GRP_2G,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 7*sizeof(int8)},
-	{"phy_rssi_gain_delta_2gb0", IOV_PHY_RSSI_GAIN_DELTA_2GB0,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, sizeof(int8)},
-	{"phy_rssi_gain_delta_2gb1", IOV_PHY_RSSI_GAIN_DELTA_2GB1,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, sizeof(int8)},
-	{"phy_rssi_gain_delta_2gb2", IOV_PHY_RSSI_GAIN_DELTA_2GB2,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, sizeof(int8)},
-	{"phy_rssi_gain_delta_2gb3", IOV_PHY_RSSI_GAIN_DELTA_2GB3,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, sizeof(int8)},
-	{"phy_rssi_gain_delta_2gb4", IOV_PHY_RSSI_GAIN_DELTA_2GB4,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, sizeof(int8)},
-#endif /* WLTEST */
+	(0), 0, IOVT_BUFFER, 18*sizeof(int8)},
 	{"phy_rssi_gain_delta_5gl", IOV_PHY_RSSI_GAIN_DELTA_5GL,
-	(IOVF_GET_UP | IOVF_SET_UP), 0, IOVT_BUFFER, 6*sizeof(int8)},
+	(0), 0, IOVT_BUFFER, 6*sizeof(int8)},
 	{"phy_rssi_gain_delta_5gml", IOV_PHY_RSSI_GAIN_DELTA_5GML,
-	(IOVF_GET_UP | IOVF_SET_UP), 0, IOVT_BUFFER, 6*sizeof(int8)},
+	(0), 0, IOVT_BUFFER, 6*sizeof(int8)},
 	{"phy_rssi_gain_delta_5gmu", IOV_PHY_RSSI_GAIN_DELTA_5GMU,
-	(IOVF_GET_UP | IOVF_SET_UP), 0, IOVT_BUFFER, 6*sizeof(int8)},
+	(0), 0, IOVT_BUFFER, 6*sizeof(int8)},
 	{"phy_rssi_gain_delta_5gh", IOV_PHY_RSSI_GAIN_DELTA_5GH,
-	(IOVF_GET_UP | IOVF_SET_UP), 0, IOVT_BUFFER, 6*sizeof(int8)},
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	{"pkteng_stats", IOV_PKTENG_STATS,
-	(IOVF_GET_UP | IOVF_MFG), 0, IOVT_BUFFER, sizeof(wl_pkteng_stats_t)},
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+	(0), 0, IOVT_BUFFER, 6*sizeof(int8)},
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -68,14 +46,10 @@ phy_rssi_doiovar(void *ctx, uint32 aid,
 
 	switch (aid) {
 		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2G):
-		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2GH):
-		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2GHH):
 			err = phy_rssi_set_gain_delta_2g(pi->rssii, aid, setValues);
 			break;
 
 		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2G):
-		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2GH):
-		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2GHH):
 			err = phy_rssi_get_gain_delta_2g(pi->rssii, aid, getValues);
 			break;
 
@@ -92,36 +66,6 @@ phy_rssi_doiovar(void *ctx, uint32 aid,
 		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_5GH):
 			err = phy_rssi_get_gain_delta_5g(pi->rssii, aid, getValues);
 			break;
-#if defined(BCMINTERNAL) || defined(WLTEST)
-		case IOV_GVAL(IOV_PKTENG_STATS):
-			err = wlc_phy_pkteng_stats_get(pi->rssii, a, alen);
-			break;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-#ifdef WLTEST
-		case IOV_SVAL(IOV_PHY_RSSI_CAL_FREQ_GRP_2G):
-			err = phy_rssi_set_cal_freq_2g(pi->rssii, setValues);
-			break;
-
-		case IOV_GVAL(IOV_PHY_RSSI_CAL_FREQ_GRP_2G):
-			err = phy_rssi_get_cal_freq_2g(pi->rssii, getValues);
-			break;
-
-		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB0):
-		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB1):
-		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB2):
-		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB3):
-		case IOV_SVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB4):
-			err = phy_rssi_set_gain_delta_2gb(pi->rssii, aid, setValues);
-			break;
-
-		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB0):
-		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB1):
-		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB2):
-		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB3):
-		case IOV_GVAL(IOV_PHY_RSSI_GAIN_DELTA_2GB4):
-			err = phy_rssi_get_gain_delta_2gb(pi->rssii, aid, getValues);
-			break;
-#endif /* WLTEST */
 	default:
 		err = BCME_UNSUPPORTED;
 		break;

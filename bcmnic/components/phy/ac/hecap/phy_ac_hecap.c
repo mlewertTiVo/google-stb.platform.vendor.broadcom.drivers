@@ -13,6 +13,9 @@
  *
  * $Id: $
  */
+
+#ifdef WL11AX
+
 #include <phy_cfg.h>
 #include <typedefs.h>
 #include <bcmdefs.h>
@@ -28,6 +31,7 @@
 #include <phy_utils_reg.h>
 #include <wlc_phyreg_ac.h>
 #include <wlioctl.h>
+#include <phy_hecap_api.h>
 
 /* module private states */
 struct phy_ac_hecap_info {
@@ -37,8 +41,6 @@ struct phy_ac_hecap_info {
 	uint32 phy_he_caps;			    /* Capabilities from HE specific registers */
 	uint32 phy_he_caps1;			/* Capabilities from HE specific registers */
 };
-
-#ifdef WL11AX
 
 /* local functions */
 void wlc_phy_hecap_enable_acphy(phy_info_t *pi, bool enable);
@@ -71,7 +73,7 @@ BCMATTACHFN(phy_ac_hecap_register_impl)(phy_info_t *pi,
 		PHY_CAP_HE_BW : 0;
 	ac_hecap_info->phy_he_caps |= READ_PHYREGFLD(pi, PhyInternalCapability5, PESupport11ax) ?
 		PHY_CAP_HE_PE : 0;
-	ac_hecap_info->phy_he_caps |= READ_PHYREGFLD(pi, PhyInternalCapability5, DCMSupport11ax) ?
+	ac_hecap_info->phy_he_caps |= READ_PHYREGFLD(pi, PhyCapability2, Support11axDCM) ?
 		PHY_CAP_HE_DCM : 0;
 	ac_hecap_info->phy_he_caps |= READ_PHYREGFLD(pi, PhyInternalCapability5,
 		BeamChangeSupport11ax) ? PHY_CAP_HE_BEAM_CHANGE : 0;

@@ -381,7 +381,45 @@ done:
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+tkip_dump(const wlc_key_t *key, struct bcmstrbuf *b)
+{
+	tkip_key_t *tkip_key;
+	size_t i;
+
+	KM_DBG_ASSERT(TKIP_KEY_VALID(key));
+
+	tkip_key = (tkip_key_t *)key->algo_impl.ctx;
+	bcm_bprintf(b, "\ttkip key: ");
+	for (i = 0; i < TKIP_KEY_TK_SIZE; ++i)
+		bcm_bprintf(b, "%02x", tkip_key->key[i]);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\ttk, mic key from_ds: ");
+	for (i = 0; i < TKIP_KEY_MIC_KEY_SIZE; ++i)
+		bcm_bprintf(b, "%02x", tkip_key->mic_keys.from_ds[i]);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\ttk, mic key to ds: ");
+	for (i = 0; i < TKIP_KEY_MIC_KEY_SIZE; ++i)
+		bcm_bprintf(b, "%02x", tkip_key->mic_keys.to_ds[i]);
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "\ttkip rx_seq: ");
+	for (i = 0; i < KEY_NUM_RX_SEQ(key); ++i) {
+		size_t j;
+		bcm_bprintf(b, "\t\t%d: 0x", i);
+		for (j = TKIP_KEY_SEQ_SIZE; j > 0; --j)
+			bcm_bprintf(b, "%02x", tkip_key->rx_seq[i][j-1]);
+		bcm_bprintf(b, "\n");
+	}
+
+	return BCME_OK;
+}
+
+#define TKIP_DUMP tkip_dump
+#else
 #define TKIP_DUMP NULL
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static const key_algo_callbacks_t key_tkip_callbacks = {
     tkip_destroy,	/* destroy */

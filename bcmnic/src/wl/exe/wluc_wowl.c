@@ -40,7 +40,7 @@
 
 static cmd_func_t wl_nshostip;
 static cmd_func_t wl_wowl_pattern, wl_wowl_wakeind, wl_wowl_pkt, wl_wowl_status;
-static cmd_func_t wl_wowl_wake_reason, wl_wowl_extended_magic, wl_wowl_radio_duty_cycle;
+static cmd_func_t wl_wowl_extended_magic, wl_wowl_radio_duty_cycle;
 static cmd_func_t wl_wowl_wog_appid;
 static cmd_func_t wl_wowl_wog_resp;
 
@@ -101,8 +101,6 @@ static cmd_t wl_wowl_cmds[] = {
 	{"wowl_ext_magic", wl_wowl_extended_magic, WLC_GET_VAR, WLC_SET_VAR,
 	"Set 6-byte extended magic pattern\n"
 	"Usage: wl wowl_ext_magic 0x112233445566"},
-	{ "wowl_wakeup_reason", wl_wowl_wake_reason, WLC_GET_VAR, -1 /* Set not reqd */,
-	"Returns pattern id and associated wakeup reason"},
 	{ "wowl_rls_wake_pkt", wl_var_void, -1, WLC_SET_VAR,
 	"Release packet that triggered the host wake up"},
 	{ "wowl_wog", wl_varint, WLC_GET_VAR, WLC_SET_VAR,
@@ -288,37 +286,6 @@ wl_wowl_wakeind(void *wl, cmd_t *cmd, char **argv)
 		printf("No wakeup indication set\n");
 
 	return 0;
-}
-/* Used by NINTENDO2 */
-static int
-wl_wowl_wake_reason(void *wl, cmd_t *cmd, char **argv)
-{
-	int err = -1;
-	wl_wr_t wr;
-
-	UNUSED_PARAMETER(cmd);
-
-	if (!*++argv) {
-		err = wlu_iovar_get(wl, "wakeup_reason", &wr, sizeof(wl_wr_t));
-		if (err)
-			return err;
-
-		if (wr.reason && wr.reason < REASON_LAST) {
-			printf("ID: %d\t", wr.id);
-
-			if (wr.reason == LCD_ON)
-			printf("Reason: LCD_ON\n");
-			else if (wr.reason == LCD_OFF)
-			printf("Reason: LCD_OFF\n");
-			else if (wr.reason == DRC1_WAKE)
-			printf("Reason: DRC1_WAKE\n");
-			else if (wr.reason == DRC2_WAKE)
-			printf("Reason: DRC2_WAKE\n");
-		}
-		else
-			printf("Unknown wakeup Reason\n");
-	}
-		return err;
 }
 
 /* Send a wakeup frame to sta in WAKE mode */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_perf_utils.h 618889 2016-02-12 10:28:03Z $
+ * $Id: wlc_perf_utils.h 659395 2016-09-14 03:09:14Z $
  */
 
 #ifndef _wlc_perf_utils_h_
@@ -52,6 +52,21 @@ extern void wlc_delay_stats_upd(scb_delay_stats_t *delay_stats, uint32 delay, ui
 	bool ack_recd);
 #endif /* WLPKTDLYSTAT */
 
+#if defined(BCMDBG)
+/* Mask for individual stats */
+#define WLC_PERF_STATS_ISR		0x01
+#define WLC_PERF_STATS_DPC		0x02
+#define WLC_PERF_STATS_TMR_DPC		0x04
+#define WLC_PERF_STATS_PRB_REQ		0x08
+#define WLC_PERF_STATS_PRB_RESP		0x10
+#define WLC_PERF_STATS_BCN_ISR		0x20
+#define WLC_PERF_STATS_BCNS		0x40
+
+/* Performance statistics interfaces */
+void wlc_update_perf_stats(wlc_info_t *wlc, uint32 mask);
+void wlc_update_isr_stats(wlc_info_t *wlc, uint32 macintstatus);
+void wlc_update_p2p_stats(wlc_info_t *wlc, uint32 macintstatus);
+#endif /* BCMDBG */
 
 #ifdef PKTQ_LOG
 void wlc_pktq_stats_free(wlc_info_t* wlc, struct pktq* q);

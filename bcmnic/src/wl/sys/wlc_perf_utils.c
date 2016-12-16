@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_perf_utils.c 632472 2016-04-19 12:06:50Z $
+ * $Id: wlc_perf_utils.c 659395 2016-09-14 03:09:14Z $
  */
 
 #include <wlc_cfg.h>
@@ -118,6 +118,9 @@ struct wlc_perf_utils {
 	bmac_hostbus_tput_info_t *bmac_bus_tput_info; /* bus thoughput measurement info */
 #endif /* BCMPCIEDEV && BUS_TPUT */
 
+#ifdef BCMDBG
+	wlc_perf_stats_t *perf_stats;
+#endif /* BCMDBG */
 };
 
 #ifdef WLPKTDLYSTAT
@@ -140,6 +143,135 @@ typedef struct {
 #endif /* WLPKTDLYSTAT_IND */
 #endif /* WLPKTDLYSTAT */
 
+#ifdef BCMDBG
+/* Performance statistics interfaces */
+typedef struct {
+	uint32 n_counts[32];
+#ifdef WLP2P
+	uint32 n_p2p[M_P2P_I_BLK_SZ];
+#endif
+} wlc_isr_stats_t;
+
+struct wlc_perf_stats {
+	uint32	n_isr;			/**< no of isrs */
+	uint32	n_dpc;			/**< no of dpcs */
+	uint32	n_timer_dpc;		/**< no of software timers */
+	uint32	n_bcn_isr;		/**< no of ints by beacons (may be coalesced) */
+	uint32	n_beacons;		/**< no of beacons received */
+	uint32	n_probe_req;		/**< no of probe requests received */
+	uint32	n_probe_resp;		/**< no of probe responses received */
+	wlc_isr_stats_t isr_stats;
+};
+#endif /* BCMDBG */
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
+
+#ifdef BCMDBG
+static int
+wlc_dump_perf_stats_clr(void *ctx)
+{
+	wlc_perf_utils_t *pui = (wlc_perf_utils_t *)ctx;
+	bzero(pui->perf_stats, sizeof(*(pui->perf_stats)));
+	return BCME_OK;
+}
+
+static int
+wlc_dump_perf_stats(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_perf_utils_t *pui = (wlc_perf_utils_t *)ctx;
+	wlc_perf_stats_t *cnt = pui->perf_stats;
+	wlc_isr_stats_t *ints = &cnt->isr_stats;
+	uint32 i;
+
+	const char * int_names[32] =
+	{
+		"MACSSPNDD     ",
+		"BCNTPL        ",
+		"TBTT          ",
+		"BCNSUCCESS    ",
+		"BCNCANCLD     ",
+		"ATIMWINEND    ",
+		"PMQ           ",
+		"NSPECGEN_0    ",
+		"NSPECGEN_1    ",
+		"MACTXERR      ",
+		"NSPECGEN_3    ",
+		"PHYTXERR      ",
+		"PME           ",
+		"GP0           ",
+		"GP1           ",
+		"DMAINT        ",
+		"TXSTOP        ",
+		"CCA           ",
+		"BG_NOISE      ",
+		"DTIM_TBTT     ",
+		"PRQ           ",
+		"PWRUP         ",
+		"BT_RFACT_STUCK",
+		"BT_PRED_REQ   ",
+		"INT_24        ",
+		"P2P           ",
+		"INT_26        ",
+		"INT_27        ",
+		"RFDISABLE     ",
+		"TFS           ",
+		"PHYCHANGED    ",
+		"TO            "
+	};
+
+#ifdef WLP2P
+	const char * p2p_int_names[32] =
+	{
+		"PRE_TBTT",
+		"CTW_END ",
+		"ABS     ",
+		"PRS     "
+	};
+#endif
+	/* Print perf stats */
+
+	bcm_bprintf(b, "\nGeneral Performance Stats:-\n");
+
+	bcm_bprintf(b,
+		"\nisr        : %d"
+		"\ndpc        : %d"
+		"\ntimer dpc  : %d"
+		"\nbcn isr    : %d"
+		"\nbeacons    : %d"
+		"\nprobe req  : %d"
+		"\nprobe resp : %d\n",
+			cnt->n_isr, cnt->n_dpc, cnt->n_timer_dpc,
+			cnt->n_bcn_isr, cnt->n_beacons, cnt->n_probe_req, cnt->n_probe_resp);
+
+	bcm_bprintf(b, "\nInterrupt       num  percent");
+
+	for (i = 0; i < 32; i++) {
+		if (ints->n_counts[i]) {
+			bcm_bprintf(b, "\n%s	%d	%d", int_names[i], ints->n_counts[i],
+				((ints->n_counts[i])*100)/(cnt->n_isr));
+		}
+	}
+	bcm_bprintf(b, "\n");
+
+#ifdef WLP2P
+	if (P2P_ENAB(pui->wlc->pub) && ints->n_counts[25]) {
+		bcm_bprintf(b, "\nP2P Interrupt   num  percent");
+
+		for (i = 0; i < M_P2P_I_BLK_SZ; i++) {
+			bcm_bprintf(b, "\n%s	%d	%d", p2p_int_names[i], ints->n_p2p[i],
+				((ints->n_p2p[i])*100)/(ints->n_counts[25]));
+		}
+		bcm_bprintf(b, "\n");
+	}
+#endif
+
+	return BCME_OK;
+}
+#endif /* BCMDBG */
 
 /* attach/detach */
 wlc_perf_utils_t *
@@ -154,6 +286,14 @@ BCMATTACHFN(wlc_perf_utils_attach)(wlc_info_t *wlc)
 	}
 	pui->wlc = wlc;
 
+#if defined(BCMDBG)
+	if ((pui->perf_stats = MALLOCZ(wlc->osh, sizeof(*(pui->perf_stats)))) == NULL) {
+		WL_ERROR(("wl%d: %s: mem alloc failed. allocated %d bytes.\n",
+		          wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+		goto fail;
+	}
+	wlc_dump_add_fns(wlc->pub, "perf_stats", wlc_dump_perf_stats, wlc_dump_perf_stats_clr, pui);
+#endif /* BCMDBG */
 
 	if (wlc_module_register(wlc->pub, perf_utils_iovars, "perf_utils", pui,
 			wlc_perf_utils_doiovar,
@@ -259,6 +399,11 @@ BCMATTACHFN(wlc_perf_utils_detach)(wlc_perf_utils_t *pui)
 	}
 #endif /* BCMPCIEDEV && BUS_TPUT */
 
+#if defined(BCMDBG)
+	if (pui->perf_stats != NULL) {
+		MFREE(wlc->osh, pui->perf_stats, sizeof(*(pui->perf_stats)));
+	}
+#endif
 
 	MFREE(wlc->osh, pui, sizeof(*pui));
 }
@@ -422,6 +567,13 @@ wlc_txq_prec_dump(wlc_info_t* wlc, struct pktq* q, wl_iov_pktq_log_t* pktq_log, 
 		}
 	}
 	pktq_log->pktq_log.v05.counter_info[index] = result_mask;
+#if defined(BCMDBG) && defined(PSPRETEND)
+	if (PSPRETEND_ENAB(wlc->pub) && pps_time != (uint32)-1) {
+		pktq_log->pktq_log.v05.pspretend_time_delta[index] =
+		                       pps_time - q->pktqlog->pps_time;
+		q->pktqlog->pps_time = pps_time;
+	} else
+#endif /* PSPRETEND */
 	{
 		pktq_log->pktq_log.v05.pspretend_time_delta[index] = (uint32)-1;
 	}
@@ -444,6 +596,11 @@ wlc_pktq_stats(wl_iov_mac_full_params_t* full_params, uint8 params_version, stru
 	char* time = "";
 	uint32 tsf_time;
 
+#if defined(BCMDBG) && !defined(BCMDBG_EXCLUDE_HW_TIMESTAMP)
+	if (wl_msg_level2 & WL_TIMESTAMP_VAL) {
+		time = wlc_dbg_get_hw_timestamp();
+	}
+#endif
 
 	tsf_time = (R_REG(wlc->osh, &wlc->regs->tsf_timerlow));
 
@@ -515,6 +672,12 @@ wlc_pktq_stats(wl_iov_mac_full_params_t* full_params, uint8 params_version, stru
 				            marker, time, queue_type,
 				            ETHERP_TO_MACF(ea), marker);
 
+#if defined(BCMDBG) && defined(PSPRETEND)
+				if (SCB_PS_PRETEND_ENABLED(cfg, scb) &&
+				             (params->addr_type[index] & 0x7F) == 'P') {
+					pps_time = wlc_pspretend_scb_time_get(wlc->pps_info, scb);
+				}
+#endif /* PSPRETEND */
 				wlc_txq_prec_dump(wlc, pktq_func(wlc, scb), iov_pktq, index,
 				                  TRUE, tsf_time, prec_mask, pps_time);
 			} else {
@@ -705,6 +868,51 @@ wlc_perf_utils_doiovar(void *hdl, uint32 actionid,
 	return err;
 } /* wlc_perf_utils_doiovar */
 
+#ifdef BCMDBG
+void
+wlc_update_perf_stats(wlc_info_t *wlc, uint32 mask)
+{
+	wlc_perf_utils_t *pui = wlc->pui;
+	wlc_perf_stats_t *stats = pui->perf_stats;
+
+	if (mask & WLC_PERF_STATS_ISR) stats->n_isr++;
+	if (mask & WLC_PERF_STATS_DPC) stats->n_dpc++;
+	if (mask & WLC_PERF_STATS_TMR_DPC) stats->n_timer_dpc++;
+	if (mask & WLC_PERF_STATS_BCN_ISR) stats->n_bcn_isr++;
+	if (mask & WLC_PERF_STATS_BCNS) stats->n_beacons++;
+	if (mask & WLC_PERF_STATS_PRB_REQ) stats->n_probe_req++;
+	if (mask & WLC_PERF_STATS_PRB_RESP) stats->n_probe_resp++;
+}
+
+void
+wlc_update_isr_stats(wlc_info_t *wlc, uint32 macintstatus)
+{
+	wlc_perf_utils_t *pui = wlc->pui;
+	wlc_isr_stats_t *stats = &pui->perf_stats->isr_stats;
+	uint32 i;
+
+	/* Update the overall Stats Count as well */
+	if (macintstatus)
+		wlc_update_perf_stats(wlc, WLC_PERF_STATS_ISR);
+
+	for (i = 0; i < 32; i++)
+		if (macintstatus & (1<<i)) {
+			stats->n_counts[i]++;
+		}
+
+}
+
+void
+wlc_update_p2p_stats(wlc_info_t *wlc, uint32 bss)
+{
+#ifdef WLP2P
+	wlc_perf_utils_t *pui = wlc->pui;
+	wlc_isr_stats_t *stats = &pui->perf_stats->isr_stats;
+
+	stats->n_p2p[bss]++;
+#endif
+}
+#endif /* BCMDBG */
 
 #ifdef WLPKTDLYSTAT
 static int

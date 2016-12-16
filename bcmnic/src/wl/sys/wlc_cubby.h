@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_cubby.h 629717 2016-04-06 08:32:16Z $
+ * $Id: wlc_cubby.h 652227 2016-07-30 06:54:32Z $
  */
 
 #ifndef _wlc_cubby_h_
@@ -59,6 +59,7 @@ typedef uint (*cubby_secsz_fn_t)(void *ctx, void *obj);
 typedef void (*cubby_dump_fn_t)(void *ctx, void *obj, struct bcmstrbuf *b);
 typedef void (*cubby_datapath_log_dump_fn_t)(void *, struct scb *, int);
 
+
 /** structure for registering per-cubby client info */
 /* Note: if cubby init/deinit callbacks are invoked directly in other parts of
  * the code explicitly don't register fn_secsz callback and don't use secondary cubby
@@ -80,10 +81,13 @@ typedef struct wlc_cubby_fn {
 typedef int (*cubby_get_fn_t)(void *ctx, void *obj, uint8 *data, int *len);
 typedef int (*cubby_set_fn_t)(void *ctx, void *obj, const uint8 *data, int len);
 
-/* structure for registering per-cubby client info for cubby copy */
+/* Cubby update function */
+typedef int (*cubby_update_fn_t)(void *ctx, void *obj, void* new_parent);
+
 typedef struct wlc_cubby_cp_fn {
 	cubby_get_fn_t fn_get;		/* fn called to retrieve cubby content */
 	cubby_set_fn_t fn_set;		/* fn called to write content to cubby */
+	cubby_update_fn_t fn_update;	/**< fn called to perform updates on the cubby structure */
 } wlc_cubby_cp_fn_t;
 
 /* client registration interface */
@@ -115,7 +119,11 @@ void *wlc_cubby_sec_alloc(wlc_cubby_info_t *cubby_info, void *obj, uint secsz);
 void wlc_cubby_sec_free(wlc_cubby_info_t *cubby_info, void *obj, void *secptr);
 
 /* debug/dump interface */
-
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void wlc_cubby_dump(wlc_cubby_info_t *cubby_info, void *obj,
+	cubby_sec_sz_fn_t secsz_fn, void *sec_ctx, struct bcmstrbuf *b);
+#endif
+int wlc_cubby_update(wlc_cubby_info_t *ctx, void* upd_obj, void *new_parent);
 void wlc_cubby_datapath_log_dump(wlc_cubby_info_t *cubby_info, void *obj, int tag);
 
 #endif /* _wlc_cubby_h_ */

@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_murx.c 642555 2016-06-09 04:21:46Z $
+ * $Id: wlc_murx.c 656114 2016-08-25 07:56:05Z $
  */
 
 /*
@@ -63,7 +63,11 @@ enum {
 };
 
 static const bcm_iovar_t murx_iovars[] = {
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#ifdef BCMDBG
+	/* This really just here for development test. Will likely remove. */
+	{"mu_membership_clear", IOV_MURX_MEMB_CLEAR, 0, 0, IOVT_UINT32, 0},
+#endif
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU))
 	{"murx_clear_dump", IOV_MURX_CLEAR_DUMP, 0, 0, IOVT_UINT32, 0},
 #endif  
 	{NULL, 0, 0, 0, 0, 0 }
@@ -194,11 +198,12 @@ static int wlc_murx_bsscfg_config_set(void *hdl, wlc_bsscfg_t *bsscfg, const uin
 static int wlc_murx_alloc_bsscfg_gid_info(wlc_murx_info_t *mu_info, wlc_bsscfg_t *bsscfg);
 static void wlc_murx_reset_bsscfg_gid_info(wlc_murx_info_t *mu_info, wlc_bsscfg_t *bsscfg);
 static void wlc_murx_free_bsscfg_gid_info(wlc_murx_info_t *mu_info, wlc_bsscfg_t *bsscfg);
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 void murx_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
 #endif
 
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 static int wlc_murx_dump(wlc_murx_info_t *mu_info, struct bcmstrbuf *b);
 void wlc_murx_clear_dump(wlc_murx_info_t *mu_info);
 #endif
@@ -311,7 +316,7 @@ BCMATTACHFN(wlc_murx_attach)(wlc_info_t *wlc)
 	cubby_params.context = mu_info;
 	cubby_params.fn_init = murx_bsscfg_init;
 	cubby_params.fn_deinit = murx_bsscfg_deinit;
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 	cubby_params.fn_dump = murx_bsscfg_dump;
 #endif
 	cubby_params.fn_get = wlc_murx_bsscfg_config_get;
@@ -336,9 +341,10 @@ BCMATTACHFN(wlc_murx_attach)(wlc_info_t *wlc)
 		return NULL;
 	}
 
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 	wlc_dump_register(mu_info->pub, "murx", (dump_fn_t)wlc_murx_dump, (void*)mu_info);
-#endif 
+#endif /* WLCNT && (BCMDBG || WLDUMP || BCMDBG_MU || BCMDBG_DUMP) */
 
 	return mu_info;
 }
@@ -360,7 +366,8 @@ BCMATTACHFN(wlc_murx_detach)(wlc_murx_info_t *mu_info)
 	MFREE(mu_info->osh, mu_info, sizeof(wlc_murx_info_t));
 }
 
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 /* Dump MU-MIMO state information. */
 static int
 wlc_murx_dump(wlc_murx_info_t *mu_info, struct bcmstrbuf *b)
@@ -426,9 +433,13 @@ wlc_murx_dump(wlc_murx_info_t *mu_info, struct bcmstrbuf *b)
 			}
 		}
 	}
+
+	/* To avoid too many rates in one dump */
+	wlc_murx_clear_dump(mu_info);
+
 	return BCME_OK;
 }
-#endif 
+#endif /* WLCNT && (BCMDBG || WLDUMP || BCMDBG_MU || BCMDBG_DUMP) */
 
 /* IOVar handler for the MU-MIMO infrastructure module */
 static int
@@ -440,18 +451,33 @@ murx_doiovar(void *hdl, uint32 actionid,
 {
 	int32 int_val = 0;
 	int err = 0;
+#ifdef BCMDBG
+	wlc_murx_info_t *mu_info = (wlc_murx_info_t*) hdl;
+	wlc_info_t *wlc = mu_info->wlc;
+	wlc_bsscfg_t *bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+	murx_bsscfg_t *mu_bsscfg;
+#endif
 
 	if (plen >= (int)sizeof(int_val))
 		memcpy(&int_val, p, sizeof(int_val));
 
 	switch (actionid) {
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#ifdef BCMDBG
+		case IOV_SVAL(IOV_MURX_MEMB_CLEAR):
+			mu_bsscfg = MURX_BSSCFG(mu_info, bsscfg);
+			if (mu_bsscfg) {
+				(void) murx_grp_memb_hw_update(wlc, mu_bsscfg, NULL, NULL, NULL);
+			}
+			break;
+#endif
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 		case IOV_SVAL(IOV_MURX_CLEAR_DUMP):
 		{
 			wlc_murx_clear_dump((wlc_murx_info_t*) hdl);
 			break;
 		}
-#endif 
+#endif /* WLCNT && (BCMDBG || WLDUMP || BCMDBG_MU || BCMDBG_DUMP) */
 
 		default:
 			err = BCME_UNSUPPORTED;
@@ -565,13 +591,14 @@ murx_bsscfg_init(void *hdl, wlc_bsscfg_t *bsscfg)
 
 	cubby->murx_bsscfg = mu_bsscfg;
 
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 	if ((mu_bsscfg->murx_stats = MALLOCZ(mu_info->osh, sizeof(murx_stats_t))) == NULL) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
 			mu_info->pub->unit, __FUNCTION__, MALLOCED(mu_info->osh)));
 		return BCME_NOMEM;
 	}
-#endif 
+#endif /* WLCNT && (BCMDBG || WLDUMP || BCMDBG_MU || BCMDBG_DUMP) */
 
 	return BCME_OK;
 }
@@ -587,12 +614,13 @@ murx_bsscfg_deinit(void *hdl, wlc_bsscfg_t *bsscfg)
 	if (mu_bsscfg == NULL)
 		return;
 
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 	if (mu_bsscfg->murx_stats != NULL) {
 		MFREE(mu_info->osh, mu_bsscfg->murx_stats, sizeof(murx_stats_t));
 		mu_bsscfg->murx_stats = NULL;
 	}
-#endif	
+#endif	/* WLCNT && (BCMDBG || WLDUMP || BCMDBG_MU || BCMDBG_DUMP) */
 
 	/* Reset GID information in cubby + HW and free stored GID information
 	 */
@@ -707,7 +735,7 @@ wlc_murx_bsscfg_config_set(void *hdl, wlc_bsscfg_t *bsscfg, const uint8 *data, i
 	}
 
 #if defined(WLCNT)
-#if defined(WLDUMP) || defined(BCMDBG_MU)
+#if defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || defined(BCMDBG_DUMP)
 	/* Since Stats will be freed as part bsscfg-deinit done on src-bsscfg, copy it in
 	 * dst-bsscfg
 	 */
@@ -775,7 +803,7 @@ wlc_murx_free_bsscfg_gid_info(wlc_murx_info_t *mu_info, wlc_bsscfg_t *bsscfg)
 	}
 }
 
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 void
 murx_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
 {
@@ -803,7 +831,7 @@ murx_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
 #endif
 	}
 }
-#endif   
+#endif   /* BCMDBG || WLDUMP */
 
 /* Filter advertisement of MU BFE capability for a given BSS. A STA can only do
  * MU receive in one BSS. If doing MU rx in a BSS already, then do not advertise
@@ -916,9 +944,21 @@ murx_grp_memb_hw_update(wlc_info_t *wlc, murx_bsscfg_t *mu_bsscfg, struct scb *s
 	bool was_member;         /* TRUE if STA was previously a member of a given group */
 	bool is_member;          /* TRUE if STA is now a member of a given group */
 	murx_gid_info_t *gid_info = mu_bsscfg->gid_info;
+#if defined(BCMDBG)
+	char ssidbuf[SSID_FMT_BUF_LEN];
+	char eabuf[ETHER_ADDR_STR_LEN];
+	char *change_type;
+#endif
 
 	BCM_REFERENCE(scb);
 
+#if defined(BCMDBG)
+	if (scb) {
+		wlc_format_ssid(ssidbuf, scb->bsscfg->SSID, scb->bsscfg->SSID_len);
+	} else {
+		wlc_format_ssid(ssidbuf, (const uchar *)"", 0);
+	}
+#endif
 
 	for (g = MU_GROUP_ID_MIN; g < MU_GROUP_ID_MAX; g++) {
 		err = BCME_OK;
@@ -947,6 +987,15 @@ murx_grp_memb_hw_update(wlc_info_t *wlc, murx_bsscfg_t *mu_bsscfg, struct scb *s
 		}
 		/* no-op if was not and is not a member */
 		if (err != BCME_OK) {
+#ifdef BCMDBG
+			WL_ERROR(("wl%d: %s: Failed to %s MU group %d "
+				  "user position %u received from %s in BSS %s. "
+				  "Error %d (%s).\n",
+				  wlc->pub->unit, __FUNCTION__,
+				  change_type, g, pos,
+				  scb ? bcm_ether_ntoa(&scb->ea, eabuf) : "", ssidbuf,
+				  err, bcmerrorstr(err)));
+#endif /* BCMDBG */
 			rv = err;
 		}
 	}
@@ -982,6 +1031,11 @@ wlc_murx_gid_update(wlc_info_t *wlc, struct scb *scb,
 {
 	wlc_murx_info_t *mu_info = wlc->murx;
 	murx_bsscfg_t *mu_bsscfg;
+#ifdef BCMDBG
+	uint16 g;
+	uint8 pos = 0;
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	if (!MU_RX_ENAB(wlc))
 		return BCME_OK;
@@ -1036,11 +1090,26 @@ wlc_murx_gid_update(wlc_info_t *wlc, struct scb *scb,
 		return BCME_ERROR;
 	}
 
+#ifdef BCMDBG
+	if (WL_MUMIMO_ON()) {
+		/* Trace new group membership */
+		WL_MUMIMO(("wl%d: Received Group ID Mgmt frame from %s. "
+		           "New MU-MIMO group membership:\n",
+		           wlc->pub->unit, bcm_ether_ntoa(&scb->ea, eabuf)));
+		for (g = MU_GROUP_ID_MIN; g < MU_GROUP_ID_MAX; g++) {
+			if (isset(mu_bsscfg->gid_info->membership, g)) {
+				pos = mu_user_pos_get(mu_bsscfg->gid_info->position, g);
+				WL_MUMIMO(("    Group %u Pos %u\n", g, pos));
+			}
+		}
+	}
+#endif  /* BCMDBG */
 
 	return BCME_OK;
 }
 
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 void
 wlc_murx_update_rxcounters(wlc_murx_info_t *mu_info, uint32 ft, struct scb *scb,
 	struct dot11_header *h)
@@ -1052,6 +1121,9 @@ wlc_murx_update_rxcounters(wlc_murx_info_t *mu_info, uint32 ft, struct scb *scb,
 	uint8 gid;
 	bool is_mu = FALSE;
 	murx_bsscfg_t *mu_bsscfg;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	if (!mu_info || !scb) {
 		return;
@@ -1104,6 +1176,13 @@ wlc_murx_update_rxcounters(wlc_murx_info_t *mu_info, uint32 ft, struct scb *scb,
 
 	mu_bsscfg->murx_stats->gid_last_rate[gid] = rate_index;
 
+#ifdef BCMDBG
+	if (is_mu) {
+		/* Trace MU frame receipt */
+		WL_MUMIMO(("wl%d: Received MU frame from %s with group ID %u, mcs %ux%u.\n",
+			mu_info->pub->unit, bcm_ether_ntoa(&scb->ea, eabuf), gid, mcs, nss));
+	}
+#endif /* BCMDBG */
 }
 
 void wlc_murx_clear_dump(wlc_murx_info_t *mu_info)
@@ -1123,7 +1202,7 @@ void wlc_murx_clear_dump(wlc_murx_info_t *mu_info)
 	mu_bsscfg->hw_update_err = 0;
 	bzero(mu_bsscfg->murx_stats, sizeof(murx_stats_t));
 }
-#endif 
+#endif /* WLCNT && (BCMDBG || WLDUMP || BCMDBG_MU || BCMDBG_DUMP) */
 
 #ifdef WLCNT
 void wlc_murx_update_murx_inprog(wlc_murx_info_t *mu_info, bool bval)

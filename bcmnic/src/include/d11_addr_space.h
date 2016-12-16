@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: d11_addr_space.h 618930 2016-02-12 14:55:06Z $
+ * $Id: d11_addr_space.h 647216 2016-07-04 11:09:18Z $
  */
 
 #ifndef	_D11_ADDR_SPACE_H
@@ -22,6 +22,7 @@
 #if D11CONF_GE(60)
 /* for UCODE_IN_ROM_SUPPORT, 2 axi slave ports are expected */
 #define D11_AXI_SP_IDX		(1) /* Index 0 and 1 (First and Second slave port) */
+#define	D11_AXI_SP_ID		(2)
 
 #define UCM_INSTR_WIDTH_BYTES	(8)
 #define UCM_RAM_SIZE		(8 * 1024)

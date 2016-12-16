@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_antdiv_iov.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_antdiv_iov.c 666266 2016-10-20 11:18:34Z $
  */
 
 #include <phy_antdiv_iov.h>
@@ -22,17 +22,24 @@
 /* iovar ids */
 enum {
 	IOV_ANT_DIV_SW_CORE0 = 1,
-	IOV_ANT_DIV_SW_CORE1 = 2
+	IOV_ANT_DIV_SW_CORE1 = 2,
+	IOV_PHY_TXSWCTRLMAP = 3
 };
 
+/* iovar table */
 static const bcm_iovar_t phy_antdiv_iovars[] = {
 	{"ant_diversity_sw_core0", IOV_ANT_DIV_SW_CORE0, (IOVF_SET_UP|IOVF_GET_UP), 0,
 	IOVT_UINT8, 0},
 	{"ant_diversity_sw_core1", IOV_ANT_DIV_SW_CORE1, (IOVF_SET_UP|IOVF_GET_UP), 0,
 	IOVT_UINT8, 0},
+	{"phy_txswctrlmap", IOV_PHY_TXSWCTRLMAP, 0, 0, IOVT_INT8, 0},
 	{NULL, 0, 0, 0, 0, 0}
 };
 
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
 #include <wlc_patch.h>
 
 static int
@@ -66,6 +73,16 @@ phy_antdiv_doiovar(void *ctx, uint32 aid,
 	case IOV_GVAL(IOV_ANT_DIV_SW_CORE1):
 	{
 		phy_antdiv_get_sw_control(pi, ret_int_ptr, 1);
+		break;
+	}
+	case IOV_SVAL(IOV_PHY_TXSWCTRLMAP):
+	{
+		err = phy_antdiv_set_txswctrlmap(pi, int_val);
+		break;
+	}
+	case IOV_GVAL(IOV_PHY_TXSWCTRLMAP):
+	{
+		err = phy_antdiv_get_txswctrlmap(pi, ret_int_ptr);
 		break;
 	}
 	default:

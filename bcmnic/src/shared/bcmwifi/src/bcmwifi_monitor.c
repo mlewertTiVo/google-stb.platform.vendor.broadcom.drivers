@@ -26,10 +26,10 @@
 #include <bcmutils.h>
 #include <bcmendian.h>
 #include <bcmwifi_channels.h>
-#include <d11.h>
 #include <proto/monitor.h>
 #include <bcmwifi_radiotap.h>
 #include <bcmwifi_monitor.h>
+#include <hndd11.h>
 
 /* channel bandwidth */
 #define WLC_10_MHZ	10	/**< 10Mhz channel bandwidth */
@@ -45,6 +45,7 @@ struct monitor_info {
 	uint8*		amsdu_pkt;
 	int8		headroom;
 };
+
 #ifdef BCMDONGLEHOST
 /**
  * Rate info per rate: tells for *pre* 802.11n rates whether a given rate is OFDM or not and its
@@ -162,62 +163,6 @@ wlc_vht_get_rspec_from_plcp(uint8 *plcp)
 
 	return rspec;
 }
-
-/** Calculate the rate of a received frame and return it as a ratespec */
-ratespec_t BCMFASTPATH
-wlc_recv_compute_rspec(wlc_d11rxhdr_t *wrxh, uint8 *plcp)
-{
-	d11rxhdr_t *rxh = &wrxh->rxhdr;
-	ratespec_t rspec;
-	uint16 phy_ft;
-
-	phy_ft = rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK;
-
-	switch (phy_ft) {
-	case PRXS0_CCK:
-		rspec = CCK_RSPEC(CCK_PHY2MAC_RATE(((cck_phy_hdr_t *)plcp)->signal));
-		rspec |= RSPEC_BW_20MHZ;
-		break;
-	case PRXS0_OFDM:
-		rspec = OFDM_RSPEC(OFDM_PHY2MAC_RATE(((ofdm_phy_hdr_t *)plcp)->rlpt[0]));
-		rspec |= RSPEC_BW_20MHZ;
-		break;
-	case PRXS0_PREN: {
-		uint ht_sig1, ht_sig2;
-		uint8 stbc;
-
-		ht_sig1 = plcp[0];	/* only interested in low 8 bits */
-		ht_sig2 = plcp[3] | (plcp[4] << 8); /* only interested in low 10 bits */
-
-		rspec = HT_RSPEC((ht_sig1 & HT_SIG1_MCS_MASK));
-		if (ht_sig1 & HT_SIG1_CBW) {
-			/* indicate rspec is for 40 MHz mode */
-			rspec |= RSPEC_BW_40MHZ;
-		} else {
-			/* indicate rspec is for 20 MHz mode */
-			rspec |= RSPEC_BW_20MHZ;
-		}
-		if (ht_sig2 & HT_SIG2_SHORT_GI)
-			rspec |= RSPEC_SHORT_GI;
-		if (ht_sig2 & HT_SIG2_FEC_CODING)
-			rspec |= RSPEC_LDPC_CODING;
-		stbc = ((ht_sig2 & HT_SIG2_STBC_MASK) >> HT_SIG2_STBC_SHIFT);
-		if (stbc != 0) {
-			rspec |= RSPEC_STBC;
-		}
-		break;
-	}
-	case PRXS0_STDN:
-		rspec = wlc_vht_get_rspec_from_plcp(plcp);
-		break;
-	default:
-		/* return a valid rspec if not a debug/assert build */
-		rspec = OFDM_RSPEC(6) | RSPEC_BW_20MHZ;
-		break;
-	}
-
-	return rspec;
-} /* wlc_recv_compute_rspec */
 
 /**
  * Returns the rate in [Kbps] units for a caller supplied MCS/bandwidth/Nss/Sgi combination.
@@ -338,6 +283,62 @@ wlc_rate_rspec2rate(ratespec_t rspec)
 }
 
 #endif /* BCMDONGLEHOST */
+
+/** Calculate the rate of a received frame and return it as a ratespec (monitor mode) */
+static ratespec_t BCMFASTPATH
+wlc_recv_mon_compute_rspec(wlc_d11rxhdr_t *wrxh, uint8 *plcp)
+{
+	d11rxhdr_t *rxh = &wrxh->rxhdr;
+	ratespec_t rspec;
+	uint16 phy_ft;
+
+	phy_ft = rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK_REV_LT80;
+
+	switch (phy_ft) {
+		case PRXS0_CCK:
+			rspec = CCK_RSPEC(CCK_PHY2MAC_RATE(((cck_phy_hdr_t *)plcp)->signal));
+			rspec |= RSPEC_BW_20MHZ;
+			break;
+		case PRXS0_OFDM:
+			rspec = OFDM_RSPEC(OFDM_PHY2MAC_RATE(((ofdm_phy_hdr_t *)plcp)->rlpt[0]));
+			rspec |= RSPEC_BW_20MHZ;
+			break;
+		case PRXS0_PREN: {
+			uint ht_sig1, ht_sig2;
+			uint8 stbc;
+
+			ht_sig1 = plcp[0];	/* only interested in low 8 bits */
+			ht_sig2 = plcp[3] | (plcp[4] << 8); /* only interested in low 10 bits */
+
+			rspec = HT_RSPEC((ht_sig1 & HT_SIG1_MCS_MASK));
+			if (ht_sig1 & HT_SIG1_CBW) {
+				/* indicate rspec is for 40 MHz mode */
+				rspec |= RSPEC_BW_40MHZ;
+			} else {
+				/* indicate rspec is for 20 MHz mode */
+				rspec |= RSPEC_BW_20MHZ;
+			}
+			if (ht_sig2 & HT_SIG2_SHORT_GI)
+				rspec |= RSPEC_SHORT_GI;
+			if (ht_sig2 & HT_SIG2_FEC_CODING)
+				rspec |= RSPEC_LDPC_CODING;
+			stbc = ((ht_sig2 & HT_SIG2_STBC_MASK) >> HT_SIG2_STBC_SHIFT);
+			if (stbc != 0) {
+				rspec |= RSPEC_STBC;
+			}
+			break;
+		}
+		case PRXS0_STDN:
+			rspec = wlc_vht_get_rspec_from_plcp(plcp);
+			break;
+		default:
+			/* return a valid rspec if not a debug/assert build */
+			rspec = OFDM_RSPEC(6) | RSPEC_BW_20MHZ;
+			break;
+	}
+
+	return rspec;
+} /* wlc_recv_compute_rspec */
 
 /* recover 32bit TSF value from the 16bit TSF value */
 /* assumption is time in rxh is within 65ms of the current tsf */
@@ -464,7 +465,8 @@ wl_rxsts_to_rtap(struct wl_rxsts* rxsts, void *payload, uint16 len, void* pout)
  * assume p points to plcp header
  */
 static uint16
-wl_d11rx_to_rxsts(monitor_info_t* info, host_rxbuf_cmpl_t* msg, void *pkt, uint16 len, void* pout)
+wl_d11rx_to_rxsts(monitor_info_t* info, monitor_pkt_info_t* pkt_info,
+	wlc_d11rxhdr_t *wrxh, void *pkt, uint16 len, void* pout)
 {
 	struct wl_rxsts sts;
 	uint32 rx_tsf_l;
@@ -473,7 +475,6 @@ wl_d11rx_to_rxsts(monitor_info_t* info, host_rxbuf_cmpl_t* msg, void *pkt, uint1
 	uint16 len_out = 0;
 	uint8 *plcp;
 	uint8 *p = (uint8*)pkt;
-	wlc_d11rxhdr_t *wrxh = NULL;
 	uint8 hwrxoff = 0;
 	uint32 ts_tsf = 0;
 	int8 rssi = 0;
@@ -482,10 +483,8 @@ wl_d11rx_to_rxsts(monitor_info_t* info, host_rxbuf_cmpl_t* msg, void *pkt, uint1
 	ASSERT(info);
 	BCM_REFERENCE(chan_num);
 
-	wrxh = (wlc_d11rxhdr_t*)((uint8*)p);
-
-	rssi = (msg->marker >> 8) & 0xff;
-	hwrxoff = (msg->marker >> 16) & 0xff;
+	rssi = (pkt_info->marker >> 8) & 0xff;
+	hwrxoff = (pkt_info->marker >> 16) & 0xff;
 
 	plcp = (uint8*)p + hwrxoff;
 
@@ -493,22 +492,15 @@ wl_d11rx_to_rxsts(monitor_info_t* info, host_rxbuf_cmpl_t* msg, void *pkt, uint1
 		plcp += 2;
 	}
 
-	if (msg->ts.ts_low) {
-		ts_tsf = msg->ts.ts_low;
-	} else {
-		if (hwrxoff == 48)
-			ts_tsf = *(uint32*)((uint8*)p + 36);
-		else
-			ts_tsf = *(uint32*)((uint8*)p + 28);
-	}
-
+	ts_tsf = pkt_info->ts.ts_low;
 	rx_tsf_l = wlc_recover_tsf32(wrxh->rxhdr.lt80.RxTSFTime, ts_tsf);
 
 	bzero((void *)&sts, sizeof(wl_rxsts_t));
+
 	sts.mactime = rx_tsf_l;
 	sts.antenna = (wrxh->rxhdr.lt80.PhyRxStatus_0 & PRXS0_RXANT_UPSUBBAND) ? 1 : 0;
 	sts.signal = rssi;
-	sts.noise = (int8)msg->marker;
+	sts.noise = (int8)pkt_info->marker;
 	sts.chanspec = wrxh->rxhdr.lt80.RxChan;
 
 	if (wf_chspec_malformed(sts.chanspec))
@@ -516,7 +508,7 @@ wl_d11rx_to_rxsts(monitor_info_t* info, host_rxbuf_cmpl_t* msg, void *pkt, uint1
 
 	chan_num = CHSPEC_CHANNEL(sts.chanspec);
 
-	rspec = wlc_recv_compute_rspec(wrxh, plcp);
+	rspec = wlc_recv_mon_compute_rspec(wrxh, plcp);
 	{
 		struct dot11_header *h;
 		uint16 subtype;
@@ -742,15 +734,12 @@ wl_d11rx_to_rxsts(monitor_info_t* info, host_rxbuf_cmpl_t* msg, void *pkt, uint1
 }
 
 static uint16
-wl_monitor_amsdu(monitor_info_t* info, host_rxbuf_cmpl_t* msg,
+wl_monitor_amsdu(monitor_info_t* info, monitor_pkt_info_t* pkt_info, wlc_d11rxhdr_t *wrxh,
 	void *pkt, uint16 len, void* pout, uint16* offset)
 {
 	uint8 *p = pkt;
-	wlc_d11rxhdr_t *wrxh = (wlc_d11rxhdr_t*)pkt;
-	uint8 hwrxoff = (msg->marker >> 16) & 0xFF;
+	uint8 hwrxoff = (pkt_info->marker >> 16) & 0xff;
 	uint16 frame_len = 0;
-
-	/* Collect AMSDU subframe packets */
 	uint16 aggtype = (wrxh->rxhdr.lt80.RxStatus2 & RXS_AGGTYPE_MASK) >> RXS_AGGTYPE_SHIFT;
 
 	switch (aggtype) {
@@ -764,16 +753,16 @@ wl_monitor_amsdu(monitor_info_t* info, host_rxbuf_cmpl_t* msg,
 		info->headroom = MAX_RADIOTAP_SIZE - D11_PHY_HDR_LEN - hwrxoff;
 		info->headroom -= (wrxh->rxhdr.lt80.RxStatus1 & RXS_PBPRES) ? 2 : 0;
 
+		/* Save the new starting AMSDU subframe */
 		info->amsdu_len = len;
 		info->amsdu_pkt = (uint8*)pout + (info->headroom > 0 ?
 			info->headroom : 0);
 
-		if (aggtype == RXS_AMSDU_FIRST) {
-			/* Save the new starting AMSDU subframe */
-			memcpy(info->amsdu_pkt, p, len);
-		} else {
+		memcpy(info->amsdu_pkt, p, len);
+
+		if (aggtype == RXS_AMSDU_N_ONE) {
 			/* all-in-one AMSDU subframe */
-			frame_len = wl_d11rx_to_rxsts(info, msg, p,
+			frame_len = wl_d11rx_to_rxsts(info, pkt_info, wrxh, p,
 				len, info->amsdu_pkt - info->headroom);
 
 			*offset = ABS(info->headroom);
@@ -786,7 +775,7 @@ wl_monitor_amsdu(monitor_info_t* info, host_rxbuf_cmpl_t* msg,
 	case RXS_AMSDU_INTERMEDIATE:
 	case RXS_AMSDU_LAST:
 	default:
-		/* Check for previously collected */
+			/* Check for previously collected */
 		if (info->amsdu_len) {
 			/* Append next AMSDU subframe */
 			p += hwrxoff; len -= hwrxoff;
@@ -800,7 +789,7 @@ wl_monitor_amsdu(monitor_info_t* info, host_rxbuf_cmpl_t* msg,
 
 			/* complete AMSDU frame */
 			if (aggtype == RXS_AMSDU_LAST) {
-				frame_len = wl_d11rx_to_rxsts(info, msg, info->amsdu_pkt,
+				frame_len = wl_d11rx_to_rxsts(info, pkt_info, wrxh, info->amsdu_pkt,
 					info->amsdu_len, info->amsdu_pkt - info->headroom);
 
 				*offset = ABS(info->headroom);
@@ -835,15 +824,16 @@ bcmwifi_monitor_delete(monitor_info_t* info)
 }
 
 uint16
-bcmwifi_monitor(monitor_info_t* info, host_rxbuf_cmpl_t* msg,
+bcmwifi_monitor(monitor_info_t* info, monitor_pkt_info_t* pkt_info,
 	void *pkt, uint16 len, void* pout, uint16* offset)
 {
 	wlc_d11rxhdr_t *wrxh = (wlc_d11rxhdr_t*)pkt;
 
-	if ((wrxh->rxhdr.lt80.RxStatus2 & RXS_AMSDU_MASK) || info->amsdu_len) {
-		return wl_monitor_amsdu(info, msg, pkt, len, pout, offset);
+	if ((wrxh->rxhdr.lt80.RxStatus2 & RXS_AMSDU_MASK)) {
+		return wl_monitor_amsdu(info, pkt_info, wrxh, pkt, len, pout, offset);
 	} else {
+		info->amsdu_len = 0; /* reset amsdu */
 		*offset = 0;
-		return wl_d11rx_to_rxsts(info, msg, pkt, len, pout);
+		return wl_d11rx_to_rxsts(info, pkt_info, wrxh, pkt, len, pout);
 	}
 }

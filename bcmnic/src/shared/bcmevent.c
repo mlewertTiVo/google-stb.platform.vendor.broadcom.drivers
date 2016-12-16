@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmevent.c 643700 2016-06-15 18:26:20Z $
+ * $Id: bcmevent.c 660324 2016-09-20 06:14:14Z $
  */
 
 #include <typedefs.h>
@@ -180,6 +180,9 @@ static const bcmevent_name_str_t bcmevent_names[] = {
 	BCMEVENT_NAME(WLC_E_MSCH),
 	BCMEVENT_NAME(WLC_E_ULP),
 	BCMEVENT_NAME(WLC_E_NAN),
+	BCMEVENT_NAME(WLC_E_PKT_FILTER),
+	BCMEVENT_NAME(WLC_E_DMA_TXFLUSH_COMPLETE),
+	BCMEVENT_NAME(WLC_E_PSK_AUTH),
 };
 
 
@@ -237,7 +240,6 @@ wl_event_to_network_order(wl_event_msg_t * evt)
 	evt->version = hton16(evt->version);
 }
 
-#ifdef SEC_ENHANCEMENT
 /*
  * Validate if the event is proper and if valid copy event header to event.
  * If proper event pointer is passed, to just validate, pass NULL to event.
@@ -355,53 +357,3 @@ is_wlc_event_frame(void *pktdata, uint pktlen, uint16 exp_usr_subtype,
 done:
 	return err;
 }
-#else
-/* validate if the event is proper and if valid copy event header to event
- * if proper event pointer is passed, to just validate, pass NULL to event
- */
-int
-is_wlc_event_frame(void *pktdata, wl_event_msg_t *event, uint pktlen)
-{
-	uint32 datalen;
-	uint evlen;
-	uint16 subtype, usr_subtype;
-	bcm_event_t *pvt_data = (bcm_event_t *)pktdata;
-
-	if (pktlen < sizeof(bcm_event_t)) {
-		return (BCME_BADLEN);
-	}
-
-	if (bcmp(BRCM_OUI, &pvt_data->bcm_hdr.oui[0], DOT11_OUI_LEN)) {
-		return (BCME_ERROR);
-	}
-
-	subtype = ntoh16_ua((void *)&pvt_data->bcm_hdr.subtype);
-	if (subtype != BCMILCP_SUBTYPE_VENDOR_LONG) {
-		return (BCME_ERROR);
-	}
-
-	usr_subtype = ntoh16_ua((void *)&pvt_data->bcm_hdr.usr_subtype);
-	if (usr_subtype != BCMILCP_BCM_SUBTYPE_EVENT &&
-		usr_subtype != BCMILCP_BCM_SUBTYPE_DNGLEVENT)
-	{
-		return (BCME_ERROR);
-	}
-
-	datalen = ntoh32_ua((void *)&pvt_data->event.datalen);
-	evlen = datalen + sizeof(bcm_event_t);
-	if (evlen > pktlen) {
-		return (BCME_BADLEN);
-	}
-
-	/* copy event header only if proper event pointer is passed,
-	 * if passed NULL, do not copy.
-	 */
-	if (event) {
-		/* memcpy since BRCM event pkt may be unaligned. */
-		memcpy(event, &pvt_data->event, sizeof(wl_event_msg_t));
-	}
-
-	return BCME_OK;
-}
-
-#endif /* SEC_ENHANCEMENT */

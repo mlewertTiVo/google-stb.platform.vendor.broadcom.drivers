@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_math.c 635757 2016-05-05 05:18:39Z vyass $
+ * $Id: phy_utils_math.c 659421 2016-09-14 06:45:22Z $
  */
 
 #include <typedefs.h>
@@ -26,7 +26,7 @@
 void
 phy_utils_computedB(uint32 *cmplx_pwr, int8 *p_cmplx_pwr_dB, uint8 core)
 {
-	uint8 shift_ct, lsb, msb, secondmsb, i;
+	uint8 shift_ct, lsb, msb, secondmsb, thirdmsb, i;
 	uint32 tmp;
 
 	ASSERT(core <= PHY_CORE_MAX);
@@ -34,7 +34,7 @@ phy_utils_computedB(uint32 *cmplx_pwr, int8 *p_cmplx_pwr_dB, uint8 core)
 	PHY_INFORM(("wlc_phy_compute_dB: compute_dB for %d cores\n", core));
 	for (i = 0; i < core; i++) {
 		tmp = cmplx_pwr[i];
-		shift_ct = msb = secondmsb = 0;
+		shift_ct = msb = secondmsb = thirdmsb = 0;
 		while (tmp != 0) {
 			tmp = tmp >> 1;
 			shift_ct++;
@@ -43,10 +43,12 @@ phy_utils_computedB(uint32 *cmplx_pwr, int8 *p_cmplx_pwr_dB, uint8 core)
 				msb = shift_ct;
 		}
 
-		if (msb != 0)
-		secondmsb = (uint8)((cmplx_pwr[i] >> (msb - 1)) & 1);
+		if (msb != 0) {
+			secondmsb = (uint8)((cmplx_pwr[i] >> (msb - 1)) & 1);
+			thirdmsb = (uint8)((cmplx_pwr[i] >> (msb - 2)) & 1);
+		}
 
-		p_cmplx_pwr_dB[i] = (int8)(3*msb + 2*secondmsb);
+		p_cmplx_pwr_dB[i] = (int8)(3*msb + 2*secondmsb + thirdmsb);
 		PHY_INFORM(("wlc_phy_compute_dB: p_cmplx_pwr_dB[%d] %d\n", i, p_cmplx_pwr_dB[i]));
 	}
 }
@@ -407,4 +409,23 @@ phy_utils_angle_to_phasor_lut(uint16 angle, uint16* packed_word)
 	/* printf("reciprocity packed_word: %x%x%x\n",
 	   packed_word[2], packed_word[1], packed_word[0]);
 	*/
+}
+/* a simple implementation of gcd(greatest common divisor)
+ * assuming argument 1 is bigger than argument 2, both of them
+ * are positive numbers.
+ */
+uint32
+phy_utils_mat_gcd(uint32 bigger, uint32 smaller)
+{
+	uint32 remainder;
+
+	do {
+		remainder = bigger % smaller;
+		if (remainder) {
+			bigger = smaller;
+			smaller = remainder;
+		} else {
+			return smaller;
+		}
+	} while (TRUE);
 }

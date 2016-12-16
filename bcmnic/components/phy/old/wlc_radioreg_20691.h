@@ -17,7 +17,7 @@
  *
  *  $ ./merge_regs.py --always-add-macro --max 70 --macro (rev) --compare-template (RADIO20691_MAJORREV(rev) >= ${ver}) --non-register-regex JTAG_ --extended-version-checks RF_20691_REV_ID -o /projects/dot11_acsim_ext13/work/aswath/workspace/driver/src/wl/phy/wlc_radioreg_20691.h ./data/radio_regs/20691_majorrev1_registers.h ./data/radio_regs/20691_majorrev0_registers.h ./data/radio_regs/20691_majorrev2_registers.h
  *
- * $Id: wlc_radioreg_20691.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: wlc_radioreg_20691.h 606042 2015-12-14 06:21:23Z $
  */
 /* FILE-CSTYLED */
 

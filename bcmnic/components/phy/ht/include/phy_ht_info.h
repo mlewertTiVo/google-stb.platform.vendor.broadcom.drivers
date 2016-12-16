@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_info.h 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_ht_info.h 658200 2016-09-07 01:03:02Z $
  */
 
 #ifndef _phy_ht_info_h_
@@ -135,6 +135,7 @@ typedef struct _htphy_nshapetbl_mon {
 #include "phy_ht_dbg.h"
 #include "phy_ht_cache.h"
 #include "phy_ht_misc.h"
+#include "phy_ht_stf.h"
 /* ********************************************************* */
 
 struct phy_info_htphy {
@@ -158,6 +159,7 @@ struct phy_info_htphy {
 	phy_ht_misc_info_t			*misci;
 	phy_ht_chanmgr_info_t		*chanmgri;
 	phy_ht_btcx_info_t			*btcxi;
+	phy_ht_stf_info_t			*stfi;
 /* ********************************************************* */
 	uint16 classifier_state;
 	uint16 clip_state[PHY_CORE_MAX];

@@ -9,7 +9,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: acsd_svr.h 619998 2016-02-19 09:26:15Z $
+ * $Id: acsd_svr.h 657900 2016-09-03 00:32:36Z $
  */
 
 #ifndef _acsd_srv_h_
@@ -497,7 +497,7 @@ typedef struct acs_bgdfs_info {
 	chanspec_t last_attempted_at;	/* (Above) last channel attempted at time */
 	chanspec_t next_scan_chan;	/* Next channel to scan using BGDFS */
 	chanspec_t best_cleared;	/* best cleared channel available */
-	wl_dfs_ap_move_status_t status; /* latest fetched status */
+	struct wl_dfs_ap_move_status_v2 status; /* latest fetched status */
 	int bgdfs_avoid_on_far_sta;	/* avoid 3+1 DFS for a far sta */
 	int fallback_blocking_cac;	/* if bgdfs failed (tx blanking), full MIMO blocking CAC */
 	bool acs_bgdfs_on_txfail;	/* 3+1 dfs on txfail */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_txiqlocal.h 635707 2016-05-05 00:32:31Z vyass $
+ * $Id: phy_type_txiqlocal.h 635707 2016-05-05 00:32:31Z $
  */
 
 #ifndef _phy_type_txiqlocal_h_

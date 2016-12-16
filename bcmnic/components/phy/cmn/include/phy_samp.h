@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_samp.h 612756 2016-01-14 22:53:07Z rkothand $
+ * $Id: phy_samp.h 662012 2016-09-28 03:05:05Z $
  */
 
 #ifndef _phy_samp_h_
@@ -39,7 +39,22 @@ int phy_samp_down(phy_samp_info_t *cmn_info);
 #define PHYREF_SampleCollectPlayCtrl	u.d11acregs.SampleCollectPlayCtrl
 #define PHYREF_SampleCollectCurPtrHigh	u.d11acregs.SampleCollectCurPtrHigh
 #define PHYREF_SampleCollectPlayPtrHigh	u.d11acregs.SampleCollectPlayPtrHigh
-#define PHYREF_ClkGateSts	u.d11regs.ClkGateSts
+#define PHYREF_ClkGateReqCtrl0 u.d11regs.ClkGateReqCtrl0
+#define PHYREF_ClkGateReqCtrl1 u.d11regs.ClkGateReqCtrl1
+#define PHYREF_ClkGateReqCtrl2 u.d11regs.ClkGateReqCtrl2
+#define PHYREF_ClkGateUcodeReq0 u.d11regs.ClkGateUcodeReq0
+#define PHYREF_ClkGateUcodeReq1 u.d11regs.ClkGateUcodeReq1
+#define PHYREF_ClkGateUcodeReq2 u.d11regs.ClkGateUcodeReq2
+#define PHYREF_ClkGateStretch0 u.d11regs.ClkGateStretch0
+#define PHYREF_ClkGateStretch1 u.d11regs.ClkGateStretch1
+#define PHYREF_ClkGateMisc u.d11regs.ClkGateMisc
+#define PHYREF_ClkGateDivCtrl u.d11regs.ClkGateDivCtrl
+#define PHYREF_ClkGatePhyClkCtrl u.d11regs.ClkGatePhyClkCtrl
+#define PHYREF_ClkGateSts u.d11regs.ClkGateSts
+#define PHYREF_ClkGateExtReq0 u.d11regs.ClkGateExtReq0
+#define PHYREF_ClkGateExtReq1 u.d11regs.ClkGateExtReq1
+#define PHYREF_ClkGateExtReq2 u.d11regs.ClkGateExtReq2
+#define PHYREF_ClkGateUcodePhyClkCtrl u.d11regs.ClkGateUcodePhyClkCtrl
 
 /* bitfields in PhyCtrl (IHR Address 0x049) */
 #define PHYCTRL_SAMPLEPLAYSTART_SHIFT 11
@@ -72,15 +87,11 @@ extern int phy_n_mac_triggered_sample_data(phy_info_t *pi, wl_sampledata_t *p, v
 extern int phy_n_mac_triggered_sample_collect(phy_info_t *pi, wl_samplecollect_args_t *p,
 	uint32 *b);
 
-/* LCN40PHY */
-extern int phy_lcn40_sample_collect(phy_info_t *pi, wl_samplecollect_args_t *collect,
-	uint32 *buf);
-extern int8 phy_lcn40_sample_collect_gainadj(phy_info_t *pi, int8 gainadj, bool set);
-extern uint8 phy_lcn40_sample_collect_gainidx(phy_info_t *pi, uint8 gainidx, bool set);
-extern int phy_lcn40_iqimb_check(phy_info_t *pi, uint32 nsamps, uint32 *buf, int32 *metric,
-	int32 *result);
 extern int wlc_phy_sample_collect_lcn20phy(phy_info_t *pi, wl_samplecollect_args_t *collect,
 	uint32 *buf);
+#ifdef IQPLAY_DEBUG
+extern int phy_samp_prep_IQplay(phy_info_t *pi);
+#endif /* IQPLAY_DEBUG */
 
 #endif /* SAMPLE_COLLECT */
 

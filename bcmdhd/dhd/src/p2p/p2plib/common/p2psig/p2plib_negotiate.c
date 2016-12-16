@@ -33,7 +33,7 @@
 
 /* WPS include files */
 #include <reg_prototlv.h>
-
+int do_social_scan_count = 0;
 
 void
 p2plib_assert(char *fmt, int line)
@@ -52,11 +52,19 @@ p2plib_assert(char *fmt, int line)
  * Returns the time spent sleeping in this function.
  */
 static uint32
-p2papi_go_neg_search(p2papi_instance_t* hdl, uint32 chan_dwell_ms, BCMP2P_CHANNEL *channel)
+p2papi_go_neg_search(p2papi_instance_t* hdl, uint32 chan_dwell_ms, BCMP2P_CHANNEL *channel,
+	BCMP2P_BOOL do_social_scan)
 {
 	int nprobes = 0;	/* 0 = use the default number of probes */
 	uint32 sleep_ms = chan_dwell_ms * 3;
-	int ch = channel->channel;
+	int ch1, ch2, ch3;
+	if (!do_social_scan) {
+		ch1 = ch2 = ch3 = channel->channel ? channel->channel:  hdl->listen_channel.channel;
+	} else {
+		ch1 = P2PAPI_SOCIAL_CHAN_1;
+		ch2 = P2PAPI_SOCIAL_CHAN_2;
+		ch3 = P2PAPI_SOCIAL_CHAN_3;
+	}
 
 	P2PAPI_CHECK_P2PHDL(hdl);
 	if (!P2PAPI_OSL_CHECK_HDL(hdl->osl_hdl))
@@ -64,16 +72,13 @@ p2papi_go_neg_search(p2papi_instance_t* hdl, uint32 chan_dwell_ms, BCMP2P_CHANNE
 	P2PAPI_GET_WL_HDL(hdl);
 
 	BCMP2PLOG((BCMP2P_LOG_INFO, TRUE,
-		"p2papi_go_neg_search: channel=%d dwell_ms=%u\n",
-		ch, chan_dwell_ms));
-
-	if (ch == 0)
-		ch = hdl->listen_channel.channel;
+		"p2papi_go_neg_search: channels= %d, %d, %d dwell_ms=%u\n",
+		ch1, ch2, ch3, chan_dwell_ms));
 
 	(void) p2pwlu_set_p2p_mode(hdl, WL_P2P_DISC_ST_SEARCH, 0, 0);
 
 	/* Scan the given channel (the peer's listen channel) */
-	p2pwlu_scan_channels(hdl, nprobes, chan_dwell_ms, ch, ch, ch);
+	p2pwlu_scan_channels(hdl, nprobes, chan_dwell_ms, ch1, ch2, ch3);
 
 	p2papi_osl_sleep_ms(P2PAPI_OSL_SLEEP_DISCOVERY_SEARCH, sleep_ms);
 	BCMP2PLOG((BCMP2P_LOG_INFO, TRUE, "p2papi_go_neg_search: exit\n"));
@@ -429,13 +434,16 @@ p2papi_send_at_common_channel(p2papi_instance_t* hdl, BCMP2P_CHANNEL *search_cha
 	BCMP2P_BOOL do_scans, p2papi_aftx_instance_t** aftx_hdlp,
 	const char* dbg_af_name)
 {
+	int status = 0;
 	uint32 time_used_ms = 0;
 	uint32 tmo_ms = P2PAPI_CHANNEL_SYNC_TMO_MS;
 	uint32 beacon_interval_ms = 100;
-	uint32 search_ms = 50;
-	uint32 max_listen_interval = 3;
+	/*search dwell time If the scan is for findout common channel for AF*/
+	uint32 search_ms = P2PAPI_AF_SCAN_DWELL_TIME_MS;
+	uint32 max_listen_interval = 2;
 	uint32 listen_ms = 0;
 	uint32 ms;
+	uint32 single_chan_scan_count = 3;
 
 	/* Store the given action frame to be transmitted when a probe response is
 	 * received from the target peer.  The actual transmit is done in
@@ -487,7 +495,8 @@ p2papi_send_at_common_channel(p2papi_instance_t* hdl, BCMP2P_CHANNEL *search_cha
 				"    p2papi_send_comm_ch: search, ms=%u ch=%d:%d ptaf=%p\n",
 				search_ms, search_channel->channel_class,
 				search_channel->channel, hdl->pending_tx_act_frm));
-			ms = p2papi_go_neg_search(hdl, search_ms, search_channel);
+			ms = p2papi_go_neg_search(hdl, search_ms, search_channel,
+				do_social_scan_count > single_chan_scan_count ?BCMP2P_TRUE:BCMP2P_FALSE);
 			time_used_ms += ms;
 
 			/* Check all loop exit conditions here in case any of them became
@@ -539,12 +548,14 @@ p2papi_send_at_common_channel(p2papi_instance_t* hdl, BCMP2P_CHANNEL *search_cha
 	 * the WLC_E_ACTION_FRAME_COMPLETE event.)
 	 */
 	if (time_used_ms >= tmo_ms) {
+		if (hdl->pending_tx_act_frm != NULL)
+			status = BCMP2P_ERROR;
 		BCMP2PLOG((BCMP2P_LOG_MED, TRUE, "p2papi_send_comm_ch: timeout\n"));
 		p2papi_cancel_send_at_common_channel(hdl);
 		p2papi_chsync_discov_disable(hdl);
 	}
 
-	return 0;
+	return status;
 }
 
 int
@@ -570,7 +581,7 @@ static wl_af_params_t *
 build_action_frame(int category, int action_field,
 	p2papi_instance_t* hdl, struct ether_addr *dst_ea,
 	uint8 *oui, uint8 oui_type, uint8 oui_subtype, uint8 dialog_token,
-	uint8 *ie, uint16 ie_len, uint8 *ie2, uint16 ie2_len,uint8 *ie3, uint16 ie3_len,
+	uint8 *ie, uint16 ie_len, uint8 *ie2, uint16 ie2_len, uint8 *ie3, uint16 ie3_len,
 	BCMP2P_CHANNEL *channel, int32 dwell_time_ms)
 {
 	wifi_p2p_action_frame_t *af_data;
@@ -699,8 +710,8 @@ p2plib_build_p2p_act_frm(p2papi_instance_t* hdl, struct ether_addr *dst_ea,
 wl_af_params_t *
 p2plib_build_p2p_pub_act_frm(p2papi_instance_t* hdl, struct ether_addr *dst_ea,
 	uint8 *oui, uint8 oui_type, uint8 oui_subtype, uint8 dialog_token,
-	uint8 *ie, uint16 ie_len, uint8 *ie2, uint16 ie2_len, uint8 *ie3, uint16 ie3_len, BCMP2P_CHANNEL *channel,
-	int32 dwell_time_ms)
+	uint8 *ie, uint16 ie_len, uint8 *ie2, uint16 ie2_len, uint8 *ie3,
+	uint16 ie3_len, BCMP2P_CHANNEL *channel, int32 dwell_time_ms)
 {
 	return build_action_frame(P2P_PUB_AF_CATEGORY, P2P_PUB_AF_ACTION,
 		hdl, dst_ea, oui, oui_type, oui_subtype, dialog_token,
@@ -721,12 +732,12 @@ p2papi_tx_af(p2papi_instance_t* hdl, wl_af_params_t *af_params, int bssidx)
 	wl_action_frame_t *action_frame = &af_params->action_frame;
 	int err;
 
-	if (hdl->is_in_discovery_disable) { 
-	   printf("@@@@%s: prevented stale actframe tx\n"); 
-	   BCMP2PLOG((BCMP2P_LOG_MED, TRUE, 
-		   "p2papi_tx_af: disallowed stale actframe tx\n")); 
-	   return BCME_NOTFOUND; 
-	} 
+	if (hdl->is_in_discovery_disable) {
+	   printf("@@@@%s: prevented stale actframe tx\n");
+	   BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
+		   "p2papi_tx_af: disallowed stale actframe tx\n"));
+	   return BCME_NOTFOUND;
+	}
 
 	/* Suspend P2P discovery search-listen to prevent it from changing the
 	 * channel.
@@ -1460,11 +1471,11 @@ p2papi_fsm_start_incoming_gon(p2papi_instance_t* hdl,
 						if (!p2papi_find_channel(&hdl->op_channel,
 							&hdl->negotiated_channel_list)) {
 							/* down grade to 20Mhz channel class */
-						if (hdl->op_channel.channel >=1 && hdl->op_channel.channel<= 15)
+						if (hdl->op_channel.channel >=1 && hdl->op_channel.channel <= 15)
 							hdl->op_channel.channel_class = 81;
 						else if (hdl->op_channel.channel >=36 && hdl->op_channel.channel<= 48)
 							hdl->op_channel.channel_class = 115;
-						else if (hdl->op_channel.channel >=149 && hdl->op_channel.channel<= 161)
+						else if (hdl->op_channel.channel >= 149 && hdl->op_channel.channel <= 161)
 							hdl->op_channel.channel_class = 124;
 						}
 					}
@@ -2093,7 +2104,8 @@ p2papi_fsm_proc_gonconf(p2papi_instance_t* hdl,
 		 */
 		if (!hdl->is_ap) {
 			if (p2p_ie.op_chan_subelt.channel != 0) {
-				hdl->peer_channel.channel_class = (BCMP2P_CHANNEL_CLASS)p2p_ie.op_chan_subelt.band;
+				hdl->peer_channel.channel_class =
+					(BCMP2P_CHANNEL_CLASS)p2p_ie.op_chan_subelt.band;
 				hdl->peer_channel.channel = p2p_ie.op_chan_subelt.channel;
 				memcpy(&hdl->op_channel, &hdl->peer_channel,
 					sizeof(hdl->op_channel));
@@ -2333,10 +2345,11 @@ p2papi_fsm_start_go_neg(p2papi_instance_t* hdl, struct ether_addr *peer_mac,
 {
 	int err = -1;
 	bool sync_channels = FALSE;
-	int retries = 3;
+	int retries = P2PAPI_MAX_AF_TX_RETRIES;
 	int i;
 	int gon_wait_ms;
 	BCMP2P_CHANNEL peer_channel;
+	bool confirmBeforeRetry = FALSE;
 
 	memcpy(&peer_channel, peer_listen_channel, sizeof(peer_channel));
 	memcpy(&hdl->peer_dev_addr, peer_mac, sizeof(hdl->peer_dev_addr));
@@ -2422,20 +2435,27 @@ p2papi_fsm_start_go_neg(p2papi_instance_t* hdl, struct ether_addr *peer_mac,
 			p2papi_aftx_cancel_send(hdl->gon_aftx_hdl);
 			hdl->gon_aftx_hdl = NULL;
 		}
-
+		do_social_scan_count = i;
 		hdl->conn_state = P2PAPI_ST_START_NEG;
 		(void) p2papi_osl_signal_go_negotiation(hdl, P2PAPI_OSL_GO_STATE_START);
 
+		confirmBeforeRetry = FALSE;
 
 		err = p2papi_fsm_tx_go_neg_req(hdl, &hdl->peer_dev_addr,
 			!sync_channels, &peer_channel);
 		if (err != 0) {
 			BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
 				"fsm_start_go_neg: tx_go_neg failed with %d\n", err));
+			if (hdl->conn_state == P2PAPI_ST_NEG_CONFIRMED)
+				err = BCMP2P_SUCCESS;
+			else
+				err = BCMP2P_GO_NEGOTIATE_TIMEOUT;
 		}
 		else {
-			/* Wait for the GO Negotiation to complete */
-			gon_wait_ms = 2 * hdl->af_tx_max_retries * hdl->af_tx_retry_ms;
+			/* Wait for the GO Negotiation to complete
+			   The timeout should be nearly 2 * AF retry count(P2PAPI_AF_TX_RETRIES) * hdl->af_tx_retry_ms;
+			   */
+			gon_wait_ms = P2PAPI_GROUP_OWNER_NEG_TMO_MS;
 			BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
 				"fsm_start_go_neg: wait for GON to complete(i=%d,wait=%d ms)\n",
 				i, gon_wait_ms));
@@ -2461,16 +2481,32 @@ p2papi_fsm_start_go_neg(p2papi_instance_t* hdl, struct ether_addr *peer_mac,
 					hdl->conn_state, err));
 				break;
 			}
+			confirmBeforeRetry = TRUE;
+
+			/* Delay before retrying the GON request with a new dialog token */
+			BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
+				"fsm_start_go_neg: sleep %d ms before retry tx GONREQ\n",
+						P2PAPI_GONREQ_RETRY_TMO_MS));
+			p2papi_osl_sleep_ms(P2PAPI_OSL_SLEEP_GO_NEGOTIATION_RETRY,
+					P2PAPI_GONREQ_RETRY_TMO_MS);
+
+			/* check if GON completed during the 'delay' time */
+			if (confirmBeforeRetry &&
+					(p2papi_osl_wait_for_go_negotiation(hdl, 0) == BCMP2P_SUCCESS))
+			{
+				if (hdl->conn_state == P2PAPI_ST_NEG_CONFIRMED ||
+						hdl->conn_state == P2PAPI_ST_IDLE)
+				{
+					BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
+								"fsm_start_go_neg: GON done/rej,st=%u notif=0x%x\n",
+								hdl->conn_state, hdl->gon_notif));
+					err = BCMP2P_SUCCESS;
+					break;
+				}
+			}
 		}
-
-		/* Delay before retrying the GON request with a new dialog token */
-		BCMP2PLOG((BCMP2P_LOG_MED, TRUE,
-			"fsm_start_go_neg: sleep %d ms before retry tx GONREQ\n",
-			P2PAPI_GONREQ_RETRY_TMO_MS));
-		p2papi_osl_sleep_ms(P2PAPI_OSL_SLEEP_GO_NEGOTIATION_RETRY,
-			P2PAPI_GONREQ_RETRY_TMO_MS);
-
 	}
+	do_social_scan_count = 0;
 	return err;
 }
 
@@ -2963,7 +2999,7 @@ p2papi_parse_escan_result(p2papi_instance_t *hdl, wl_escan_result_t * escanresul
 /*
 			BCMP2PLOG((BCMP2P_LOG_VERB, TRUE,
 				"  escan res %d: %02x:%02x:%02x:%02x:%02x:%02x:"
-				" from beacon, discard\n", i, 
+				" from beacon, discard\n", i,
 				new_bss->BSSID.octet[0], new_bss->BSSID.octet[1],
 				new_bss->BSSID.octet[2], new_bss->BSSID.octet[3],
 				new_bss->BSSID.octet[4], new_bss->BSSID.octet[5]));
@@ -3182,8 +3218,8 @@ p2papi_p2p_wl_event(p2papi_instance_t *hdl, wl_event_msg_t *event, void* data,
 				(void) p2papi_osl_ap_mode_ifup(hdl, event->ifname);
 			} else {
 				(void) p2papi_osl_sta_mode_ifup(hdl, event->ifname);
-	            p2pwlu_set_wme_apsd_sta(hdl, hdl->maxSPLength, hdl->acBE,
-				hdl->acBK, hdl->acVI, hdl->acVO, event_data_if->bssidx);
+				p2pwlu_set_wme_apsd_sta(hdl, hdl->maxSPLength, hdl->acBE,
+						hdl->acBK, hdl->acVI, hdl->acVO, event_data_if->bssidx);
 			}
 		}
 		break;

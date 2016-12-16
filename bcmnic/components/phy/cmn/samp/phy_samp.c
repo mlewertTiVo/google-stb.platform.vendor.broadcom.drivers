@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_samp.c 612756 2016-01-14 22:53:07Z rkothand $
+ * $Id: phy_samp.c 661662 2016-09-27 00:14:43Z $
  */
 
 #include <phy_cfg.h>
@@ -25,7 +25,6 @@
 #include "phy_type_samp.h"
 #include <phy_rstr.h>
 #include <phy_samp.h>
-
 /* forward declaration */
 typedef struct phy_samp_mem phy_samp_mem_t;
 
@@ -170,15 +169,12 @@ phy_sample_collect(phy_samp_info_t *sampi, wl_samplecollect_args_t *collect, voi
 	 * 	return BCME_NOCLK;
 	 */
 
-	if (ISACPHY(pi))
+	if (fns->samp_collect != NULL)
 	{
-		ASSERT(fns->samp_collect != NULL);
 		status = ((fns->samp_collect)(fns->ctx, collect, (uint32 *)b));
 	}
 	else if (ISNPHY(pi))
 		status = phy_n_sample_collect(pi, collect, (uint32 *)b);
-	else if (ISLCN40PHY(pi))
-		status = phy_lcn40_sample_collect(pi, collect, (uint32 *)b);
 	else if (ISLCN20PHY(pi))
 		status = wlc_phy_sample_collect_lcn20phy(pi, collect, (uint32 *)b);
 	else if (ISHTPHY(pi))
@@ -213,9 +209,8 @@ phy_sample_data(phy_samp_info_t *sampi, wl_sampledata_t *sample_data, void *b)
 	 *       	return BCME_NOCLK;
 	 */
 
-	if (ISACPHY(pi))
+	if (fns->samp_data != NULL)
 	{
-		ASSERT(fns->samp_data != NULL);
 		status = ((fns->samp_data)(fns->ctx, sample_data, (uint32 *) b));
 	}
 	else if (ISHTPHY(pi))
@@ -239,6 +234,21 @@ phy_mac_triggered_sample_data(phy_samp_info_t *sampi, wl_sampledata_t *sample_da
 		return BCME_UNSUPPORTED;
 }
 
+#ifdef IQPLAY_DEBUG
+int
+phy_samp_prep_IQplay(phy_info_t *pi)
+{
+	phy_type_samp_fns_t *fns = pi->sampi->fns;
+
+	if (fns->samp_play != NULL) {
+		(fns->samp_play)(pi->sampi);
+		return BCME_OK;
+	}
+	else
+		return BCME_UNSUPPORTED;
+}
+#endif /* IQPLAY_DEBUG */
+
 /* ******************************************** */
 /*		External Definitions		*/
 /* ******************************************** */
@@ -260,8 +270,6 @@ phy_iovars_sample_collect(phy_info_t *pi, uint32 actionid, uint16 type, void *p,
 	case IOV_SVAL(IOV_PHY_SAMPLE_COLLECT_GAIN_ADJUST):
 		if (ISNPHY(pi))
 			phy_n_sample_collect_gainadj(pi, (int8)int_val, TRUE);
-		else if (ISLCN40PHY(pi))
-			phy_lcn40_sample_collect_gainadj(pi, (int8)int_val, TRUE);
 		else
 			err = BCME_UNSUPPORTED;
 		break;
@@ -270,26 +278,13 @@ phy_iovars_sample_collect(phy_info_t *pi, uint32 actionid, uint16 type, void *p,
 		if (ISNPHY(pi))
 			*ret_int_ptr = (int32)phy_n_sample_collect_gainadj(pi,
 				(int8)int_val, FALSE);
-		else if (ISLCN40PHY(pi))
-			*ret_int_ptr = (int32)phy_lcn40_sample_collect_gainadj(pi,
-				(int8)int_val, FALSE);
-		else
-			err = BCME_UNSUPPORTED;
-		break;
-
-	case IOV_SVAL(IOV_PHY_SAMPLE_COLLECT_GAIN_INDEX):
-		if (ISLCN40PHY(pi))
-			phy_lcn40_sample_collect_gainidx(pi, (uint8)int_val, TRUE);
 		else
 			err = BCME_UNSUPPORTED;
 		break;
 
 	case IOV_GVAL(IOV_PHY_SAMPLE_COLLECT_GAIN_INDEX):
-		if (ISLCN40PHY(pi))
-			*ret_int_ptr = (int32)phy_lcn40_sample_collect_gainidx(pi,
-				(uint8)int_val, FALSE);
-		else
-			err = BCME_UNSUPPORTED;
+	case IOV_SVAL(IOV_PHY_SAMPLE_COLLECT_GAIN_INDEX):
+		err = BCME_UNSUPPORTED;
 		break;
 
 	case IOV_GVAL(IOV_PHY_SAMPLE_COLLECT):
@@ -308,20 +303,11 @@ phy_iovars_sample_collect(phy_info_t *pi, uint32 actionid, uint16 type, void *p,
 			err = BCME_BADARG;
 			break;
 		}
-		if (!ISLCN40PHY(pi)) {
-			if (ltoh16(samplecollect_args.length) > (uint16)alen) {
-				PHY_ERROR(("Bad length, length requested > buf len (%d > %d)\n",
-					samplecollect_args.length, alen));
-				err = BCME_BADLEN;
-				break;
-			}
-		} else {
-			if (samplecollect_args.nsamps > ((uint16)alen >> 2)) {
-				PHY_ERROR(("Bad length, length requested > buf len (%d > %d)\n",
-					samplecollect_args.nsamps, alen));
-				err = BCME_BADLEN;
-				break;
-			}
+		if (ltoh16(samplecollect_args.length) > (uint16)alen) {
+			PHY_ERROR(("Bad length, length requested > buf len (%d > %d)\n",
+				samplecollect_args.length, alen));
+			err = BCME_BADLEN;
+			break;
 		}
 		err = phy_sample_collect(pi->sampi, &samplecollect_args, a);
 		break;
@@ -342,20 +328,11 @@ phy_iovars_sample_collect(phy_info_t *pi, uint32 actionid, uint16 type, void *p,
 			err = BCME_BADARG;
 			break;
 		}
-		if (!ISLCN40PHY(pi)) {
-			if (ltoh16(samplecollect_args.length) > (uint16)alen) {
-				PHY_ERROR(("Bad length, length requested > buf len (%d > %d)\n",
-					samplecollect_args.length, alen));
-				err = BCME_BADLEN;
-				break;
-			}
-		} else {
-			if (samplecollect_args.nsamps > ((uint16)alen >> 2)) {
-				PHY_ERROR(("Bad length, length requested > buf len (%d > %d)\n",
-					samplecollect_args.nsamps, alen));
-				err = BCME_BADLEN;
-				break;
-			}
+		if (ltoh16(samplecollect_args.length) > (uint16)alen) {
+			PHY_ERROR(("Bad length, length requested > buf len (%d > %d)\n",
+				samplecollect_args.length, alen));
+			err = BCME_BADLEN;
+			break;
 		}
 		err = phy_mac_triggered_sample_collect(pi->sampi, &samplecollect_args, a);
 		break;
@@ -390,59 +367,10 @@ phy_iovars_sample_collect(phy_info_t *pi, uint32 actionid, uint16 type, void *p,
 	}
 
 	case IOV_GVAL(IOV_IQ_IMBALANCE_METRIC_DATA):
-	{
-		/* driver must be "out" (not up but chip is alive) */
-		if (pi->sh->up) {
-			err = BCME_NOTDOWN;
-			break;
-		}
-		if (!pi->sh->clk) {
-			err = BCME_NOCLK;
-			break;
-		}
-
-		if (ISLCN40PHY(pi))
-			err = phy_lcn40_iqimb_check(pi, 2048, (uint32 *)a, NULL, NULL);
-		else
-			err = BCME_UNSUPPORTED;
-		break;
-	}
-
 	case IOV_GVAL(IOV_IQ_IMBALANCE_METRIC):
-	{
-		/* driver must be "out" (not up but chip is alive) */
-		if (pi->sh->up) {
-			err = BCME_NOTDOWN;
-			break;
-		}
-		if (!pi->sh->clk) {
-			err = BCME_NOCLK;
-			break;
-		}
-
-		if (ISLCN40PHY(pi))
-			err = phy_lcn40_iqimb_check(pi, 8000, NULL, ret_int_ptr, NULL);
-		else
-			err = BCME_UNSUPPORTED;
-		break;
-	}
-
 	case IOV_GVAL(IOV_IQ_IMBALANCE_METRIC_PASS):
 	{
-		/* driver must be "out" (not up but chip is alive) */
-		if (pi->sh->up) {
-			err = BCME_NOTDOWN;
-			break;
-		}
-		if (!pi->sh->clk) {
-			err = BCME_NOCLK;
-			break;
-		}
-
-		if (ISLCN40PHY(pi))
-			err = phy_lcn40_iqimb_check(pi, 8000, NULL, NULL, ret_int_ptr);
-		else
-			err = BCME_UNSUPPORTED;
+		err = BCME_UNSUPPORTED;
 		break;
 	}
 

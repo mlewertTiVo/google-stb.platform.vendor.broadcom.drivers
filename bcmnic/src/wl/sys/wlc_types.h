@@ -18,34 +18,21 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlc_types.h 643778 2016-06-16 00:50:50Z $
+ * $Id: wlc_types.h 664895 2016-10-14 03:04:20Z $
  */
 
 #ifndef _wlc_types_h_
 #define _wlc_types_h_
+#include <wlioctl.h>
+
+/* Version of WLC interface to be returned as a part of wl_wlc_version structure.
+ * WLC_API_VERSION_MINOR is currently not in use.
+ */
+
+#define WLC_API_VERSION_MAJOR      8
+#define WLC_API_VERSION_MINOR      0
 
 /* forward declarations */
-
-typedef struct wlc_cx_info wlc_cx_info_t;
-typedef struct wlc_cx_if wlc_cx_if_t;
-typedef struct wlc_cx_bsscfg wlc_cx_bsscfg_t;
-typedef struct wlc_cx_ampdu_info wlc_cx_ampdu_info_t;
-typedef struct wlc_cx_ampdu_rx_info wlc_cx_ampdu_rx_info_t;
-typedef struct wlc_cx_amsdu_info wlc_cx_amsdu_info_t;
-typedef struct wlc_cx_amsdu_rx_info wlc_cx_amsdu_rx_info_t;
-typedef struct wlc_cx_scb wlc_cx_scb_t;
-typedef struct wlc_cx_hw_info wlc_cx_hw_info_t;
-typedef struct wlc_cx_hw wlc_cx_hw_t;
-typedef struct wl_cx_if wl_cx_if_t;
-typedef struct wl_cx_info wl_cx_info_t;
-typedef struct wlc_cx_tsc wlc_cx_tsc_t;
-typedef struct wlc_cx_scb_amsdu wlc_cx_scb_amsdu_t;
-typedef struct wlc_cx_scb_ampdu wlc_cx_scb_ampdu_t;
-typedef struct wlc_cx_tid_ini wlc_cx_tid_ini_t;
-typedef struct wlc_ipc wlc_ipc_t;
-typedef struct wlc_cx_ses_ctx wlc_cx_ses_ctx_t;
-typedef struct wlc_cx_tid_resp wlc_cx_tid_resp_t;
-typedef struct wlc_cx_rsc wlc_cx_rsc_t;
 
 typedef struct wlc_info wlc_info_t;
 typedef struct wlcband wlcband_t;
@@ -90,6 +77,7 @@ typedef struct wlc_ap_info wlc_ap_info_t;
 typedef struct cs_info cs_info_t;
 typedef struct wlc_scan_info wlc_scan_info_t;
 typedef struct wlc_scan_cmn_info wlc_scan_cmn_t;
+typedef struct wlc_slotted_bss_info wlc_slotted_bss_info_t;
 typedef struct tdls_info tdls_info_t;
 typedef struct dls_info dls_info_t;
 typedef struct l2_filter_info l2_filter_info_t;
@@ -177,7 +165,6 @@ typedef struct wlc_mfp_info wlc_mfp_info_t;
 typedef struct wlc_mdns_info wlc_mdns_info_t;
 
 typedef struct wlc_macfltr_info wlc_macfltr_info_t;
-typedef struct wlc_bmon_info wlc_bmon_info_t;
 
 typedef struct wlc_nar_info wlc_nar_info_t;
 typedef struct wlc_bs_data_info wlc_bs_data_info_t;
@@ -367,5 +354,48 @@ typedef struct wlc_fragdur_info wlc_fragdur_info_t;
 typedef struct wlc_mbo_info wlc_mbo_info_t;
 
 typedef struct wlc_rx_hc wlc_rx_hc_t;
+
+typedef struct wlc_oce_info wlc_oce_info_t;
+
+typedef struct wlc_sfd_cache wlc_sfd_cache_t;
+
+typedef struct wlc_vasip_info wlc_vasip_info_t;
+
+typedef struct wlc_mbo_oce_info wlc_mbo_oce_info_t;
+
+typedef sta_info_v4_t sta_info_t;
+
+typedef struct wl_roam_prof_band_v2 wl_roam_prof_band_t;
+typedef struct wl_roam_prof_v2 wl_roam_prof_t;
+
+typedef struct wlc_swdiv_stats_v2 wlc_swdiv_stats_t;
+typedef struct wl_dfs_ap_move_status_v2 wl_dfs_ap_move_status_t;
+
+typedef struct wl_utrace_capture_args_v2 wl_utrace_capture_args_t;
+typedef struct wl_pmalert_ucode_dbg_v2 wl_pmalert_ucode_dbg_t;
+
+typedef struct wl_proxd_collect_data_v2 wl_proxd_collect_data_t;
+
+typedef struct wlc_leakyapstats_info_v1 wlc_leakyapstats_info_t;
+
+/* Inteface version mapping for versioned pfn structures */
+#undef PFN_SCANRESULT_VERSION
+#define PFN_SCANRESULT_VERSION PFN_SCANRESULT_VERSION_V2
+#define PFN_SCANRESULTS_VERSION PFN_SCANRESULTS_VERSION_V2
+#define PFN_LBEST_SCAN_RESULT_VERSION PFN_LBEST_SCAN_RESULT_VERSION_V2
+typedef wl_pfn_subnet_info_v2_t wl_pfn_subnet_info_t;
+typedef wl_pfn_net_info_v2_t wl_pfn_net_info_t;
+typedef wl_pfn_lnet_info_v2_t wl_pfn_lnet_info_t;
+typedef wl_pfn_lscanresults_v2_t wl_pfn_lscanresults_t;
+typedef wl_pfn_scanresults_v2_t wl_pfn_scanresults_t;
+typedef wl_pfn_scanresult_v2_t wl_pfn_scanresult_t;
+
+
+#define UCM_PROFILE_VERSION UCM_PROFILE_VERSION_1
+typedef wlc_btcx_profile_v1_t wlc_btcx_profile_t;
+
+/* TXQ MUX Broadcast/Multicast module and cubby structure definition */
+typedef struct wlc_bcmcq_info wlc_bcmcq_info_t;
+typedef struct bcmc_cubby bcmc_cubby_t;
 
 #endif	/* _wlc_types_h_ */

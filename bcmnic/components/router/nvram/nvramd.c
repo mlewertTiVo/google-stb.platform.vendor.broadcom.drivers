@@ -173,6 +173,50 @@ static char backupfile[256];
 #define DBG_NVRAM_INFO		0x00000040
 #define DBG_NVRAM_ERROR		0x00000080
 
+#ifdef BCMDBG
+
+static int debug_nvram_level = DBG_NVRAM_SET| DBG_NVRAM_GET| DBG_NVRAM_INFO | DBG_NVRAM_ERROR;
+
+#define DBG_SET(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_SET) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__, ##arg); } while(0)
+
+#define DBG_GET(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_GET) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__,##arg); } while(0)
+
+#define DBG_GETALL(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_GETALL) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__,##arg); } while(0)
+
+#define DBG_UNSET(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_UNSET) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__,##arg); } while(0)
+
+#define DBG_SET_BITFLAG(fmt, arg...) \
+	do { if (debug_nvram_level & DBG_NVRAM_SET) \
+		printf("%s@%d: "fmt , __FUNCTION__ , __LINE__, ##arg); } while(0)
+
+#define DBG_GET_BITFLAG(fmt, arg...) \
+	do { if (debug_nvram_level & DBG_NVRAM_GET) \
+		printf("%s@%d: "fmt , __FUNCTION__ , __LINE__,##arg); } while(0)
+
+#define DBG_COMMIT(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_COMMIT) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__,##arg); } while(0)
+
+#define DBG_UPDATE(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_UPDATE) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__, ##arg); } while(0)
+
+#define DBG_INFO(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_INFO) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__, ##arg); } while(0)
+
+#define DBG_ERROR(fmt, arg...) \
+        do { if (debug_nvram_level & DBG_NVRAM_ERROR) \
+                printf("%s@%d: "fmt , __FUNCTION__ , __LINE__, ##arg); } while(0)
+#else
 #define DBG_SET(fmt, arg...)
 #define DBG_GET(fmt, arg...)
 #define DBG_GETALL(fmt, arg...)
@@ -183,6 +227,7 @@ static char backupfile[256];
 #define DBG_UPDATE(fmt, arg...)
 #define DBG_INFO(fmt, arg...)
 #define DBG_ERROR(fmt, arg...)
+#endif
 
 static void usage(void)
 {

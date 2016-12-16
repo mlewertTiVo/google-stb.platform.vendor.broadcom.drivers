@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_tbl.h 605704 2015-12-11 06:23:44Z xuanz $
+ * $Id: phy_type_tbl.h 657351 2016-08-31 23:00:22Z $
  */
 
 #ifndef _phy_type_tbl_h_
@@ -38,6 +38,8 @@ typedef bool (*phy_type_tbl_dump_addrfltr_fn_t)(phy_type_tbl_ctx_t *ctx,
 typedef void (*phy_type_tbl_read_tbl_fn_t)(phy_type_tbl_ctx_t *ctx,
 	phy_table_info_t *ti, uint addr, uint16 *val, uint16 *qval);
 typedef int (*phy_type_tbl_dump_fn_t)(phy_type_tbl_ctx_t *ctx, struct bcmstrbuf *b);
+typedef int (*phy_type_tbl_dump_txv0_fn_t)(phy_type_tbl_ctx_t *ctx, struct bcmstrbuf *b);
+
 typedef struct {
 	phy_type_tbl_init_fn_t init;
 	phy_type_tbl_down_fn_t down;
@@ -46,6 +48,7 @@ typedef struct {
 	phy_type_tbl_read_tbl_fn_t readtbl;
 	phy_type_tbl_dump_fn_t dump;
 	phy_type_tbl_ctx_t *ctx;
+	phy_type_tbl_dump_txv0_fn_t dump_txv0;
 } phy_type_tbl_fns_t;
 
 /*

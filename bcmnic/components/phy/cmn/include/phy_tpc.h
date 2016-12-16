@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_tpc.h 651513 2016-07-27 08:59:58Z mvermeid $
+ * $Id: phy_tpc.h 659961 2016-09-16 18:46:01Z $
  */
 
 #ifndef _phy_tpc_h_
@@ -20,6 +20,7 @@
 
 #include <typedefs.h>
 #include <phy_api.h>
+#include <wlc_ppr.h>
 
 /* forward declaration */
 typedef struct phy_tpc_info phy_tpc_info_t;
@@ -99,6 +100,8 @@ bool phy_tpc_get_tworangetssi5g(phy_tpc_info_t *tpci);
 uint8 phy_tpc_get_2g_pdrange_id(phy_tpc_info_t *tpci);
 uint8 phy_tpc_get_5g_pdrange_id(phy_tpc_info_t *tpci);
 
+uint8 phy_tpc_get_band_from_channel(phy_tpc_info_t *tpci, uint channel);
+
 #ifdef NO_PROPRIETARY_VHT_RATES
 #else
 void wlc_phy_txpwr_read_1024qam_ppr(phy_info_t *pi);
@@ -109,10 +112,14 @@ void wlc_phy_txpwr_srom11_ext_1024qam_convert_mcs_2g(uint16 po,
 		chanspec_t chanspec, uint8 tmp_max_pwr,
 		ppr_vht_mcs_rateset_t* vht);
 #endif
+void phy_tpc_ipa_upd(phy_tpc_info_t *tpci);
 
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-int phy_tpc_set_pavars(phy_tpc_info_t *tpci, void* a, void* p);
-int phy_tpc_get_pavars(phy_tpc_info_t *tpci, void* a, void* p);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+#ifdef RADIO_HEALTH_CHECK
+phy_crash_reason_t phy_radio_health_check_baseindex(phy_info_t *pi);
+#endif /* RADIO_HEALTH_CHECK */
+
+bool wlc_phy_txpwr_srom9_read(phy_info_t *pi);
+
+void phy_tpc_get_paparams_for_band(phy_info_t *pi, int32 *a1, int32 *b0, int32 *b1);
 
 #endif /* _phy_tpc_h_ */

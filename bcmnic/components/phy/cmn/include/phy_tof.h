@@ -11,7 +11,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: phy_tof.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: phy_tof.h 606042 2015-12-14 06:21:23Z $
  */
 #ifndef _phy_tof_h_
 #define _phy_tof_h_

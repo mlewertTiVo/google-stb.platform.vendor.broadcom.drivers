@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_iovt_high.c 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_lcn20_iovt_high.c 583048 2015-08-31 16:43:34Z $
  */
 
 #include <typedefs.h>

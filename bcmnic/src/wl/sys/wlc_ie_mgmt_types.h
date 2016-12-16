@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt_types.h 622560 2016-03-03 02:41:41Z $
+ * $Id: wlc_ie_mgmt_types.h 665073 2016-10-14 20:33:29Z $
  */
 
 #ifndef _wlc_ie_mgmt_types_h_
@@ -25,23 +25,15 @@
 #include <d11.h>
 #include <wlc_rate.h>		/* to get ratespec_t */
 
-/*
- * unknown frame type
- */
-#define WLC_IEM_FC_UNK 0xffff
-
-/*
- * unknown frame type
- */
-#define NARROW_BW_NONE 0
-#define NARROW_BW_20 1
-#define NARROW_BW_40 2
 
 /* ******** 'calc_len'/'build' callback pair & registration ******** */
 
 /*
  * forward declarations
  */
+typedef uint16 wlc_iem_ft_t;	/* frame type */
+typedef uint16 wlc_iem_mft_t;	/* multi frame type */
+typedef uint16 wlc_iem_tag_t;	/* tag */
 typedef struct wlc_iem_cbparm wlc_iem_cbparm_t;
 typedef union wlc_iem_ft_cbparm wlc_iem_ft_cbparm_t;
 
@@ -71,10 +63,10 @@ typedef union wlc_iem_ft_cbparm wlc_iem_ft_cbparm_t;
 typedef struct {
 	wlc_iem_cbparm_t *cbparm;	/* Callback parameters */
 	wlc_bsscfg_t *cfg;
-	uint16 ft;	/* Frame type */
+	wlc_iem_ft_t ft;	/* Frame type */
 	uint8 *ie;	/* user supplied IE */
 	uint ie_len;
-	uint8 tag;	/* IE tag */
+	wlc_iem_tag_t tag;	/* IE tag */
 } wlc_iem_calc_data_t;
 typedef uint (*wlc_iem_calc_fn_t)(void *ctx, wlc_iem_calc_data_t *data);
 
@@ -109,10 +101,10 @@ typedef uint (*wlc_iem_calc_fn_t)(void *ctx, wlc_iem_calc_data_t *data);
 typedef struct {
 	wlc_iem_cbparm_t *cbparm;	/* Callback parameters */
 	wlc_bsscfg_t *cfg;
-	uint16 ft;	/* Frame type */
+	wlc_iem_ft_t ft;	/* Frame type */
 	uint8 *ie;	/* user supplied IE */
 	uint ie_len;
-	uint8 tag;	/* IE tag */
+	wlc_iem_tag_t tag;	/* IE tag */
 	uint8 *buf;	/* IE buffer pointer */
 	uint buf_len;
 } wlc_iem_build_data_t;
@@ -150,9 +142,9 @@ typedef int (*wlc_iem_build_fn_t)(void *ctx, wlc_iem_build_data_t *data);
 typedef struct {
 	wlc_iem_cbparm_t *cbparm;	/* Callback parameters */
 	wlc_bsscfg_t *cfg;
-	uint16 ft;	/* Frame type */
+	wlc_iem_ft_t ft;	/* Frame type */
 	int16 prev;	/* Previous tag */
-	uint8 tag;	/* Current tag */
+	wlc_iem_tag_t tag;	/* Current tag */
 	bool is_tag;	/* TRUE indicates 'tag' field is IE tag; otherwise prio */
 	uint8 *ie;	/* User supplied IE */
 	uint ie_len;
@@ -180,7 +172,7 @@ typedef bool (*wlc_iem_ins_cb_t)(void *ctx, wlc_iem_ins_data_t *data);
 typedef struct {
 	wlc_iem_cbparm_t *cbparm;	/* Callback parameters */
 	wlc_bsscfg_t *cfg;
-	uint16 ft;	/* Frame type */
+	wlc_iem_ft_t ft;	/* Frame type */
 	uint8 *ie;	/* User supplied IE */
 	uint ie_len;
 } wlc_iem_mod_data_t;
@@ -201,13 +193,10 @@ typedef bool (*wlc_iem_mod_cb_t)(void *ctx, wlc_iem_mod_data_t *data);
  * generated Vendor Specific IEs.
  */
 typedef struct {
-	wlc_iem_cbparm_t *cbparm;	/* Callback parameters */
-	wlc_bsscfg_t *cfg;
-	uint16 ft;	/* Frame type */
 	uint8 *ie;	/* User supplied Vendor Specific IE */
 	uint ie_len;
 } wlc_iem_cbvsie_data_t;
-typedef uint8 (*wlc_iem_cbvsie_cb_t)(void *ctx, wlc_iem_cbvsie_data_t *data);
+typedef wlc_iem_tag_t (*wlc_iem_cbvsie_cb_t)(void *ctx, wlc_iem_cbvsie_data_t *data);
 
 /* User supplied IEs list and handling information used by IE management.
  *
@@ -282,7 +271,7 @@ typedef union wlc_iem_ft_pparm wlc_iem_ft_pparm_t;
 typedef struct {
 	wlc_iem_pparm_t *pparm;	/* Callback parameters */
 	wlc_bsscfg_t *cfg;
-	uint16 ft;
+	wlc_iem_ft_t ft;
 	uint8 *ie;		/* IE pointer */
 	uint ie_len;
 	uint8 *buf;		/* IEs in the frame */
@@ -296,17 +285,12 @@ typedef int (*wlc_iem_parse_fn_t)(void *ctx, wlc_iem_parse_data_t *data);
  * 'notif' callback - invoked to notify the user that the IE mgmt can't find
  * a callback for the IE.
  *
- * - 'pparm' points to the parse callback parameters structure from the
- *   wlc_iem_parse_frame() caller.
- * - 'cfg' is the pointer to bsscfg for which the call is issued.
  * - 'ft' is the frame type FC_XXXX as defined in 802.11.h (see also
  *   (WLC_IEM_FC_SCAN_XXXX in wlc_iem_mgmt.h)
  * - 'ie/ie_len' is the IE for which no callback is registered
  */
 typedef struct {
-	wlc_iem_pparm_t *pparm;	/* Callback parameters */
-	wlc_bsscfg_t *cfg;
-	uint16 ft;	/* Frame type */
+	wlc_iem_ft_t ft;	/* Frame type */
 	uint8 *ie;	/* IE pointer */
 	uint ie_len;
 } wlc_iem_nhdlr_data_t;
@@ -319,25 +303,17 @@ typedef void (*wlc_iem_nhdlr_cb_t)(void *ctx, wlc_iem_nhdlr_data_t *data);
  * The ID is an integer value ranging from 0 to 249. It was used for users to
  * register a Vendor Specific IE parser callback through wlc_iem_vs_add_parse_fn.
  *
- * - 'pparm' points to the parse callback parameters structure from the
- *   wlc_iem_parse_frame() caller.
- * - 'cfg' is the pointer to bsscfg for which the call is issued.
- * - 'ft' is the frame type FC_XXXX as defined in 802.11.h (see also
- *   (WLC_IEM_FC_SCAN_XXXX in wlc_iem_mgmt.h)
- * - 'ie/ie_len' is the Vendor Specific IE.
+ * - 'ie/ie_len' is the Vendor Specific IE pointer and length.
  *
- * The callback may call wlc_iem_vs_get_id() for Vendor Specific IEs that wlc_iem_vs.c
+ * The callback may call wlc_iem_vs_get_id() for Vendor Specific IEs that wlc_ie_mgmt_vs.c
  * knows, or in case patching ROM function the callback can return an unique ID directly.
- * The recommendation is to modify wlc_iem_vs.c to add any new IDs if possible.
+ * The recommendation is to modify wlc_ie_mgmt_vs.c to add any new IDs if possible.
  */
 typedef struct {
-	wlc_iem_pparm_t *pparm;	/* Callback parameters */
-	wlc_bsscfg_t *cfg;
-	uint16 ft;	/* Frame type */
 	uint8 *ie;	/* Vendor Specific IE pointer */
 	uint ie_len;
 } wlc_iem_pvsie_data_t;
-typedef uint8 (*wlc_iem_pvsie_cb_t)(void *ctx, wlc_iem_pvsie_data_t *data);
+typedef wlc_iem_tag_t (*wlc_iem_pvsie_cb_t)(void *ctx, wlc_iem_pvsie_data_t *data);
 
 /*
  * User parse parameters and handling information used by IE management.

@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlm.h 643791 2016-06-16 01:32:24Z $
+ * $Id: wlm.h 661788 2016-09-27 10:52:28Z $
  */
 
 #ifndef _wlm_h
@@ -266,6 +266,16 @@ enum {
 };
 typedef int WLM_ENCRYPTION;
 
+typedef struct wlmRxIQEstChannel_t {
+	int channel;
+	float rxIqEst;
+} wlmRxIQEstChannel_t;
+
+typedef struct wlmRxIQEstSweepReult_t {
+	int numChannels;
+	wlmRxIQEstChannel_t value[1];
+} wlmRxIQEstSweepReult_t;
+
 /* Country abbreviative code */
 #define WLM_COUNTRY_ALL "ALL"	/* Default country code */
 #define WLM_COUNTRY_JAPAN "JP"     /* Japan country code */
@@ -315,6 +325,15 @@ int wlmApiCleanup(void);
 WLM_FUNCTION
 int wlmSelectInterface(WLM_DUT_INTERFACE ifType, char *ifName,
 	WLM_DUT_SERVER_PORT dutServerPort, WLM_DUT_OS dutOs);
+
+/* Creates a secondary interface on SDB supported products
+ * param[in] secondary interface type, STA or AP
+ * param[in] interface index, e.g. interfaceidx=1 will create wl1.2.
+ * param[in] optional custom mac address. Use "0" if unused
+ * return - True for success, false for failure.
+ */
+WLM_FUNCTION
+int wlmCreateSecondaryInterface(char *ifType, int interfaceidx, char *ifName);
 
 /* Selects the interface index
  * param[in] options such as "-i" and "-w" to specify the interface.
@@ -1063,6 +1082,29 @@ WLM_FUNCTION
 int wlmRxIQEstACGet(float *val, int sampleCount, int ant, int extragain, int gainindex,
     int gain_correct);
 
+/* Get Receiver IQ Estimation for requested channels
+ * param[out] pointer to a static wlmRxIQEstSweepReult_t structure of estimated rxiq power in dBm
+	at 0.25dBm resolution for each requested channel
+ * param[in] 0 terminated list of the required channels. If NULL - Estimation will be done for all
+	channels
+ * param[in] sample count, 0 to 15
+ * param[in] antenna, 0 to 3
+ * param[in] extra gain 0, 3, ... 21, 24
+ * param[in] gain index, 0 = default gain; 1 = fixed high gain (elna on); 4 = fixed low gain
+ * param[in] gain correction toggle, 0 = off; or 1, 2, 3, 4
+ * param[in] elna
+ * return - True for success, false for failure.
+*/
+WLM_FUNCTION
+int wlmRxIQEstACSweepGet(wlmRxIQEstSweepReult_t **result, int *channels, int sampleCount,
+	int antenna, int extraGain, int gainIndex, int gainCorrect, int niter, int delay);
+WLM_FUNCTION
+int wlmRxIQEstSweepGet(wlmRxIQEstSweepReult_t **result, int *channels, int sampleCount,
+	int antenna);
+WLM_FUNCTION
+int wlmRxIQEstExtSweepGet(wlmRxIQEstSweepReult_t **result, int *channels, int sampleCount,
+	int antenna, int elna, int gainIndex);
+
 /* Get PHY txpwrindex
  * param[out] txpwrindex
  *            The index for each core [0, 3] is mapped to each of the 4 bytes
@@ -1303,8 +1345,8 @@ int wlmTemperatureSensorEnable(void);
 WLM_FUNCTION
 int wlmTransmitCoreSet(int core, int streams);
 
-/* Get temperation sensor read
- * param[out] chip core temperature in F
+/* Get temperature sensor read
+ * param[out] chip core temperature in C
  * return - True for success, false for failure.
  */
 WLM_FUNCTION
@@ -1740,6 +1782,13 @@ int wlmAdjustedTssiGet(int core, int *adjTssi);
  */
 WLM_FUNCTION
 int wlmPhyTestIdleTssiGet(int core, int *tssi);
+/* Get current tssi value
+ * param[in] core id
+ * param[out] return tssi value
+ * return - True for success, false for failure.
+ */
+WLM_FUNCTION
+int wlmPhyTestTssiGet(int core, int *tssi);
 
 /* Get current Txcal adjusted tssi values
  * param[in] core id
@@ -2131,6 +2180,24 @@ int wlmConfigSet(const char *iovar, char *config);
  */
 WLM_FUNCTION
 int wlmConfigGet(const char *iovar, char *status_str, uint32 *val);
+
+/* Query desense mode for rxgain
+ * param[out] band
+ * param[out] number of cores on which desense is applied
+ * param[out] array of desense values corresponding to number of cores
+ * return - True for success, false for failure.
+*/
+WLM_FUNCTION
+int wlmBtcoexDesenseRxgainGet(WLM_BAND *band, int *num_cores, int *desense_array);
+
+/* Set desense mode for rxgain
+ * param[in] band
+ * param[in] number of cores
+ * param[in] array of desense values corresponding to number of cores
+ * return - True for success, false for failure.
+*/
+WLM_FUNCTION
+int wlmBtcoexDesenseRxgainSet(WLM_BAND band, int num_cores, int *desense_array);
 
 WLM_FUNCTION
 int wlmOtatestStatus(int cnt);

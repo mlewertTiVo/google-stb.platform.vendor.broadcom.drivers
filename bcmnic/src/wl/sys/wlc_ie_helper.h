@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_helper.h 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_ie_helper.h 665073 2016-10-14 20:33:29Z $
  */
 
 
@@ -24,31 +24,15 @@
 #include <wlc_ie_mgmt_types.h>
 
 /*
- * 'calc_len' callback data decode accessors
- */
-extern wlc_bsscfg_t *wlc_iem_calc_get_cfg(wlc_iem_calc_data_t *calc);
-extern uint16 wlc_iem_calc_get_ft(wlc_iem_calc_data_t *calc);
-extern wlc_iem_cbparm_t *wlc_iem_calc_get_parm(wlc_iem_calc_data_t *calc);
-
-/*
- * 'build' callback parameter decode accessors
- */
-extern wlc_bsscfg_t *wlc_iem_build_get_cfg(wlc_iem_build_data_t *build);
-extern uint16 wlc_iem_build_get_ft(wlc_iem_build_data_t *build);
-extern wlc_iem_cbparm_t *wlc_iem_build_get_parm(wlc_iem_build_data_t *build);
-
-/*
- * 'parse' callback parameter decode accessors
- */
-extern wlc_bsscfg_t *wlc_iem_parse_get_cfg(wlc_iem_parse_data_t *parse);
-extern uint16 wlc_iem_parse_get_ft(wlc_iem_parse_data_t *parse);
-extern wlc_iem_pparm_t *wlc_iem_parse_get_parm(wlc_iem_parse_data_t *parse);
-
-/*
  * 'calc_len/build' Frame Type specific structure decode accessors.
  */
 extern wlc_bss_info_t *wlc_iem_calc_get_assocreq_target(wlc_iem_calc_data_t *calc);
 extern wlc_bss_info_t *wlc_iem_build_get_assocreq_target(wlc_iem_build_data_t *build);
 extern struct scb* wlc_iem_parse_get_assoc_bcn_scb(wlc_iem_parse_data_t *parse);
+
+/* initialize user provided parse params */
+void wlc_iem_parse_upp_init(wlc_iem_info_t *iem, wlc_iem_upp_t *upp);
+/* initialize user IE list params */
+void wlc_iem_build_uiel_init(wlc_iem_info_t *iem, wlc_iem_uiel_t *upp);
 
 #endif /* _wlc_ie_helper_h_ */

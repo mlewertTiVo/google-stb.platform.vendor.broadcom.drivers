@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_antdiv.c 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_antdiv.c 659179 2016-09-13 03:45:44Z $
  */
 
 #include <typedefs.h>
@@ -35,6 +35,7 @@
 #include <phy_ac_txpwrcap.h>
 #include <phy_txpwrcap_api.h>
 #endif
+#include <phy_antdiv_api.h>
 
 /* private definitions */
 #define ACPHY_TXPOWERCAP_SWDIV_SHM_OFFSET	(8)	/* txpwrcap offset in shmem */
@@ -54,6 +55,7 @@ struct phy_ac_antdiv_info {
 	uint8	ant_swOvr_state_core1;
 	uint8	antdiv_rfswctrlpin_a0;
 	uint8	antdiv_rfswctrlpin_a1;
+	int8	pa_mode; /* Modes: High Efficiency, High Linearity */
 };
 
 /* module private states memory layout */
@@ -63,11 +65,14 @@ struct phy_ac_antdiv_mem {
 };
 
 /* local functions */
+static void phy_ac_antdiv_nvram_attach(phy_ac_antdiv_info_t *info, phy_info_t * pi);
 static void phy_ac_antdiv_std_params(phy_ac_antdiv_info_t *info);
 static void phy_ac_antdiv_set_rx(phy_type_antdiv_ctx_t *ctx, uint8 ant);
 static void phy_ac_antdiv_set_sw_control(phy_type_antdiv_ctx_t *ctx, int8 divOvrride, int core);
 static void phy_ac_antdiv_get_sw_control(phy_type_antdiv_ctx_t *ctx, int32 *ret_int_ptr, int core);
 static uint32 si_gci_chipstatus_acphy(si_t *sih, uint reg);
+static int phy_ac_antdiv_set_txswctrlmap(phy_type_antdiv_ctx_t *ctx, int32 int_val);
+static int phy_ac_antdiv_get_txswctrlmap(phy_type_antdiv_ctx_t *ctx, int32 *ret_int_ptr);
 
 #ifdef WLC_SW_DIVERSITY
 static void BCMATTACHFN(wlc_phy_swdiv_attach_acphy)(phy_info_t *pi);
@@ -124,21 +129,11 @@ BCMATTACHFN(phy_ac_antdiv_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	fns.setrx = phy_ac_antdiv_set_rx;
 	fns.set_sw_control = phy_ac_antdiv_set_sw_control;
 	fns.get_sw_control = phy_ac_antdiv_get_sw_control;
+	fns.set_txswctrlmap = phy_ac_antdiv_set_txswctrlmap;
+	fns.get_txswctrlmap = phy_ac_antdiv_get_txswctrlmap;
 	fns.ctx = info;
 
-	if ((PHY_GETVAR_SLICE(pi, rstr_antdiv_rfswctrlpin_a0)) != NULL) {
-		info->antdiv_rfswctrlpin_a0 = (uint8)PHY_GETINTVAR_SLICE(pi,
-				rstr_antdiv_rfswctrlpin_a0);
-	} else {
-		info->antdiv_rfswctrlpin_a0 = (uint8)ANTDIV_RFSWCTRLPIN_UNDEFINED;
-	}
-	if ((PHY_GETVAR_SLICE(pi, rstr_antdiv_rfswctrlpin_a1)) != NULL) {
-		info->antdiv_rfswctrlpin_a1 = (uint8)PHY_GETINTVAR_SLICE(pi,
-				rstr_antdiv_rfswctrlpin_a1);
-	} else {
-		info->antdiv_rfswctrlpin_a1 = (uint8)ANTDIV_RFSWCTRLPIN_UNDEFINED;
-	}
-
+	phy_ac_antdiv_nvram_attach(info, pi);
 	phy_ac_antdiv_std_params(info);
 #ifdef WLC_SW_DIVERSITY
 	if (PHYSWDIV_ENAB(pi)) {
@@ -178,10 +173,29 @@ BCMATTACHFN(phy_ac_antdiv_unregister_impl)(phy_ac_antdiv_info_t *info)
 }
 
 static void
-BCMATTACHFN(phy_ac_antdiv_std_params)(phy_ac_antdiv_info_t *info)
+BCMATTACHFN(phy_ac_antdiv_nvram_attach)(phy_ac_antdiv_info_t *antdivi, phy_info_t * pi)
 {
-	info->ant_swOvr_state_core0 = 2;
-	info->ant_swOvr_state_core1 = 2;
+	if ((PHY_GETVAR_SLICE(pi, rstr_antdiv_rfswctrlpin_a0)) != NULL) {
+		antdivi->antdiv_rfswctrlpin_a0 = (uint8)PHY_GETINTVAR_SLICE(pi,
+			rstr_antdiv_rfswctrlpin_a0);
+	} else {
+		antdivi->antdiv_rfswctrlpin_a0 = (uint8)ANTDIV_RFSWCTRLPIN_UNDEFINED;
+	}
+	if ((PHY_GETVAR_SLICE(pi, rstr_antdiv_rfswctrlpin_a1)) != NULL) {
+		antdivi->antdiv_rfswctrlpin_a1 = (uint8)PHY_GETINTVAR_SLICE(pi,
+			rstr_antdiv_rfswctrlpin_a1);
+	} else {
+		antdivi->antdiv_rfswctrlpin_a1 = (uint8)ANTDIV_RFSWCTRLPIN_UNDEFINED;
+	}
+	/* PA Mode is set so that NVRAM values are used by default */
+	antdivi->pa_mode = AUTO;
+}
+
+static void
+BCMATTACHFN(phy_ac_antdiv_std_params)(phy_ac_antdiv_info_t *antdivi)
+{
+	antdivi->ant_swOvr_state_core0 = 2;
+	antdivi->ant_swOvr_state_core1 = 2;
 }
 
 /* Setup */
@@ -244,8 +258,7 @@ wlc_ant_div_sw_control(phy_type_antdiv_ctx_t *ctx, uint8 divOvrride, int core)
 		WRITE_PHYREG(pi, femctrl_override_reg, femctrl_val);
 #if defined(WLC_TXPWRCAP)
 		/* Tx Pwr Cap update */
-		if (PHYTXPWRCAP_ENAB(pi))
-			wlc_phy_txpwrcap_set_acphy(pi);
+		phy_ac_txpwrcap_set(info->aci->txpwrcapi);
 #endif
 	}
 #endif /* WLC_SW_DIVERSITY */
@@ -477,8 +490,7 @@ phy_acphy_swdiv_init(phy_type_antdiv_ctx_t *ctx)
 
 		wlc_phy_swdiv_antmap_init(ctx);
 #if defined(WLC_TXPWRCAP)
-		if (PHYTXPWRCAP_ENAB(pi))
-			wlc_phy_txpwrcap_set_acphy(pi);
+		phy_ac_txpwrcap_set(info->aci->txpwrcapi);
 #endif /* WLC_TXPWRCAP */
 	}
 }
@@ -784,7 +796,7 @@ wlc_phy_wltx_word_get(phy_info_t *pi, uint8 band, uint32 swctrlmap_wltx,
 	BCM_REFERENCE(band);
 
 	/* If linear, use the lower 16 bits */
-	if (pi_ac->pa_mode == PAMODE_HI_LIN) {
+	if (pi_ac->antdivi->pa_mode == PAMODE_HI_LIN) {
 		*swctrlword = swctrlmap_wltx & PAMODE_HI_LIN_MASK;
 		*swctrlwordext = swctrlmap_wltx_ext & PAMODE_HI_LIN_MASK;
 	} else {
@@ -952,9 +964,6 @@ void wlc_phy_write_regtbl_fc_from_nvram(phy_info_t *pi)
 				if (pi->pubpi->phy_corenum == 2)
 					ant = core;
 
-				/* JIRA: SWWLAN-66107.
-				   Core1 EVM degradation is seen when compared to core 0
-				 */
 				if (ACMAJORREV_4(pi->pubpi->phy_rev)) {
 					ant = phy_get_rsdbbrd_corenum(pi, core);
 				}
@@ -1027,4 +1036,70 @@ void wlc_phy_write_regtbl_fc_from_nvram(phy_info_t *pi)
 			}
 		}
 	}
+}
+
+void
+phy_ac_antdiv_chanspec(phy_ac_antdiv_info_t * antdivi)
+{
+	phy_ac_info_t *pi_ac = antdivi->aci;
+	if (CHSPEC_IS2G(antdivi->pi->radio_chanspec)) {
+		if (pi_ac->sromi->nvram_femctrl.txswctrlmap_2g) {
+			antdivi->pa_mode = (pi_ac->sromi->nvram_femctrl.txswctrlmap_2g_mask >>
+				(CHSPEC_CHANNEL(antdivi->pi->radio_chanspec) - 1)) & 1;
+		} else {
+			antdivi->pa_mode = 0;
+		}
+	} else {
+		antdivi->pa_mode = pi_ac->sromi->nvram_femctrl.txswctrlmap_5g;
+	}
+}
+
+/* Former name chanspec_regtbl_fc_from_nvram */
+void
+phy_ac_antdiv_regtbl_fc_from_nvram(phy_ac_antdiv_info_t *antdivi)
+{
+	phy_info_t *pi = antdivi->pi;
+	phy_info_acphy_t *pi_ac = antdivi->aci;
+	if (!CCT_INIT(pi_ac) && CHSPEC_IS2G(pi->radio_chanspec) &&
+		pi_ac->sromi->nvram_femctrl.txswctrlmap_2g &&
+		(antdivi->pa_mode ^ ((pi_ac->sromi->nvram_femctrl.txswctrlmap_2g_mask >>
+		(CHSPEC_CHANNEL(pi->radio_chanspec) - 1)) & 1)) &&
+		!ACPHY_FEMCTRL_ACTIVE(pi)) {
+		antdivi->pa_mode = (pi_ac->sromi->nvram_femctrl.txswctrlmap_2g_mask >>
+			(CHSPEC_CHANNEL(pi->radio_chanspec) - 1)) & 1;
+		wlc_phy_write_regtbl_fc_from_nvram(pi);
+	}
+}
+
+static int
+phy_ac_antdiv_set_txswctrlmap(phy_type_antdiv_ctx_t *ctx, int32 int_val)
+{
+	phy_ac_antdiv_info_t *antdivi = (phy_ac_antdiv_info_t *)ctx;
+
+	if (!((int_val >= AUTO) && (int_val <= PAMODE_HI_EFF))) {
+		PHY_ERROR(("Value out of range\n"));
+		return BCME_RANGE;
+	}
+
+	/* Setter mode, sets the value.
+	 * Populate the right swctrlmap only if the pa_mode requested is different
+	 * from the current setting
+	 */
+	if (antdivi->pa_mode != (int8) int_val) {
+		/* Note the new state */
+		antdivi->pa_mode = (int8) int_val;
+		/* Call this function again to repopulate the switch control table. */
+		wlc_phy_write_regtbl_fc_from_nvram(antdivi->pi);
+	}
+	return BCME_OK;
+}
+
+static int
+phy_ac_antdiv_get_txswctrlmap(phy_type_antdiv_ctx_t *ctx, int32 *ret_int_ptr)
+{
+	phy_ac_antdiv_info_t *antdivi = (phy_ac_antdiv_info_t *)ctx;
+
+	/* Getter mode, return the previously set value. */
+	*ret_int_ptr = (int32) antdivi->pa_mode;
+	return BCME_OK;
 }

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_temp_iov.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_temp_iov.c 653133 2016-08-05 04:40:58Z $
  */
 
 #include <wlc_cfg.h>
@@ -37,10 +37,13 @@ enum {
 static const bcm_iovar_t phy_temp_iovars[] = {
 	{"phy_tempthresh", IOV_PHY_TEMPTHRESH, 0, 0, IOVT_INT16, 0},
 	{"phy_temp_hysteresis", IOV_PHY_TEMP_HYSTERESIS, 0, 0, IOVT_UINT8, 0},
-#if defined(BCMDBG) || defined(WLTEST) || defined(MACOSX)
+#if defined(BCMDBG)
 	{"phy_tempoffset", IOV_PHY_TEMPOFFSET, 0, 0, IOVT_INT8, 0},
 	{"phy_tempsense_override", IOV_PHY_TEMPSENSE_OVERRIDE, 0, 0, IOVT_UINT16, 0},
-#endif /* BCMDBG || WLTEST || MACOSX */
+	{"phycal_tempdelta", IOV_PHYCAL_TEMPDELTA,
+	(IOVF_MFG), 0, IOVT_UINT8, 0
+	},
+#endif 
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -73,7 +76,7 @@ phy_temp_doiovar(void *ctx, uint32 aid,
 	(void)ret_int_ptr;
 
 	switch (aid) {
-#if defined(BCMDBG) || defined(WLTEST) || defined(DUTY_CYCLE_THROTTLING)
+#if defined(BCMDBG) || defined(DUTY_CYCLE_THROTTLING)
 	case IOV_GVAL(IOV_PHY_TEMPTHRESH):
 		*ret_int_ptr = (int32) temp->disable_temp;
 		break;
@@ -82,8 +85,8 @@ phy_temp_doiovar(void *ctx, uint32 aid,
 		temp->disable_temp = (uint8) int_val;
 		temp->enable_temp = temp->disable_temp - temp->hysteresis;
 		break;
-#endif /* defined(BCMDBG) || defined(WLTEST) || defined(DUTY_CYCLE_THROTTLING) */
-#if defined(BCMDBG) || defined(WLTEST)
+#endif 
+#if defined(BCMDBG)
 	case IOV_GVAL(IOV_PHY_TEMPOFFSET):
 		*ret_int_ptr = (int32) pi->phy_tempsense_offset;
 		break;
@@ -109,7 +112,17 @@ phy_temp_doiovar(void *ctx, uint32 aid,
 		temp->enable_temp = temp->disable_temp - temp->hysteresis;
 		break;
 
-#endif /* BCMDBG || WLTEST */
+	case IOV_GVAL(IOV_PHYCAL_TEMPDELTA):
+		*ret_int_ptr = (int32)temp->phycal_tempdelta;
+		break;
+
+	case IOV_SVAL(IOV_PHYCAL_TEMPDELTA):
+		if (int_val == -1)
+			temp->phycal_tempdelta = temp->phycal_tempdelta_default;
+		else
+			temp->phycal_tempdelta = (uint8)int_val;
+		break;
+#endif 
 
 	default:
 		err = BCME_UNSUPPORTED;

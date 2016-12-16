@@ -12,11 +12,13 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_antdiv_cfg.h 633493 2016-04-22 17:22:36Z kentryu $
+ * $Id: phy_antdiv_cfg.h 659179 2016-09-13 03:45:44Z $
  */
 
 #ifndef _phy_antdiv_cfg_h_
 #define _phy_antdiv_cfg_h_
+
+#include <phy_antdiv_api.h>
 
 struct phy_swdiv {
 	bool swdiv_enable;

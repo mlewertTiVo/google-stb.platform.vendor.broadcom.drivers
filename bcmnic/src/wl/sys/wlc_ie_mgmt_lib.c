@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt_lib.c 617664 2016-02-06 13:09:19Z $
+ * $Id: wlc_ie_mgmt_lib.c 665073 2016-10-14 20:33:29Z $
  */
 
 #include <wlc_cfg.h>
@@ -27,9 +27,23 @@
 #include <bcmdefs.h>
 #include <bcmutils.h>
 #include <wl_dbg.h>
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+#include <osl.h>
+#include <siutils.h>
+#include <d11.h>
+#include <wlioctl.h>
+#include <wlc_pub.h>
+#include <wlc_bsscfg.h>
+#include <wlc_rate.h>
+#include <wlc.h>
+#endif /* BCMDBG || BCMDBG_ERR */
 #include <wlc_ie_mgmt_dbg.h>
 #include <wlc_ie_mgmt_lib.h>
 
+#ifdef BCMDBG
+/* default message level */
+uint iem_msg_level = 0;
+#endif /* BCMDBG */
 
 /* Sort entries in a callback table 'cbe_tag' + 'cbe_tbl' based on the order
  * of the tags in the tag table 'tag'. 'cbe_cnt' tells the size of the callback
@@ -38,8 +52,8 @@
  * the callback entry's size in bytes.
  */
 static void
-BCMINITFN(wlc_iem_sort_tbl)(uint8 *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
-	void *tmp_cbe, uint cbe_sz, const uint8 *tag, uint16 cnt)
+BCMINITFN(wlc_iem_sort_tbl)(wlc_iem_tag_t *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
+	void *tmp_cbe, uint cbe_sz, const wlc_iem_tag_t *tag, uint16 cnt)
 {
 	uint16 ti;
 	uint16 first;	/* the first entry after the sorted ones */
@@ -57,7 +71,7 @@ BCMINITFN(wlc_iem_sort_tbl)(uint8 *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
 
 	/* use the tags order in the tags table as a guide to "sort" callbacks table */
 	for (ti = 0, first = 0; ti < cnt && first < cbe_cnt; ti ++) {
-		uint8 t = tag[ti];
+		wlc_iem_tag_t t = tag[ti];
 		int l, m, r;
 
 		IEM_TRACE(("%s: tag %u\n", __FUNCTION__, t));
@@ -106,7 +120,7 @@ BCMINITFN(wlc_iem_sort_tbl)(uint8 *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
 					memmove(ep + cbe_sz, ep, cbe_sz * (m - first));
 					bcopy(tmp_cbe, ep, cbe_sz);
 					memmove(&cbe_tag[first + 1], &cbe_tag[first],
-					        sizeof(uint8) * (m - first));
+					        sizeof(*cbe_tag) * (m - first));
 					cbe_tag[first] = t;
 				}
 
@@ -131,17 +145,19 @@ BCMINITFN(wlc_iem_sort_tbl)(uint8 *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
  * the tags order in the tag table 'tag'.
  */
 void
-BCMINITFN(wlc_ieml_sort_cbtbl)(uint8 *build_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	const uint8 *tag, uint16 cnt)
+BCMINITFN(wlc_ieml_sort_cbtbl)(wlc_iem_tag_t *build_tag, wlc_iem_cbe_t *build_cb,
+	uint16 build_cnt, const wlc_iem_tag_t *ie_tags, uint16 ie_tags_cnt)
 {
 	wlc_iem_cbe_t tmp;
+
+	ASSERT(ie_tags != NULL);
 
 	IEM_TRACE(("%s: tag %p cb %p sz %u tplt %p cnt %u\n",
 	           __FUNCTION__, OSL_OBFUSCATE_BUF(build_tag),
 			OSL_OBFUSCATE_BUF(build_cb), build_cnt,
-			OSL_OBFUSCATE_BUF(tag), cnt));
+			OSL_OBFUSCATE_BUF(ie_tags), ie_tags_cnt));
 
-	wlc_iem_sort_tbl(build_tag, build_cb, build_cnt, &tmp, sizeof(tmp), tag, cnt);
+	wlc_iem_sort_tbl(build_tag, build_cb, build_cnt, &tmp, sizeof(tmp), ie_tags, ie_tags_cnt);
 }
 
 /* Add a callback entry 'cbe' in the callback table 'cbe_tag' + 'cbe_tbl'.
@@ -149,8 +165,8 @@ BCMINITFN(wlc_ieml_sort_cbtbl)(uint8 *build_tag, wlc_iem_cbe_t *build_cb, uint16
  * 'cbe_sz' specifies the callback entry size.
  */
 static void
-BCMATTACHFN(wlc_iem_add_cb)(uint8 *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
-	void *cbe, uint cbe_sz, uint8 tag)
+BCMATTACHFN(wlc_iem_add_cb)(wlc_iem_tag_t *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
+	void *cbe, uint cbe_sz, wlc_iem_tag_t tag)
 {
 	uint16 i;
 	uint8 *ep;
@@ -182,7 +198,7 @@ BCMATTACHFN(wlc_iem_add_cb)(uint8 *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
 	if (cbe_cnt > i) {
 		IEM_TRACE(("%s: move %u\n", __FUNCTION__, i));
 		memmove(ep + cbe_sz, ep, cbe_sz * (cbe_cnt - i));
-		memmove(&cbe_tag[i + 1], &cbe_tag[i], sizeof(uint8) * (cbe_cnt - i));
+		memmove(&cbe_tag[i + 1], &cbe_tag[i], sizeof(*cbe_tag) * (cbe_cnt - i));
 	}
 	/* insert it at index 'i' */
 	bcopy(cbe, ep, cbe_sz);
@@ -191,9 +207,9 @@ BCMATTACHFN(wlc_iem_add_cb)(uint8 *cbe_tag, void *cbe_tbl, uint16 cbe_cnt,
 
 /* Register 'calc_len'/'build' callback pair for tag 'tag' */
 void
-BCMATTACHFN(wlc_ieml_add_build_fn)(uint8 *build_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx,
-	uint8 tag)
+BCMATTACHFN(wlc_ieml_add_build_fn)(wlc_iem_tag_t *build_tag, wlc_iem_cbe_t *build_cb,
+	uint16 build_cnt, wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx,
+	wlc_iem_tag_t tag)
 {
 	wlc_iem_cbe_t build;
 
@@ -202,6 +218,15 @@ BCMATTACHFN(wlc_ieml_add_build_fn)(uint8 *build_tag, wlc_iem_cbe_t *build_cb, ui
 	build.ctx = ctx;
 
 	wlc_iem_add_cb(build_tag, build_cb, build_cnt, &build, sizeof(build), tag);
+}
+
+/* Get IE ID with extension from IE */
+static wlc_iem_tag_t
+wlc_iem_get_id(uint8 *ie)
+{
+	return ie[TLV_TAG_OFF] == DOT11_MNG_ID_EXT_ID ?
+	        ie[TLV_TAG_OFF] + ie[TLV_BODY_OFF] :
+	        ie[TLV_TAG_OFF];
 }
 
 /* User supplied IEs list processing */
@@ -216,7 +241,7 @@ typedef struct {
 
 /* Write all IEs with the tag value 'tag' */
 static int
-wlc_iem_ins_uiel(wlc_bsscfg_t *cfg, uint16 ft, uint8 tag, bool is_tag,
+wlc_iem_ins_uiel(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft, wlc_iem_tag_t tag, bool is_tag,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
 	int (*ins)(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len),
 	wlc_iem_uiel_cbparm_t *ucbp)
@@ -238,13 +263,9 @@ wlc_iem_ins_uiel(wlc_bsscfg_t *cfg, uint16 ft, uint8 tag, bool is_tag,
 	ies = uiel->ies;
 	ies_len = uiel->ies_len;
 
-	vsie.cbparm = cbparm;
-	vsie.cfg = cfg;
-	vsie.ft = ft;
-
 	while ((ie = ies) != NULL &&
 	       (ie_len = TLV_HDR_LEN + ie[TLV_LEN_OFF]) <= ies_len) {
-		uint8 ie_tag = ie[TLV_TAG_OFF];
+		wlc_iem_tag_t ie_tag = wlc_iem_get_id(ie);
 
 		IEM_TRACE(("%s: tag %u\n", __FUNCTION__, ie_tag));
 
@@ -276,7 +297,7 @@ wlc_iem_ins_uiel(wlc_bsscfg_t *cfg, uint16 ft, uint8 tag, bool is_tag,
 
 /* Modify and write all IEs with the tag value 'tag' */
 static int
-wlc_iem_mod_uiel(wlc_bsscfg_t *cfg, uint16 ft, uint8 tag, bool is_tag,
+wlc_iem_mod_uiel(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft, wlc_iem_tag_t tag, bool is_tag,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
 	int (*mod)(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len),
 	wlc_iem_uiel_cbparm_t *ucbp)
@@ -298,13 +319,9 @@ wlc_iem_mod_uiel(wlc_bsscfg_t *cfg, uint16 ft, uint8 tag, bool is_tag,
 	ies = uiel->ies;
 	ies_len = uiel->ies_len;
 
-	vsie.cbparm = cbparm;
-	vsie.cfg = cfg;
-	vsie.ft = ft;
-
 	while ((ie = ies) != NULL &&
 	       (ie_len = TLV_HDR_LEN + ie[TLV_LEN_OFF]) <= ies_len) {
-		uint8 ie_tag = ie[TLV_TAG_OFF];
+		wlc_iem_tag_t ie_tag = wlc_iem_get_id(ie);
 
 		IEM_TRACE(("%s: tag %u\n", __FUNCTION__, ie_tag));
 
@@ -340,8 +357,8 @@ wlc_iem_mod_uiel(wlc_bsscfg_t *cfg, uint16 ft, uint8 tag, bool is_tag,
  * user has decided to modify them.
  */
 static int
-wlc_iem_proc_uiel(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *nocbvec, int16 prev, uint8 tag, bool is_tag,
+wlc_iem_proc_uiel(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	uint8 *nocbvec, int16 prev, wlc_iem_tag_t tag, bool is_tag,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
 	int (*ins_fn)(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len),
 	int (*mod_fn)(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len),
@@ -381,9 +398,6 @@ wlc_iem_proc_uiel(wlc_bsscfg_t *cfg, uint16 ft,
 		mod.cbparm = cbparm;
 		mod.cfg = cfg;
 		mod.ft = ft;
-		vsie.cbparm = cbparm;
-		vsie.cfg = cfg;
-		vsie.ft = ft;
 	}
 	else {
 		ies = NULL;
@@ -393,7 +407,7 @@ wlc_iem_proc_uiel(wlc_bsscfg_t *cfg, uint16 ft,
 	/* walk all IEs and insert them if user approves so */
 	while ((ie = ies) != NULL &&
 	       (ie_len = TLV_HDR_LEN + ie[TLV_LEN_OFF]) <= ies_len) {
-		uint8 ie_tag = ie[TLV_TAG_OFF];
+		wlc_iem_tag_t ie_tag = wlc_iem_get_id(ie);
 
 		/* skip non applicable IEs based on 'is_tag' value */
 		if ((is_tag ? TRUE : FALSE) == (ie_tag == DOT11_MNG_VS_ID)) {
@@ -500,7 +514,7 @@ wlc_iem_calc_mod_uie_len(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 	cbe = ucbp->cbe;
 	calc = ucbp->cbdata.calc;
 
-	calc->tag = ie[TLV_TAG_OFF];
+	calc->tag = wlc_iem_get_id(ie);
 	calc->ie = ie;
 
 	ASSERT(cbe->calc != NULL);
@@ -514,8 +528,8 @@ wlc_iem_calc_mod_uie_len(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 }
 
 static uint
-_wlc_iem_calc_ie_len(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 tag, bool is_tag, int16 prev, wlc_iem_cbe_t *cbe,
+_wlc_iem_calc_ie_len(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t tag, bool is_tag, int16 prev, wlc_iem_cbe_t *cbe,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *nocbvec)
 {
 	uint l;
@@ -538,12 +552,10 @@ _wlc_iem_calc_ie_len(wlc_bsscfg_t *cfg, uint16 ft,
 		ucbp.cbe = cbe;
 		ucbp.cbdata.calc = &calc;
 
-		err = wlc_iem_proc_uiel(cfg, ft, nocbvec,
+		if ((err = wlc_iem_proc_uiel(cfg, ft, nocbvec,
 		                        prev, tag, is_tag, uiel, cbparm,
 		                        wlc_iem_calc_ins_uie_len, wlc_iem_calc_mod_uie_len,
-		                        &ucbp, &done);
-		if (err != BCME_OK) {
-			WL_ERROR(("%s: err %d\n", __FUNCTION__, err));
+		                        &ucbp, &done)) != BCME_OK) {
 			return 0;
 		}
 
@@ -578,15 +590,15 @@ exit:
  * table otherwise. 'build_cnt' param is the callback table's size.
  */
 uint
-wlc_ieml_calc_len(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
+wlc_ieml_calc_len(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
 {
 	uint16 i;
 	uint l = 0;
 	uint ll = 0;
 	int16 prev = -1;
-	uint8 nocbvec[CEIL(NBITVAL(NBBY), NBBY)];
+	uint8 nocbvec[CEIL(WLC_IEM_ID_MAX, NBBY)];
 
 	ASSERT(build_tag != NULL);
 	ASSERT(build_cb != NULL);
@@ -606,7 +618,7 @@ wlc_ieml_calc_len(wlc_bsscfg_t *cfg, uint16 ft,
 	/* walk through callbacks list and invoke them and sum IEs' length. */
 	for (i = 0; i < build_cnt; i ++) {
 		/* targeted IE */
-		uint8 tag = build_tag[i];	/* this is 'prio' when 'is_tag' is FALSE */
+		wlc_iem_tag_t tag = build_tag[i];	/* this is 'prio' when 'is_tag' is FALSE */
 
 		l = _wlc_iem_calc_ie_len(cfg, ft, tag, is_tag, prev, &build_cb[i],
 		                         uiel, cbparm, nocbvec);
@@ -634,17 +646,15 @@ wlc_ieml_calc_len(wlc_bsscfg_t *cfg, uint16 ft,
  * for its tag!
  */
 uint
-wlc_ieml_calc_ie_len(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
-	uint8 tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
+wlc_ieml_calc_ie_len(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
 {
 	uint16 i;
 	uint l = 0;
 	uint ll = 0;
 	int16 prev = -1;
-	uint8 nocbvec[CEIL(NBITVAL(NBBY), NBBY)];
-
-	BCM_REFERENCE(is_tag);
+	uint8 nocbvec[CEIL(WLC_IEM_ID_MAX, NBBY)];
 
 	ASSERT(build_tag != NULL);
 	ASSERT(build_cb != NULL);
@@ -691,7 +701,7 @@ wlc_iem_build_ins_uie(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 	IEM_TRACE(("%s: tag %u len %u\n", __FUNCTION__, ie[TLV_TAG_OFF], ie_len));
 
 	if (build->buf_len < ie_len) {
-		WL_ERROR(("%s: buf %u ie %u\n", __FUNCTION__, build->buf_len, ie_len));
+		WL_IE_ERROR(("%s: buf %u ie %u\n", __FUNCTION__, build->buf_len, ie_len));
 		return BCME_BUFTOOSHORT;
 	}
 
@@ -710,7 +720,7 @@ wlc_iem_build_mod_uie(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 	wlc_iem_calc_data_t calc;
 	int err;
 	uint l;
-	uint8 ie_tag;
+	wlc_iem_tag_t ie_tag;
 
 	ASSERT(ucbp != NULL);
 	ASSERT(ucbp->cbe != NULL);
@@ -720,7 +730,7 @@ wlc_iem_build_mod_uie(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 	cbe = ucbp->cbe;
 	build = ucbp->cbdata.build;
 
-	ie_tag = ie[TLV_TAG_OFF];
+	ie_tag = wlc_iem_get_id(ie);
 
 	IEM_TRACE(("%s: tag %u len %u\n", __FUNCTION__, ie_tag, ie_len));
 
@@ -733,7 +743,7 @@ wlc_iem_build_mod_uie(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 	ASSERT(cbe->calc != NULL);
 	l = (cbe->calc)(cbe->ctx, &calc);
 	if (build->buf_len < l) {
-		WL_ERROR(("%s: buf %u ie %u\n", __FUNCTION__, build->buf_len, l));
+		WL_IE_ERROR(("%s: buf %u ie %u\n", __FUNCTION__, build->buf_len, l));
 		return BCME_BUFTOOSHORT;
 	}
 
@@ -742,7 +752,8 @@ wlc_iem_build_mod_uie(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 	ASSERT(cbe->build != NULL);
 	err = (cbe->build)(cbe->ctx, build);
 	if (err != BCME_OK) {
-		WL_ERROR(("%s: err %d\n", __FUNCTION__, err));
+		WL_IE_ERROR(("%s: err %d tag %u funct->build %p\n",
+				__FUNCTION__, err, build->tag, cbe->build));
 		return err;
 	}
 	build->buf += l;
@@ -755,8 +766,8 @@ wlc_iem_build_mod_uie(wlc_iem_uiel_cbparm_t *ucbp, uint8 *ie, uint ie_len)
 
 /* Write a single IE in a buffer */
 static int
-_wlc_iem_build_ie(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 tag, bool is_tag, int16 prev, wlc_iem_cbe_t *cbe,
+_wlc_iem_build_ie(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t tag, bool is_tag, int16 prev, wlc_iem_cbe_t *cbe,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *nocbvec,
 	uint8 *buf, uint *buf_len)
 {
@@ -797,7 +808,6 @@ _wlc_iem_build_ie(wlc_bsscfg_t *cfg, uint16 ft,
 		                             prev, tag, is_tag, uiel, cbparm,
 		                             wlc_iem_build_ins_uie, wlc_iem_build_mod_uie,
 		                             &ucbp, &done)) != BCME_OK) {
-			WL_ERROR(("%s: err %d\n", __FUNCTION__, err));
 			return err;
 		}
 		/* sanity check */
@@ -842,11 +852,12 @@ _wlc_iem_build_ie(wlc_bsscfg_t *cfg, uint16 ft,
 	ASSERT(cbe->build != NULL);
 	err = (cbe->build)(cbe->ctx, &build);
 	if (err != BCME_OK) {
-		WL_ERROR(("%s: err %d\n", __FUNCTION__, err));
+		WL_IE_ERROR(("%s: err %d tag %u funct->build %p\n",
+				__FUNCTION__, err, build.tag, cbe->build));
 		return err;
 	}
 	tsf_l = IEM_T32D(cfg->wlc, tsf_l);
-	IEM_TRACE(("%s: len %u time %u\n", __FUNCTION__, l, tsf_l));
+	IEM_TRACE(("%s: len %u time %u \n", __FUNCTION__, l, tsf_l));
 	if (IEM_DUMP_ON()) {
 		char name[16];
 		snprintf(name, sizeof(name), "tag%u", tag);
@@ -860,15 +871,15 @@ exit:
 
 /* Write IEs in a frame */
 int
-wlc_ieml_build_frame(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
+wlc_ieml_build_frame(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
 	uint8 *buf, uint buf_len)
 {
 	uint16 i;
 	int err;
 	int16 prev = -1;
-	uint8 nocbvec[CEIL(NBITVAL(NBBY), NBBY)];
+	uint8 nocbvec[CEIL(WLC_IEM_ID_MAX, NBBY)];
 	uint8 *buf1;
 	uint buf_len1;
 
@@ -892,7 +903,7 @@ wlc_ieml_build_frame(wlc_bsscfg_t *cfg, uint16 ft,
 	buf_len1 = buf_len;
 	for (i = 0; i < build_cnt; i ++) {
 		/* targeted IE */
-		uint8 tag = build_tag[i];	/* this is 'prio' when 'is_tag' is FALSE */
+		wlc_iem_tag_t tag = build_tag[i];	/* this is 'prio' when 'is_tag' is FALSE */
 
 		err = _wlc_iem_build_ie(cfg, ft, tag, is_tag, prev, &build_cb[i],
 		                        uiel, cbparm, nocbvec, buf1, &buf_len1);
@@ -929,18 +940,17 @@ wlc_ieml_build_frame(wlc_bsscfg_t *cfg, uint16 ft,
  * for its tag!
  */
 int
-wlc_ieml_build_ie(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt, uint8 tag,
-	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len)
+wlc_ieml_build_ie(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *build_tag, bool is_tag, wlc_iem_cbe_t *build_cb, uint16 build_cnt,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
+	uint8 *buf, uint buf_len)
 {
 	uint16 i;
 	int err;
 	int16 prev = -1;
-	uint8 nocbvec[CEIL(NBITVAL(NBBY), NBBY)];
+	uint8 nocbvec[CEIL(WLC_IEM_ID_MAX, NBBY)];
 	uint8 *buf1;
 	uint buf_len1;
-
-	BCM_REFERENCE(is_tag);
 
 	ASSERT(build_tag != NULL);
 	ASSERT(build_cb != NULL);
@@ -984,9 +994,9 @@ wlc_ieml_build_ie(wlc_bsscfg_t *cfg, uint16 ft,
 
 /* Register 'parse' callback for tag 'tag' */
 void
-BCMATTACHFN(wlc_ieml_add_parse_fn)(uint8 *parse_tag, wlc_iem_pe_t *parse_cb, uint16 parse_cnt,
-	wlc_iem_parse_fn_t parse_fn, void *ctx,
-	uint8 tag)
+BCMATTACHFN(wlc_ieml_add_parse_fn)(wlc_iem_tag_t *parse_tag, wlc_iem_pe_t *parse_cb,
+	uint16 parse_cnt, wlc_iem_parse_fn_t parse_fn, void *ctx,
+	wlc_iem_tag_t tag)
 {
 	wlc_iem_pe_t parse;
 
@@ -1009,12 +1019,12 @@ BCMATTACHFN(wlc_ieml_add_parse_fn)(uint8 *parse_tag, wlc_iem_pe_t *parse_cb, uin
  * by walking the IE buffer starting from the IE passed to them when invoked.
  */
 int
-wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 *parse_tag, bool is_tag, wlc_iem_pe_t *parse_cb, uint16 parse_cnt,
+wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t *parse_tag, bool is_tag, wlc_iem_pe_t *parse_cb, uint16 parse_cnt,
 	wlc_iem_upp_t *upp, wlc_iem_pparm_t *pparm,
 	uint8 *buf, uint buf_len)
 {
-	uint8 cbvec[CEIL(NBITVAL(NBBY), NBBY)];
+	uint8 cbvec[CEIL(WLC_IEM_ID_MAX, NBBY)];
 	uint i;
 	uint8 *ie;
 	uint ie_len;
@@ -1043,12 +1053,7 @@ wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, uint16 ft,
 	for (i = 0; i < parse_cnt; i ++)
 		setbit(cbvec, parse_tag[i]);
 
-	ntie.pparm = pparm;
-	ntie.cfg = cfg;
 	ntie.ft = ft;
-	vsie.pparm = pparm;
-	vsie.cfg = cfg;
-	vsie.ft = ft;
 
 	parse.pparm = pparm;
 	parse.cfg = cfg;
@@ -1059,7 +1064,7 @@ wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, uint16 ft,
 	/* traverse all IEs */
 	while ((ie = buf) != NULL && buf_len >= TLV_HDR_LEN &&
 	       (ie_len = TLV_HDR_LEN + ie[TLV_LEN_OFF]) <= buf_len) {
-		uint8 ie_tag = ie[TLV_TAG_OFF];
+		wlc_iem_tag_t ie_tag = wlc_iem_get_id(ie);
 		int l, m, r;
 
 		/* skip the IE if we have handled the tag earlier */
@@ -1114,7 +1119,7 @@ wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, uint16 ft,
 				ASSERT(parse_cb[m].parse != NULL);
 				err = (parse_cb[m].parse)(parse_cb[m].ctx, &parse);
 				if (err != BCME_OK) {
-					WL_ERROR(("%s: err %d\n", __FUNCTION__, err));
+					IEM_INFO(("%s: err %d\n", __FUNCTION__, err));
 					return err;
 				}
 				m ++;
@@ -1159,7 +1164,7 @@ wlc_ieml_parse_frame(wlc_bsscfg_t *cfg, uint16 ft,
 		ASSERT(parse_cb[i].parse != NULL);
 		err = (parse_cb[i].parse)(parse_cb[i].ctx, &parse);
 		if (err != BCME_OK) {
-			WL_ERROR(("%s: err %d\n", __FUNCTION__, err));
+			IEM_INFO(("%s: err %d\n", __FUNCTION__, err));
 			return err;
 		}
 	}

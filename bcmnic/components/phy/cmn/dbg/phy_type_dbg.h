@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_dbg.h 620395 2016-02-23 01:15:14Z vyass $
+ * $Id: phy_type_dbg.h 658374 2016-09-07 19:38:20Z $
  */
 
 #ifndef _phy_type_dbg_h_
@@ -32,13 +32,18 @@ typedef void phy_type_dbg_ctx_t;
 typedef void (*phy_type_dbg_txerr_dump_fn_t)(phy_type_dbg_ctx_t *ctx, uint16 err);
 typedef void (*phy_type_dbg_print_phydbg_regs_fn_t)(phy_type_dbg_ctx_t *ctx);
 typedef void (*phy_type_dbg_gpio_out_enab_fn_t)(phy_type_dbg_ctx_t *ctx, bool enab);
-typedef uint16 (*phy_ac_dbg_get_phyreg_address_fn_t)(phy_type_dbg_ctx_t *ctx, uint16 addr);
+typedef uint16 (*phy_type_dbg_get_phyreg_address_fn_t)(phy_type_dbg_ctx_t *ctx, uint16 addr);
+typedef int (*phy_type_dbg_test_evm)(phy_type_dbg_ctx_t *ctx, int channel, uint rate, int txpwr);
+typedef int (*phy_type_dbg_test_carrier_suppress)(phy_type_dbg_ctx_t *ctx, int channel);
+
 typedef struct {
 	phy_type_dbg_ctx_t *ctx;
 	phy_type_dbg_txerr_dump_fn_t txerr_dump;
 	phy_type_dbg_print_phydbg_regs_fn_t print_phydbg_regs;
 	phy_type_dbg_gpio_out_enab_fn_t gpio_out_enab;
-	phy_ac_dbg_get_phyreg_address_fn_t phyregaddr;
+	phy_type_dbg_get_phyreg_address_fn_t phyregaddr;
+	phy_type_dbg_test_evm test_evm;
+	phy_type_dbg_test_carrier_suppress test_carrier_suppress;
 } phy_type_dbg_fns_t;
 
 /*

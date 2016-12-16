@@ -32,7 +32,13 @@ extern "C" {
  *  ASSERT
  */
 
+#ifdef BCMDBG_ASSERT
+extern void osl_assert(char *exp, char *file, int line);
+#define ASSERT(exp) \
+		do { if (!(exp)) osl_assert(#exp, __FILE__, __LINE__); } while (0)
+#else
 #define	ASSERT(exp)
+#endif
 
 
 /* Helper macros for unsupported functionality. */

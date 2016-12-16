@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_ht.c 658200 2016-09-07 01:03:02Z $
  */
 
 #include <typedefs.h>
@@ -38,6 +38,7 @@
 #include <phy_ht_papdcal.h>
 #include <phy_ht_vcocal.h>
 #include <phy_ht_misc.h>
+#include <phy_ht_stf.h>
 
 #include "phy_type.h"
 #include "phy_type_ht.h"
@@ -64,12 +65,11 @@ static int phy_ht_attach_ext(phy_info_t *pi, int bandtype);
 static int phy_ht_register_impl(phy_info_t *pi, phy_type_info_t *ti, int bandtype);
 static void phy_ht_unregister_impl(phy_info_t *pi, phy_type_info_t *ti);
 static void phy_ht_reset_impl(phy_info_t *pi, phy_type_info_t *ti);
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 static int phy_ht_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b);
 #else
 #define	phy_ht_dump_phyregs	NULL
-#endif /* (BCMINTERNAL || DBG_PHY_IOV) && (BCMDBG || BCMDBG_DUMP) */
+#endif 
 
 /* attach/detach */
 phy_type_info_t *
@@ -288,6 +288,13 @@ BCMATTACHFN(phy_ht_register_impl)(phy_info_t *pi, phy_type_info_t *ti, int bandt
 		goto fail;
 	}
 
+	/* Register with STF module */
+	if (pi->stfi != NULL &&
+		(hti->stfi = phy_ht_stf_register_impl(pi, hti, pi->stfi)) == NULL) {
+			PHY_ERROR(("%s: phy_ht_stf_register_impl failed\n", __FUNCTION__));
+			goto fail;
+	}
+
 	/* ...Add your module registration here... */
 
 
@@ -305,6 +312,10 @@ BCMATTACHFN(phy_ht_unregister_impl)(phy_info_t *pi, phy_type_info_t *ti)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	/* ...Add your module unregistration here... */
+
+	/* Unregister from STF module */
+	if (hti->stfi != NULL)
+		phy_ht_stf_unregister_impl(hti->stfi);
 
 	/* Unregister from Bluetooth Coexistence module */
 	if (hti->btcxi != NULL)
@@ -397,7 +408,7 @@ phy_ht_reset_impl(phy_info_t *pi, phy_type_info_t *ti)
 }
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 static phy_regs_t htphy0_bphy_regs[] = {
 	{ 0x000,	0x002 },	/* 0x000 - 0x001 */
 	{ 0x004,	0x005 },	/* 0x004 - 0x008 */
@@ -628,7 +639,7 @@ phy_ht_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b)
 {
 	phy_regs_t *rl;
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	if (CHSPEC_IS2G(pi->radio_chanspec)) {
 		rl = htphy0_bphy_regs;
@@ -642,9 +653,9 @@ phy_ht_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b)
 
 	phy_dump_phyregs(pi, "htphy", rl, 0, b);
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	return BCME_OK;
 }
-#endif /* BCMINTERNAL || DBG_PHY_IOV */
+#endif 
 #endif /* BCMDBG || BCMDBG_DUMP */

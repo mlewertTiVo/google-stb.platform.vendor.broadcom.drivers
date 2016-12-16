@@ -56,7 +56,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt.c 622560 2016-03-03 02:41:41Z $
+ * $Id: wlc_ie_mgmt.c 665073 2016-10-14 20:33:29Z $
  */
 
 #include <wlc_cfg.h>
@@ -74,9 +74,13 @@
 #include <wl_dbg.h>
 #include <wlc_ie_mgmt_lib.h>
 #include <wlc_ie_mgmt_dbg.h>
+#include <wlc_ie_mgmt_vs.h>
 #include <wlc_ie_mgmt.h>
 #ifdef IEM_TEST
 #include <wlc_ie_mgmt_test.h>
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#include <wlc_ie_mgmt_vs.h>
 #endif
 #include <wlc_dump.h>
 
@@ -112,18 +116,18 @@ struct wlc_iem_info {
 /* module private states - entire structure */
 /* typedef struct {
  *	wlc_iem_info_t iem -- module private states
- *	uint8 build_tag[max_ie_build_cbs] -- 'build' tag table
+ *	wlc_iem_tag_t build_tag[max_ie_build_cbs] -- 'build' tag table
  *	wlc_iem_cbe_t build_cb[max_ie_build_cbs] -- 'build' callback table
- *	uint16 build_ft[IEM_NUM_FT + 1] - 'build' ft table
- *	uint8 vs_build_prio[max_vs_ie_build_cbs] -- 'vs build' prio table
+ *	wlc_iem_ft_t build_ft[IEM_NUM_FT + 1] - 'build' ft table
+ *	wlc_iem_tag_t vs_build_prio[max_vs_ie_build_cbs] -- 'vs build' prio table
  *	wlc_iem_cbe_t vs_build_cb[max_vs_ie_build_cbs] -- 'vs build' callback table
- *	uint16 vs_build_ft[IEM_NUM_FT + 1] - 'vs build' ft table
- *	uint8 parse_tag[max_ie_parse_cbs] -- 'parse' tag table
+ *	wlc_iem_ft_t vs_build_ft[IEM_NUM_FT + 1] - 'vs build' ft table
+ *	wlc_iem_tag_t parse_tag[max_ie_parse_cbs] -- 'parse' tag table
  *	wlc_iem_pe_t parse_cb[max_ie_parse_cbs] -- 'parse' callback table
- *	uint16 parse_ft[IEM_NUM_FT + 1] - 'parse' ft table
- *	uint8 vs_parse_id[max_vs_ie_parse_cbs] -- 'vs parse' id table
+ *	wlc_iem_ft_t parse_ft[IEM_NUM_FT + 1] - 'parse' ft table
+ *	wlc_iem_tag_t vs_parse_id[max_vs_ie_parse_cbs] -- 'vs parse' id table
  *	wlc_iem_pe_t vs_parse_cb[max_vs_ie_parse_cbs] -- 'vs parse' callback table
- *	uint16 parse_ft[IEM_NUM_FT + 1] - 'vs parse' ft table
+ *	wlc_iem_ft_t vs_parse_ft[IEM_NUM_FT + 1] - 'vs parse' ft table
  * } wlc_iem_mem_t;
  * Notes:
  * - parallel tables
@@ -162,28 +166,28 @@ struct wlc_iem_info {
  *                +--------+ +-------+--
  *                | prio X | | cb... |
  *                +--------+ +-------+--
- * - xxxx_ft[] size
+ * - ft[] size
  *   The tables are 1 size bigger than it needs to be, which allows us to compute
- *   the number of callbacks in table i by using xxxx_ft[i + 1] - xxxx_ft[i].
+ *   the number of callbacks in table i by using ft[i + 1] - ft[i].
  */
 
 /* table access macros */
-#define BUILD_TAG_TBL(iem)	(uint8 *)((uintptr)(iem) + (iem)->build_tag_offset)
+#define BUILD_TAG_TBL(iem)	(wlc_iem_tag_t *)((uintptr)(iem) + (iem)->build_tag_offset)
 #define BUILD_CB_TBL(iem)	(wlc_iem_cbe_t *)((uintptr)(iem) + (iem)->build_cb_offset)
-#define BUILD_FT_TBL(iem)	(uint16 *)((uintptr)(iem) + (iem)->build_ft_offset)
-#define VS_BUILD_PRIO_TBL(iem)	(uint8 *)((uintptr)(iem) + (iem)->vs_build_prio_offset)
+#define BUILD_FT_TBL(iem)	(wlc_iem_ft_t *)((uintptr)(iem) + (iem)->build_ft_offset)
+#define VS_BUILD_PRIO_TBL(iem)	(wlc_iem_tag_t *)((uintptr)(iem) + (iem)->vs_build_prio_offset)
 #define VS_BUILD_CB_TBL(iem)	(wlc_iem_cbe_t *)((uintptr)(iem) + (iem)->vs_build_cb_offset)
-#define VS_BUILD_FT_TBL(iem)	(uint16 *)((uintptr)(iem) + (iem)->vs_build_ft_offset)
-#define PARSE_TAG_TBL(iem)	(uint8 *)((uintptr)(iem) + (iem)->parse_tag_offset)
+#define VS_BUILD_FT_TBL(iem)	(wlc_iem_ft_t *)((uintptr)(iem) + (iem)->vs_build_ft_offset)
+#define PARSE_TAG_TBL(iem)	(wlc_iem_tag_t *)((uintptr)(iem) + (iem)->parse_tag_offset)
 #define PARSE_CB_TBL(iem)	(wlc_iem_pe_t *)((uintptr)(iem) + (iem)->parse_cb_offset)
-#define PARSE_FT_TBL(iem)	(uint16 *)((uintptr)(iem) + (iem)->parse_ft_offset)
-#define VS_PARSE_ID_TBL(iem)	(uint8 *)((uintptr)(iem) + (iem)->vs_parse_id_offset)
+#define PARSE_FT_TBL(iem)	(wlc_iem_ft_t *)((uintptr)(iem) + (iem)->parse_ft_offset)
+#define VS_PARSE_ID_TBL(iem)	(wlc_iem_tag_t *)((uintptr)(iem) + (iem)->vs_parse_id_offset)
 #define VS_PARSE_CB_TBL(iem)	(wlc_iem_pe_t *)((uintptr)(iem) + (iem)->vs_parse_cb_offset)
-#define VS_PARSE_FT_TBL(iem)	(uint16 *)((uintptr)(iem) + (iem)->vs_parse_ft_offset)
+#define VS_PARSE_FT_TBL(iem)	(wlc_iem_ft_t *)((uintptr)(iem) + (iem)->vs_parse_ft_offset)
 
 /* position callback entries for type 'ft' */
 #define TBL_POS_GET(fttbl, ft, cur, next) {	\
-		uint16 subtype = FT2FST(ft);	\
+		wlc_iem_ft_t subtype = FT2FST(ft);	\
 		ASSERT(subtype < IEM_NUM_FT);	\
 		cur = (fttbl)[subtype];		\
 		next = (fttbl)[subtype + 1];	\
@@ -207,9 +211,9 @@ struct wlc_iem_info {
 /*
  * IE tags tables
  */
-/* Beacon - IEEE 802.11 spec Table 8-20 */
-static const uint8 BCMINITDATA(ie_tags_bcn)[] = {
-	/* order name id */
+/* Beacon - IEEE Std 802.11-2012 Table 8-20 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_bcn)[] = {
+	/* order */ /* id */
 	/* 4 */	DOT11_MNG_SSID_ID,
 	/* 5 */ DOT11_MNG_RATES_ID,
 	/* 6 */ DOT11_MNG_FH_PARMS_ID,
@@ -262,15 +266,16 @@ static const uint8 BCMINITDATA(ie_tags_bcn)[] = {
 	/* 62 */ DOT11_MNG_VHT_TRANSMIT_POWER_ENVELOPE_ID,
 	/* 63 */ DOT11_MNG_CHANNEL_SWITCH_WRAPPER_ID,
 	/* 66 */ DOT11_MNG_OPER_MODE_NOTIF_ID,
-	/* XX */ DOT11_MNG_HE_CAP_ID,
-	/* XX */ DOT11_MNG_HE_OP_ID,
-	/* XX */ DOT11_MNG_TWT_ID,
+	/* 73 */ DOT11_MNG_HE_CAP_ID,	/* IEEE P802.11ax/D0.5 */
+	/* 74 */ DOT11_MNG_HE_OP_ID,
+	/* 75 */ DOT11_MNG_TWT_ID,
+	/* 76 */ DOT11_MNG_RAPS_ID,
 	/* Last */ DOT11_MNG_VS_ID
 };
 
-/* Probe Request - IEEE 802.11 spec Table 8-26 */
-static const uint8 BCMINITDATA(ie_tags_prq)[] = {
-	/* order name id */
+/* Probe Request - IEEE Std 802.11-2012 Table 8-26 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_prq)[] = {
+	/* order */ /* id */
 	/* 1 */	DOT11_MNG_SSID_ID,
 	/* 2 */ DOT11_MNG_RATES_ID,
 	/* 3 */ DOT11_MNG_REQUEST_ID,
@@ -284,16 +289,15 @@ static const uint8 BCMINITDATA(ie_tags_prq)[] = {
 	/* 11 */ DOT11_MNG_CHANNEL_USAGE,
 	/* 12 */ DOT11_MNG_INTERWORKING_ID,
 	/* 17 */ DOT11_MNG_VHT_CAP_ID,
+	/* 32 */ DOT11_MNG_HE_CAP_ID,	/* IEEE P802.11ax/D0.5 */
 	/* 49 */ DOT11_MNG_MESH_ID,
 	/* 50 */ DOT11_MNG_MESH_CONFIG,
-	/* XX */ DOT11_MNG_HE_CAP_ID,
-	/* XX */ DOT11_MNG_HE_OP_ID,
 	/* Last */ DOT11_MNG_VS_ID
 };
 
-/* Probe Response - IEEE 802.11 spec Table 8-27 */
-static const uint8 BCMINITDATA(ie_tags_prs)[] = {
-	/* order name id */
+/* Probe Response - IEEE Std 802.11-2012 Table 8-27 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_prs)[] = {
+	/* order */ /* id */
 	/* 4 */	DOT11_MNG_SSID_ID,
 	/* 5 */ DOT11_MNG_RATES_ID,
 	/* 6 */ DOT11_MNG_FH_PARMS_ID,
@@ -345,15 +349,17 @@ static const uint8 BCMINITDATA(ie_tags_prs)[] = {
 	/* 62 */ DOT11_MNG_VHT_TRANSMIT_POWER_ENVELOPE_ID,
 	/* 64 */ DOT11_MNG_CHANNEL_SWITCH_WRAPPER_ID,
 	/* 67 */ DOT11_MNG_OPER_MODE_NOTIF_ID,
-	/* XX */ DOT11_MNG_HE_CAP_ID,
-	/* XX */ DOT11_MNG_HE_OP_ID,
+	/* 92 */ DOT11_MNG_HE_CAP_ID,	/* IEEE P802.11ax/D0.5 */
+	/* 93 */ DOT11_MNG_HE_OP_ID,
+	/* 94 */ DOT11_MNG_TWT_ID,
+	/* 95 */ DOT11_MNG_RAPS_ID,
 	/* Last - 1 */ DOT11_MNG_VS_ID
 	/* Last - n */ /* Requested elements */
 };
 
-/* Authentication - IEEE 802.11 spec Table 8-28 */
-static const uint8 BCMINITDATA(ie_tags_auth)[] = {
-	/* order name id */
+/* Authentication - IEEE Std 802.11-2012 Table 8-28 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_auth)[] = {
+	/* order */ /* id */
 	/* 4 */ DOT11_MNG_CHALLENGE_ID,
 	/* 5 */ DOT11_MNG_RSN_ID,
 	/* 6 */ DOT11_MNG_MDIE_ID,
@@ -363,15 +369,15 @@ static const uint8 BCMINITDATA(ie_tags_auth)[] = {
 	/* Last */ DOT11_MNG_VS_ID
 };
 
-/* De-authentication - IEEE 802.11 spec Table 8-30 */
-static const uint8 BCMINITDATA(ie_tags_deauth)[] = {
-	/* order name id */
+/* De-authentication - IEEE Std 802.11-2012 Table 8-30 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_deauth)[] = {
+	/* order */ /* id */
 	/* 2 - (Last - 1) */ DOT11_MNG_VS_ID
 };
 
-/* Association Request - IEEE 802.11 spec Table 8-22 */
-static const uint8 BCMINITDATA(ie_tags_assocreq)[] = {
-	/* order name id */
+/* Association Request - IEEE Std 802.11-2012 Table 8-22 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_assocreq)[] = {
+	/* order */ /* id */
 	/* 3 */	DOT11_MNG_SSID_ID,
 	/* 4 */ DOT11_MNG_RATES_ID,
 	/* 5 */ DOT11_MNG_EXT_RATES_ID,
@@ -390,14 +396,13 @@ static const uint8 BCMINITDATA(ie_tags_assocreq)[] = {
 	/* 18 */ DOT11_MNG_INTERWORKING_ID,
 	/* 22 */ DOT11_MNG_VHT_CAP_ID,
 	/* 23 */ DOT11_MNG_OPER_MODE_NOTIF_ID,
-	/* XX */ DOT11_MNG_HE_CAP_ID,
-	/* XX */ DOT11_MNG_HE_OP_ID,
-	/* Last */ DOT11_MNG_VS_ID,
+	/* 43 */ DOT11_MNG_HE_CAP_ID,	/* IEEE P802.11ax/D0.5 */
+	/* Last */ DOT11_MNG_VS_ID
 };
 
-/* Re-association Request - IEEE 802.11 spec Table 8-24 */
-static const uint8 BCMINITDATA(ie_tags_reassocreq)[] = {
-	/* order name id */
+/* Re-association Request - IEEE Std 802.11-2012 Table 8-24 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_reassocreq)[] = {
+	/* order */ /* id */
 	/* 4 */	DOT11_MNG_SSID_ID,
 	/* 5 */ DOT11_MNG_RATES_ID,
 	/* 6 */ DOT11_MNG_EXT_RATES_ID,
@@ -420,14 +425,13 @@ static const uint8 BCMINITDATA(ie_tags_reassocreq)[] = {
 	/* 23 */ DOT11_MNG_INTERWORKING_ID,
 	/* 28 */ DOT11_MNG_VHT_CAP_ID,
 	/* 29 */ DOT11_MNG_OPER_MODE_NOTIF_ID,
-	/* XX */ DOT11_MNG_HE_CAP_ID,
-	/* XX */ DOT11_MNG_HE_OP_ID,
-	/* Last */ DOT11_MNG_VS_ID,
+	/* 47 */ DOT11_MNG_HE_CAP_ID,	/* IEEE P802.11ax/D0.5 */
+	/* Last */ DOT11_MNG_VS_ID
 };
 
-/* Association Response - IEEE 802.11 spec Table 8-23 */
-static const uint8 BCMINITDATA(ie_tags_assocresp)[] = {
-	/* order name id */
+/* Association Response - IEEE Std 802.11-2012 Table 8-23 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_assocresp)[] = {
+	/* order */ /* id */
 	/* 4 */ DOT11_MNG_RATES_ID,
 	/* 5 */ DOT11_MNG_EXT_RATES_ID,
 	/* 6 */ DOT11_MNG_EDCA_PARAM_ID,
@@ -449,14 +453,15 @@ static const uint8 BCMINITDATA(ie_tags_assocresp)[] = {
 	/* 27 */ DOT11_MNG_VHT_CAP_ID,
 	/* 28 */ DOT11_MNG_VHT_OPERATION_ID,
 	/* 29 */ DOT11_MNG_OPER_MODE_NOTIF_ID,
-	/* XX */ DOT11_MNG_HE_CAP_ID,
-	/* XX */ DOT11_MNG_HE_OP_ID,
+	/* ?29? */ DOT11_MNG_TWT_ID,	/* IEEE P802.11ax/D0.5 */
+	/* 54 */ DOT11_MNG_HE_CAP_ID,
+	/* 55 */ DOT11_MNG_HE_OP_ID,
 	/* Last */ DOT11_MNG_VS_ID
 };
 
-/* Re-association Response - IEEE 802.11 spec Table 8-25 */
-static const uint8 BCMINITDATA(ie_tags_reassocresp)[] = {
-	/* order name id */
+/* Re-association Response - IEEE Std 802.11-2012 Table 8-25 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_reassocresp)[] = {
+	/* order */ /* id */
 	/* 4 */ DOT11_MNG_RATES_ID,
 	/* 5 */ DOT11_MNG_EXT_RATES_ID,
 	/* 6 */ DOT11_MNG_EDCA_PARAM_ID,
@@ -482,48 +487,50 @@ static const uint8 BCMINITDATA(ie_tags_reassocresp)[] = {
 	/* 31 */ DOT11_MNG_VHT_CAP_ID,
 	/* 32 */ DOT11_MNG_VHT_OPERATION_ID,
 	/* 33 */ DOT11_MNG_OPER_MODE_NOTIF_ID,
-	/* XX */ DOT11_MNG_HE_CAP_ID,
-	/* XX */ DOT11_MNG_HE_OP_ID,
+	/* 42 */ DOT11_MNG_TWT_ID,	/* IEEE P802.11ax/D0.5 */
+	/* 55 */ DOT11_MNG_HE_CAP_ID,
+	/* 56 */ DOT11_MNG_HE_OP_ID,
 	/* Last */ DOT11_MNG_VS_ID
 };
 
-/* Disassociation - IEEE 802.11 spec Table 8-21 */
-static const uint8 BCMINITDATA(ie_tags_disassoc)[] = {
-	/* order name id */
+/* Disassociation - IEEE Std 802.11-2012 Table 8-21 */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_disassoc)[] = {
+	/* order */ /* id */
 	/* 2 - (Last - 1) */ DOT11_MNG_VS_ID
 };
 
 #ifdef IEM_TEST
 /* Test */
-static const uint8 BCMINITDATA(ie_tags_test)[] = {
-	/* order name id */
+static const wlc_iem_tag_t BCMINITDATA(ie_tags_test)[] = {
+	/* order */ /* id */
 	/* 0 */	DOT11_MNG_SSID_ID,
 	/* 1 */ DOT11_MNG_RATES_ID,
 	/* 2 */ DOT11_MNG_EXT_RATES_ID,
 	/* 3 */ DOT11_MNG_EXT_CAP_ID,
+	/* 4 */ DOT11_MNG_RAPS_ID,
 	/* Last */ DOT11_MNG_VS_ID
 };
 #endif /* IEM_TEST */
 
 /*
- * # of Frame Types supported
+ * Frame Types supported
  */
 /* IE tags tables info - sorted by FC_XXXX */
 typedef struct {
-	const uint8 *tags;
+	const wlc_iem_tag_t *tags;
 	uint16 cnt;
-} wlc_iem_tag_t;
-static const wlc_iem_tag_t BCMINITDATA(ie_tags)[] = {
+} wlc_iem_tag_tbl_t;
+static const wlc_iem_tag_tbl_t BCMINITDATA(ie_tags_tbl)[] = {
 	/* FC_ASSOC_REQ	0 */ {ie_tags_assocreq, ARRAYSIZE(ie_tags_assocreq)},
 	/* FC_ASSOC_RESP 1 */ {ie_tags_assocresp, ARRAYSIZE(ie_tags_assocresp)},
 	/* FC_REASSOC_REQ 2 */ {ie_tags_reassocreq, ARRAYSIZE(ie_tags_reassocreq)},
 	/* FC_REASSOC_RESP 3 */ {ie_tags_reassocresp, ARRAYSIZE(ie_tags_reassocresp)},
 	/* FC_PROBE_REQ 4 */ {ie_tags_prq, ARRAYSIZE(ie_tags_prq)},
 	/* FC_PROBE_RESP 5 */ {ie_tags_prs, ARRAYSIZE(ie_tags_prs)},
-/* F */	/* WLC_IEM_FC_SCAN_PRBRSP 6 */ {ie_tags_prs, ARRAYSIZE(ie_tags_prs)},
-/* F */	/* WLC_IEM_FC_SCAN_BCN 7 */ {ie_tags_bcn, ARRAYSIZE(ie_tags_bcn)},
+/* F */	/* WLC_IEM_FC_SCAN_PRBRSP 6 */ {NULL, 0},
+/* F */	/* WLC_IEM_FC_SCAN_BCN 7 */ {NULL, 0},
 	/* FC_BEACON 8 */ {ie_tags_bcn, ARRAYSIZE(ie_tags_bcn)},
-/* F */	/* WLC_IEM_FC_AP_BCN 9 */ {ie_tags_bcn, ARRAYSIZE(ie_tags_bcn)},
+/* F */	/* WLC_IEM_FC_AP_BCN 9 */ {NULL, 0},
 	/* FC_DISASSOC 10 */ {ie_tags_disassoc, ARRAYSIZE(ie_tags_disassoc)},
 	/* FC_AUTH 11 */ {ie_tags_auth, ARRAYSIZE(ie_tags_auth)},
 	/* FC_DEAUTH 12 */ {ie_tags_deauth, ARRAYSIZE(ie_tags_deauth)},
@@ -531,8 +538,32 @@ static const wlc_iem_tag_t BCMINITDATA(ie_tags)[] = {
 /* F */	/* WLC_IEM_FC_TEST 13 */ {ie_tags_test, ARRAYSIZE(ie_tags_test)},
 #endif
 };
-#define IEM_NUM_FT ARRAYSIZE(ie_tags)
 
+/* # of Frame Types supported */
+#define IEM_NUM_FT ARRAYSIZE(ie_tags_tbl)
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* IE tags tables names - sorted by FC_XXXX */
+/* PLEASE KEEP THIS TABLE IN SYNC WITH ABOVE 'ie_tags_tbl' */
+static const char *ie_tags_names[] = {
+	"AssocReq",
+	"AssocResp",
+	"ReassocReq",
+	"ReassocResp",
+	"ProbeReq",
+	"ProbeResp",
+	"ScanPrbRsp",
+	"ScanBcn",
+	"Bcn",
+	"APBcn",
+	"Disassoc",
+	"Auth",
+	"Deauth",
+#ifdef IEM_TEST
+	"Test",
+#endif
+};
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /*
  * IOVar table
@@ -543,7 +574,15 @@ enum {
 	IOV_LAST
 };
 
+#if defined(BCMDBG)
+static const bcm_iovar_t wlc_iem_iovars[] = {
+	{"iem_dbg", IOV_IEM_DBG, (0), 0, IOVT_UINT32, 0},
+	{"iem_test", IOV_IEM_TEST, (0), 0, IOVT_UINT32, 0},
+	{NULL, 0, 0, 0, 0, 0}
+};
+#else
 #define wlc_iem_iovars NULL
+#endif
 
 /*
  * Debug
@@ -554,8 +593,16 @@ enum {
  * Local function declarations
  */
 /* module entries */
+#if defined(BCMDBG)
+static int wlc_iem_doiovar(void *ctx, uint32 aid,
+	void *p, uint plen, void *a, uint alen, uint vs, struct wlc_if *wlcif);
+#else
 #define wlc_iem_doiovar NULL
+#endif
 static int wlc_iem_init(void *ctx);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_iem_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* Vendor Specific IE proxy */
 static uint wlc_iem_vs_calc_len_cb(void *ctx, wlc_iem_calc_data_t *data);
@@ -573,44 +620,49 @@ BCMATTACHFN(wlc_iem_attach)(wlc_info_t *wlc)
 	uint fst;
 	int cid;
 
+	/* sanity check */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	STATIC_ASSERT(ARRAYSIZE(ie_tags_tbl) == ARRAYSIZE(ie_tags_names));
+#endif
+
 	/* module private data length (fixed struct + variable strcuts) */
 	len = (uint16)sizeof(wlc_iem_info_t);	/* fixed */
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* build tag */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* build tag */
 	IEM_ATTACH(("build_tag: %u\n", len));
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_ie_build_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_ie_build_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* build cb */
 	IEM_ATTACH(("build_cb: %u\n", len));
 	len += (uint16)(sizeof(wlc_iem_cbe_t) * wlc->pub->tunables->max_ie_build_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* build ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* build ft */
 	IEM_ATTACH(("build_ft: %u\n", len));
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* vs build prio */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* vs build prio */
 	IEM_ATTACH(("vs_build_prio: %u\n", len));
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_vs_ie_build_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_vs_ie_build_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* vs_build cb */
 	IEM_ATTACH(("vs_build_cb: %u\n", len));
 	len += (uint16)(sizeof(wlc_iem_cbe_t) * wlc->pub->tunables->max_vs_ie_build_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* vs build ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* vs build ft */
 	IEM_ATTACH(("vs_build_ft: %u\n", len));
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* parse tag */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* parse tag */
 	IEM_ATTACH(("parse_tag: %u\n", len));
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_ie_parse_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_ie_parse_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* parse cb */
 	IEM_ATTACH(("parse_cb: %u\n", len));
 	len += (uint16)(sizeof(wlc_iem_pe_t) * wlc->pub->tunables->max_ie_parse_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* parse ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* parse ft */
 	IEM_ATTACH(("parse_ft: %u\n", len));
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* vs parse tag */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* vs parse tag */
 	IEM_ATTACH(("vs_parse_id: %u\n", len));
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_vs_ie_parse_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_vs_ie_parse_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* vs parse cb */
 	IEM_ATTACH(("vs_parse_cb: %u\n", len));
 	len += (uint16)(sizeof(wlc_iem_pe_t) * wlc->pub->tunables->max_vs_ie_parse_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* vs parse ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* vs parse ft */
 	IEM_ATTACH(("vs_parse_ft: %u\n", len));
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
 
 	/* allocate module private data */
 	if ((iem = MALLOCZ(wlc->osh, len)) == NULL) {
@@ -623,65 +675,65 @@ BCMATTACHFN(wlc_iem_attach)(wlc_info_t *wlc)
 
 	/* suballocate variable size arrays */
 	len = (uint16)sizeof(wlc_iem_info_t);	/* fixed */
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* build tag */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* build tag */
 	IEM_ATTACH(("build_tag: %u\n", len));
 	iem->build_tag_offset = len;
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_ie_build_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_ie_build_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* build cb */
 	IEM_ATTACH(("build_cb: %u\n", len));
 	iem->build_cb_offset = len;
 	len += (uint16)(sizeof(wlc_iem_cbe_t) * wlc->pub->tunables->max_ie_build_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* build ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* build ft */
 	IEM_ATTACH(("build_ft: %u\n", len));
 	iem->build_ft_offset = len;
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* vs build prio */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* vs build prio */
 	IEM_ATTACH(("vs_build_prio: %u\n", len));
 	iem->vs_build_prio_offset = len;
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_vs_ie_build_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_vs_ie_build_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* vs build cb */
 	IEM_ATTACH(("vs_build_cb: %u\n", len));
 	iem->vs_build_cb_offset = len;
 	len += (uint16)(sizeof(wlc_iem_cbe_t) * wlc->pub->tunables->max_vs_ie_build_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* vs build ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* vs build ft */
 	IEM_ATTACH(("vs_build_ft: %u\n", len));
 	iem->vs_build_ft_offset = len;
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* parse tag */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* parse tag */
 	IEM_ATTACH(("parse_tag: %u\n", len));
 	iem->parse_tag_offset = len;
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_ie_parse_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_ie_parse_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* parse cb */
 	IEM_ATTACH(("parse_cb: %u\n", len));
 	iem->parse_cb_offset = len;
 	len += (uint16)(sizeof(wlc_iem_pe_t) * wlc->pub->tunables->max_ie_parse_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* parse ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* parse ft */
 	IEM_ATTACH(("parse_ft: %u\n", len));
 	iem->parse_ft_offset = len;
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint8));	/* vs parse tag */
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_tag_t));	/* vs parse tag */
 	IEM_ATTACH(("vs_parse_id: %u\n", len));
 	iem->vs_parse_id_offset = len;
-	len += (uint16)(sizeof(uint8) * wlc->pub->tunables->max_vs_ie_parse_cbs);
+	len += (uint16)(sizeof(wlc_iem_tag_t) * wlc->pub->tunables->max_vs_ie_parse_cbs);
 	len = (uint16)ALIGN_SIZE(len, sizeof(void *));	/* vs parse cb */
 	IEM_ATTACH(("vs_parse_cb: %u\n", len));
 	iem->vs_parse_cb_offset = len;
 	len += (uint16)(sizeof(wlc_iem_pe_t) * wlc->pub->tunables->max_vs_ie_parse_cbs);
-	len = (uint16)ALIGN_SIZE(len, sizeof(uint16));	/* vs parse ft */
+	len = (uint16)ALIGN_SIZE(len, sizeof(wlc_iem_ft_t));	/* vs parse ft */
 	IEM_ATTACH(("vs_parse_ft: %u\n", len));
 	iem->vs_parse_ft_offset = len;
-	len += (uint16)(sizeof(uint16) * (IEM_NUM_FT + 1));
+	len += (uint16)(sizeof(wlc_iem_ft_t) * (IEM_NUM_FT + 1));
 
 	/* sanity check */
 	ASSERT(len == iem->iem_info_len);
 
 	/* register Vendor Specific IE calc_len/build proxy */
 	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
-		if (ie_tags[fst].tags == NULL)
+		if (ie_tags_tbl[fst].tags == NULL)
 			continue;
 		if ((cid = wlc_iem_add_build_fn(iem, FST2FT(fst), DOT11_MNG_VS_ID,
 		            wlc_iem_vs_calc_len_cb, wlc_iem_vs_build_cb, iem)) < 0) {
-			WL_ERROR(("wl%d: %s: wlc_iem_add_build_fn failed, fst %d err %d\n",
+			WL_ERROR(("wl%d: %s: wlc_iem_add_build_fn for vs failed, fst %d err %d\n",
 			          wlc->pub->unit, __FUNCTION__, fst, cid));
 			goto fail;
 		}
@@ -689,11 +741,9 @@ BCMATTACHFN(wlc_iem_attach)(wlc_info_t *wlc)
 
 	/* register Vendor Specific IE parse proxy */
 	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
-		if (ie_tags[fst].tags == NULL)
-			continue;
 		if ((cid = wlc_iem_add_parse_fn(iem, FST2FT(fst), DOT11_MNG_VS_ID,
 		            wlc_iem_vs_parse_cb, iem)) < 0) {
-			WL_ERROR(("wl%d: %s: wlc_iem_add_parse_fn failed, fst %d err %d\n",
+			WL_ERROR(("wl%d: %s: wlc_iem_add_parse_fn for vs failed, fst %d err %d\n",
 			          wlc->pub->unit, __FUNCTION__, fst, cid));
 			goto fail;
 		}
@@ -718,6 +768,11 @@ BCMATTACHFN(wlc_iem_attach)(wlc_info_t *wlc)
 		goto fail;
 	};
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* register dump routine */
+	wlc_dump_register(wlc->pub, "iem", wlc_iem_dump, (void *)iem);
+	wlc_dump_register(wlc->pub, "iem_vs", wlc_iem_vs_dump, (void *)iem);
+#endif
 
 	return iem;
 
@@ -743,15 +798,64 @@ BCMATTACHFN(wlc_iem_detach)(wlc_iem_info_t *iem)
 	MFREE(wlc->osh, iem, len);
 }
 
+#if defined(BCMDBG)
+static int
+wlc_iem_doiovar(void *ctx, uint32 aid,
+	void *p, uint plen, void *a, uint alen, uint vs, struct wlc_if *wlcif)
+{
+	wlc_iem_info_t *iem = (wlc_iem_info_t *)ctx;
+	wlc_info_t *wlc = iem->wlc;
+	int32 int_val = 0;
+	int err = BCME_OK;
+	wlc_bsscfg_t *cfg;
+
+	BCM_REFERENCE(a);
+	BCM_REFERENCE(alen);
+	BCM_REFERENCE(vs);
+
+	if (plen >= (int)sizeof(int_val))
+		bcopy(p, &int_val, sizeof(int_val));
+
+	cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+	ASSERT(cfg != NULL);
+
+	switch (aid) {
+	case IOV_SVAL(IOV_IEM_DBG):
+		iem_msg_level = (uint)int_val;
+		break;
+#ifdef IEM_TEST
+	case IOV_SVAL(IOV_IEM_TEST): {
+		uint saved_msglevel = iem_msg_level;
+		iem_msg_level = -1;
+		switch (int_val) {
+		case 0:
+			err = wlc_iem_test_build_frame(wlc, cfg);
+			break;
+		case 1:
+			err = wlc_iem_test_parse_frame(wlc, cfg);
+			break;
+		}
+		iem_msg_level = saved_msglevel;
+		break;
+	}
+#endif /* IEM_TEST */
+	default:
+		err = BCME_UNSUPPORTED;
+		break;
+	}
+
+	return err;
+}
+#endif /* BCMDBG */
 
 /* Sort all calc_len/build callback table entries */
 static int
 BCMINITFN(wlc_iem_sort_cbtbl)(wlc_iem_info_t *iem)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(iem);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(iem);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(iem);
-	uint16 *build_ft = BUILD_FT_TBL(iem);
-	uint16 fst;
+	wlc_iem_ft_t *build_ft = BUILD_FT_TBL(iem);
+	wlc_iem_ft_t fst;
 
 	/* Note: on dongle, wlc_iem_sort_cbtbl and some tables
 	 * may not be available after wl init sequence...
@@ -766,9 +870,12 @@ BCMINITFN(wlc_iem_sort_cbtbl)(wlc_iem_info_t *iem)
 	/* sort for all frame types */
 	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
 		uint16 cur, next;
-		uint16 ft;
-		uint8 *build_tag1;
+		wlc_iem_ft_t ft;
+		wlc_iem_tag_t *build_tag1;
 		wlc_iem_cbe_t *build_cb1;
+
+		if (ie_tags_tbl[fst].tags == NULL)
+			continue;
 
 		ft = FST2FT(fst);
 		TBL_POS_GET(build_ft, ft, cur, next);
@@ -786,7 +893,7 @@ BCMINITFN(wlc_iem_sort_cbtbl)(wlc_iem_info_t *iem)
 
 		/* sort based on the ie_tags table */
 		wlc_ieml_sort_cbtbl(build_tag1, build_cb1, next - cur,
-		                    ie_tags[fst].tags, ie_tags[fst].cnt);
+			ie_tags_tbl[fst].tags, ie_tags_tbl[fst].cnt);
 	}
 
 	return BCME_OK;
@@ -812,30 +919,173 @@ BCMINITFN(wlc_iem_init)(void *ctx)
 	return BCME_OK;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_iem_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_iem_info_t *iem = (wlc_iem_info_t *)ctx;
+	wlc_info_t *wlc = iem->wlc;
+	uint16 cur, next;
+	wlc_iem_ft_t fst, ft;
+	uint16 i;
 
-/* 'calc_len//build' callback pair registration - for non Vendor Specific IE
+	/* table offsets */
+	bcm_bprintf(b, "build_tag_offset %u build_cb_offset %u build_ft_offset %u\n",
+	            iem->build_tag_offset, iem->build_cb_offset, iem->build_ft_offset);
+	bcm_bprintf(b, "vs_build_prio_offset %u vs_build_cb_offset %u vs_build_ft_offset %u\n",
+	            iem->vs_build_prio_offset, iem->vs_build_cb_offset, iem->vs_build_ft_offset);
+	bcm_bprintf(b, "parse_tag_offset %u parse_cb_offset %u parse_ft_offset %u\n",
+	            iem->parse_tag_offset, iem->parse_cb_offset, iem->parse_ft_offset);
+	bcm_bprintf(b, "vs_parse_id_offset %u vs_parse_cb_offset %u vs_parse_ft_offset %u\n",
+	            iem->vs_parse_id_offset, iem->vs_parse_cb_offset, iem->vs_parse_ft_offset);
+
+	/* states */
+	bcm_bprintf(b, "init: %u\n", iem->init);
+
+	/* tables */
+	bcm_bprintf(b, "tags tables: %u\n", IEM_NUM_FT);
+	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
+		uint16 ti;
+
+		if (ie_tags_tbl[fst].tags == NULL)
+			continue;
+
+		ft = FST2FT(fst);
+
+		bcm_bprintf(b, "  frame type: 0x%04x(%s), total tags: %u\n",
+		            ft, ie_tags_names[fst], ie_tags_tbl[fst].cnt);
+
+		for (ti = 0; ti < ie_tags_tbl[fst].cnt; ti ++) {
+			bcm_bprintf(b, "    idx %u: tag %u\n", ti, ie_tags_tbl[fst].tags[ti]);
+		}
+	}
+	bcm_bprintf(b, "build callbacks: %u of %u\n",
+	            iem->build_cbs, wlc->pub->tunables->max_ie_build_cbs);
+	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
+		wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(iem);
+		wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(iem);
+		wlc_iem_ft_t *build_ft = BUILD_FT_TBL(iem);
+
+		if (ie_tags_tbl[fst].tags == NULL)
+			continue;
+
+		ft = FST2FT(fst);
+		TBL_POS_GET(build_ft, ft, cur, next);
+
+		bcm_bprintf(b, "  frame type: 0x%04x(%s), total callbacks %u\n",
+		            ft, ie_tags_names[fst], next - cur);
+
+		for (i = cur; i < next; i ++) {
+			bcm_bprintf(b, "    idx %u(%u): tag %u, calc %p, build %p, ctx %p\n",
+			            i - cur, i, build_tag[i],
+			            OSL_OBFUSCATE_BUF(build_cb[i].calc),
+					OSL_OBFUSCATE_BUF(build_cb[i].build),
+					OSL_OBFUSCATE_BUF(build_cb[i].ctx));
+		}
+	}
+	bcm_bprintf(b, "vs build callbacks: %u of %u\n",
+	            iem->vs_build_cbs, wlc->pub->tunables->max_vs_ie_build_cbs);
+	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
+		wlc_iem_tag_t *build_prio = VS_BUILD_PRIO_TBL(iem);
+		wlc_iem_cbe_t *build_cb = VS_BUILD_CB_TBL(iem);
+		wlc_iem_ft_t *build_ft = VS_BUILD_FT_TBL(iem);
+
+		if (ie_tags_tbl[fst].tags == NULL)
+			continue;
+
+		ft = FST2FT(fst);
+		TBL_POS_GET(build_ft, ft, cur, next);
+
+		bcm_bprintf(b, "  frame type: 0x%04x(%s), total callbacks %u\n",
+		            ft, ie_tags_names[fst], next - cur);
+
+		for (i = cur; i < next; i ++) {
+			bcm_bprintf(b, "    idx %u(%u): prio %u, calc %p, build %p, ctx %p\n",
+			            i - cur, i, build_prio[i],
+			            OSL_OBFUSCATE_BUF(build_cb[i].calc),
+					OSL_OBFUSCATE_BUF(build_cb[i].build),
+					OSL_OBFUSCATE_BUF(build_cb[i].ctx));
+		}
+	}
+	bcm_bprintf(b, "parse callbacks: %u of %u\n",
+	            iem->parse_cbs, wlc->pub->tunables->max_ie_parse_cbs);
+	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
+		wlc_iem_tag_t *parse_tag = PARSE_TAG_TBL(iem);
+		wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(iem);
+		wlc_iem_ft_t *parse_ft = PARSE_FT_TBL(iem);
+
+		if (ie_tags_tbl[fst].tags == NULL)
+			continue;
+
+		ft = FST2FT(fst);
+		TBL_POS_GET(parse_ft, ft, cur, next);
+
+		bcm_bprintf(b, "  frame type: 0x%04x(%s), total callbacks %u\n",
+		            ft, ie_tags_names[fst], next - cur);
+
+		for (i = cur; i < next; i ++) {
+			bcm_bprintf(b, "    idx %u(%u): tag %u, parse %p, ctx %p\n",
+			            i - cur, i, parse_tag[i],
+			            OSL_OBFUSCATE_BUF(parse_cb[i].parse),
+					OSL_OBFUSCATE_BUF(parse_cb[i].ctx));
+		}
+	}
+	bcm_bprintf(b, "vs parse callbacks: %u of %u\n",
+	            iem->vs_parse_cbs, wlc->pub->tunables->max_vs_ie_parse_cbs);
+	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
+		wlc_iem_tag_t *parse_id = VS_PARSE_ID_TBL(iem);
+		wlc_iem_pe_t *parse_cb = VS_PARSE_CB_TBL(iem);
+		wlc_iem_ft_t *parse_ft = VS_PARSE_FT_TBL(iem);
+
+		if (ie_tags_tbl[fst].tags == NULL)
+			continue;
+
+		ft = FST2FT(fst);
+		TBL_POS_GET(parse_ft, ft, cur, next);
+
+		bcm_bprintf(b, "  frame type: 0x%04x(%s), total callbacks %u\n",
+		            ft, ie_tags_names[fst], next - cur);
+
+		for (i = cur; i < next; i ++) {
+			bcm_bprintf(b, "    idx %u(%u): tag %u, parse %p, ctx %p\n",
+			            i - cur, i, parse_id[i],
+			            OSL_OBFUSCATE_BUF(parse_cb[i].parse),
+					OSL_OBFUSCATE_BUF(parse_cb[i].ctx));
+		}
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
+
+/* 'calc_len/build' callback pair registration - for non Vendor Specific IE
  * with tag 'tag'
  */
 int
-BCMATTACHFN(wlc_iem_add_build_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
+BCMATTACHFN(wlc_iem_add_build_fn)(wlc_iem_info_t *iem, wlc_iem_ft_t ft, wlc_iem_tag_t tag,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
 {
 	wlc_info_t *wlc = iem->wlc;
-	uint8 *build_tag = BUILD_TAG_TBL(iem);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(iem);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(iem);
-	uint16 *build_ft = BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = BUILD_FT_TBL(iem);
 	uint16 cur, next;
-	uint16 fst;
+	wlc_iem_ft_t fst;
 	uint i;
-
-	fst = FT2FST(ft);
-	ASSERT(fst < IEM_NUM_FT);
 
 	if (iem->build_cbs >= wlc->pub->tunables->max_ie_build_cbs) {
 		WL_ERROR(("wl%d: %s: too many entries\n", wlc->pub->unit, __FUNCTION__));
 		return BCME_NORESOURCE;
 	}
 
+	if (tag >= WLC_IEM_ID_MAX) {
+		WL_ERROR(("wl%d: %s: tag %d is too big, not supported\n",
+		          WLCUNIT(iem), __FUNCTION__, tag));
+		return BCME_UNSUPPORTED;
+	}
+
+	fst = FT2FST(ft);
+	ASSERT(fst < IEM_NUM_FT);
 
 	ASSERT(calc_fn != NULL);
 	ASSERT(build_fn != NULL);
@@ -846,12 +1096,12 @@ BCMATTACHFN(wlc_iem_add_build_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
 		OSL_OBFUSCATE_BUF(ctx)));
 
 	/* make sure we know about the tag */
-	for (i = 0; i < ie_tags[fst].cnt; i ++) {
-		if (ie_tags[fst].tags[i] == tag)
+	for (i = 0; i < ie_tags_tbl[fst].cnt; i ++) {
+		if (ie_tags_tbl[fst].tags[i] == tag)
 			break;
 	}
-	if (i == ie_tags[fst].cnt) {
-		WL_ERROR(("wl%d: %s: tag %u not found\n", wlc->pub->unit, __FUNCTION__, tag));
+	if (i == ie_tags_tbl[fst].cnt) {
+		WL_ERROR(("wl%d: %s: tag %u not found\n", WLCUNIT(iem), __FUNCTION__, tag));
 		return BCME_NOTFOUND;
 	}
 
@@ -879,14 +1129,14 @@ BCMATTACHFN(wlc_iem_add_build_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
 	return BCME_OK;
 }
 
-/* 'calc_len//build' callback pair registration - for non Vendor Specific IE
+/* 'calc_len/build' callback pair registration - for non Vendor Specific IE
  * with tag 'tag' and for multiple frame types.
  */
 int
-BCMATTACHFN(wlc_iem_add_build_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uint8 tag,
-	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
+BCMATTACHFN(wlc_iem_add_build_fn_mft)(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp,
+	wlc_iem_tag_t tag, wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
 {
-	uint16 fst;
+	wlc_iem_ft_t fst;
 	int err = BCME_OK;
 
 	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
@@ -902,18 +1152,24 @@ BCMATTACHFN(wlc_iem_add_build_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uint8 
 
 /* 'calc_len/build' callback registration for Vendor Specific IE with priority 'prio' */
 int
-BCMATTACHFN(wlc_iem_vs_add_build_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 prio,
+BCMATTACHFN(wlc_iem_vs_add_build_fn)(wlc_iem_info_t *iem, wlc_iem_ft_t ft, wlc_iem_tag_t prio,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
 {
 	wlc_info_t *wlc = iem->wlc;
-	uint8 *build_prio = VS_BUILD_PRIO_TBL(iem);
+	wlc_iem_tag_t *build_prio = VS_BUILD_PRIO_TBL(iem);
 	wlc_iem_cbe_t *build_cb = VS_BUILD_CB_TBL(iem);
-	uint16 *build_ft = VS_BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = VS_BUILD_FT_TBL(iem);
 	uint16 cur, next;
 
 	if (iem->vs_build_cbs >= wlc->pub->tunables->max_vs_ie_build_cbs) {
 		WL_ERROR(("wl%d: %s: too many entries\n", wlc->pub->unit, __FUNCTION__));
 		return BCME_NORESOURCE;
+	}
+
+	if (prio >= WLC_IEM_VS_ID_MAX) {
+		WL_ERROR(("wl%d: %s: tag %d is too big, not supported\n",
+		          WLCUNIT(iem), __FUNCTION__, prio));
+		return BCME_UNSUPPORTED;
 	}
 
 
@@ -948,14 +1204,14 @@ BCMATTACHFN(wlc_iem_vs_add_build_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 prio,
 	return BCME_OK;
 }
 
-/* 'calc_len//build' callback pair registration - for non Vendor Specific IE
- * with tag 'tag' and for multiple frame types.
+/* 'calc_len/build' callback pair registration - for Vendor Specific IE
+ * with priority 'prio' and for multiple frame types.
  */
 int
-BCMATTACHFN(wlc_iem_vs_add_build_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uint8 prio,
-	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
+BCMATTACHFN(wlc_iem_vs_add_build_fn_mft)(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp,
+	wlc_iem_tag_t prio, wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx)
 {
-	uint16 fst;
+	wlc_iem_ft_t fst;
 	int err = BCME_OK;
 
 	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
@@ -971,13 +1227,13 @@ BCMATTACHFN(wlc_iem_vs_add_build_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uin
 
 /* 'parse' callback registration for non Vendor Specific IE with tag 'tag' */
 int
-BCMATTACHFN(wlc_iem_add_parse_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
+BCMATTACHFN(wlc_iem_add_parse_fn)(wlc_iem_info_t *iem, wlc_iem_ft_t ft, wlc_iem_tag_t tag,
 	wlc_iem_parse_fn_t parse_fn, void *ctx)
 {
 	wlc_info_t *wlc = iem->wlc;
-	uint8 *parse_tag = PARSE_TAG_TBL(iem);
+	wlc_iem_tag_t *parse_tag = PARSE_TAG_TBL(iem);
 	wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(iem);
-	uint16 *parse_ft = PARSE_FT_TBL(iem);
+	wlc_iem_ft_t *parse_ft = PARSE_FT_TBL(iem);
 	uint16 cur, next;
 
 	if (iem->parse_cbs >= wlc->pub->tunables->max_ie_parse_cbs) {
@@ -985,6 +1241,11 @@ BCMATTACHFN(wlc_iem_add_parse_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
 		return BCME_NORESOURCE;
 	}
 
+	if (tag >= WLC_IEM_ID_MAX) {
+		WL_ERROR(("wl%d: %s: tag %d is too big, not supported\n",
+		          WLCUNIT(iem), __FUNCTION__, tag));
+		return BCME_UNSUPPORTED;
+	}
 
 	ASSERT(parse_fn != NULL);
 
@@ -1020,10 +1281,10 @@ BCMATTACHFN(wlc_iem_add_parse_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 tag,
  * for multiple frame types
  */
 int
-BCMATTACHFN(wlc_iem_add_parse_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uint8 tag,
-	wlc_iem_parse_fn_t parse_fn, void *ctx)
+BCMATTACHFN(wlc_iem_add_parse_fn_mft)(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp,
+	wlc_iem_tag_t tag, wlc_iem_parse_fn_t parse_fn, void *ctx)
 {
-	uint16 fst;
+	wlc_iem_ft_t fst;
 	int err = BCME_OK;
 
 	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
@@ -1039,13 +1300,13 @@ BCMATTACHFN(wlc_iem_add_parse_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uint8 
 
 /* 'parse' callback registration for Vendor Specific IE with ID 'id' */
 int
-BCMATTACHFN(wlc_iem_vs_add_parse_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 id,
-	wlc_iem_parse_fn_t parse_fn, void *ctx)
+BCMATTACHFN(wlc_iem_vs_add_parse_fn)(wlc_iem_info_t *iem, wlc_iem_ft_t ft,
+	wlc_iem_tag_t id, wlc_iem_parse_fn_t parse_fn, void *ctx)
 {
 	wlc_info_t *wlc = iem->wlc;
-	uint8 *parse_id = VS_PARSE_ID_TBL(iem);
+	wlc_iem_tag_t *parse_id = VS_PARSE_ID_TBL(iem);
 	wlc_iem_pe_t *parse_cb = VS_PARSE_CB_TBL(iem);
-	uint16 *parse_ft = VS_PARSE_FT_TBL(iem);
+	wlc_iem_ft_t *parse_ft = VS_PARSE_FT_TBL(iem);
 	uint16 cur, next;
 
 	if (iem->vs_parse_cbs >= wlc->pub->tunables->max_vs_ie_parse_cbs) {
@@ -1053,6 +1314,11 @@ BCMATTACHFN(wlc_iem_vs_add_parse_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 id,
 		return BCME_NORESOURCE;
 	}
 
+	if (id >= WLC_IEM_VS_ID_MAX) {
+		WL_ERROR(("wl%d: %s: tag %d is too big, not supported\n",
+		          WLCUNIT(iem), __FUNCTION__, id));
+		return BCME_UNSUPPORTED;
+	}
 
 	ASSERT(parse_fn != NULL);
 
@@ -1088,10 +1354,10 @@ BCMATTACHFN(wlc_iem_vs_add_parse_fn)(wlc_iem_info_t *iem, uint16 ft, uint8 id,
  * for multiple frame types.
  */
 int
-BCMATTACHFN(wlc_iem_vs_add_parse_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uint8 id,
-	wlc_iem_parse_fn_t parse_fn, void *ctx)
+BCMATTACHFN(wlc_iem_vs_add_parse_fn_mft)(wlc_iem_info_t *iem, wlc_iem_mft_t fstbmp,
+	wlc_iem_tag_t id, wlc_iem_parse_fn_t parse_fn, void *ctx)
 {
-	uint16 fst;
+	wlc_iem_ft_t fst;
 	int err = BCME_OK;
 
 	for (fst = 0; fst < IEM_NUM_FT; fst ++) {
@@ -1107,12 +1373,12 @@ BCMATTACHFN(wlc_iem_vs_add_parse_fn_mft)(wlc_iem_info_t *iem, uint16 fstbmp, uin
 
 /* Calculate IEs' length in a frame */
 uint
-wlc_iem_calc_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
+wlc_iem_calc_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(iem);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(iem);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(iem);
-	uint16 *build_ft = BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = BUILD_FT_TBL(iem);
 	uint16 cur, next;
 	uint len;
 
@@ -1154,12 +1420,12 @@ wlc_iem_calc_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
  * A negative return value indicates an error (BCME_XXXX).
  */
 uint
-wlc_iem_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
+wlc_iem_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(iem);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(iem);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(iem);
-	uint16 *build_ft = BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = BUILD_FT_TBL(iem);
 	uint16 cur, next;
 
 	ASSERT(build_ft != NULL);
@@ -1192,12 +1458,12 @@ wlc_iem_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
  * A negative return value indicates an error (BCME_XXXX).
  */
 uint
-wlc_iem_vs_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
+wlc_iem_vs_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm)
 {
-	uint8 *build_prio = VS_BUILD_PRIO_TBL(iem);
+	wlc_iem_tag_t *build_prio = VS_BUILD_PRIO_TBL(iem);
 	wlc_iem_cbe_t *build_cb = VS_BUILD_CB_TBL(iem);
-	uint16 *build_ft = VS_BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = VS_BUILD_FT_TBL(iem);
 	uint16 cur, next;
 
 	ASSERT(build_ft != NULL);
@@ -1218,12 +1484,12 @@ wlc_iem_vs_calc_ie_len(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
 
 /* Write IEs in a frame */
 int
-wlc_iem_build_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
+wlc_iem_build_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(iem);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(iem);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(iem);
-	uint16 *build_ft = BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = BUILD_FT_TBL(iem);
 	uint16 cur, next;
 	int err;
 
@@ -1267,12 +1533,13 @@ wlc_iem_build_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
  * A negative return value indicates an error (BCME_XXXX).
  */
 int
-wlc_iem_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len)
+wlc_iem_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t tag, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
+	uint8 *buf, uint buf_len)
 {
-	uint8 *build_tag = BUILD_TAG_TBL(iem);
+	wlc_iem_tag_t *build_tag = BUILD_TAG_TBL(iem);
 	wlc_iem_cbe_t *build_cb = BUILD_CB_TBL(iem);
-	uint16 *build_ft = BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = BUILD_FT_TBL(iem);
 	uint16 cur, next;
 
 	ASSERT(build_ft != NULL);
@@ -1307,12 +1574,13 @@ wlc_iem_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
  * A negative return value indicates an error (BCME_XXXX).
  */
 int
-wlc_iem_vs_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
-	uint8 prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len)
+wlc_iem_vs_build_ie(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
+	wlc_iem_tag_t prio, wlc_iem_uiel_t *uiel, wlc_iem_cbparm_t *cbparm,
+	uint8 *buf, uint buf_len)
 {
-	uint8 *build_prio = VS_BUILD_PRIO_TBL(iem);
+	wlc_iem_tag_t *build_prio = VS_BUILD_PRIO_TBL(iem);
 	wlc_iem_cbe_t *build_cb = VS_BUILD_CB_TBL(iem);
-	uint16 *build_ft = VS_BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = VS_BUILD_FT_TBL(iem);
 	uint16 cur, next;
 
 	ASSERT(build_ft != NULL);
@@ -1336,9 +1604,9 @@ static uint
 wlc_iem_vs_calc_len_cb(void *ctx, wlc_iem_calc_data_t *data)
 {
 	wlc_iem_info_t *iem = (wlc_iem_info_t *)ctx;
-	uint8 *build_prio = VS_BUILD_PRIO_TBL(iem);
+	wlc_iem_tag_t *build_prio = VS_BUILD_PRIO_TBL(iem);
 	wlc_iem_cbe_t *build_cb = VS_BUILD_CB_TBL(iem);
-	uint16 *build_ft = VS_BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = VS_BUILD_FT_TBL(iem);
 	uint16 cur, next;
 
 	TBL_POS_GET(build_ft, data->ft, cur, next);
@@ -1358,9 +1626,9 @@ static int
 wlc_iem_vs_build_cb(void *ctx, wlc_iem_build_data_t *data)
 {
 	wlc_iem_info_t *iem = (wlc_iem_info_t *)ctx;
-	uint8 *build_prio = VS_BUILD_PRIO_TBL(iem);
+	wlc_iem_tag_t *build_prio = VS_BUILD_PRIO_TBL(iem);
 	wlc_iem_cbe_t *build_cb = VS_BUILD_CB_TBL(iem);
-	uint16 *build_ft = VS_BUILD_FT_TBL(iem);
+	wlc_iem_ft_t *build_ft = VS_BUILD_FT_TBL(iem);
 	uint16 cur, next;
 
 	TBL_POS_GET(build_ft, data->ft, cur, next);
@@ -1377,12 +1645,12 @@ wlc_iem_vs_build_cb(void *ctx, wlc_iem_build_data_t *data)
 
 /* Traverse IEs in 'buf' and invoke callbacks registered for these IEs */
 int
-wlc_iem_parse_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, uint16 ft,
+wlc_iem_parse_frame(wlc_iem_info_t *iem, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_upp_t *upp, wlc_iem_pparm_t *pparm, uint8 *buf, uint buf_len)
 {
-	uint8 *parse_tag = PARSE_TAG_TBL(iem);
+	wlc_iem_tag_t *parse_tag = PARSE_TAG_TBL(iem);
 	wlc_iem_pe_t *parse_cb = PARSE_CB_TBL(iem);
-	uint16 *parse_ft = PARSE_FT_TBL(iem);
+	wlc_iem_ft_t *parse_ft = PARSE_FT_TBL(iem);
 	uint16 cur, next;
 	int err;
 
@@ -1415,9 +1683,9 @@ static int
 wlc_iem_vs_parse_cb(void *ctx, wlc_iem_parse_data_t *data)
 {
 	wlc_iem_info_t *iem = (wlc_iem_info_t *)ctx;
-	uint8 *parse_id = VS_PARSE_ID_TBL(iem);
+	wlc_iem_tag_t *parse_id = VS_PARSE_ID_TBL(iem);
 	wlc_iem_pe_t *parse_cb = VS_PARSE_CB_TBL(iem);
-	uint16 *parse_ft = VS_PARSE_FT_TBL(iem);
+	wlc_iem_ft_t *parse_ft = VS_PARSE_FT_TBL(iem);
 	uint16 cur, next;
 	uint8 *buf;
 	uint buf_len;

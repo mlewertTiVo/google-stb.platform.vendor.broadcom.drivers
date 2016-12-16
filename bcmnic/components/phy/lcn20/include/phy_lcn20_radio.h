@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_radio.h 616484 2016-02-01 17:32:27Z guangjie $
+ * $Id: phy_lcn20_radio.h 616484 2016-02-01 17:32:27Z $
  */
 
 #ifndef _phy_lcn20_radio_h_

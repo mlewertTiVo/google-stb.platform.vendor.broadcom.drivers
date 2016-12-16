@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_radar.h 603346 2015-12-01 23:05:11Z chihap $
+ * $Id: phy_type_radar.h 657811 2016-09-02 17:48:43Z $
  */
 
 #ifndef _phy_type_radar_h_
@@ -35,14 +35,18 @@ typedef int (*phy_type_radar_init_fn_t)(phy_type_radar_ctx_t *ctx, bool on);
 typedef void (*phy_type_radar_update_fn_t)(phy_type_radar_ctx_t *ctx);
 typedef void (*phy_type_radar_mode_fn_t)(phy_type_radar_ctx_t *ctx, phy_radar_detect_mode_t mode);
 typedef uint8 (*phy_type_radar_run_fn_t)(phy_type_radar_ctx_t *ctx,
-                                         radar_detected_info_t *radar_detected);
+	radar_detected_info_t *radar_detected, bool sec_pll, bool bw80_80_mode);
 typedef int (*phy_type_radar_dump_fn_t)(phy_type_radar_ctx_t *ctx, struct bcmstrbuf *b);
+typedef int (*phy_type_radar_set_thresholds_fn_t)(phy_type_radar_ctx_t *ctx,
+	wl_radar_thr_t *thresholds);
+
 typedef struct {
 	phy_type_radar_init_fn_t init;
 	phy_type_radar_update_fn_t update;
 	phy_type_radar_mode_fn_t mode;
 	phy_type_radar_run_fn_t run;
 	phy_type_radar_ctx_t *ctx;
+	phy_type_radar_set_thresholds_fn_t set_thresholds;
 } phy_type_radar_fns_t;
 
 /*

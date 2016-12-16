@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_vcocal.c 603319 2015-12-01 21:41:40Z vyass $
+ * $Id: phy_vcocal.c 656120 2016-08-25 08:17:57Z $
  */
 
 #include <phy_cfg.h>
@@ -124,7 +124,7 @@ BCMATTACHFN(phy_vcocal_unregister_impl)(phy_vcocal_info_t *cmn_info)
 	cmn_info->fns = NULL;
 }
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
+#if defined(RADIO_HEALTH_CHECK)
 void
 phy_vcocal_force(phy_info_t *pi)
 {
@@ -141,4 +141,12 @@ phy_vcocal_force(phy_info_t *pi)
 		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
 	}
 }
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+#endif 
+int phy_vcocal_status(phy_vcocal_info_t *vcocali)
+{
+	phy_type_vcocal_fns_t *fns = vcocali->fns;
+	if (fns->status)
+		return (fns->status)(fns->ctx);
+	else
+		return RADIO2069X_VCOCAL_IS_DONE;
+}

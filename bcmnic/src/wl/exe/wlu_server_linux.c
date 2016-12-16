@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_server_linux.c 537973 2015-02-28 19:09:14Z $
+ * $Id: wlu_server_linux.c 659779 2016-09-15 23:33:28Z $
  */
 
 /* Revision History:Linux port of Remote wl server
@@ -232,6 +232,15 @@ wl_find_adapter(struct ifreq *ifr)
 			continue;
 		strncpy(ifr->ifr_name, name, IFNAMSIZ-1);
 		ifr->ifr_name[IFNAMSIZ-1] = 0;
+
+		/*
+		 * If no -i interface, prioritize ethX, not say wl1.2
+		 * wlanX is Android
+		 */
+		if (!strncmp(name, "wl", 2) && strncmp(name, "wlan", 4)) {
+			continue;
+		}
+
 		if (wl_get_dev_type(name, dev_type, DEV_TYPE_LEN) >= 0 &&
 			!strncmp(dev_type, "wl", 2))
 		if (wl_check((void *) ifr) == 0)

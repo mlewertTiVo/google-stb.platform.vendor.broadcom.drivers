@@ -8,7 +8,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: acs.c 626202 2016-03-19 16:57:55Z $
+ * $Id: acs.c 657900 2016-09-03 00:32:36Z $
  */
 
 #include <stdio.h>
@@ -4970,7 +4970,7 @@ acs_get_video_sta_traffic_info(acs_chaninfo_t * c_info, acs_traffic_info_t *t_in
 {
 	acs_fcs_t *fcs_info = &c_info->acs_fcs;
 	char stabuf[ACS_MAX_STA_INFO_BUF];
-	sta_info_t *sta;
+	sta_info_v5_t *sta;
 	int i, ret = BCME_OK;
 	int index = fcs_info->video_sta_idx;
 
@@ -4988,7 +4988,7 @@ acs_get_video_sta_traffic_info(acs_chaninfo_t * c_info, acs_traffic_info_t *t_in
 			ACSD_ERROR("sta_info for %s failed\n", fcs_info->vid_sta[i].vid_sta_mac);
 			return BCME_ERROR;
 		}
-		sta = (sta_info_t *)stabuf;
+		sta = (sta_info_v5_t *)stabuf;
 		total.txbyte = total.txbyte + dtoh64(sta->tx_tot_bytes);
 		total.rxbyte = total.rxbyte + dtoh64(sta->rx_tot_bytes);
 		total.txframe = total.txframe + dtoh32(sta->tx_tot_pkts);
@@ -5351,7 +5351,7 @@ int
 acs_bgdfs_check_status(acs_chaninfo_t * c_info, bool bgdfs_on_txfail)
 {
 	acs_bgdfs_info_t *acs_bgdfs = c_info->acs_bgdfs;
-	wl_dfs_ap_move_status_t *status;
+	struct wl_dfs_ap_move_status_v2 *status;
 	chanspec_t scan_ch;
 
 	if (acs_bgdfs == NULL) {

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_misc.c 634436 2016-04-28 00:38:28Z vivekt $
+ * $Id: phy_lcn20_misc.c 659938 2016-09-16 16:47:54Z $
  */
 
 #include <typedefs.h>
@@ -24,6 +24,7 @@
 #include <phy_lcn20_misc.h>
 #include <phy_utils_reg.h>
 #include <wlc_radioreg_20692.h>
+#include <phy_calmgr_api.h>
 
 #ifndef ALL_NEW_PHY_MOD
 /* < TODO: all these are going away... */
@@ -115,12 +116,12 @@ phyradregs_list_t dot11lcn20phy_regs_rev1[] = {
 #endif /* PHY_DUMP_BINARY */
 
 /*  Local Functions */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static void phy_lcn20_init_test(phy_type_misc_ctx_t *ctx, bool encals);
 #if (defined(LCN20CONF) && (LCN20CONF != 0))
 static int phy_lcn20_misc_test_freq_accuracy(phy_type_misc_ctx_t *ctx, int channel);
 #endif /* #if (defined(LCN20CONF) && (LCN20CONF != 0)) */
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 #ifdef PHY_DUMP_BINARY
 static int phy_lcn20_misc_getlistandsize(phy_type_misc_ctx_t *ctx, phyradregs_list_t **phyreglist,
 	uint16 *phyreglist_sz);
@@ -138,9 +139,9 @@ static int phy_lcn20_iovar_set_rx_iq_est(phy_type_misc_ctx_t *ctx, int32 int_val
 static void phy_lcn20_misc_deaf_mode(phy_type_misc_ctx_t *ctx, bool user_flag);
 #endif /* #if (defined(LCN20CONF) && (LCN20CONF != 0)) */
 
-#ifdef ATE_BUILD
-static void wlc_phy_gpaio_lcn20phy(phy_type_misc_ctx_t *ctx, wl_gpaio_option_t option, int core);
-#endif
+
+static void phy_update_rxldpc_lcn20phy(phy_type_misc_ctx_t *ctx, bool ldpc);
+static int phy_lcn20_misc_set_lo_gain_nbcal(phy_type_misc_ctx_t *ctx, bool lo_gain);
 
 /* register phy type specific implementation */
 phy_lcn20_misc_info_t *
@@ -164,16 +165,16 @@ BCMATTACHFN(phy_lcn20_misc_register_impl)(phy_info_t *pi, phy_lcn20_info_t *lcn2
 	/* register PHY type specific implementation */
 	bzero(&fns, sizeof(fns));
 	fns.ctx = lcn20_info;
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 	fns.phy_type_misc_test_init = phy_lcn20_init_test;
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 	fns.phy_type_misc_rx_iq_est = phy_lcn20_rx_iq_est;
 #if (defined(LCN20CONF) && (LCN20CONF != 0))
 	fns.phy_type_misc_set_deaf = phy_lcn20_misc_deaf_mode;
 	fns.phy_type_misc_clear_deaf = phy_lcn20_misc_deaf_mode;
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 	fns.phy_type_misc_test_freq_accuracy = phy_lcn20_misc_test_freq_accuracy;
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 #endif /* #if (defined(LCN20CONF) && (LCN20CONF != 0)) */
 #ifdef PHY_DUMP_BINARY
 	fns.phy_type_misc_getlistandsize = phy_lcn20_misc_getlistandsize;
@@ -182,9 +183,9 @@ BCMATTACHFN(phy_lcn20_misc_register_impl)(phy_info_t *pi, phy_lcn20_info_t *lcn2
 	fns.phy_type_misc_iovar_txlo_tone = phy_lcn20_iovar_txlo_tone;
 	fns.phy_type_misc_iovar_get_rx_iq_est = phy_lcn20_iovar_get_rx_iq_est;
 	fns.phy_type_misc_iovar_set_rx_iq_est = phy_lcn20_iovar_set_rx_iq_est;
-#ifdef ATE_BUILD
-	fns.gpaioconfig = wlc_phy_gpaio_lcn20phy;
-#endif
+	fns.set_ldpc_override = phy_update_rxldpc_lcn20phy;
+	fns.set_lo_gain_nbcal = phy_lcn20_misc_set_lo_gain_nbcal;
+
 	if (phy_misc_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_misc_register_impl failed\n", __FUNCTION__));
 		goto fail;
@@ -221,7 +222,7 @@ BCMATTACHFN(phy_lcn20_misc_unregister_impl)(phy_lcn20_misc_info_t *lcn20_info)
 /* ********************************************** */
 /* Function table registred function */
 /* ********************************************** */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static void
 phy_lcn20_init_test(phy_type_misc_ctx_t *ctx, bool encals)
 {
@@ -254,7 +255,7 @@ phy_lcn20_misc_test_freq_accuracy(phy_type_misc_ctx_t *ctx, int channel)
 	return BCME_OK;
 }
 #endif /* #if (defined(LCN20CONF) && (LCN20CONF != 0)) */
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 
 static uint32 phy_lcn20_rx_iq_est(phy_type_misc_ctx_t *ctx, uint8 samples, uint8 antsel,
 	uint8 resolution, uint8 lpf_hpc, uint8 dig_lpf, uint8 gain_correct,
@@ -266,13 +267,6 @@ static uint32 phy_lcn20_rx_iq_est(phy_type_misc_ctx_t *ctx, uint8 samples, uint8
 	int8 noise_dbm_ant[PHY_CORE_MAX];
 	int16	tot_gain[PHY_CORE_MAX];
 	int16 noise_dBm_ant_fine[PHY_CORE_MAX];
-#if defined(WLTEST)
-	uint16 log_num_samps;
-	uint16 num_samps;
-	uint8 wait_time = 32;
-	uint8 i, extra_gain_1dB = 0;
-	uint32 result = 0;
-#endif /* #if defined(WLTEST) */
 	bool sampling_in_progress = (pi->phynoise_state != 0);
 	uint16 crsmin_pwr[PHY_CORE_MAX];
 
@@ -290,11 +284,6 @@ static uint32 phy_lcn20_rx_iq_est(phy_type_misc_ctx_t *ctx, uint8 samples, uint8
 	}
 
 	pi->phynoise_state |= PHY_NOISE_STATE_MON;
-#if defined(WLTEST)
-	/* choose num_samps to be some power of 2 */
-	log_num_samps = samples;
-	num_samps = 1 << log_num_samps;
-#endif /* #if defined(WLTEST) */
 
 	bzero((uint8 *)est, sizeof(est));
 	bzero((uint8 *)cmplx_pwr, sizeof(cmplx_pwr));
@@ -304,74 +293,6 @@ static uint32 phy_lcn20_rx_iq_est(phy_type_misc_ctx_t *ctx, uint8 samples, uint8
 	bzero((int16 *)tot_gain, sizeof(tot_gain));
 
 	/* get IQ power measurements */
-#if defined(WLTEST)
-	wlc_lcn20phy_rx_power(pi, num_samps, wait_time, wait_for_crs, est, tot_gain);
-	tot_gain[0] = tot_gain[0] - LCN20PHY_RX_IQ_EST_INP_4bit_SHIFT_TO_QDB;
-
-	/* sum I and Q powers for each core, average over num_samps with rounding */
-	ASSERT(PHYCORENUM(pi->pubpi->phy_corenum) <= PHY_CORE_MAX);
-	FOREACH_CORE(pi, i) {
-		cmplx_pwr[i] = ((est[i].i_pwr + est[i].q_pwr) +
-			(1U << (log_num_samps-1))) >> log_num_samps;
-	}
-
-	/* convert in 1dB gain for gain adjustment */
-	extra_gain_1dB = 3 * extra_gain_3dB;
-
-	if (resolution == 0) {
-		/* pi->phy_noise_win per antenna is updated inside */
-		wlc_phy_noise_calc(pi, cmplx_pwr, noise_dbm_ant, extra_gain_1dB);
-
-		pi->phynoise_state &= ~PHY_NOISE_STATE_MON;
-
-		for (i = PHYCORENUM(pi->pubpi->phy_corenum); i >= 1; i--)
-			result = (result << 8) | (noise_dbm_ant[i-1] & 0xff);
-
-		return result;
-	}
-	else if (resolution == 1) {
-		/* Reports power in finer resolution than 1 dB (currently 0.25 dB) */
-		int16 noisefloor;
-
-		wlc_phy_noise_calc_fine_resln(pi, cmplx_pwr, crsmin_pwr, noise_dBm_ant_fine,
-		                              extra_gain_1dB, tot_gain);
-
-		if ((gain_correct == 1) || (gain_correct == 2) || gain_correct == 3) {
-			int16 gainerr[PHY_CORE_MAX];
-			int16 gain_err_temp_adj;
-			wlc_phy_get_rxgainerr_phy(pi, gainerr);
-
-			wlc_phy_upd_gain_wrt_temp_phy(pi, &gain_err_temp_adj);
-
-				FOREACH_CORE(pi, i) {
-				/* gainerr is in 0.5dB units;
-				 * need to convert to 0.25dB units
-				 */
-			    if (gain_correct == 1) {
-			    gainerr[i] = gainerr[i] << 1;
-				/* Apply gain correction */
-				noise_dBm_ant_fine[i] -= gainerr[i];
-				}
-				noise_dBm_ant_fine[i] += gain_err_temp_adj;
-			}
-		}
-
-		noisefloor = (CHSPEC_IS40(pi->radio_chanspec))?
-			4*HTPHY_NOISE_FLOOR_40M : 4*HTPHY_NOISE_FLOOR_20M;
-
-		FOREACH_CORE(pi, i) {
-		if (noise_dBm_ant_fine[i] < noisefloor) {
-					noise_dBm_ant_fine[i] = noisefloor;
-			}
-		}
-
-		for (i = PHYCORENUM(pi->pubpi->phy_corenum); i >= 1; i--) {
-			result = (result << 10) | (noise_dBm_ant_fine[i-1] & 0x3ff);
-		}
-		pi->phynoise_state &= ~PHY_NOISE_STATE_MON;
-		return result;
-	}
-#endif /* #if defined(WLTEST) */
 
 	pi->phynoise_state &= ~PHY_NOISE_STATE_MON;
 	return 0;
@@ -601,63 +522,34 @@ static int BCMRAMFN(phy_lcn20_misc_getlistandsize)(phy_type_misc_ctx_t *ctx,
 }
 #endif /* PHY_DUMP_BINARY */
 
-#ifdef ATE_BUILD
+
+/* enable/disable ldpc_support bit when the ldpc_cap is changed */
 static void
-wlc_phy_gpaio_lcn20phy(phy_type_misc_ctx_t *ctx, wl_gpaio_option_t option, int core)
+phy_update_rxldpc_lcn20phy(phy_type_misc_ctx_t *ctx, bool ldpc)
 {
-	phy_lcn20_misc_info_t *info = (phy_lcn20_misc_info_t *)ctx;
-	phy_info_t *pi = info->pi;
-	/* To bring out various radio test signals on gpaio. */
+	phy_lcn20_misc_info_t *misc_info = (phy_lcn20_misc_info_t *) ctx;
+	phy_info_t *pi = misc_info->pi;
 
-	MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL2, 0, wl_cgpaio_pu, 1);
-	MOD_RADIO_REG_20692(pi, WL_RCAL_CFG1, 0, wl_rcal_pu, 0);
-	MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL0, 0, wl_cgpaio_sel_0to15_port, 0x0);
-	MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL1, 0, wl_cgpaio_sel_16to31_port, 0x0);
+	phy_info_lcn20phy_t *pi_lcn20 = (phy_info_lcn20phy_t *)pi->u.pi_lcn20phy;
 
-	switch (option) {
-		case (GPAIO_PMU_AFELDO): {
-			/* Connect port 14 */
-			MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL0, 0, wl_cgpaio_sel_0to15_port, 0x4000);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG3, 0, wl_tsten, 0x1);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG1, 0, wl_ana_mux, 0x0);
-			break;
-		}
-		case (GPAIO_PMU_TXLDO): {
-			MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL0, 0, wl_cgpaio_sel_0to15_port, 0x4000);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG3, 0, wl_tsten, 0x1);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG1, 0, wl_ana_mux, 0x1);
-			break;
-		}
-		case (GPAIO_PMU_VCOLDO): {
-			MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL0, 0, wl_cgpaio_sel_0to15_port, 0x4000);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG3, 0, wl_tsten, 0x1);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG1, 0, wl_ana_mux, 0x2);
-			break;
-		}
-		case GPAIO_PMU_LNALDO: {
-			MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL0, 0, wl_cgpaio_sel_0to15_port, 0x4000);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG3, 0, wl_tsten, 0x1);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG1, 0, wl_ana_mux, 0x3);
-			break;
-		}
-		case GPAIO_PMU_ADCLDO: {
-			MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL0, 0, wl_cgpaio_sel_0to15_port, 0x4000);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG3, 0, wl_tsten, 0x1);
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG1, 0, wl_ana_mux, 0x7);
-			break;
-		}
-		case GPAIO_ICTAT_CAL: {
-			/* Connect port 27 */
-			MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL1, 0, wl_cgpaio_sel_16to31_port, 0x800);
-			break;
-		}
-		case GPAIO_PMU_CLEAR: {
-			MOD_RADIO_REG_20692(pi, WL_PMU_CFG3, 0, wl_tsten, 0x0);
-			MOD_RADIO_REG_20692(pi, WL_GPAIO_SEL2, 0, wl_cgpaio_pu, 0);
-			break;
-		}
-		default:
-			break;
+	PHY_TRACE(("wl%d: %s\n", pi->sh->unit, __FUNCTION__));
+
+	if (ldpc != pi_lcn20->lcn20_rxldpc_override) {
+		pi_lcn20->lcn20_rxldpc_override = ldpc;
+
+		PHY_REG_MOD(pi, LCN20PHY, LDPCControl, ldpc_support, (ldpc) ? 1 : 0);
 	}
+
+	/* SWWLAN-54874 : 43430 LDPC latency issue WAR */
+	if (D11REV_IS(pi->sh->corerev, 39))
+		PHY_REG_MOD(pi, LCN20PHY, TxMacIfHoldOff, holdoffval, (ldpc) ? 24 : 20);
 }
-#endif /* ATE_BUILD */
+
+/* Pass CLM flag info to PHY */
+int
+phy_lcn20_misc_set_lo_gain_nbcal(phy_type_misc_ctx_t *ctx, bool lo_gain)
+{
+	phy_lcn20_misc_info_t *misc_info = (phy_lcn20_misc_info_t *) ctx;
+	misc_info->lcn20i->logain_NBcal = lo_gain;
+	return BCME_OK;
+}

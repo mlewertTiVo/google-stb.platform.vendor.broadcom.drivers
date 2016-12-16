@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_lq.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_lq.c 663790 2016-10-07 00:29:50Z $
  */
 
 #include <wlc_cfg.h>
@@ -32,6 +32,9 @@
 #include <wlc_bsscfg.h>
 #include <wlc.h>
 #include <wlc_scan.h>
+#ifdef WLMCNX
+#include <wlc_mcnx.h>
+#endif
 #ifdef APCS
 #include <wlc_apcs.h>
 #endif
@@ -49,14 +52,19 @@
 #include <wlc_dump.h>
 #include <wlc_stf.h>
 #include <wlc_iocv.h>
+#include <phy_noise_api.h>
 
 /* iovar table */
 enum {
 	IOV_SNR,
 	IOV_NOISE_LTE,
+	IOV_NOISE_LTE_RESET,
 	IOV_RSSI_EVENT,
 	IOV_RSSI_WINDOW_SZ,
 	IOV_SNR_WINDOW_SZ,
+	IOV_RSSI_DELTA,
+	IOV_SNR_DELTA,
+	IOV_LQ_MAX_BCN_LOSS,
 	IOV_LINKQUAL_ONOFF,
 	IOV_GET_LINKQUAL_STATS,
 	IOV_CHANIM_ENAB,
@@ -72,6 +80,7 @@ enum {
 	IOV_LOCKOUT_PERIOD,
 	IOV_ACS_RECORD,
 	IOV_RSSI_ANT,
+	IOV_RSSI_MONITOR,
 	IOV_LQ_LAST
 };
 
@@ -86,12 +95,24 @@ static const bcm_iovar_t wlc_lq_iovars[] = {
 	{"snr_win", IOV_SNR_WINDOW_SZ,
 	(0), 0, IOVT_UINT16, 0
 	},
+	{"lq_snr_delta", IOV_SNR_DELTA,
+	(IOVF_WHL), 0, IOVT_UINT8, 0
+	},
+	{"lq_rssi_delta", IOV_RSSI_DELTA,
+	(IOVF_WHL), 0, IOVT_UINT8, 0
+	},
+	{"lq_max_bcn_thresh", IOV_LQ_MAX_BCN_LOSS,
+	(IOVF_WHL), 0, IOVT_UINT32, 0
+	},
 #endif /* STA */
 
 	{"snr", IOV_SNR,
 	(0), 0, IOVT_INT32, 0
 	},
 	{"noise_lte", IOV_NOISE_LTE,
+	(0), 0, IOVT_INT32, 0
+	},
+	{"noise_lte_reset", IOV_NOISE_LTE_RESET,
 	(0), 0, IOVT_INT32, 0
 	},
 	{"chanim_enab", IOV_CHANIM_ENAB,
@@ -133,6 +154,9 @@ static const bcm_iovar_t wlc_lq_iovars[] = {
 	},
 #endif /* WLCHANIM */
 	{"phy_rssi_ant", IOV_RSSI_ANT, (0), 0, IOVT_BUFFER, sizeof(wl_rssi_ant_t)},
+	{"rssi_monitor", IOV_RSSI_MONITOR,
+	(0), 0, IOVT_BUFFER, sizeof(wl_rssi_monitor_cfg_t)
+	},
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -141,6 +165,18 @@ static const wlc_ioctl_cmd_t wlc_lq_ioctls[] = {
 	{WLC_GET_RSSI, 0, sizeof(int32)},
 	{WLC_GET_PHY_NOISE, 0, sizeof(int32)}
 };
+
+/* special rssi sample window in monitor mode */
+typedef struct {
+	/* raw per antenna rssi - valid when # ants > 1 */
+	uint16	rssi_chain_window_sz;
+	uint8	rssi_chain_index;
+	int8	*rssi_chain_window;	/* int8 [RX_ANT_NUM][MA_WINDOW_SZ] */
+} monitor_rssi_win_t;
+
+/* allocation size */
+#define MONITOR_RSSI_WIN_SZ(lqi) (sizeof(monitor_rssi_win_t) + \
+				  MONITOR_MA_WIN_SZ * RX_ANT_NUM(lqi))
 
 /* size of channel_qa_sample array */
 #define WLC_CHANNEL_QA_NSAMP	2
@@ -158,6 +194,8 @@ struct wlc_lq_info {
 	/* noise levels */
 	int8 noise;
 	int8 noise_lte;
+	int noise_lte_values[9];
+	uint8 noise_lte_val_idx;
 
 	/* rssi & snr sample windows allocation sizes */
 	uint8 sta_ma_window_sz;
@@ -182,13 +220,16 @@ struct wlc_lq_info {
 
 	/* bcn rssi sample window */
 	uint8 sta_bcn_window_sz;
+
+	/* monitor mode rssi window */
+	monitor_rssi_win_t *monitor;
 };
 
 /* moving average window size */
 #define STA_MA_WINDOW_SZ	16	/* for STA */
 #define DEF_MA_WINDOW_SZ	8
 #define STA_BCN_WINDOW_SIZE	16
-
+#define MONITOR_MA_WIN_SZ	16
 
 /* # antennas */
 #define RX_ANT_NUM(lqi)		(lqi)->ants
@@ -223,6 +264,12 @@ typedef struct {
 	uint8 rssi_level;		/**< current rssi based on notification configuration */
 
 	uint16 rssi_bcn_window_sz;	/* rssi window size. */
+
+	/* RSSI/SNR auto-deduction upon consecutive beacon loss */
+	uint8 rssi_delta;	/* Reduce RSSI by this much upon consecutive beacon loss */
+	uint8 snr_delta;	/* Reduce SNR by this much upon consecutive beacon loss */
+	int32 max_lq_bcn_loss;	/* beacon loss threshold in ms */
+	uint32 lq_last_bcn_time; /* local time for last beacon received */
 } bss_lq_info_t;
 
 /* handy macros to access bsscfg cubby & data */
@@ -289,20 +336,34 @@ static int wlc_lq_doiovar(void *hdl, uint32 actionid,
 	void *p, uint plen, void *arg, uint alen, uint val_size, struct wlc_if *wlcif);
 static int wlc_lq_doioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif);
 static void wlc_lq_watchdog(void *ctx);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_lq_dump(wlc_info_t *wlc, struct bcmstrbuf *b);
+#endif
 
 static int wlc_lq_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_lq_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_lq_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_lq_bss_dump NULL
+#endif
 
 static int wlc_lq_scb_init(void *ctx, struct scb *scb);
 static void wlc_lq_scb_deinit(void *ctx, struct scb *scb);
 static uint wlc_lq_scb_secsz(void *ctx, struct scb *scb);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_lq_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_lq_scb_dump NULL
+#endif
 
 static void wlc_lq_rssi_event_timeout(void *arg);
 static int8 wlc_lq_rssi_ma(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb);
 #ifdef STA
 static void wlc_lq_ant_bcn_rssi(void *ctx, bss_rx_bcn_notif_data_t *notif_data);
+#ifdef WLMCNX
+static void wlc_lq_update_tbtt(void *ctx, wlc_mcnx_intr_data_t *notif_data);
+#endif
 #endif /* STA */
 
 
@@ -310,8 +371,6 @@ static void wlc_lq_ant_bcn_rssi(void *ctx, bss_rx_bcn_notif_data_t *notif_data);
 /* **** chanim **** */
 
 /* TODO: move chanim code out to a different file */
-
-typedef struct chanim_interfaces chanim_interfaces_t;
 
 /** accumulative  count structure */
 typedef struct {
@@ -364,6 +423,13 @@ typedef struct wlc_chanim_stats {
 } wlc_chanim_stats_t;
 
 /* chanim module info struct */
+typedef struct chanim_interface_info {
+	struct chanim_interface_info *next;
+	chanim_accum_t accum;		/* accumulative counts */
+	wlc_chanim_stats_t *stats;	/* respective chspec stats wlc->chanim_info->stats */
+	chanspec_t chanspec;		/* chanspec of the interface */
+} chanim_interface_info_t;
+
 struct chanim_info {
 	wlc_chanim_stats_t *stats; /**< normalized stats obtained during scan */
 	chanim_cnt_t last_cnt;     /**< count from last read */
@@ -371,7 +437,8 @@ struct chanim_info {
 	chanim_config_t config;
 	chanim_acs_record_t record[CHANIM_ACS_RECORD];
 	wlc_info_t *wlc;
-	chanim_interfaces_t *ifs;
+	chanim_interface_info_t *ifaces;
+	chanim_interface_info_t *free_list;
 };
 
 #define chanim_mark(c_info)	(c_info)->mark
@@ -396,27 +463,16 @@ struct chanim_info {
 #define CHANIM_DETECTED		0x1	 /* interference detected */
 #define CHANIM_ACTON		0x2	 /* ACT triggered */
 
-typedef struct {
-	chanim_accum_t *accum;		/* accumulative counts */
-	wlc_chanim_stats_t *stats;	/* respective chspec stats wlc->chanim_info->stats */
-	int ref_cnt;				/* 0 means entry is available */
-	chanspec_t chanspec;		/* chanspec of the interface */
-	int idx;					/* index to loop through the interfaces */
-} chanim_interface_info_t;
-
-struct chanim_interfaces {
-	chanim_interface_info_t *if_info; /* stores the stats of an interface */
-	int num_ifs;				/*  for mchan this will be 2, 1 otherwise */
-};
-
-static bool wlc_lq_chanim_any_if_info_setup(chanim_interfaces_t *ifaces);
+static bool wlc_lq_chanim_any_if_info_setup(chanim_interface_info_t *ifaces);
 
 #ifndef WLCHANIM_DISABLED
 static int wlc_lq_chanim_attach(wlc_info_t *wlc);
 static void wlc_lq_chanim_detach(wlc_info_t *wlc);
 static void wlc_chanim_mfree(osl_t *osh, chanim_info_t *c_info);
-static void wlc_lq_chanim_bsscfg_updn(void *ctx, bsscfg_up_down_event_data_t *evt);
 
+#if defined(BCMDBG_DUMP)
+static int wlc_dump_chanim(wlc_info_t *wlc, struct bcmstrbuf *b);
+#endif
 #endif /* WLCHANIM_DISABLED */
 
 static wlc_chanim_stats_t *wlc_lq_chanim_create_stats(wlc_info_t *wlc, chanspec_t chanspec);
@@ -439,11 +495,15 @@ static void wlc_lq_chanim_close(wlc_info_t* wlc, chanspec_t chanspec, chanim_acc
 static bool wlc_lq_chanim_interfered_glitch(wlc_chanim_stats_t *stats, uint32 thres);
 static bool wlc_lq_chanim_interfered_cca(wlc_chanim_stats_t *stats, uint32 thres);
 static bool wlc_lq_chanim_interfered_noise(wlc_chanim_stats_t *stats, int8 thres);
-static chanim_interface_info_t *wlc_lq_chanim_if_info_find(chanim_interfaces_t *ifaces,
+static chanim_interface_info_t *wlc_lq_chanim_if_info_find(chanim_interface_info_t *ifaces,
 	chanspec_t chanspec);
 static wlc_chanim_stats_t *wlc_lq_chanim_chanspec_to_stats(chanim_info_t *c_info,
 	chanspec_t chanspec);
 
+#ifdef BCMDBG
+static int wlc_lq_chanim_display(wlc_info_t *wlc, chanspec_t chanspec,
+	wlc_chanim_stats_t *cur_stats);
+#endif
 #endif /* WLCHANIM */
 
 #ifdef WLCQ
@@ -484,10 +544,11 @@ BCMATTACHFN(wlc_lq_attach)(wlc_info_t *wlc)
 	lqi->ants = WLC_BITSCNT(wlc->stf->rxchain);
 	lqi->ants = MIN(lqi->ants, WL_RSSI_ANT_MAX);
 
+
 	/* reserve cubby in the bsscfg container for per-bsscfg private data */
 	if ((lqi->cfgh = wlc_bsscfg_cubby_reserve(wlc, sizeof(bss_lq_info_t *),
-			wlc_lq_bss_init, wlc_lq_bss_deinit, wlc_lq_bss_dump,
-			lqi)) < 0) {
+		wlc_lq_bss_init, wlc_lq_bss_deinit, wlc_lq_bss_dump,
+		lqi)) < 0) {
 		WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve() failed\n",
 			wlc->pub->unit, __FUNCTION__));
 		goto fail;
@@ -503,6 +564,9 @@ BCMATTACHFN(wlc_lq_attach)(wlc_info_t *wlc)
 	cubby_params.fn_init = wlc_lq_scb_init;
 	cubby_params.fn_deinit = wlc_lq_scb_deinit;
 	cubby_params.fn_secsz = wlc_lq_scb_secsz;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = wlc_lq_scb_dump;
+#endif
 
 	if ((lqi->scbh = wlc_scb_cubby_reserve_ext(wlc,
 			sizeof(scb_lq_info_t *), &cubby_params)) < 0) {
@@ -513,13 +577,21 @@ BCMATTACHFN(wlc_lq_attach)(wlc_info_t *wlc)
 	}
 
 #ifdef STA
-	if (wlc_bss_rx_bcn_register(wlc, (bss_rx_bcn_notif_fn_t)wlc_lq_ant_bcn_rssi,
-		lqi) != BCME_OK) {
+	if (wlc_bss_rx_bcn_register(wlc, wlc_lq_ant_bcn_rssi, lqi) != BCME_OK) {
 		WL_ERROR(("wl%d: %s: wlc_lq_ant_bcn_rssi() failed\n",
-		wlc->pub->unit, __FUNCTION__));
+			wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
-
+#ifdef WLMCNX
+	if (MCNX_ENAB(wlc->pub)) {
+		/* register preTBTT callback */
+		if ((wlc_mcnx_intr_register(wlc->mcnx, wlc_lq_update_tbtt, lqi)) != BCME_OK) {
+			WL_ERROR(("wl%d: wlc_mcnx_intr_register failed (lq_tbtt)\n",
+				wlc->pub->unit));
+			goto fail;
+		}
+	}
+#endif /* WLMCNX */
 #endif /* STA */
 
 	/* register module */
@@ -536,6 +608,18 @@ BCMATTACHFN(wlc_lq_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* keep the existing "wl dump rssi" command, and also use it to dump all
+	 * "link quality" samples and results.
+	 */
+	wlc_dump_register(wlc->pub, "rssi", (dump_fn_t)wlc_lq_dump, (void *)wlc);
+#endif
+
+#if defined(RSSI_MONITOR) && !defined(RSSI_MONITOR_DISABLED)
+	wlc->pub->cmn->_rmon = TRUE;
+#else
+	wlc->pub->cmn->_rmon = FALSE;
+#endif /* RSSI_MONITOR && !RSSI_MONITOR_DISABLED */
 
 #if defined(WLCHANIM) && !defined(WLCHANIM_DISABLED)
 	if (wlc_lq_chanim_attach(wlc)) {
@@ -565,6 +649,16 @@ BCMATTACHFN(wlc_lq_detach)(wlc_lq_info_t *lqi)
 
 	(void)wlc_module_remove_ioctl_fn(wlc->pub, lqi);
 	wlc_module_unregister(wlc->pub, "lq", wlc);
+
+#ifdef STA
+	wlc_bss_rx_bcn_unregister(wlc, wlc_lq_ant_bcn_rssi, lqi);
+#ifdef WLMCNX
+	if (MCNX_ENAB(wlc->pub)) {
+		wlc_mcnx_intr_unregister(wlc->mcnx, wlc_lq_update_tbtt, lqi);
+	}
+#endif
+#endif /* STA */
+
 
 	MFREE(wlc->osh, lqi, sizeof(wlc_lq_info_t));
 }
@@ -603,6 +697,7 @@ wlc_lq_doiovar(void *hdl, uint32 actionid,
 		struct ether_addr *ea;
 		struct scb *scb;
 		int i;
+
 
 		/* Infra STA */
 		if (BSSCFG_STA(bsscfg) && bsscfg->BSS) {
@@ -663,10 +758,51 @@ wlc_lq_doiovar(void *hdl, uint32 actionid,
 		}
 		break;
 
+#ifdef RSSI_MONITOR
+	case IOV_GVAL(IOV_RSSI_MONITOR):
+		if (RMON_ENAB(wlc->pub)) {
+			wlc_link_qual_t *link = bsscfg->link;
+			wl_rssi_monitor_cfg_t *cfg = (wl_rssi_monitor_cfg_t *)a;
+
+			cfg->version = RSSI_MONITOR_VERSION;
+			cfg->max_rssi = link->rssi_monitor.max_rssi;
+			cfg->min_rssi = link->rssi_monitor.min_rssi;
+			cfg->flags = link->rssi_monitor.flag;
+			break;
+		} else {
+			err = BCME_UNSUPPORTED;
+			break;
+		}
+
+	case IOV_SVAL(IOV_RSSI_MONITOR):
+		if (RMON_ENAB(wlc->pub)) {
+			wlc_link_qual_t *link = bsscfg->link;
+			wl_rssi_monitor_cfg_t *cfg = (wl_rssi_monitor_cfg_t *)a;
+
+			if (cfg->version != RSSI_MONITOR_VERSION) {
+				err = BCME_VERSION;
+				break;
+			}
+			if (cfg->flags & RSSI_MONITOR_STOP) {
+				link->rssi_monitor.flag &= ~RSSI_MONITOR_ENABLED;
+				break;
+			}
+			link->rssi_monitor.min_rssi = cfg->min_rssi;
+			link->rssi_monitor.max_rssi = cfg->max_rssi;
+			link->rssi_monitor.flag &= ~RSSI_MONITOR_EVT_SENT;
+			link->rssi_monitor.flag |= RSSI_MONITOR_ENABLED;
+			wlc_lq_rssi_monitor_event(bsscfg);
+			break;
+		} else {
+			err = BCME_UNSUPPORTED;
+			break;
+		}
+#endif /* RSSI_MONITOR */
+
 #ifdef STA
 	case IOV_SVAL(IOV_RSSI_WINDOW_SZ):
 		if (MA_WIN_SZ(int_val) == 0 ||
-		    MA_WIN_SZ(int_val) > MA_WIN_SZ(blqi->rssi_window_sz)) {
+		    MA_WIN_SZ(int_val) > BSS_MA_WINDOW_SZ(lqi, bsscfg)) {
 			err = BCME_RANGE;
 			break;
 		}
@@ -691,7 +827,7 @@ wlc_lq_doiovar(void *hdl, uint32 actionid,
 
 	case IOV_SVAL(IOV_SNR_WINDOW_SZ):
 		if (MA_WIN_SZ(int_val) == 0 ||
-		    MA_WIN_SZ(int_val) > MA_WIN_SZ(blqi->snr_window_sz)) {
+		    MA_WIN_SZ(int_val) > BSS_MA_WINDOW_SZ(lqi, bsscfg)) {
 			err = BCME_RANGE;
 			break;
 		}
@@ -714,6 +850,30 @@ wlc_lq_doiovar(void *hdl, uint32 actionid,
 	case IOV_GVAL(IOV_SNR_WINDOW_SZ):
 		*ret_int_ptr = blqi->snr_window_sz;
 		break;
+
+	case IOV_SVAL(IOV_RSSI_DELTA):
+		blqi->rssi_delta = (uint8)int_val;
+		break;
+
+	case IOV_GVAL(IOV_RSSI_DELTA):
+		*ret_int_ptr = (int32)blqi->rssi_delta;
+		break;
+
+	case IOV_SVAL(IOV_SNR_DELTA):
+		blqi->snr_delta = (uint8)int_val;
+		break;
+
+	case IOV_GVAL(IOV_SNR_DELTA):
+		*ret_int_ptr = (int32)blqi->snr_delta;
+		break;
+
+	case IOV_SVAL(IOV_LQ_MAX_BCN_LOSS):
+		blqi->max_lq_bcn_loss = int_val;	/* in ms */
+		break;
+
+	case IOV_GVAL(IOV_LQ_MAX_BCN_LOSS):
+		*ret_int_ptr = blqi->max_lq_bcn_loss;	/* in ms */
+		break;
 #endif /* STA */
 
 	case IOV_GVAL(IOV_SNR):
@@ -722,6 +882,16 @@ wlc_lq_doiovar(void *hdl, uint32 actionid,
 
 	case IOV_GVAL(IOV_NOISE_LTE): {
 		*ret_int_ptr = lqi->noise_lte;
+		break;
+	}
+
+	case IOV_GVAL(IOV_NOISE_LTE_RESET): {
+		uint8 i;
+		lqi->noise_lte = WLC_NOISE_INVALID;
+		for (i = 0; i < 9; i++)
+			lqi->noise_lte_values[i] = WLC_NOISE_INVALID;
+		lqi->noise_lte_val_idx = 0;
+		*ret_int_ptr = 0;
 		break;
 	}
 
@@ -931,7 +1101,7 @@ wlc_lq_doioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif)
 		break;
 
 	case WLC_GET_PHY_NOISE:
-		*pval = wlc_lq_noise_ma_upd(wlc, wlc_phy_noise_avg(WLC_PI(wlc)));
+		*pval = wlc_lq_noise_ma_upd(wlc, phy_noise_avg(WLC_PI(wlc)));
 		break;
 
 #ifdef WLCQ
@@ -968,8 +1138,8 @@ wlc_lq_watchdog(void *ctx)
 	wlc_info_t *wlc = (wlc_info_t *)ctx;
 
 	/* Get Noise Est from Phy */
-	wlc_lq_noise_ma_upd(wlc, wlc_phy_noise_avg(WLC_PI(wlc)));
-	wlc_lq_noise_lte_ma_upd(wlc, wlc_phy_noise_lte_avg(WLC_PI(wlc)));
+	wlc_lq_noise_ma_upd(wlc, phy_noise_avg(WLC_PI(wlc)));
+	wlc_lq_noise_lte_ma_upd(wlc, phy_noise_lte_avg(WLC_PI(wlc)));
 }
 
 
@@ -1236,6 +1406,34 @@ wlc_lq_rssi_event_timeout(void *arg)
 	blqi->rssi_event_timer_active = FALSE;
 }
 
+#ifdef RSSI_MONITOR
+void
+wlc_lq_rssi_monitor_event(wlc_bsscfg_t *cfg)
+{
+	wlc_info_t *wlc = cfg->wlc;
+	wlc_link_qual_t *link = cfg->link;
+	wlc_rssi_monitor_t *rssi_monitor = &(link->rssi_monitor);
+
+	if (rssi_monitor->flag & RSSI_MONITOR_EVT_SENT ||
+	   !(rssi_monitor->flag & RSSI_MONITOR_ENABLED) ||
+	   !link->rssi) {
+		return;
+	}
+
+	if (link->rssi < rssi_monitor->min_rssi ||
+	   link->rssi > rssi_monitor->max_rssi) {
+		wl_rssi_monitor_evt_t event_data;
+		event_data.version = RSSI_MONITOR_VERSION;
+		event_data.cur_rssi = link->rssi;
+		event_data.pad = 0;
+		wlc_bss_mac_event(wlc, cfg, WLC_E_RSSI_LQM, &cfg->BSSID, 0, 0,
+			0, &event_data, sizeof(event_data));
+		rssi_monitor->flag |= RSSI_MONITOR_EVT_SENT;
+	}
+	return;
+}
+#endif /* RSSI_MONITOR */
+
 uint8 BCMFASTPATH
 wlc_lq_snr_ma_upd(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb, uint8 snr, bool ucast)
 {
@@ -1287,6 +1485,95 @@ wlc_lq_snr_ma_upd(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb, uint8 snr
 	return link->snr;
 }
 
+#ifdef WLMCNX
+static void wlc_lq_update_tbtt(void *ctx, wlc_mcnx_intr_data_t *notif_data)
+{
+	wlc_info_t *wlc = notif_data->cfg->wlc;
+	wlc_bsscfg_t *cfg = notif_data->cfg;
+	wlc_lq_info_t *lqi = wlc->lqi;
+	bss_lq_info_t *blqi = BSS_LQ_INFO(lqi, cfg);
+	wlc_link_qual_t *link = cfg->link;
+	int rssi = WLC_RSSI_INVALID, snr = WLC_SNR_INVALID;
+	uint32 now = OSL_SYSUPTIME();
+	int band;
+	struct scb *scb;
+
+	/* Here, only infrastructure STA is recognized */
+	if (!(BSSCFG_STA(cfg) && cfg->BSS))
+		return;
+
+	/* Here, only TBTT interrupt is recognized */
+	if (notif_data->intr != M_P2P_I_PRE_TBTT)
+		return;
+
+	/* Skip beacon loss checking if away from home channel */
+	if (WLC_BAND_PI_RADIO_CHANSPEC != cfg->current_bss->chanspec) {
+#ifdef EVENT_LOG_COMPILE
+		EVENT_LOG(EVENT_LOG_TAG_BEACON_LOG, "Beacon(tbtt): away (SCAN=%d)",
+			SCAN_IN_PROGRESS(wlc->scan));
+#endif
+		/* When away from home, this beacon period is deducted from
+		 * the beacon loss time by adjusting lq_last_bcn_time forward.
+		 * (approximately adjust time in ms with beacon period in TU)
+		 */
+		blqi->lq_last_bcn_time += cfg->current_bss->beacon_period;
+		if ((int)(blqi->lq_last_bcn_time - now) > 0)
+			blqi->lq_last_bcn_time = now;
+		return;
+	}
+
+	/* Check for consecutive beacon loss */
+#ifdef EVENT_LOG_COMPILE
+	EVENT_LOG(EVENT_LOG_TAG_BEACON_LOG, "Beacon(tbtt): home");
+#endif
+	if ((blqi->max_lq_bcn_loss == 0) ||
+	    ((int)(now - blqi->lq_last_bcn_time) < blqi->max_lq_bcn_loss))
+		return;
+
+	band = CHSPEC_BANDUNIT(cfg->current_bss->chanspec);
+	if ((scb = wlc_scbfindband(wlc, cfg, &cfg->BSSID, band)) == NULL) {
+		return;
+	}
+
+	/* By now, we have missed enough beacons. Need to discount RSSI/SNR */
+	if ((blqi->rssi_delta != 0) && (link->rssi != WLC_RSSI_INVALID)) {
+		rssi = link->rssi - blqi->rssi_delta;
+
+		/* Do not reduce it beyond WLC_RSSI_MINVAL or noise floor */
+		if (rssi < WLC_RSSI_MINVAL)
+			rssi = WLC_RSSI_MINVAL;
+		if ((lqi->noise != WLC_NOISE_INVALID) && (rssi < lqi->noise))
+			rssi = lqi->noise;
+
+#ifdef EVENT_LOG_COMPILE
+		EVENT_LOG(EVENT_LOG_TAG_BEACON_LOG,
+			"Apply rssi_delta: last beacon = %08x now = %08x\n",
+			blqi->lq_last_bcn_time, now);
+#endif
+		wlc_lq_rssi_ma_upd(wlc, cfg, scb, (int8)rssi, 0, FALSE);
+		cfg->current_bss->RSSI = (int16)link->rssi;
+	}
+
+	if ((blqi->snr_delta != 0) && (link->snr != WLC_SNR_INVALID)) {
+		snr = link->snr - blqi->snr_delta;
+		if (snr < WLC_SNR_MINVAL)
+			snr = WLC_SNR_MINVAL;
+
+#ifdef EVENT_LOG_COMPILE
+		EVENT_LOG(EVENT_LOG_TAG_BEACON_LOG,
+			"Apply snr_delta: last beacon = %08x now = %08x\n",
+			blqi->lq_last_bcn_time, now);
+#endif
+		wlc_lq_snr_ma_upd(wlc, cfg, scb, (uint8)snr, FALSE);
+		cfg->current_bss->SNR = (int16)link->snr;
+	}
+#ifdef EVENT_LOG_COMPILE
+	EVENT_LOG(EVENT_LOG_TAG_BEACON_LOG, "Beacon(miss): RSSI=%d(avg:%d) SNR=%d(avg:%d)",
+		rssi, link->rssi, snr, link->snr);
+#endif
+}
+#endif /* WLMCNX */
+
 int8
 wlc_lq_noise_ma_upd(wlc_info_t *wlc, int8 noise)
 {
@@ -1305,7 +1592,8 @@ wlc_lq_noise_ma_upd(wlc_info_t *wlc, int8 noise)
 			lqi->noise += (noise - lqi->noise - 1) / 2;
 
 #ifdef CCA_STATS
-		if (wlc_cca_chan_qual_event_update(wlc, WL_CHAN_QUAL_NF, lqi->noise)) {
+		if (WL_CCA_STATS_ENAB(wlc->pub) &&
+		    wlc_cca_chan_qual_event_update(wlc, WL_CHAN_QUAL_NF, lqi->noise)) {
 			cca_chan_qual_event_t event_output;
 
 			event_output.status = 0;
@@ -1323,25 +1611,47 @@ wlc_lq_noise_ma_upd(wlc_info_t *wlc, int8 noise)
 	return lqi->noise;
 }
 
+static
+int wlc_lq_noise_lte_median(int* values)
+{
+	int noise_val[9], temp;
+	uint8 i, j;
+	uint8 len = 9;
+
+	for (i = 0; i < len; i++)
+		noise_val[i] = values[i];
+
+	for (i = 0; i < len-1; i++) {
+		if (i > 4)
+			break;
+		for (j = i+1; j < len; j++) {
+			temp = MAX(noise_val[i], noise_val[j]);
+			noise_val[j] = MIN(noise_val[i], noise_val[j]);
+			noise_val[i] = temp;
+		}
+	}
+	return noise_val[4];
+}
+
 int8
 wlc_lq_noise_lte_ma_upd(wlc_info_t *wlc, int8 noise)
 {
 	wlc_lq_info_t *lqi = wlc->lqi;
 
-	/* Asymmetric noise floor filter:
-	 *	Going up slowly by only +1
-	 *	Coming down faster by diff/2
-	 */
 	if (noise != WLC_NOISE_INVALID) {
-		if (lqi->noise == WLC_NOISE_INVALID)
-			lqi->noise = noise;
-		else if (noise > lqi->noise_lte)
-			lqi->noise_lte ++;
-		else if (noise < lqi->noise_lte)
-			lqi->noise_lte += (noise - lqi->noise_lte - 1) / 2;
+		lqi->noise_lte_values[lqi->noise_lte_val_idx] = noise;
+		lqi->noise_lte_val_idx++;
+		if (lqi->noise_lte_val_idx >= 9)
+			lqi->noise_lte_val_idx = 0;
+		lqi->noise_lte = (int8)wlc_lq_noise_lte_median(lqi->noise_lte_values);
+		if (lqi->noise_lte == WLC_NOISE_INVALID)
+			lqi->noise_lte = noise;
+		if (lqi->noise_lte < PHY_NOISE_FIXED_VAL)
+			lqi->noise_lte = PHY_NOISE_FIXED_VAL;
 
 #ifdef CCA_STATS
-		if (wlc_cca_chan_qual_event_update(wlc, WL_CHAN_QUAL_NF_LTE, lqi->noise_lte)) {
+		if (WL_CCA_STATS_ENAB(wlc->pub) &&
+		    wlc_cca_chan_qual_event_update(wlc, WL_CHAN_QUAL_NF_LTE, lqi->noise_lte)) {
 			cca_chan_qual_event_t event_output;
 
 			event_output.status = 0;
@@ -1380,23 +1690,7 @@ wlc_lq_recv_snr_compute(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, int8 noise)
 		return snr;
 	}
 
-	if (WLCISLCN40PHY(wlc->band)) {
-		int frameType = wrxh->rxhdr.lt80.PhyRxStatus_0 & PRXS0_FT_MASK;
-		if (frameType != PRXS0_CCK) {
-			snr = (wrxh->rxhdr.lt80.PhyRxStatus_1 & PRXS1_SQ_MASK) >> PRXS1_SQ_SHIFT;
-			return snr;
-		}
-		if (!noise)
-			noise = WLC_NOISE_EXCELLENT;
-		snr = rssi - noise;
-
-		/* Backup just in case Noise Est is incorrect */
-		if ((int8)snr < 0)
-			snr = 3;
-		if (snr >= WLC_SNR_EXCELLENT) {
-			snr = WLC_SNR_EXCELLENT;
-		}
-	} else if (WLCISACPHY(wlc->band) || WLCISLCN20PHY(wlc->band)) {
+	if (WLCISACPHY(wlc->band) || WLCISLCN20PHY(wlc->band)) {
 		if (rssi != WLC_RSSI_INVALID) {
 			if (!noise)
 				noise = WLC_NOISE_EXCELLENT;
@@ -1418,6 +1712,24 @@ wlc_lq_recv_snr_compute(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, int8 noise)
 	return snr;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_lq_dump(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	int idx;
+	wlc_bsscfg_t *cfg;
+	wlc_lq_info_t *lqi = wlc->lqi;
+
+
+	FOREACH_BSS(wlc, idx, cfg) {
+		bcm_bprintf(b, "Link Quality - bsscfg: %d\n", WLC_BSSCFG_IDX(cfg));
+		wlc_lq_bss_dump(lqi, cfg, b);
+		bcm_bprintf(b, "\n");
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 
 /* Use simple averaging algo for now until there is need to optimize the perfermance,
@@ -1693,6 +2005,7 @@ wlc_lq_bss_sta_sample(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 	}
 }
 
+
 /* bsscfg cubby */
 static int
 wlc_lq_bss_init(void *ctx, wlc_bsscfg_t *cfg)
@@ -1779,6 +2092,54 @@ wlc_lq_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	*pblqi = NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_lq_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_lq_info_t *lqi = (wlc_lq_info_t *)ctx;
+	wlc_info_t *wlc = lqi->wlc;
+	bss_lq_info_t *blqi;
+	scb_lq_info_t *slqi;
+	struct scb *scb;
+	struct scb_iter scbiter;
+	uint i;
+	uint idx;
+	char eabuf[ETHER_ADDR_STR_LEN];
+
+	/* per-scb data */
+	FOREACH_BSS_SCB(wlc->scbstate, &scbiter, cfg, scb) {
+		bcm_bprintf(b, "  SCB: %s BAND: %d\n",
+			bcm_ether_ntoa(&scb->ea, eabuf), scb->bandunit);
+		wlc_lq_scb_dump(wlc->lqi, scb, b);
+	}
+
+	/* dump the folllowing info only for infra STA */
+	if (!BSSCFG_STA(cfg) || !cfg->BSS || !cfg->associated)
+		return;
+	if ((scb = wlc_scbfindband(wlc, cfg, &cfg->BSSID,
+			CHSPEC_WLCBANDUNIT(cfg->current_bss->chanspec))) == NULL)
+		return;
+
+	/* average */
+	bcm_bprintf(b, "  RSSI: %d SNR: %d BAND: %d\n",
+		cfg->link->rssi, cfg->link->snr,
+		CHSPEC_WLCBANDUNIT(cfg->current_bss->chanspec));
+
+	blqi = BSS_LQ_INFO(lqi, cfg);
+	slqi = SCB_LQ_INFO(lqi, scb);
+
+	/* RSSI QDB */
+	if (PER_SCB_RSSI_QDB_SAMP(cfg)) {
+		bcm_bprintf(b, "     QDB: [ ");
+		for (i = 0, idx = slqi->rssi_index;
+		     i < MA_WIN_SZ(blqi->rssi_window_sz);
+		     i++, idx = MODINC_POW2(idx, MA_WIN_SZ(blqi->rssi_window_sz))) {
+			bcm_bprintf(b, "%3d ", blqi->rssi_qdb_window[idx]);
+		}
+		bcm_bprintf(b, "]\n");
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* scb cubby */
 static uint
@@ -1792,8 +2153,7 @@ wlc_lq_scb_secsz(void *ctx, struct scb *scb)
 	uint16 rssi_bcn_window_sz;
 #endif /* STA */
 
-	rssi_window_sz = BSS_MA_WINDOW_SZ(lqi, cfg);
-	snr_window_sz = rssi_window_sz;
+	snr_window_sz = rssi_window_sz = BSS_MA_WINDOW_SZ(lqi, cfg);
 #ifdef STA
 	rssi_bcn_window_sz = lqi->sta_bcn_window_sz;
 #endif /* STA */
@@ -1847,8 +2207,7 @@ wlc_lq_scb_init(void *ctx, struct scb *scb)
 	}
 	*pslqi = slqi;
 
-	rssi_window_sz = BSS_MA_WINDOW_SZ(lqi, cfg);
-	snr_window_sz = rssi_window_sz;
+	snr_window_sz = rssi_window_sz = BSS_MA_WINDOW_SZ(lqi, cfg);
 #ifdef STA
 	rssi_bcn_window_sz = lqi->sta_bcn_window_sz;
 #endif /* STA */
@@ -1895,18 +2254,98 @@ wlc_lq_scb_deinit(void *ctx, struct scb *scb)
 	*pslqi = NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_lq_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_lq_info_t *lqi = (wlc_lq_info_t *)ctx;
+	wlc_info_t *wlc = lqi->wlc;
+	wlc_bsscfg_t *cfg = SCB_BSSCFG(scb);
+	bss_lq_info_t *blqi = BSS_LQ_INFO(lqi, cfg);
+	scb_lq_info_t *slqi = SCB_LQ_INFO(lqi, scb);
+	uint i, j, k;
+	uint idx;
+	int8 *row;
+	uint rssi_window_sz = MA_WIN_SZ(blqi->rssi_window_sz);
+	uint snr_window_sz = MA_WIN_SZ(blqi->snr_window_sz);
+
+	/* RSSI */
+	if (PER_SCB_RSSI_SAMP(cfg)) {
+		bcm_bprintf(b, "     RSSI: [ ");
+		idx = slqi->rssi_index;
+		for (i = 0; i < rssi_window_sz; i ++) {
+			bcm_bprintf(b, "%3d ", slqi->rssi_window[idx]);
+			idx = MODINC_POW2(idx, rssi_window_sz);
+		}
+		bcm_bprintf(b, "] AVG: %d\n", wlc_lq_rssi_get(wlc, cfg, scb));
+		if (PER_ANT_RSSI_SAMP(lqi, cfg)) {
+			for (k = WL_ANT_IDX_1, j = 0; k < WL_RSSI_ANT_MAX; k ++) {
+				if ((wlc->stf->rxchain & (1 << k)) == 0)
+					continue;
+				row = slqi->rssi_chain_window + j * rssi_window_sz;
+				bcm_bprintf(b, "     ANT%d: [ ", k);
+				idx = slqi->rssi_chain_index;
+				for (i = 0; i < rssi_window_sz; i ++) {
+					bcm_bprintf(b, "%3d ", *(row + idx));
+					idx = MODINC_POW2(idx, rssi_window_sz);
+				}
+				bcm_bprintf(b, "] AVG [%d]\n",
+					wlc_lq_ant_rssi_get(wlc, cfg, scb, k));
+				j ++;
+			}
+		}
+	}
+
+	/* SNR */
+	if (PER_SCB_SNR_SAMP(cfg)) {
+		bcm_bprintf(b, "     SNR: [ ");
+		idx = slqi->snr_index;
+		for (i = 0; i < snr_window_sz; i ++) {
+			bcm_bprintf(b, "%3d ", slqi->snr_window[idx]);
+			idx = MODINC_POW2(idx, snr_window_sz);
+		}
+		bcm_bprintf(b, "] AVG: %u\n", cfg->link->snr);
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #ifdef STA
 /* callback for beacon reception */
 static void
-wlc_lq_ant_bcn_rssi(void *ctx, bss_rx_bcn_notif_data_t *notif_data)
+wlc_lq_ant_bcn_rssi(void *ctx, bss_rx_bcn_notif_data_t *bcn)
 {
-	bss_rx_bcn_notif_data_t *bcn = notif_data;
 	wlc_lq_info_t *lqi = (wlc_lq_info_t *)ctx;
+	wlc_info_t *wlc = lqi->wlc;
+	wlc_bsscfg_t *cfg = bcn->cfg;
+	bss_lq_info_t *blqi = BSS_LQ_INFO(lqi, cfg);
 	rx_lq_samp_t lq_sample;
-	wlc_lq_sample(lqi->wlc, bcn->cfg, bcn->scb, bcn->wrxh, FALSE, &lq_sample);
+
+	wlc_lq_sample(wlc, cfg, bcn->scb, bcn->wrxh, FALSE, &lq_sample);
 	/* per ant bcn rssi */
-	wlc_lq_ant_bcn_rssi_sample(lqi->wlc, bcn->cfg, bcn->scb, bcn->wrxh);
+	wlc_lq_ant_bcn_rssi_sample(wlc, cfg, bcn->scb, bcn->wrxh);
+
+	if (cfg->BSS) {
+		wlc_lq_rssi_bss_sta_event_upd(wlc, cfg);
+
+#ifdef EVENT_LOG_COMPILE
+		{
+		struct dot11_bcn_prb *bcnprb = (struct dot11_bcn_prb *)bcn->body;
+		EVENT_LOG(EVENT_LOG_TAG_BEACON_LOG,
+			"Beacon(recv): RSSI=%d SNR=%d TSF=%08x%08x",
+			lq_sample.rssi_avg, lq_sample.snr_avg,
+			bcnprb->timestamp[1], bcnprb->timestamp[0]);
+		}
+#endif /* EVENT_LOG_COMPILE */
+		blqi->lq_last_bcn_time = OSL_SYSUPTIME();
+		cfg->current_bss->RSSI = lq_sample.rssi_avg;
+		cfg->current_bss->SNR = lq_sample.snr_avg;
+
+#ifdef RSSI_MONITOR
+		if (RMON_ENAB(wlc->pub)) {
+			wlc_lq_rssi_monitor_event(cfg);
+		}
+#endif /* RSSI_MONITOR */
+	}
 }
 #endif /* STA */
 
@@ -1975,7 +2414,7 @@ wlc_lq_chanim_chanspec_to_stats(chanim_info_t *c_info, chanspec_t chanspec)
 	chanim_interface_info_t *if_info = NULL;
 
 	/* For quicker access, look in cache first. Otherwise, walk the list. */
-	if ((if_info = wlc_lq_chanim_if_info_find(c_info->ifs, chanspec)) != NULL) {
+	if ((if_info = wlc_lq_chanim_if_info_find(c_info->ifaces, chanspec)) != NULL) {
 
 		return if_info->stats;
 	}
@@ -2180,7 +2619,7 @@ wlc_lq_chanim_phy_noise(wlc_info_t *wlc)
 	int8 result = 0;
 	int err = 0;
 
-	if (!WLCISLCNPHY(wlc->band) && SCAN_IN_PROGRESS(wlc->scan)) {
+	if (SCAN_IN_PROGRESS(wlc->scan)) {
 		int cnt = 10, valid_cnt = 0;
 		int i;
 		int sum = 0;
@@ -2188,13 +2627,13 @@ wlc_lq_chanim_phy_noise(wlc_info_t *wlc)
 		rxiq = 10 << 8 | 3; /* default: samples = 1024 (2^10) and antenna = 3 */
 
 		if ((err = wlc_iovar_setint(wlc, "phy_rxiqest", rxiq)) < 0) {
-			WL_ERROR(("failed to set phy_rxiqest\n"));
+			WL_TRACE(("failed to set phy_rxiqest\n"));
 		}
 
 		for (i =  0; i < cnt; i++) {
 
 			if ((err = wlc_iovar_getint(wlc, "phy_rxiqest", &rxiq)) < 0) {
-				WL_ERROR(("failed to get phy_rxiqest\n"));
+				WL_TRACE(("failed to get phy_rxiqest\n"));
 			}
 
 			if (rxiq >> 8)
@@ -2213,7 +2652,7 @@ wlc_lq_chanim_phy_noise(wlc_info_t *wlc)
 	}
 
 	if (!SCAN_IN_PROGRESS(wlc->scan))
-		result = wlc_phy_noise_avg(WLC_PI(wlc));
+		result = phy_noise_avg(WLC_PI(wlc));
 
 	WL_CHANINT(("bgnoise: %d dBm\n", result));
 
@@ -2319,6 +2758,33 @@ wlc_lq_chanim_close(wlc_info_t* wlc, chanspec_t chanspec, chanim_accum_t* acc,
 	wlc_lq_chanim_clear_acc(wlc, acc);
 }
 
+#ifdef BCMDBG
+static int
+wlc_lq_chanim_display(wlc_info_t *wlc, chanspec_t chanspec, wlc_chanim_stats_t *cur_stats)
+{
+	chanim_info_t *c_info = wlc->chanim_info;
+
+	if (!cur_stats)
+		return BCME_ERROR;
+
+	BCM_REFERENCE(c_info);
+
+	WL_CHANINT(("**intf: %d glitch cnt: %d badplcp: %d noise: %d chanspec: 0x%x \n",
+		chanim_mark(c_info).state, cur_stats->chanim_stats.glitchcnt,
+		cur_stats->chanim_stats.badplcp, cur_stats->chanim_stats.bgnoise, chanspec));
+
+	WL_CHANINT(("***cca stats: txdur: %d, inbss: %d, obss: %d,"
+	  "nocat: %d, nopkt: %d, doze: %d\n",
+	  cur_stats->chanim_stats.ccastats[CCASTATS_TXDUR],
+	  cur_stats->chanim_stats.ccastats[CCASTATS_INBSS],
+	  cur_stats->chanim_stats.ccastats[CCASTATS_OBSS],
+	  cur_stats->chanim_stats.ccastats[CCASTATS_NOCTG],
+	  cur_stats->chanim_stats.ccastats[CCASTATS_NOPKT],
+	  cur_stats->chanim_stats.ccastats[CCASTATS_DOZE]));
+
+	return BCME_OK;
+}
+#endif /* BCMDBG */
 
 /*
  * Given a chanspec, find the matching interface info. If there isn't a match, then
@@ -2326,43 +2792,40 @@ wlc_lq_chanim_close(wlc_info_t* wlc, chanspec_t chanspec, chanim_accum_t* acc,
  * BSSCFG callback.
  */
 static chanim_interface_info_t *
-wlc_lq_chanim_if_info_setup(chanim_info_t *c_info, chanspec_t chanspec, bool frm_bsscfg_cb)
+wlc_lq_chanim_if_info_setup(chanim_info_t *c_info, chanspec_t chanspec)
 {
 	wlc_info_t *wlc = c_info->wlc;
-	chanim_interfaces_t *ifaces = c_info->ifs;
-	chanim_interface_info_t *if_info = NULL;
-	int i;
+	chanim_interface_info_t *if_info, *ifaces = c_info->ifaces;
 
 	/* Find an existing entry with a matching chanspec */
-	for (i = 0; i < ifaces->num_ifs; i++) {
-		if (chanspec == ifaces->if_info[i].chanspec) {
-			if_info = &ifaces->if_info[i];	/* Found one */
-			break;
-		}
-	}
+	if_info = wlc_lq_chanim_if_info_find(ifaces, chanspec);
 
 	if (if_info == NULL) {
-		/* Not found. Find an empty slot */
-		for (i = 0; i < ifaces->num_ifs; i++) {
-			if (ifaces->if_info[i].chanspec == 0) {
-				/* Found one */
-				if_info = &ifaces->if_info[i];
-				memset(if_info->accum, 0, sizeof(chanim_accum_t));
-				/* Get stats for channel (cached) */
-				if_info->stats = wlc_lq_chanim_find_stats(wlc, chanspec);
-				if_info->ref_cnt = 0;
-				if_info->chanspec = chanspec;
-				ASSERT(if_info->stats != NULL);
-				break;
+		/* Not found. Create an new slot */
+		if (c_info->free_list) {
+			if_info = c_info->free_list;
+			c_info->free_list = if_info->next;
+		} else {
+			if_info = (chanim_interface_info_t *) MALLOCZ(wlc->osh,
+				sizeof(chanim_interface_info_t));
+
+			if (!if_info) {
+				WL_ERROR(("wl%d: %s: out of memory %d bytes\n",
+					wlc->pub->unit, __FUNCTION__,
+					(uint)sizeof(chanim_interface_info_t)));
+				ASSERT(FALSE);
+				return NULL;
 			}
 		}
-	}
 
-	ASSERT(!MCHAN_ENAB(wlc->pub) || if_info != NULL);
+		/* Put in interface info list head */
+		if_info->next = ifaces->next;
+		ifaces->next = if_info;
 
-	if (if_info && frm_bsscfg_cb) {
-		/* Only increment ref count if called from BSS cfg up. */
-		if_info->ref_cnt++;
+		/* Get stats for channel (cached) */
+		if_info->stats = wlc_lq_chanim_find_stats(wlc, chanspec);
+		if_info->chanspec = chanspec;
+		ASSERT(if_info->stats != NULL);
 	}
 
 	return if_info;
@@ -2374,48 +2837,43 @@ wlc_lq_chanim_if_info_setup(chanim_info_t *c_info, chanspec_t chanspec, bool frm
  * callback.
  */
 static void
-wlc_lq_chanim_if_info_release(chanim_info_t *c_info, chanspec_t chanspec, bool frm_bsscfg_cb)
+wlc_lq_chanim_if_info_release(chanim_info_t *c_info, chanspec_t chanspec)
 {
-	chanim_interfaces_t *ifaces = c_info->ifs;
+	chanim_interface_info_t *ifaces = c_info->ifaces;
 	chanim_interface_info_t *if_info = NULL;
-	int i;
 
-	for (i = 0; i < ifaces->num_ifs; i++) {
-		if (ifaces->if_info[i].chanspec == chanspec) {
-			if_info = &ifaces->if_info[i];	/* Found match */
-			break;
-		}
-	}
-
+	/* Find an existing entry with a matching chanspec */
+	if_info = wlc_lq_chanim_if_info_find(ifaces, chanspec);
 
 	if (if_info) {
-		if (frm_bsscfg_cb) {
-			if_info->ref_cnt--;
+		chanim_interface_info_t *curptr, *previous = ifaces;
+
+		/* remove it from the interface info list */
+		while ((curptr = previous->next)) {
+			if (curptr == if_info) {
+				previous->next = curptr->next;
+				break;
+			}
+			previous = curptr;
 		}
 
-		/* Till all the interfaces which are refering the same
-		 * stats info are not down the if_info is not reset
-		 */
-		if (if_info->ref_cnt == 0) {
-			if_info->stats = NULL;
-			if_info->chanspec = 0;
-		}
+		/* Add it to the free list */
+		memset(if_info, 0, sizeof(chanim_interface_info_t));
+		if_info->next = c_info->free_list;
+		c_info->free_list = if_info;
 	}
 }
 
 static chanim_interface_info_t *
-wlc_lq_chanim_if_info_find(chanim_interfaces_t *ifaces, chanspec_t chanspec)
+wlc_lq_chanim_if_info_find(chanim_interface_info_t *ifaces, chanspec_t chanspec)
 {
-	chanim_interface_info_t *if_info = NULL;
-	int i;
+	chanim_interface_info_t *if_info = ifaces;
 
-	for (i = 0; i < ifaces->num_ifs; i++) {
-		if (ifaces->if_info[i].chanspec == chanspec) {
-			if_info = &ifaces->if_info[i];	/* Found match */
+	while ((if_info = if_info->next)) {
+		if (if_info->chanspec == chanspec) {
 			break;
 		}
 	}
-
 	return if_info;
 }
 
@@ -2426,18 +2884,14 @@ wlc_lq_chanim_if_info_find(chanim_interfaces_t *ifaces, chanspec_t chanspec)
  * channel instead.
  */
 static chanim_interface_info_t *
-wlc_lq_chanim_if_info_find_ctl(chanim_interfaces_t *ifaces, chanspec_t chanspec)
+wlc_lq_chanim_if_info_find_ctl(chanim_interface_info_t *ifaces, chanspec_t chanspec)
 {
-	chanim_interface_info_t *if_info = NULL;
-	int i;
+	chanim_interface_info_t *if_info = ifaces;
 	chanspec_t ctl_chanspec = wf_chspec_ctlchan(chanspec);
 
-	for (i = 0; i < ifaces->num_ifs; i++) {
-		if (ifaces->if_info[i].chanspec != 0) {
-			if (wf_chspec_ctlchan(ifaces->if_info[i].chanspec) == ctl_chanspec) {
-				if_info = &ifaces->if_info[i];	/* Found match */
-				break;
-			}
+	while ((if_info = if_info->next)) {
+		if (wf_chspec_ctlchan(if_info->chanspec) == ctl_chanspec) {
+			break;
 		}
 	}
 	return if_info;
@@ -2458,10 +2912,15 @@ wlc_lq_chanim_if_switch_channels(wlc_info_t *wlc,
 	 * NOTE: the new chanspec is passed in because it will overwrite the chanspec field with
 	 * this value.
 	 */
-	wlc_lq_chanim_accum(wlc, chanspec, if_info->accum);
+	wlc_lq_chanim_accum(wlc, chanspec, &if_info->accum);
 
 	/* Close the previous channel. */
-	wlc_lq_chanim_close(wlc, prev_chanspec, if_info->accum, if_info->stats);
+	wlc_lq_chanim_close(wlc, prev_chanspec, &if_info->accum, if_info->stats);
+#ifdef BCMDBG
+	if (wlc_lq_chanim_display(wlc, prev_chanspec, if_info->stats) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: if_info->stats is NULL\n", wlc->pub->unit, __FUNCTION__));
+	}
+#endif
 
 	/*
 	 * Since it is switching to a new channel, update the cached pointer to point to the new
@@ -2492,14 +2951,14 @@ wlc_lq_chanim_create_bss_chan_context(wlc_info_t *wlc, chanspec_t chanspec,
 
 	if ((prev_chanspec != 0) && (prev_chanspec != chanspec)) {
 		/* An interface is switching channels. */
-		if_info = wlc_lq_chanim_if_info_find_ctl(wlc->chanim_info->ifs, prev_chanspec);
+		if_info = wlc_lq_chanim_if_info_find_ctl(wlc->chanim_info->ifaces, prev_chanspec);
 	}
 
 	if (if_info != NULL) {
 		wlc_lq_chanim_if_switch_channels(wlc, if_info, chanspec, prev_chanspec);
 	} else {
 		/* Set up a new i/f */
-		if_info = wlc_lq_chanim_if_info_setup(wlc->chanim_info, chanspec, FALSE);
+		if_info = wlc_lq_chanim_if_info_setup(wlc->chanim_info, chanspec);
 	}
 
 	ASSERT(if_info != NULL);
@@ -2512,7 +2971,7 @@ wlc_lq_chanim_delete_bss_chan_context(wlc_info_t *wlc, chanspec_t chanspec)
 		return;
 	}
 
-	wlc_lq_chanim_if_info_release(wlc->chanim_info, chanspec, FALSE);
+	wlc_lq_chanim_if_info_release(wlc->chanim_info, chanspec);
 }
 
 /*
@@ -2525,7 +2984,7 @@ int
 wlc_lq_chanim_adopt_bss_chan_context(wlc_info_t *wlc, chanspec_t chanspec, chanspec_t prev_chanspec)
 {
 	chanim_info_t *c_info;
-	chanim_interfaces_t *ifaces;
+	chanim_interface_info_t *ifaces;
 	chanim_interface_info_t *if_info;
 
 	if (!WLC_CHANIM_ENAB(wlc->pub)) {
@@ -2533,7 +2992,7 @@ wlc_lq_chanim_adopt_bss_chan_context(wlc_info_t *wlc, chanspec_t chanspec, chans
 	}
 
 	c_info = wlc->chanim_info;
-	ifaces = c_info->ifs;
+	ifaces = c_info->ifaces;
 
 	ASSERT(chanspec != prev_chanspec);
 
@@ -2545,60 +3004,27 @@ wlc_lq_chanim_adopt_bss_chan_context(wlc_info_t *wlc, chanspec_t chanspec, chans
 		return BCME_OK;
 	}
 
-	if (SCAN_IN_PROGRESS(wlc->scan)) {
-		return BCME_BUSY;
-	}
-
 	/*
 	 * The above search did not find a match. This can happen when a station chanspec changed
 	 * bandwidth in adopt. Instead, search using control channel and switch to the new channel.
 	 */
 	if ((if_info = wlc_lq_chanim_if_info_find_ctl(ifaces, chanspec))) {
 		wlc_lq_chanim_if_switch_channels(wlc, if_info, chanspec, if_info->chanspec);
+		return BCME_OK;
+	}
+
+	if (SCAN_IN_PROGRESS(wlc->scan)) {
+		return BCME_BUSY;
 	}
 	return BCME_OK;
 }
 
-#define NUM_IFS CHANIM_NUM_INTERFACES_MCHAN
-#define CHANIM_INFO_SZ	((NUM_IFS+1) * sizeof(chanim_interface_info_t))
-#define CHANIM_ACCUM_SZ ((NUM_IFS+1) * sizeof(chanim_accum_t))
-
 #ifndef WLCHANIM_DISABLED
-
-/* Register with bsscfg for creating and tearing down i/f */
-static void
-wlc_lq_chanim_bsscfg_updn(void *ctx, bsscfg_up_down_event_data_t *evt)
-{
-	chanim_info_t *c_info = (chanim_info_t *) ctx;
-	wlc_info_t *wlc = c_info->wlc;
-	chanspec_t cs;
-
-	if (MCHAN_ENAB(wlc->pub))
-		return;
-
-	ASSERT(evt != NULL);
-
-	if (AP_ENAB(c_info->wlc->pub)) {
-		cs = evt->bsscfg->current_bss->chanspec;
-	} else {
-		cs = wlc->chanspec;
-	}
-
-	if (evt->up) {
-		(void) wlc_lq_chanim_if_info_setup(c_info, cs, TRUE);
-	} else {
-		wlc_lq_chanim_if_info_release(c_info, cs, TRUE);
-	}
-}
-
 static int
 BCMATTACHFN(wlc_lq_chanim_attach)(wlc_info_t *wlc)
 {
 	chanim_info_t *c_info;
-	chanim_interfaces_t *ifaces;
 	chanim_interface_info_t *if_info;
-	chanim_accum_t *accum;
-	int i;
 	int ret = BCME_OK;
 
 	if ((wlc->chanim_info = MALLOCZ(wlc->osh, sizeof(chanim_info_t))) == NULL) {
@@ -2607,15 +3033,11 @@ BCMATTACHFN(wlc_lq_chanim_attach)(wlc_info_t *wlc)
 	}
 
 	c_info = wlc->chanim_info;
-
 	ASSERT(wlc->chanim_info != NULL);
 
-
-	if ((ret = wlc_bsscfg_updown_register(wlc, wlc_lq_chanim_bsscfg_updn, c_info)) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: wlc_bsscfg_updown_register() failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		goto err;
-	}
+#if defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "chanim", (dump_fn_t)wlc_dump_chanim, (void *)wlc);
+#endif 
 
 	c_info->config.crsglitch_thres = CRSGLITCH_THRESHOLD_DEFAULT;
 	c_info->config.ccastats_thres = CCASTATS_THRESHOLD_DEFAULT;
@@ -2630,25 +3052,7 @@ BCMATTACHFN(wlc_lq_chanim_attach)(wlc_info_t *wlc)
 	c_info->stats = NULL;
 	c_info->wlc = wlc;
 
-	ifaces = MALLOCZ(wlc->osh, sizeof(chanim_interfaces_t));
-
-	if (ifaces == NULL) {
-		WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
-			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
-		ret = BCME_NOMEM;
-		goto err;
-	}
-
-	c_info->ifs = ifaces;
-
-	/*
-	 * The chanim bsscfg info is a structure for holding an array of accumulators.
-	 * In addition, it caches the normalized stats counters for quick access. It
-	 * supports N number of interfaces, but allocates one additional. The extra
-	 * entry is used for quick access for channel scans. NOTE: It only allocates
-	 * a single block.
-	 */
-	if_info = ((chanim_interface_info_t *)MALLOCZ(wlc->osh, CHANIM_INFO_SZ));
+	if_info = MALLOCZ(wlc->osh, sizeof(chanim_interface_info_t));
 
 	if (if_info == NULL) {
 		WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
@@ -2657,30 +3061,15 @@ BCMATTACHFN(wlc_lq_chanim_attach)(wlc_info_t *wlc)
 		goto err;
 	}
 
-	ifaces->if_info = if_info;
-	ifaces->num_ifs = NUM_IFS;
-
-	accum = ((chanim_accum_t *) MALLOCZ(wlc->osh, CHANIM_ACCUM_SZ));
-
-	if (accum == NULL) {
-		WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
-			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
-		ret = BCME_NOMEM;
-		goto err;
-	}
-
-	for (i = 0; i <= NUM_IFS; i++) {
-		if_info[i].accum = accum++;
-		if_info[i].idx = i;
-	}
+	c_info->ifaces = if_info;
+	c_info->free_list = NULL;
 
 	/*
 	 * Initialize if_info dedicated for scan (this saves an extra check for chanspec valid in
 	 * chanim_update).
 	 */
-	if_info[NUM_IFS].chanspec = 0x1001;
-	if_info[NUM_IFS].stats =
-		wlc_lq_chanim_find_stats(wlc, if_info[NUM_IFS].chanspec);
+	if_info->chanspec = 0x1001;
+	if_info->stats = wlc_lq_chanim_find_stats(wlc, if_info->chanspec);
 	wlc->pub->_chanim = TRUE;
 	return BCME_OK;
 err:
@@ -2710,42 +3099,58 @@ static void
 BCMATTACHFN(wlc_lq_chanim_detach)(wlc_info_t *wlc)
 {
 	chanim_info_t *c_info = wlc->chanim_info;
-	chanim_interfaces_t *ifaces;
+	chanim_interface_info_t *ifaces, *headptr;
 
 	if (c_info == NULL)
 		return;
 
-	ifaces = c_info->ifs;
+	headptr = c_info->free_list;
+	while ((ifaces = headptr)) {
+		headptr = headptr->next;
+		MFREE(wlc->osh, ifaces, sizeof(chanim_interface_info_t));
+	}
 
-	wlc_bsscfg_updown_unregister(wlc, wlc_lq_chanim_bsscfg_updn, c_info);
-
-	if (ifaces != NULL) {
-		if (ifaces->if_info != NULL) {
-			if (ifaces->if_info[0].accum != NULL) {
-				MFREE(wlc->osh, ifaces->if_info[0].accum, CHANIM_ACCUM_SZ);
-			}
-			MFREE(wlc->osh, ifaces->if_info, CHANIM_INFO_SZ);
-		}
-		MFREE(wlc->osh, ifaces, sizeof(chanim_interfaces_t));
+	headptr = c_info->ifaces;
+	while ((ifaces = headptr)) {
+		headptr = headptr->next;
+		MFREE(wlc->osh, ifaces, sizeof(chanim_interface_info_t));
 	}
 
 	wlc_chanim_mfree(wlc->osh, c_info);
 }
 
-#endif /* #ifndef WLCHANIM_DISABLED */
+#if defined(BCMDBG_DUMP)
+static int
+wlc_dump_chanim(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	chanim_info_t* c_info = wlc->chanim_info;
+	wlc_chanim_stats_t *stats = c_info->stats;
 
+	bcm_bprintf(b, "CHAN Interference Measurement:\n");
+	bcm_bprintf(b, "Stats during last scan:\n");
+	while (stats) {
+		bcm_bprintf(b, " chanspec: 0x%x crsglitch cnt: %d bad plcp: %d noise: %d\n",
+			stats->chanim_stats.chanspec, stats->chanim_stats.glitchcnt,
+			stats->chanim_stats.badplcp, stats->chanim_stats.bgnoise);
+
+		bcm_bprintf(b, "\t cca_txdur: %d cca_inbss: %d cca_obss:"
+		  "%d cca_nocat: %d cca_nopkt: %d\n",
+		  stats->chanim_stats.ccastats[CCASTATS_TXDUR],
+		  stats->chanim_stats.ccastats[CCASTATS_INBSS],
+		  stats->chanim_stats.ccastats[CCASTATS_OBSS],
+		  stats->chanim_stats.ccastats[CCASTATS_NOCTG],
+		  stats->chanim_stats.ccastats[CCASTATS_NOPKT]);
+		stats = stats->next;
+	}
+	return BCME_OK;
+}
+#endif 
+#endif /* WLCHANIM_DISABLED */
 
 static bool
-wlc_lq_chanim_any_if_info_setup(chanim_interfaces_t *ifaces)
+wlc_lq_chanim_any_if_info_setup(chanim_interface_info_t *ifaces)
 {
-	int i;
-
-	for (i = 0; i < ifaces->num_ifs; i++) {
-		if (ifaces->if_info[i].chanspec != 0) {
-			return TRUE;
-		}
-	}
-	return FALSE;
+	return (ifaces->next != NULL);
 }
 
 /*
@@ -2756,40 +3161,45 @@ wlc_lq_chanim_any_if_info_setup(chanim_interfaces_t *ifaces)
 int
 wlc_lq_chanim_update(wlc_info_t *wlc, chanspec_t chanspec, uint32 flags)
 {
-	chanim_interfaces_t *ifaces = wlc->chanim_info->ifs;
 	chanim_info_t* c_info = wlc->chanim_info;
+	chanim_interface_info_t *if_info, *ifaces = c_info->ifaces;
 
-	if (!WLC_CHANIM_ENAB(wlc)) {
+	if (!WLC_CHANIM_ENAB(wlc->pub)) {
 		WL_ERROR(("wl%d: %s: WLC_CHANIM not enabled \n", wlc->pub->unit, __FUNCTION__));
 		return BCME_ERROR;
 	}
 
 	/* on watchdog trigger */
 	if (flags & CHANIM_WD) {
-		int i;
-
 		if (!WLC_CHANIM_MODE_DETECT(c_info) || SCAN_IN_PROGRESS(wlc->scan)) {
-			WL_ERROR(("wl%d: %s: WLC_CHANIM upd blocked scan/detect\n", wlc->pub->unit,
+			WL_SCAN(("wl%d: %s: WLC_CHANIM upd blocked scan/detect\n", wlc->pub->unit,
 				__FUNCTION__));
 			return BCME_NOTREADY;
 		}
-
 
 		/*
 		 * Cycle through list of interfaces, accumulate matching chanspec and close,
 		 * if required.
 		 */
-		for (i = 0; i < ifaces->num_ifs; i++) {
-			chanim_interface_info_t *if_info = &ifaces->if_info[i];
-
+		if_info = ifaces;
+		while ((if_info = if_info->next)) {
 			if (!wf_chspec_malformed(if_info->chanspec)) {
 				if (chanspec == if_info->chanspec) {
-					wlc_lq_chanim_accum(wlc, if_info->chanspec, if_info->accum);
+					wlc_lq_chanim_accum(wlc, if_info->chanspec,
+						&if_info->accum);
 				}
 
 				if ((wlc->pub->now % chanim_config(c_info).sample_period) == 0) {
-					wlc_lq_chanim_close(wlc, if_info->chanspec, if_info->accum,
+					wlc_lq_chanim_close(wlc, if_info->chanspec, &if_info->accum,
 							if_info->stats);
+#ifdef BCMDBG
+					if (wlc_lq_chanim_display(wlc, if_info->chanspec,
+						if_info->stats) != BCME_OK)
+					{
+						WL_ERROR(("wl%d: %s: if_info->stats is NULL\n",
+							wlc->pub->unit, __FUNCTION__));
+					}
+#endif
 				}
 			}
 		}
@@ -2798,36 +3208,14 @@ wlc_lq_chanim_update(wlc_info_t *wlc, chanspec_t chanspec, uint32 flags)
 	/* on channel switch */
 	WL_TSLOG(wlc, __FUNCTION__, TS_ENTER, 0);
 	if (flags & CHANIM_CHANSPEC) {
-		chanim_interface_info_t *if_info;
-		chanspec_t prev_chanspec;
-
 		/* Switching to a new channel */
-		if_info = wlc_lq_chanim_if_info_find(wlc->chanim_info->ifs, chanspec);
-
 		if (SCAN_IN_PROGRESS(wlc->scan) || !wlc_lq_chanim_any_if_info_setup(ifaces)) {
-			if_info = &ifaces->if_info[ifaces->num_ifs];
-			prev_chanspec = if_info->chanspec;
-			wlc_lq_chanim_if_switch_channels(wlc, if_info, chanspec, prev_chanspec);
+			if_info = ifaces;
+			wlc_lq_chanim_if_switch_channels(wlc, if_info, chanspec, if_info->chanspec);
 		} else {
+			if_info = wlc_lq_chanim_if_info_find(ifaces, chanspec);
 			if (if_info != NULL)
-				wlc_lq_chanim_accum(wlc, chanspec, if_info->accum);
-
-			/* When an interface changes its chanspec then close the current interface
-			 * which would be interface at Zero index when mchan is not enabled.
-			 * For mchan case the interface gets updated with the new chanspec by
-			 * wlc_lq_chanim_create_bss_chan_context()
-			 */
-			if (!MCHAN_ENAB(wlc->pub) && if_info == NULL) {
-				if_info = &ifaces->if_info[0];
-				prev_chanspec = if_info->chanspec;
-				wlc_lq_chanim_if_switch_channels(wlc, if_info, chanspec,
-					prev_chanspec);
-				/* Preserve original behavior. Is there a better way? */
-				if (wlc->home_chanspec != if_info->chanspec) {
-					if_info->chanspec = wlc->home_chanspec;
-				}
-			}
-
+				wlc_lq_chanim_accum(wlc, chanspec, &if_info->accum);
 		}
 	}
 	WL_TSLOG(wlc, __FUNCTION__, TS_EXIT, 0);
@@ -2838,13 +3226,12 @@ void
 wlc_lq_chanim_acc_reset(wlc_info_t *wlc)
 {
 	chanim_info_t* c_info = wlc->chanim_info;
-	chanim_interfaces_t *ifaces = wlc->chanim_info->ifs;
 	chanim_interface_info_t *if_info;
 
-	if_info = wlc_lq_chanim_if_info_find(ifaces, wlc->chanspec);
+	if_info = wlc_lq_chanim_if_info_find(c_info->ifaces, wlc->chanspec);
 
 	if (if_info != NULL) {
-		wlc_lq_chanim_clear_acc(wlc, if_info->accum);
+		wlc_lq_chanim_clear_acc(wlc, &if_info->accum);
 	}
 	bzero((char*)&c_info->last_cnt, sizeof(chanim_cnt_t));
 }
@@ -3053,15 +3440,13 @@ wlc_lq_chanim_get_stats(chanim_info_t *c_info, wl_chanim_stats_t* iob, int *len,
 	if (cnt == WL_CHANIM_COUNT_ALL)
 		stats = c_info->stats;
 	else {
-		int i;
+		chanim_interface_info_t *if_info = c_info->ifaces;
 
 		/*
 		 * There are multiple i/f. To preserve original behavior, find the i/f that matches
 		 * home chanspec.
 		 */
-		for (i = 0; i < c_info->ifs->num_ifs; i++) {
-			chanim_interface_info_t *if_info = &c_info->ifs->if_info[i];
-
+		while ((if_info = if_info->next)) {
 			if (c_info->wlc->home_chanspec == if_info->chanspec) {
 				cur_stats = *if_info->stats;
 				cur_stats.next = NULL;
@@ -3188,7 +3573,6 @@ wlc_lq_chanim_mode_detect(chanim_info_t *c_info)
 {
 	return (chanim_config(c_info).mode >= CHANIM_DETECT);
 }
-
 #endif /* WLCHANIM */
 
 typedef struct wlc_lq_stats_notif {
@@ -3267,6 +3651,10 @@ wlc_lq_notif_timer(void *arg)
 	delta.PM = curr.PM - prev->PM;
 	delta.txopp = curr.txopp - prev->txopp;
 	delta.slot_time_txop = curr.slot_time_txop;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	delta.gdtxdur = curr.gdtxdur - prev->gdtxdur;
+	delta.bdtxdur = curr.bdtxdur - prev->bdtxdur;
+#endif
 
 #ifdef WL_OBSS_DYNBW
 	if (WLC_OBSS_DYNBW_ENAB(notif_ctx->wlc->pub)) {
@@ -3543,10 +3931,19 @@ wlc_lq_noise_sample_request(wlc_info_t *wlc, uint8 request, uint8 channel)
 	if (sampling_in_progress)
 		return;
 
-	wlc_phy_noise_sample_request_external(WLC_PI(wlc));
+	phy_noise_sample_request_external(WLC_PI(wlc));
 
 	return;
 }
+
+int8
+wlc_lq_read_noise_lte(wlc_info_t *wlc)
+{
+	wlc_lq_info_t *lqi = wlc->lqi;
+	int8 nval = lqi->noise_lte;
+	return nval;
+}
+
 #ifdef WLCHANIM
 /* Get tx + rx load */
 /* USED by RSDB PM module to decide on the modeswitch */
@@ -3579,3 +3976,23 @@ wlc_rsdb_get_lq_load(wlc_info_t *wlc)
 	return load;
 }
 #endif /* WLCHANIM */
+void
+wlc_lq_rssi_ant_get_api(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, int8 *rssi)
+{
+	int i;
+	struct ether_addr *ea;
+	struct scb *scb;
+	for (i = WL_ANT_IDX_1; i < WL_RSSI_ANT_MAX; i++) {
+		rssi[i] = WLC_RSSI_INVALID;
+	}
+	if (BSSCFG_STA(bsscfg) && bsscfg->BSS) {
+		ea = &bsscfg->BSSID;
+		if ((scb = wlc_scbfind(wlc, bsscfg, ea)) != NULL) {
+			for (i = WL_ANT_IDX_1; i < WL_RSSI_ANT_MAX; i++) {
+				if (wlc->stf->rxchain & (1 << i)) {
+					rssi[i] = wlc_lq_ant_rssi_get(wlc, bsscfg, scb, i);
+				}
+			}
+		}
+	}
+}

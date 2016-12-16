@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_radar.c 604347 2015-12-07 00:05:52Z chihap $
+ * $Id: phy_radar.c 657811 2016-09-02 17:48:43Z $
  */
 
 #include <typedefs.h>
@@ -26,6 +26,7 @@
 #include "phy_radar_st.h"
 #include "phy_radar_shared.h"
 #include <phy_radar.h>
+#include <phy_ac_info.h>
 
 /* module private states */
 struct phy_radar_info {
@@ -217,7 +218,8 @@ phy_radar_detect_enable(phy_info_t *pi, bool enab)
 }
 
 uint8
-phy_radar_detect(phy_info_t *pi, radar_detected_info_t *radar_detected)
+phy_radar_detect(phy_info_t *pi, radar_detected_info_t *radar_detected,
+bool sec_pll, bool bw80_80_mode)
 {
 	phy_radar_info_t *ri = pi->radari;
 	phy_type_radar_fns_t *fns = ri->fns;
@@ -227,7 +229,7 @@ phy_radar_detect(phy_info_t *pi, radar_detected_info_t *radar_detected)
 	if (fns->run == NULL)
 		return BCME_OK;
 
-	return (fns->run)(fns->ctx, radar_detected);
+	return (fns->run)(fns->ctx, radar_detected, sec_pll, bw80_80_mode);
 }
 
 void
@@ -279,8 +281,9 @@ phy_radar_detect_mode_set(phy_info_t *pi, phy_radar_detect_mode_t mode)
 }
 
 void
-phy_radar_first_indicator_set(phy_radar_info_t *ri)
+phy_radar_first_indicator_set(phy_info_t *pi)
 {
+	phy_radar_info_t *ri = pi->radari;
 	phy_radar_st_t *st = ri->st;
 
 	if (st == NULL)
@@ -288,4 +291,30 @@ phy_radar_first_indicator_set(phy_radar_info_t *ri)
 
 	/* indicate first time radar detection */
 	st->first_radar_indicator = 1;
+	if (PHY_SUPPORT_SCANCORE(pi) ||
+		PHY_SUPPORT_BW80P80(pi)) {
+		st->first_radar_indicator_sc = 1;
+	}
+}
+
+int
+phy_radar_set_thresholds(phy_radar_info_t *radari, wl_radar_thr_t *thresholds)
+{
+	int err = BCME_OK;
+	phy_radar_st_t *st = phy_radar_get_st(radari);
+	phy_type_radar_fns_t *fns = radari->fns;
+	if (thresholds->version != WL_RADAR_THR_VERSION) {
+		err = BCME_VERSION;
+		goto end;
+	}
+	st->rparams.radar_thrs.thresh0_20_lo = thresholds->thresh0_20_lo;
+	st->rparams.radar_thrs.thresh1_20_lo = thresholds->thresh1_20_lo;
+	st->rparams.radar_thrs.thresh0_20_hi = thresholds->thresh0_20_hi;
+	st->rparams.radar_thrs.thresh1_20_hi = thresholds->thresh1_20_hi;
+	if (fns->set_thresholds != NULL) {
+		err = (fns->set_thresholds)(fns->ctx, thresholds);
+	}
+	phy_radar_detect_enable(radari->pi, radari->pi->sh->radar);
+end:
+	return err;
 }

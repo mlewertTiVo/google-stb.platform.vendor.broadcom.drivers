@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_srvsdb.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_srvsdb.c 659188 2016-09-13 04:49:46Z $
  */
 
 
@@ -155,10 +155,10 @@ wlc_srvsdb_doiovar(void *hdl, uint32 actionid,
 
 			if (srvsdb->vsdb_chans[0] && srvsdb->vsdb_chans[1]) {
 				/* Set vsdb chans */
-				wlc_phy_force_vsdb_chans(WLC_PI(wlc), srvsdb->vsdb_chans, 1);
+				phy_chanmgr_vsdb_force_chans(WLC_PI(wlc), srvsdb->vsdb_chans, 1);
 			} else {
 				/* Reset vsdb chans */
-				wlc_phy_force_vsdb_chans(WLC_PI(wlc), srvsdb->vsdb_chans, 0);
+				phy_chanmgr_vsdb_force_chans(WLC_PI(wlc), srvsdb->vsdb_chans, 0);
 			}
 		} else {
 			err = BCME_UNSUPPORTED;

@@ -426,7 +426,6 @@ clm_limits_params_init(struct clm_limits_params *params);
 extern clm_result_t
 clm_country_iter(clm_country_t *country, ccode_t cc, unsigned int *rev);
 
-
 /** Looks up for country (region) with given country code and revision
  * \param[in] cc Country code to look for
  * \param[in] rev Country (region) revision to look for
@@ -447,7 +446,6 @@ clm_country_lookup(const ccode_t cc, unsigned int rev, clm_country_t *country);
 extern clm_result_t
 clm_country_def(const clm_country_t country, clm_country_locales_t *locales);
 
-
 /** Retrieves information about valid and restricted channels for locales of
  * some region
  * \param[in] locales Country (region) locales' information
@@ -460,7 +458,6 @@ clm_country_def(const clm_country_t country, clm_country_locales_t *locales);
 extern clm_result_t
 clm_country_channels(const clm_country_locales_t *locales, clm_band_t band,
 	clm_channels_t *valid_channels, clm_channels_t *restricted_channels);
-
 
 /** Retrieves flags associated with given country (region) for given band
  * \param[in] locales Country (region) locales' information

@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt_vs.c 641815 2016-06-06 10:17:42Z $
+ * $Id: wlc_ie_mgmt_vs.c 665073 2016-10-14 20:33:29Z $
  */
 
 #include <wlc_cfg.h>
@@ -22,9 +22,6 @@
 #if defined(WLFBT)
 #include <proto/802.11_ccx.h>
 #endif
-#ifdef WL11ULB
-#include <proto/bcmulb.h>
-#endif /* WL11ULB */
 #include <bcmutils.h>
 #include <wlc_ie_mgmt_vs.h>
 
@@ -48,7 +45,7 @@ static const struct {
 		uint8 type;
 		uint8 subtype;
 	} cdi;
-	uint8 id;
+	wlc_iem_tag_t id;
 } cdi482id[] = {
 	{{MSFT_OUI, WME_OUI_TYPE, WME_SUBTYPE_IE}, WLC_IEM_VS_IE_PRIO_WME},
 	{{MSFT_OUI, WME_OUI_TYPE, WME_SUBTYPE_PARAM_IE}, WLC_IEM_VS_IE_PRIO_WME},
@@ -63,7 +60,7 @@ static const struct {
 		uint8 oui[3];
 		uint8 type;
 	} cdi;
-	uint8 id;
+	wlc_iem_tag_t id;
 } cdi322id[] = {
 	{{BRCM_PROP_OUI, VHT_FEATURES_IE_TYPE}, WLC_IEM_VS_IE_PRIO_BRCM_VHT},
 	{{BRCM_PROP_OUI, HT_CAP_IE_TYPE}, WLC_IEM_VS_IE_PRIO_BRCM_HT},
@@ -72,9 +69,6 @@ static const struct {
 	{{BRCM_PROP_OUI, RELMCAST_BRCM_PROP_IE_TYPE}, WLC_IEM_VS_IE_PRIO_BRCM_RMC},
 #endif
 	{{BRCM_PROP_OUI, MEMBER_OF_BRCM_PROP_IE_TYPE}, WLC_IEM_VS_IE_PRIO_BRCM_PSTA},
-#ifdef WL11ULB
-	{{BRCM_PROP_OUI, ULB_BRCM_PROP_IE_TYPE}, WLC_IEM_VS_IE_PRIO_ULB},
-#endif /* WL11ULB */
 	{{MSFT_OUI, WPA_OUI_TYPE}, WLC_IEM_VS_IE_PRIO_WPA},
 	{{MSFT_OUI, WPS_OUI_TYPE}, WLC_IEM_VS_IE_PRIO_WPS},
 	{{WFA_OUI, WFA_OUI_TYPE_HS20}, WLC_IEM_VS_IE_PRIO_HS20},
@@ -95,7 +89,7 @@ static const struct {
  */
 static const struct {
 	uint8 oui[3];
-	uint8 id;
+	wlc_iem_tag_t id;
 } oui2id[] = {
 	{BRCM_OUI, WLC_IEM_VS_IE_PRIO_BRCM},
 #ifdef IBSS_RMC
@@ -106,12 +100,11 @@ static const struct {
 /*
  * Map Vendor Specific IE to an id
  */
-uint8
-wlc_iem_vs_get_id(wlc_iem_info_t *iem, uint8 *ie)
+wlc_iem_tag_t
+wlc_iem_vs_get_id(uint8 *ie)
 {
 	uint i;
 
-	BCM_REFERENCE(iem);
 	ASSERT(ie != NULL);
 
 	/* TODO: arrange the elements in applicable arrays in a sorted order
@@ -138,5 +131,35 @@ wlc_iem_vs_get_id(wlc_iem_info_t *iem, uint8 *ie)
 		}
 	}
 
-	return WLC_IEM_VS_IE_ID_UNK;
+	return WLC_IEM_VS_ID_MAX;
 }
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+int
+wlc_iem_vs_dump(void *ctx, struct bcmstrbuf *b)
+{
+	uint i;
+
+	BCM_REFERENCE(ctx);
+
+	for (i = 0; i < ARRAYSIZE(cdi482id); i ++) {
+		bcm_bprintf(b, "%u: ", cdi482id[i].id);
+		bcm_bprhex(b, "", FALSE, (uint8 *)&cdi482id[i].cdi.oui,
+			sizeof(cdi482id[i].cdi.oui));
+		bcm_bprintf(b, "%02x", cdi482id[i].cdi.type);
+		bcm_bprintf(b, "%02x\n", cdi482id[i].cdi.subtype);
+	}
+	for (i = 0; i < ARRAYSIZE(cdi322id); i ++) {
+		bcm_bprintf(b, "%u: ", cdi322id[i].id);
+		bcm_bprhex(b, "", FALSE, (uint8 *)&cdi322id[i].cdi.oui,
+			sizeof(cdi322id[i].cdi.oui));
+		bcm_bprintf(b, "%02x\n", cdi322id[i].cdi.type);
+	}
+	for (i = 0; i < ARRAYSIZE(oui2id); i ++) {
+		bcm_bprintf(b, "%u: ", oui2id[i].id);
+		bcm_bprhex(b, "", TRUE, oui2id[i].oui, sizeof(oui2id[i].oui));
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */

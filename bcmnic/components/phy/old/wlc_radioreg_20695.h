@@ -17,7 +17,7 @@
  *
  *  $ ./merge_regs.py --always-add-macro --max 70 --macro (rev) --compare-template (RADIO20695_MAJORREV(rev) >= ${ver}) --non-register-regex JTAG_ --extended-version-checks RF_20695_REV_ID -o /projects/BCM43012/work/sarvendr/phy_tools/driver/src/wl/phy/wlc_radioreg_20695.h ./data/radio_regs/20695_majorrev0_registers.h ./data/radio_regs/20695_majorrev1_registers.h ./data/radio_regs/20695_majorrev2_registers.h
  *
- * $Id: wlc_radioreg_20695.h 611870 2016-01-12 10:45:18Z sudhirk $
+ * $Id: wlc_radioreg_20695.h 611870 2016-01-12 10:45:18Z $
  */
 /* FILE-CSTYLED */
 

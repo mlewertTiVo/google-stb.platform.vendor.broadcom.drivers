@@ -107,6 +107,12 @@
 #endif /* PSPRETEND */
 
 #ifdef PSPRETEND
+#ifdef BCMDBG
+void wlc_pspretend_scb_time_upd(wlc_pps_info_t *pps, struct scb *scb);
+uint wlc_pspretend_scb_time_get(wlc_pps_info_t *pps, struct scb *scb);
+void wlc_pspretend_supr_upd(wlc_pps_info_t *pps, wlc_bsscfg_t *cfg, struct scb *scb,
+	uint supr_status);
+#endif
 
 bool wlc_pspretend_limit_transit(wlc_pps_info_t *pps, wlc_bsscfg_t *cfg, struct scb *scb,
 	int in_transit);

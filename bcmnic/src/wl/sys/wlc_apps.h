@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_apps.h 641311 2016-06-02 05:49:22Z $
+ * $Id: wlc_apps.h 660987 2016-09-22 19:23:11Z $
 */
 
 
@@ -47,11 +47,18 @@ extern void wlc_apps_process_pmqdata(wlc_info_t *wlc, uint32 pmqdata);
 extern void wlc_apps_pspoll_resp_prepare(wlc_info_t *wlc, struct scb *scb,
                                          void *pkt, struct dot11_header *h, bool last_frag);
 extern void wlc_apps_send_psp_response(wlc_info_t *wlc, struct scb *scb, uint16 fc);
+#if defined(TXQ_MUX)
+uint BCMFASTPATH wlc_scbq_ps_output(void *ctx, uint ac, uint request_time, struct spktq *output_q);
+#endif
 
 extern int wlc_apps_attach(wlc_info_t *wlc);
 extern void wlc_apps_detach(wlc_info_t *wlc);
 
+#if !defined(TXQ_MUX)
 extern void wlc_apps_psq_ageing(wlc_info_t *wlc);
+#else
+#define wlc_apps_psq_ageing(wlc) do {} while (0)
+#endif /* TXQ_MUX */
 extern bool wlc_apps_psq(wlc_info_t *wlc, void *pkt, int prec);
 extern void wlc_apps_tbtt_update(wlc_info_t *wlc);
 extern bool wlc_apps_suppr_frame_enq(wlc_info_t *wlc, void *pkt, tx_status_t *txs, bool lastframe);
@@ -64,7 +71,9 @@ extern uint8 wlc_apps_apsd_ac_available(wlc_info_t *wlc, struct scb *scb);
 extern uint8 wlc_apps_apsd_ac_buffer_status(wlc_info_t *wlc, struct scb *scb);
 
 extern void wlc_apps_scb_tx_block(wlc_info_t *wlc, struct scb *scb, uint reason, bool block);
+#if !defined(TXQ_MUX)
 extern void wlc_apps_scb_psq_norm(wlc_info_t *wlc, struct scb *scb);
+#endif /* TXQ_MUX */
 extern bool wlc_apps_scb_supr_enq(wlc_info_t *wlc, struct scb *scb, void *pkt);
 extern int wlc_apps_scb_apsd_cnt(wlc_info_t *wlc, struct scb *scb);
 
@@ -126,7 +135,9 @@ extern void wlc_apps_clear_auxpmq(wlc_info_t *wlc);
 #define wlc_apps_apsd_ac_buffer_status(a, b) 0
 
 #define wlc_apps_scb_tx_block(a, b, c, d) do {} while (0)
+#if !defined(TXQ_MUX)
 #define wlc_apps_scb_psq_norm(a, b) do {} while (0)
+#endif /* TXQ_MUX */
 #define wlc_apps_scb_supr_enq(a, b, c) FALSE
 
 #define wlc_apps_set_listen_prd(a, b, c) do {} while (0)
@@ -156,7 +167,9 @@ extern void wlc_apps_print_scb_psinfo_txstuck(wlc_info_t *wlc, struct bcmstrbuf 
 void wlc_apps_dbg_dump(wlc_info_t *wlc, int hi, int lo);
 
 extern uint wlc_apps_scb_txpktcnt(wlc_info_t *wlc, struct scb *scb);
+#if !defined(TXQ_MUX)
 extern void wlc_apps_ps_flush_by_prio(wlc_info_t *wlc, struct scb *scb, int prec);
+#endif /* TXQ_MUX */
 #ifdef PKTQ_LOG
 struct pktq * wlc_apps_prec_pktq(wlc_info_t* wlc, struct scb* scb);
 #endif

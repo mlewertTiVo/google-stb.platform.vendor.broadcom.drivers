@@ -36,6 +36,9 @@ int km_key_create(wlc_keymgmt_t *km, const wlc_key_info_t *key_info,
 	wlc_key_t **key);
 int km_key_destroy(wlc_key_t **key);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void km_key_dump(wlc_key_t *key, struct bcmstrbuf *buf);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 int km_key_get_data(wlc_key_t *key, uint8* data, size_t data_size,
     size_t *data_len, wlc_key_data_type_t type, int instance, bool tx);

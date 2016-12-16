@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_prot_obss.c 637713 2016-05-13 22:12:35Z $
+ * $Id: wlc_prot_obss.c 659250 2016-09-13 12:08:30Z $
  */
 
 /**
@@ -59,7 +59,6 @@
 #include <wlc_prot_obss.h>
 #include <wlc_lq.h>
 #include <wlc_obss_util.h>
-#include <wlc_ulb.h>
 
 typedef struct {
 	uint32 obss_inactivity_period;	/* quiet time prior to deactivating OBSS protection */
@@ -77,6 +76,12 @@ typedef struct {
 	wlc_bmac_obss_counts_t *curr_stats;
 	/* Cummulative stat counters */
 	wlc_bmac_obss_counts_t *total_stats;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* For diagnostic measurements */
+	wlc_bmac_obss_counts_t *msrmnt_stored;
+	cca_stats_n_flags *results;
+	struct wl_timer *stats_timer;
+#endif
 	uint16 obss_inactivity;	/* # of secs of OBSS inactivity */
 	int8 mode;
 } wlc_prot_obss_info_priv_t;
@@ -93,6 +98,11 @@ typedef struct {
 	wlc_bmac_obss_counts_t curr_stats;
 	/* Cummulative stat counters */
 	wlc_bmac_obss_counts_t total_stats;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* For diagnostic measurements */
+	wlc_bmac_obss_counts_t msrmnt_stored;
+	cca_stats_n_flags results;
+#endif
 } wlc_prot_obss_t;
 
 static uint16 wlc_prot_obss_info_priv_offset = OFFSETOF(wlc_prot_obss_t, priv);
@@ -105,6 +115,11 @@ static const bcm_iovar_t wlc_prot_obss_iovars[] = {
 	{"obss_prot", IOV_OBSS_PROT,
 	(0), 0, IOVT_BUFFER, sizeof(wl_config_t),
 	},
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	{"ccastats", IOV_CCASTATS,
+	(IOVF_GET_UP), 0, IOVT_BUFFER, sizeof(cca_stats_n_flags),
+	},
+#endif 
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -119,6 +134,16 @@ wlc_prot_obss_doiovar(void *hdl, uint32 actionid,
 	void *p, uint plen,
 	void *a, uint alen, uint val_size, struct wlc_if *wlcif);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_prot_obss_dump(wlc_prot_obss_info_t *prot, void *input, int buf_len, void *output);
+
+static void
+wlc_prot_obss_stats_sample(wlc_prot_obss_info_t *prot, int duration);
+
+static void
+wlc_prot_obss_stats_timeout(void *arg);
+#endif
 
 static void
 wlc_prot_obss_enable(wlc_prot_obss_info_t *prot, bool enable);
@@ -128,12 +153,81 @@ wlc_prot_obss_init(void *cntxt);
 
 static void
 wlc_prot_obss_watchdog(void *cntxt);
+
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
  * source file may reference private constants, types, variables, and functions).
  */
 #include <wlc_patch.h>
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_prot_obss_stats_sample(wlc_prot_obss_info_t *prot, int duration)
+{
+	wlc_prot_obss_info_priv_t *priv = WLC_PROT_OBSS_INFO_PRIV(prot);
+	wlc_info_t *wlc = priv->wlc;
+
+	if (duration) {
+		/* Store results of first read */
+		wlc_bmac_obss_stats_read(wlc->hw, priv->msrmnt_stored);
+		wl_add_timer(wlc->wl, priv->stats_timer, duration, 0);
+		priv->results->msrmnt_time = duration;
+	} else {
+		wlc_bmac_obss_counts_t delta, now;
+		wlc_bmac_obss_counts_t *curr = &now;
+		wlc_bmac_obss_counts_t *prev = priv->msrmnt_stored;
+
+		/* Read current values and compute the delta. */
+		wlc_bmac_obss_stats_read(wlc->hw, curr);
+
+		memset(&delta, '\0', sizeof(delta));
+
+		/* duration */
+		delta.usecs = curr->usecs - prev->usecs;
+		delta.txdur = curr->txdur - prev->txdur;
+		delta.ibss = curr->ibss - prev->ibss;
+		delta.obss = curr->obss - prev->obss;
+		delta.noctg = curr->noctg - prev->noctg;
+		delta.nopkt = curr->nopkt - prev->nopkt;
+		delta.PM = curr->PM - prev->PM;
+		delta.txopp = curr->txopp - prev->txopp;
+		delta.gdtxdur = curr->gdtxdur - prev->gdtxdur;
+		delta.bdtxdur = curr->bdtxdur - prev->bdtxdur;
+		delta.slot_time_txop = curr->slot_time_txop;
+
+		/* obss */
+		delta.rxdrop20s = curr->rxdrop20s - prev->rxdrop20s;
+		delta.rx20s = curr->rx20s - prev->rx20s;
+		delta.rxcrs_pri = curr->rxcrs_pri - prev->rxcrs_pri;
+		delta.rxcrs_sec20 = curr->rxcrs_sec20 - prev->rxcrs_sec20;
+		delta.rxcrs_sec40 = curr->rxcrs_sec40 - prev->rxcrs_sec40;
+		delta.sec_rssi_hist_hi = curr->sec_rssi_hist_hi - prev->sec_rssi_hist_hi;
+		delta.sec_rssi_hist_med = curr->sec_rssi_hist_med - prev->sec_rssi_hist_med;
+		delta.sec_rssi_hist_low = curr->sec_rssi_hist_low - prev->sec_rssi_hist_low;
+
+		/* counters */
+		delta.crsglitch = curr->crsglitch - prev->crsglitch;
+		delta.badplcp = curr->badplcp - prev->badplcp;
+		delta.bphy_crsglitch = curr->bphy_crsglitch - prev->bphy_crsglitch;
+		delta.bphy_badplcp = curr->bphy_badplcp - prev->bphy_badplcp;
+		delta.badfcs = curr->badfcs - prev->badfcs;
+		delta.suspend = curr->suspend - prev->suspend;
+		delta.suspend_cnt = curr->suspend_cnt - prev->suspend_cnt;
+		delta.txfrm = curr->txfrm - prev->txfrm;
+		delta.rxstrt = curr->rxstrt - prev->rxstrt;
+
+		memcpy(priv->msrmnt_stored, &delta, sizeof(wlc_bmac_obss_counts_t));
+		priv->results->msrmnt_done = 1;
+	}
+}
+
+static void
+wlc_prot_obss_stats_timeout(void *arg)
+{
+	wlc_prot_obss_info_t *prot = (wlc_prot_obss_info_t *) arg;
+	wlc_prot_obss_stats_sample(prot, 0);
+}
+#endif 
 
 static void
 wlc_prot_obss_enable(wlc_prot_obss_info_t *prot, bool enable)
@@ -259,6 +353,41 @@ wlc_prot_obss_watchdog(void *cntxt)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_prot_obss_dump(wlc_prot_obss_info_t *prot, void *input, int buf_len, void *output)
+{
+	wlc_prot_obss_info_priv_t *priv = WLC_PROT_OBSS_INFO_PRIV(prot);
+	cca_msrmnt_query *q = (cca_msrmnt_query *) input;
+	cca_stats_n_flags *results;
+
+	if (!q->msrmnt_query) {
+		priv->results->msrmnt_done = 0;
+		wlc_prot_obss_stats_sample(prot, q->time_req);
+		memset(output, 0, buf_len);
+	} else {
+		char *buf_ptr;
+		struct bcmstrbuf b;
+
+		results = (cca_stats_n_flags *) output;
+		buf_ptr = results->buf;
+		buf_len = buf_len - OFFSETOF(cca_stats_n_flags, buf);
+		buf_len = (buf_len > 0) ? buf_len : 0;
+
+		results->msrmnt_time = priv->results->msrmnt_time;
+		results->msrmnt_done = priv->results->msrmnt_done;
+		bcm_binit(&b, buf_ptr, buf_len);
+
+		if (results->msrmnt_done) {
+			wlc_obss_util_stats(priv->wlc, priv->msrmnt_stored, priv->prev_stats,
+				priv->curr_stats, q->report_opt, &b);
+		} else {
+			bcm_bprintf(&b, "BUSY\n");
+		}
+	}
+	return 0;
+}
+#endif 
 
 static int
 wlc_prot_obss_doiovar(void *hdl, uint32 actionid,
@@ -317,6 +446,11 @@ wlc_prot_obss_doiovar(void *hdl, uint32 actionid,
 		} else
 			err = BCME_UNSUPPORTED;
 	        break;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	case IOV_GVAL(IOV_CCASTATS):
+	        err = wlc_prot_obss_dump(prot, p, alen, a);
+		break;
+#endif 
 	default:
 		err = BCME_UNSUPPORTED;
 	}
@@ -346,6 +480,17 @@ BCMATTACHFN(wlc_prot_obss_attach)(wlc_info_t *wlc)
 	priv->prev_stats = &obss->prev_stats;
 	priv->curr_stats = &obss->curr_stats;
 	priv->total_stats = &obss->total_stats;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	priv->msrmnt_stored = &obss->msrmnt_stored;
+	priv->results = &obss->results;
+	priv->stats_timer = wl_init_timer(wlc->wl, wlc_prot_obss_stats_timeout, prot, "obss_prot");
+
+	if (priv->stats_timer == NULL) {
+		WL_ERROR(("wl%d: %s: wl_init_timer failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif 
 
 	if (D11REV_GE(wlc->pub->corerev, 40)) {
 		priv->config->obss_sec_rssi_lim0 = OBSS_SEC_RSSI_LIM0_DEFAULT;
@@ -381,6 +526,9 @@ BCMATTACHFN(wlc_prot_obss_detach)(wlc_prot_obss_info_t *prot)
 	wlc = priv->wlc;
 	wlc->pub->_prot_obss = FALSE;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wl_free_timer(wlc->wl, priv->stats_timer);
+#endif 
 	wlc_module_unregister(wlc->pub, "prot_obss", prot);
 	MFREE(wlc->osh, prot, WLC_PROT_OBSS_SIZE);
 }

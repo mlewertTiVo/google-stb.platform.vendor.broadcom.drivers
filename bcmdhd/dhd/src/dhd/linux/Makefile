@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 634301 2016-04-27 10:57:42Z $
+# $Id: Makefile 648647 2016-07-13 06:54:27Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -152,6 +152,9 @@ ifneq ($(findstring stb,$(TARGET)),)
 	DFLAGS += -DSTB
 endif
 
+ifeq ($(WLSYNC),1)
+        DFLAGS += -DUPDATE_LINK_STATE
+endif
 # Past 2.6.29 kernels, arch specific bits are re-organized in linux kernel. So
 # append new include paths to existing ones to get 2.6.29+ kernels compile
 

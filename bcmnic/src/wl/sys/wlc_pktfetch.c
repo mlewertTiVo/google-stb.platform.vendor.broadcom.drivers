@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_pktfetch.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_pktfetch.c 663452 2016-10-05 12:14:40Z $
  */
 
 
@@ -35,9 +35,7 @@
 #include <wlc.h>
 #include <wlc_pub.h>
 #include <wlc_pktfetch.h>
-#ifdef WLAMPDU
 #include <wlc_scb.h>
-#endif
 #include <wlc_ampdu_rx.h>
 #include <wlc_keymgmt.h>
 #include <wlc_bsscfg.h>
@@ -55,6 +53,10 @@ static void wlc_sendup_pktfetch_cb(void *lbuf, void *orig_lfrag,
 #endif
 static void wlc_recreate_frameinfo(wlc_info_t *wlc, void *lbuf, void *lfrag,
 	wlc_frminfo_t *fold, wlc_frminfo_t *fnew);
+
+static bool
+wlc_pktfetch_checkpkt(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
+	struct wlc_frminfo *f, struct dot11_llc_snap_header *lsh, uint body_len);
 
 bool
 wlc_pktfetch_required(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
@@ -75,6 +77,7 @@ wlc_pktfetch_required(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
 		if ((ntoh16(*ether_type)) == ETHER_TYPE_802_1X)
 		return TRUE;
 	}
+
 	/* If IV needs to be accounted for, move past IV len */
 	lsh = (struct dot11_llc_snap_header *)(f->pbody + (skip_iv ? key_info->iv_len : 0));
 
@@ -82,32 +85,11 @@ wlc_pktfetch_required(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
 	if (f->isamsdu)
 		lsh = (struct dot11_llc_snap_header*)((char *)lsh + ETHER_HDR_LEN);
 
-	if ((PKTFRAGUSEDLEN(wlc->osh, f->p) > 0) &&
-		LLC_SNAP_HEADER_CHECK(lsh) &&
-		(EAPOL_PKTFETCH_REQUIRED(lsh) ||
-#ifdef WLTDLS
-		WLTDLS_PKTFETCH_REQUIRED(wlc, lsh) ||
-#endif
-#ifdef WLNDOE
-		NDOE_PKTFETCH_REQUIRED(wlc, lsh, f->pbody, f->body_len) ||
-#endif
-#ifdef WOWLPF
-		WOWLPF_ACTIVE(wlc->pub) ||
-#endif
-#ifdef BDO
-		BDO_PKTFETCH_REQUIRED(wlc, lsh) ||
-#endif
-#ifdef WL_TBOW
-		WLTBOW_PKTFETCH_REQUIRED(wlc, bsscfg, ntoh16(lsh->type)) ||
-#endif
-#ifdef TKO
-		TKO_PKTFETCH_REQUIRED(wlc, lsh) ||
-#endif
-		FALSE))
-		return TRUE;
-
+	/* Check only if host is holding the packet */
+	if (PKTFRAGUSEDLEN(wlc->osh, f->p) > 0) {
+		return (wlc_pktfetch_checkpkt(wlc, bsscfg, f, lsh, f->body_len));
+	}
 	return FALSE;
-
 }
 
 int
@@ -229,8 +211,10 @@ wlc_recvdata_pktfetch_cb(void *lbuf, void *orig_lfrag, void *ctxt, bool cancelle
 	struct scb *scb = NULL;
 	osl_t *osh = wlc->osh;
 	wlc_frminfo_t f;
+#ifdef WLAMPDU
 	bool ampdu_path = ctx->ampdu_path;
 	bool ordered = ctx->ordered;
+#endif
 	bool promisc = ctx->promisc;
 	wlc_bsscfg_t *bsscfg = NULL;
 
@@ -281,11 +265,13 @@ wlc_recvdata_pktfetch_cb(void *lbuf, void *orig_lfrag, void *ctxt, bool cancelle
 				wlc_recvdata_sendup(wlc, scb, FALSE,
 					(struct ether_addr *)PKTDATA(wlc->osh, f.p), f.p);
 			}
+#ifdef WLAMPDU
 		} else if (ampdu_path) {
 			if (ordered)
 				wlc_recvdata_ordered(wlc, scb, &f);
 			else
 				wlc_ampdu_recvdata(wlc->ampdu_rx, scb, &f);
+#endif
 		} else {
 			wlc_recvdata_ordered(wlc, scb, &f);
 		}
@@ -379,30 +365,9 @@ wlc_sendup_chain_pktfetch_required(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, void *
 	body_len = PKTLEN(wlc->osh, p) - body_offset;
 	BCM_REFERENCE(body_len);
 
-	if ((PKTFRAGUSEDLEN(wlc->osh, p) > 0) &&
-		LLC_SNAP_HEADER_CHECK(lsh) &&
-		(EAPOL_PKTFETCH_REQUIRED(lsh) ||
-#ifdef WLTDLS
-		WLTDLS_PKTFETCH_REQUIRED(wlc, lsh) ||
-#endif
-#ifdef WLNDOE
-		NDOE_PKTFETCH_REQUIRED(wlc, lsh, lsh, body_len) ||
-#endif
-#ifdef WOWLPF
-		WOWLPF_ACTIVE(wlc->pub) ||
-#endif
-#ifdef BDO
-		BDO_PKTFETCH_REQUIRED(wlc, lsh) ||
-#endif
-#ifdef WL_TBOW
-		WLTBOW_PKTFETCH_REQUIRED(wlc, bsscfg, ntoh16(lsh->type)) ||
-#endif
-#ifdef TKO
-		TKO_PKTFETCH_REQUIRED(wlc, lsh) ||
-#endif
-		FALSE))
-		return TRUE;
-
+	if (PKTFRAGUSEDLEN(wlc->osh, p) > 0) {
+		return (wlc_pktfetch_checkpkt(wlc, bsscfg, p, lsh, body_len));
+	}
 	return FALSE;
 }
 
@@ -516,5 +481,45 @@ wlc_sendup_pktfetch_cb(void *lbuf, void *orig_lfrag, void *ctxt, bool cancelled)
 	wlc_sendup_chain(wlc, lbuf);
 }
 #endif /* PKTC || PKTC_DONGLE */
+
+static bool
+wlc_pktfetch_checkpkt(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
+	struct wlc_frminfo *f, struct dot11_llc_snap_header *lsh, uint body_len)
+{
+	bool pktfetch_pkt, retval = FALSE;
+
+	pktfetch_pkt = LLC_SNAP_HEADER_CHECK(lsh) &&
+		(EAPOL_PKTFETCH_REQUIRED(lsh) ||
+#ifdef WLTDLS
+			WLTDLS_PKTFETCH_REQUIRED(wlc, lsh) ||
+#endif
+#ifdef WLNDOE
+			NDOE_PKTFETCH_REQUIRED(wlc, lsh, f->pbody, body_len) ||
+#endif
+#ifdef WOWLPF
+			WOWLPF_ACTIVE(wlc->pub) ||
+#endif
+#ifdef BDO
+			BDO_PKTFETCH_REQUIRED(wlc, lsh) ||
+#endif
+#ifdef WL_TBOW
+			WLTBOW_PKTFETCH_REQUIRED(wlc, bsscfg, ntoh16(lsh->type)) ||
+#endif
+#ifdef TKO
+			TKO_PKTFETCH_REQUIRED(wlc, lsh, bsscfg) ||
+#endif
+#ifdef ICMP
+			ICMP_PKTFETCH_REQUIRED(wlc, lsh) ||
+#endif
+			FALSE);
+
+	/* CCX_IAPP pkt has different OUI in LLC SNAP .. so check seperately */
+	if (pktfetch_pkt ||
+	FALSE)
+	{
+		retval = TRUE;
+	}
+	return retval;
+}
 
 #endif /* BCMSPLITRX */

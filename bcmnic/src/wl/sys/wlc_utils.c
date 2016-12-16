@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_utils.c 636260 2016-05-07 02:05:02Z $
+ * $Id: wlc_utils.c 651027 2016-07-25 06:03:44Z $
  */
 
 #include <wlc_cfg.h>
@@ -423,4 +423,13 @@ struct wlc_bsscfg *
 bcm_iov_bsscfg_find_from_wlcif(struct wlc_info *wlc, struct wlc_if *wl_if)
 {
 		return wlc_bsscfg_find_by_wlcif((wlc) ? wlc : NULL, wl_if);
+}
+
+bool
+wlc_ssid_cmp(uint8 *ssid1, uint8 *ssid2, uint16 len1, uint16 len2)
+{
+	if (len1 == len2) {
+		return (memcmp(ssid1, ssid2, len1) == 0);
+	}
+	return FALSE;
 }

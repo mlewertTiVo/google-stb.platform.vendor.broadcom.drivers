@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_cache.c 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: phy_ht_cache.c 656063 2016-08-25 03:56:25Z $
  */
 
 #include <phy_cfg.h>
@@ -190,7 +190,7 @@ wlc_phy_cal_cache_restore_htphy(phy_type_cache_ctx_t * cache_ctx)
 
 	if (!ctx->valid) {
 		PHY_ERROR(("wl%d: %s: Chanspec 0x%x found, but not valid in phycal cache\n",
-		           pi->sh->unit, __FUNCTION__, ctx->chanspec));
+		           pi->sh->unit, __FUNCTION__, pi->radio_chanspec));
 		return BCME_ERROR;
 	}
 
@@ -255,7 +255,7 @@ wlc_phy_cal_cache_restore_htphy(phy_type_cache_ctx_t * cache_ctx)
 	}
 
 	PHY_CAL(("wl%d: %s: Restored values for chanspec 0x%x are:\n", pi->sh->unit,
-	           __FUNCTION__, ctx->chanspec));
+	           __FUNCTION__, pi->radio_chanspec));
 	wlc_phy_cal_cache_dbg_htphy((wlc_phy_t *)pi, ctx);
 	return BCME_OK;
 }
@@ -344,7 +344,7 @@ void wlc_phy_cal_cache_htphy(phy_type_cache_ctx_t * cache_ctx)
 	}
 
 	PHY_CAL(("wl%d: %s: Cached cal values for chanspec 0x%x are:\n",
-		pi->sh->unit, __FUNCTION__,  ctx->chanspec));
+		pi->sh->unit, __FUNCTION__,  pi->radio_chanspec));
 	wlc_phy_cal_cache_dbg_htphy(pi, ctx);
 }
 

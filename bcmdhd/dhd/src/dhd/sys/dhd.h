@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd.h 626588 2016-03-22 06:54:57Z $
+ * $Id: dhd.h 648647 2016-07-13 06:54:27Z $
  */
 
 /****************
@@ -961,6 +961,12 @@ extern int dhd_register_if(dhd_pub_t *dhdp, int idx, bool need_rtnl_lock);
 extern void dhd_detach(dhd_pub_t *dhdp);
 extern void dhd_free(dhd_pub_t *dhdp);
 extern void dhd_clear(dhd_pub_t *dhdp);
+
+#ifdef UPDATE_LINK_STATE
+/* Indication of link state */
+extern void dhd_link_down(struct dhd_info *dhd_info, int *ifidx);
+extern void dhd_link_up(struct dhd_info *dhd_info, int *ifidx);
+#endif /* UPDATE_LINK_STATE */
 
 /* Indication from bus module to change flow-control state */
 extern void dhd_txflowcontrol(dhd_pub_t *dhdp, int ifidx, bool on);

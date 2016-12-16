@@ -131,7 +131,7 @@ typedef uint16 bcm_xtlv_opts_t;
 #define BCM_XTLV_ID_EX(_elt, _opts) bcm_xtlv_id(_elt, _opts)
 
 /* entire size of the XTLV including header, data, and optional padding */
-#define BCM_XTLV_SIZE(_elt) (BCM_XTLV_HDR_SIZE + BCM_XTLV_LEN(_elt))
+#define BCM_XTLV_SIZE(elt, opts) bcm_xtlv_size(elt, opts)
 #define BCM_XTLV_SIZE_EX(_elt, _opts) bcm_xtlv_size(_elt, _opts)
 
 /* max xtlv data size */

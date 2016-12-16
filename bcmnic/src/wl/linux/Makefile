@@ -74,7 +74,7 @@
 #  4) Now $(INOBJDIR): read config and wl.mk for most flags/files settings,
 #     may still use $(TARGET) for architecture and such.  Do dep, modules.
 #
-# $Id: Makefile 657363 2016-08-31 23:59:32Z $
+# $Id: Makefile 671734 2016-11-22 23:41:13Z $
 #
 
 # Some unix systems have /bin/sh linked to some incompatible shells
@@ -343,8 +343,8 @@ endif
 
 ifneq ($(findstring armv7l,$(TARGET)),)
 # Should add the arm arch version specific details
-  DFLAGS += -D__LINUX_ARM_ARCH__=7 -march=armv7-a
-endif #armv7l
+   DFLAGS += -D__LINUX_ARM_ARCH__=7 -march=armv7-a
+endif
 
 ifneq ($(findstring armv8,$(TARGET)),)
    DFLAGS += -D__LINUX_ARM_ARCH__=8 -march=armv8-a
@@ -385,19 +385,12 @@ ifneq ($(findstring android,$(TARGET)),)
     IFLAGS += -isystem$(LINUXSRC)/arch/$(WLARCH)/include/uapi
     IFLAGS += -isystem$(LINUXSRC)/arch/$(WLARCH)/include/generated/uapi
   endif
-endif # android 
+endif # android
 IFLAGS   += -I.
 
 IFLAGS   += $(WLAN_ComponentIncPathA)
 IFLAGS   += $(WLAN_IncPathA)
 IFLAGS   += -I$(WLAN_SrcBaseA)/shared/zlib
-############################################################
-# BCM7271 SPECIFICS
-############################################################
-ifneq ($(findstring stb7271,$(TARGET)),)
-	WLAN_EmuSrc=$(WLAN_SrcBaseA)/tools/7271emu
-	IFLAGS   += -I$(WLAN_EmuSrc)
-endif
 
 ############################################################
 # Check if the dongle image is embedded
@@ -638,14 +631,7 @@ ifeq ($(INOBJDIR),true)
 
   # Remove duplicate filenames, pick up flags
   CFILES := $(sort $(WLFILES))
-  # For all WLFILES that are not part of CXO datapath, use the regular WLFLAGS
-  $(filter-out $(WLFILES_CXO_DATA),$(WLFILES)): DFLAGS += $(WLFLAGS)
-  # For CXO datapath related files, use WLFLAGS_CXO_DATA instead
-  # Note: in a cxo_full build, different objects will be built with different compiler flags!
-  $(WLFILES_CXO_DATA): DFLAGS += $(WLFLAGS_CXO_DATA)
-  # Export per-object flags to kernel makefiles for the module build using the same logic
-  $(foreach obj,$(filter-out $(WLFILES_CXO_DATA),$(WLFILES)),$(eval export CFLAGS_$(basename $(obj)).o := $$(WLFLAGS)))
-  $(foreach obj,$(WLFILES_CXO_DATA),$(eval export CFLAGS_$(basename $(obj)).o := $$(WLFLAGS_CXO_DATA)))
+  DFLAGS += $(WLFLAGS)
 
   # Set some arch-specific definitions
   ifneq ($(filter mipsel,$(INMAKE)),)
@@ -703,7 +689,7 @@ ifeq ($(findstring stbgcc-4.5.4,$(CROSS_COMPILE)),)
 ifneq ($(WLARCH),arm)
   STRICT_GCC_WARNINGS += -Wmissing-field-initializers
 endif
-  #STRICT_GCC_WARNINGS += -Wcast-qual
+  STRICT_GCC_WARNINGS += -Wcast-qual
 endif
 endif
 
@@ -785,6 +771,10 @@ ifeq ($(BCM_STA_CFG80211),1)
 	DFLAGS += -DWL_CFG80211
 	DFLAGS += -DWL_CFG80211_SYNC_GON
 	DFLAGS += -DVSDB
+	# use privcmd support for stb soc builds
+	ifeq ($(STB_SOC_WIFI),1)
+		DFLAGS += -DWL_NEWCFG_PRIVCMD_SUPPORT
+	endif
 
 	# WL_ENABLE_P2P_IF and WL_CFG80211_P2P_DEV_IF are mutually exclusive.
 	# Define WL_CFG80211_P2P_DEV_IF if kernel version is greater than 3.8.0
@@ -968,11 +958,7 @@ dep: $(foreach file,$(CFILES),.$(file).depend)
 endif
 #dep: $(foreach file,$(CFILES),.$(file).preprocessor)
 
-# For dependencies, perform same CXO based filtering as for object files above.
-# For all WLFILES that are not part of CXO datapath, add the regular WLFLAGS
-$(patsubst %,.%.depend,$(filter-out $(WLFILES_CXO_DATA),$(WLFILES))): CFLAGS := $(strip $(patsubst -I$(WLAN_TreeBaseA)/%,-I../../../../%,$(CFLAGS) $(WLFLAGS)))
-# For CXO datapath related files, add WLFLAGS_CXO_DATA instead
-$(patsubst %,.%.depend,$(WLFILES_CXO_DATA)): CFLAGS := $(strip $(patsubst -I$(WLAN_TreeBaseA)/%,-I../../../../%,$(CFLAGS) $(WLFLAGS_CXO_DATA)))
+.%.c.depend: CFLAGS := $(strip $(patsubst -I$(WLAN_TreeBaseA)/%,-I../../../../%,$(CFLAGS)))
 .%.c.depend: %.c
 	@echo "Making $@"
 	@$(CC) $(CFLAGS) -M $< > $@
@@ -982,12 +968,17 @@ $(patsubst %,.%.depend,$(WLFILES_CXO_DATA)): CFLAGS := $(strip $(patsubst -I$(WL
 #	$(CC) -S $(CFLAGS) $<
 
 # Update the CLM database C code from XML inputs if present.
+ifeq ($(STB_SOC_WIFI),1)
+CLM_TYPE := 7xxx_stb
+else
 CLM_TYPE := 43xx_pcoem
+endif
+
 $(call WLAN_GenClmCompilerRule,$(CURDIR),$(WLAN_SrcBaseR))
 
 vpath %.c $(addprefix $(WLAN_SrcBaseR)/,wl/linux \
 	   shared/nvram bcmsdio/sys $(if $(WL_FW_DECOMP),shared/zlib)) \
-	   $(WLAN_StdSrcDirsR) $(WLAN_ComponentSrcDirsR) $(WLAN_EmuSrc)
+	   $(WLAN_StdSrcDirsR) $(WLAN_ComponentSrcDirsR)
 
 ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6),TRUE)
 # When make is used from 2.6, vpath doesn't help so we need to link the files

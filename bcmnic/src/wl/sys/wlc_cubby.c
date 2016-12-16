@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_cubby.c 629717 2016-04-06 08:32:16Z $
+ * $Id: wlc_cubby.c 652227 2016-07-30 06:54:32Z $
  */
 
 
@@ -35,8 +35,16 @@ typedef struct cubby_fn {
 	cubby_get_fn_t fn_get;		/**< fn called during object copy */
 	cubby_set_fn_t fn_set;
 	cubby_datapath_log_dump_fn_t fn_data_log_dump; /**< fn called during datapath dump */
+	cubby_update_fn_t fn_update;
 } cubby_fn_t;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+struct cubby_dbg {
+	cubby_dump_fn_t	fn_dump;	/**< fn called during object dump */
+	const char	*name;		/**< name to tell where the cubby is registered */
+	uint16		size;		/**< cubby size */
+};
+#endif
 
 typedef struct cubby_dbg cubby_dbg_t;
 
@@ -62,8 +70,14 @@ struct wlc_cubby_info {
 };
 
 /* client info allocation size (client callbacks + debug info) */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define CUBBY_FN_ALLOC_SZ(info, cubbies) \
+	(uint)(sizeof(*((info)->cubby_fn)) * (cubbies) + \
+	       sizeof(*((info)->cubby_dbg)) * (cubbies))
+#else
 #define CUBBY_FN_ALLOC_SZ(info, cubbies) \
 	(uint)(sizeof(*((info)->cubby_fn)) * (cubbies))
+#endif
 
 /** cubby info allocation size (cubby info + client contexts) */
 #define CUBBY_INFO_ALLOC_SZ(info, cubbies) \
@@ -71,7 +85,11 @@ struct wlc_cubby_info {
 	       sizeof(*((info)->cubby_ctx)) * (cubbies))
 
 /* debug macro */
+#ifdef BCMDBG
+#define WL_CUBBY(x) WL_NONE(x)
+#else
 #define WL_CUBBY(x)
+#endif
 
 #define MALLOC_ERR          "wl%d: %s: MALLOC(%d) failed, malloced %d bytes\n"
 
@@ -117,6 +135,10 @@ BCMATTACHFN(wlc_cubby_attach)(osl_t *osh, uint unit, wlc_obj_registry_t *objr,
 	}
 	(void)obj_registry_ref(objr, key);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* cubby_dbg was allocated along with cubby_fn */
+	cubby_info->cubby_dbg = (cubby_dbg_t *)&cubby_info->cubby_fn[num];
+#endif
 
 	cubby_info->ncubbies = (uint16)num;
 
@@ -158,6 +180,9 @@ int
 BCMATTACHFN(wlc_cubby_reserve)(wlc_cubby_info_t *cubby_info, uint size, wlc_cubby_fn_t *fn,
 	uint cp_size, wlc_cubby_cp_fn_t *cp_fn, void *ctx)
 {
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_dbg_t *cubby_dbg;
+#endif
 	cubby_fn_t *cubby_fn;
 	void **cubby_ctx;
 	int offset;
@@ -169,6 +194,12 @@ BCMATTACHFN(wlc_cubby_reserve)(wlc_cubby_info_t *cubby_info, uint size, wlc_cubb
 	}
 
 	/* callbacks */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_dbg = &cubby_info->cubby_dbg[cubby_info->ncubby];
+	cubby_dbg->fn_dump = fn->fn_dump;
+	cubby_dbg->name = fn->name;
+	cubby_dbg->size = (uint16)size;
+#endif
 	cubby_fn = &cubby_info->cubby_fn[cubby_info->ncubby];
 	cubby_fn->fn_init = fn->fn_init;
 	cubby_fn->fn_deinit = fn->fn_deinit;
@@ -180,6 +211,7 @@ BCMATTACHFN(wlc_cubby_reserve)(wlc_cubby_info_t *cubby_info, uint size, wlc_cubb
 	if (cp_fn != NULL) {
 		cubby_fn->fn_get = cp_fn->fn_get;
 		cubby_fn->fn_set = cp_fn->fn_set;
+		cubby_fn->fn_update = cp_fn->fn_update;
 	}
 	/* ctx */
 	cubby_ctx = &cubby_info->cubby_ctx[cubby_info->ncubby];
@@ -355,6 +387,40 @@ wlc_cubby_deinit(wlc_cubby_info_t *cubby_info, void *obj,
 } /* wlc_cubby_deinit */
 
 /* debug/dump interface */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void
+wlc_cubby_dump(wlc_cubby_info_t *cubby_info, void *obj,
+	cubby_sec_sz_fn_t secsz_fn, void *sec_ctx, struct bcmstrbuf *b)
+{
+	cubby_fn_t *cubby_fn;
+	void *cubby_ctx;
+	cubby_dbg_t *cubby_dbg;
+	uint i;
+	uint secsz;
+
+	secsz = secsz_fn != NULL ? (secsz_fn)(sec_ctx, obj) : 0;
+
+	bcm_bprintf(b, "# of cubbies: %u, tot size: %u tot sec size: %u\n",
+	            cubby_info->ncubby, cubby_info->totsize, secsz);
+
+	for (i = 0; i < cubby_info->ncubby; i++) {
+		cubby_fn = &cubby_info->cubby_fn[i];
+		cubby_ctx = cubby_info->cubby_ctx[i];
+		cubby_dbg = &cubby_info->cubby_dbg[i];
+		bcm_bprintf(b, "  cubby %d: \"%s\" %u",
+		            i, cubby_dbg->name, cubby_dbg->size);
+		if (secsz > 0 && cubby_fn->fn_secsz != NULL) {
+			bcm_bprintf(b, " %u",
+			            cubby_fn->fn_secsz(cubby_ctx, obj));
+		}
+		bcm_bprintf(b, "\n");
+		if ((secsz > 0 || cubby_fn->fn_secsz == NULL) &&
+		    cubby_dbg->fn_dump != NULL) {
+			cubby_dbg->fn_dump(cubby_ctx, obj, b);
+		}
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /** EVENT_LOG based datapath dump */
 void
@@ -500,3 +566,24 @@ wlc_cubby_copy(wlc_cubby_info_t *from_info, void *from_obj,
 
 	return err;
 } /* wlc_cubby_copy */
+
+/* Update functions for the cubbies */
+int
+wlc_cubby_update(wlc_cubby_info_t *cubby_info, void* upd_obj, void *new_parent)
+{
+	int i;
+	void *cubby_ctx;
+	cubby_fn_t *cubby_fn;
+	int ret = BCME_OK;
+	for (i = 0; i < cubby_info->ncubby; i++) {
+		cubby_fn = &cubby_info->cubby_fn[i];
+		cubby_ctx = cubby_info->cubby_ctx[i];
+		if (cubby_fn && cubby_fn->fn_update) {
+			ret = cubby_fn->fn_update(cubby_ctx, upd_obj, new_parent);
+			if (ret) {
+				return ret;
+			}
+		}
+	}
+	return ret;
+}

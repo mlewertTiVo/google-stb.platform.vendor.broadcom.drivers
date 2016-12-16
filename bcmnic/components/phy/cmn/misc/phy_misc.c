@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_misc.c 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_misc.c 666575 2016-10-21 23:07:43Z $
  */
 
 #include <phy_cfg.h>
@@ -37,7 +37,8 @@ struct phy_misc_info {
 	phy_info_t			*pi;	/* PHY info ptr */
 	phy_type_misc_fns_t	*fns;	/* PHY specific function ptrs */
 	phy_misc_mem_t		*mem;	/* Memory layout ptr */
-	uint8   itrsw;
+	uint8 rxiqest_niter;	/* Number of averaging iterations for iqest */
+	uint8 rxiqest_delay;	/* Averaging delay for iqest */
 };
 
 /* module private states memory layout */
@@ -69,7 +70,6 @@ BCMATTACHFN(phy_misc_attach)(phy_info_t *pi)
 	cmn_info->pi = pi;
 	cmn_info->fns = &(mem->fns);
 	cmn_info->mem = mem;
-	cmn_info->itrsw = (uint8) (PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_itrsw, 0));
 
 	/* Initialize misc params */
 	pi->phy_scraminit = AUTO;
@@ -137,101 +137,8 @@ phy_misc_down(phy_misc_info_t *mi)
 	return callbacks;
 }
 
-/*
- * Return vasip version, -1 if not present.
- */
-uint8
-phy_misc_get_vasip_ver(phy_info_t *pi)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_get_ver != NULL)
-		return fns->phy_type_vasip_get_ver(fns->ctx);
-	else
-		return VASIP_NOVERSION;
-}
-
-/*
- * reset/activate vasip.
- */
-void
-phy_misc_vasip_proc_reset(phy_info_t *pi, int reset)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_proc_reset != NULL)
-		fns->phy_type_vasip_proc_reset(fns->ctx, reset);
-}
-
-void
-phy_misc_vasip_clk_set(phy_info_t *pi, bool val)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_clk_set != NULL)
-		fns->phy_type_vasip_clk_set(fns->ctx, val);
-}
-
-void
-phy_misc_vasip_bin_write(phy_info_t *pi, const uint32 vasip_code[], const uint nbytes)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_bin_write != NULL) {
-		fns->phy_type_vasip_bin_write(fns->ctx, vasip_code, nbytes);
-	}
-}
-
-#ifdef VASIP_SPECTRUM_ANALYSIS
-void
-phy_misc_vasip_spectrum_tbl_write(phy_info_t *pi,
-        const uint32 vasip_spectrum_tbl[], const uint nbytes_tbl)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_spectrum_tbl_write != NULL) {
-		fns->phy_type_vasip_spectrum_tbl_write(fns->ctx, vasip_spectrum_tbl, nbytes_tbl);
-	}
-}
-#endif
-
-void
-phy_misc_vasip_svmp_write(phy_info_t *pi, uint32 offset, uint16 val)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_svmp_write != NULL)
-		fns->phy_type_vasip_svmp_write(fns->ctx, offset, val);
-}
-
-uint16
-phy_misc_vasip_svmp_read(phy_info_t *pi, uint32 offset)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	return fns->phy_type_vasip_svmp_read(fns->ctx, offset);
-}
-
-void
-phy_misc_vasip_svmp_write_blk(phy_info_t *pi, uint32 offset, uint16 len, uint16 *val)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_svmp_write_blk != NULL)
-		fns->phy_type_vasip_svmp_write_blk(fns->ctx, offset, len, val);
-}
-
-void
-phy_misc_vasip_svmp_read_blk(phy_info_t *pi, uint32 offset, uint16 len, uint16 *val)
-{
-	phy_type_misc_fns_t *fns = pi->misci->fns;
-
-	if (fns->phy_type_vasip_svmp_read_blk != NULL)
-		fns->phy_type_vasip_svmp_read_blk(fns->ctx, offset, len, val);
-}
-
 /* Inter-module interfaces and downward interfaces to PHY type specific implemenation */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 int
 wlc_phy_test_init(phy_info_t *pi, int channel, bool txpkt)
 {
@@ -301,7 +208,7 @@ wlc_phy_test_freq_accuracy(phy_info_t *pi, int channel)
 	}
 	return bcmerror;
 }
-#endif	/* defined(BCMDBG) || defined(WLTEST) */
+#endif	
 
 uint32
 wlc_phy_rx_iq_est(phy_info_t *pi, uint8 samples, uint8 antsel, uint8 resolution, uint8 lpf_hpc,
@@ -310,10 +217,47 @@ wlc_phy_rx_iq_est(phy_info_t *pi, uint8 samples, uint8 antsel, uint8 resolution,
 {
 	phy_type_misc_fns_t *fns = pi->misci->fns;
 
+	ASSERT(pi->misci->rxiqest_niter > 0);
+
 	if (fns->phy_type_misc_rx_iq_est != NULL) {
-		return fns->phy_type_misc_rx_iq_est(fns->ctx, samples, antsel, resolution, lpf_hpc,
-			dig_lpf, gain_correct, extra_gain_3dB, wait_for_crs, force_gain_type);
-	} else {
+		int iter, core_idx;
+		uint32 rxiq_est;
+		int32 rxiq_est_sum[PHY_CORE_MAX] = { 0 };
+		uint16 rxiq_mask = 0xff;
+		uint16 rxiq_bit_width = 8;
+
+		if (pi->phy_rxiq_resln) {
+			rxiq_mask = 0x3ff;
+			rxiq_bit_width = 10;
+		}
+
+		if (pi->misci->rxiqest_niter == 1) {
+			/* return results for single iqest */
+			return fns->phy_type_misc_rx_iq_est(fns->ctx, samples, antsel,
+				resolution, lpf_hpc, dig_lpf, gain_correct, extra_gain_3dB,
+				wait_for_crs, force_gain_type);
+		}
+
+		for (iter = 0; iter < pi->misci->rxiqest_niter; ++iter) {
+			rxiq_est = fns->phy_type_misc_rx_iq_est(fns->ctx, samples, antsel,
+				resolution, lpf_hpc, dig_lpf, gain_correct, extra_gain_3dB,
+				wait_for_crs, force_gain_type);
+			FOREACH_CORE(pi, core_idx) {
+				rxiq_est_sum[core_idx] += (int32)((rxiq_est & rxiq_mask)
+					<< (32 - rxiq_bit_width)) >> (32 - rxiq_bit_width);
+				rxiq_est >>= rxiq_bit_width;
+			}
+			if (pi->misci->rxiqest_delay && iter < pi->misci->rxiqest_niter - 1)
+				OSL_DELAY(pi->misci->rxiqest_delay);
+		}
+		rxiq_est = 0;
+		FOREACH_CORE(pi, core_idx) {
+			rxiq_est |= (((uint32)(((rxiq_est_sum[core_idx] << 1) +
+				pi->misci->rxiqest_niter) / (pi->misci->rxiqest_niter << 1))) &
+				rxiq_mask) << (rxiq_bit_width * core_idx);
+		}
+		return rxiq_est;
+} else {
 		return 0; /* Fix me. It can only return non-negative number */
 	}
 
@@ -347,35 +291,6 @@ wlc_phy_clear_deaf(wlc_phy_t  *ppi, bool user_flag)
 	}
 }
 
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(ATE_BUILD)
-void
-wlc_phy_iovar_tx_tone(phy_info_t *pi, int32 int_val)
-{
-	phy_misc_info_t * info;
-	phy_type_misc_fns_t * fns;
-
-	ASSERT(pi != NULL);
-	info = pi->misci;
-	fns = info->fns;
-
-	if (fns->phy_type_misc_iovar_tx_tone != NULL)
-		fns->phy_type_misc_iovar_tx_tone(fns->ctx, int_val);
-}
-
-
-void
-wlc_phy_iovar_txlo_tone(phy_info_t *pi)
-{
-	phy_misc_info_t *info;
-	phy_type_misc_fns_t *fns;
-	ASSERT(pi != NULL);
-	info = pi->misci;
-	fns = info->fns;
-
-	if (fns->phy_type_misc_iovar_txlo_tone != NULL)
-		fns->phy_type_misc_iovar_txlo_tone(fns->ctx);
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) || defined(ATE_BUILD) */
 
 int wlc_phy_iovar_get_rx_iq_est(phy_info_t *pi, int32 *ret_int_ptr, int32 int_val, int err)
 {
@@ -390,19 +305,35 @@ int wlc_phy_iovar_get_rx_iq_est(phy_info_t *pi, int32 *ret_int_ptr, int32 int_va
 	else
 		return err;
 }
-int wlc_phy_iovar_set_rx_iq_est(phy_info_t *pi, int32 int_val, int err)
+int wlc_phy_iovar_set_rx_iq_est(phy_info_t *pi, void *p, int32 plen, int err)
 {
 	phy_misc_info_t *info;
 	phy_type_misc_fns_t *fns;
+	wl_iqest_params_t params;
+
 	ASSERT(pi != NULL);
 	info = pi->misci;
 	fns = info->fns;
 
+	memset(&params, 0, sizeof(params));
+	params.niter = 1;
+	params.delay = PHY_RXIQEST_AVERAGING_DELAY;
+
+	if (plen > sizeof(uint32) && plen <  sizeof(params))
+		return BCME_BUFTOOSHORT;
+	if (plen > sizeof(params))
+		plen = sizeof(params);
+	bcopy(p, &params, plen);
+	if (params.niter < 1)
+		return BCME_BADARG;
+	info->rxiqest_niter = params.niter;
+	info->rxiqest_delay = params.delay;
 	if (fns->phy_type_misc_iovar_set_rx_iq_est != NULL)
-		return fns->phy_type_misc_iovar_set_rx_iq_est(fns->ctx, int_val, err);
+		return fns->phy_type_misc_iovar_set_rx_iq_est(fns->ctx, params.rxiq, err);
 	else
 		return err;
 }
+
 
 #ifdef PHY_DUMP_BINARY
 int
@@ -420,64 +351,6 @@ phy_misc_getlistandsize(phy_info_t *pi, phyradregs_list_t **phyreglist, uint16 *
 }
 #endif /* PHY_DUMP_BINARY */
 
-#ifdef ATE_BUILD
-void
-wlc_phy_gpaio(wlc_phy_t *ppi, wl_gpaio_option_t option, int core)
-{
-	phy_info_t *pi = (phy_info_t *)ppi;
-
-	ASSERT(pi != NULL);
-	phy_misc_info_t *info = pi->misci;
-	phy_type_misc_fns_t *fns = info->fns;
-
-	if (fns->gpaioconfig != NULL)
-		(fns->gpaioconfig)(fns->ctx, option, core);
-
-	return;
-}
-
-#endif /* ATE_BUILD */
-
-int phy_misc_txswctrlmapset(phy_info_t *pi, int32 int_val)
-{
-	phy_misc_info_t *info;
-	phy_type_misc_fns_t *fns;
-	int err;
-
-	ASSERT(pi != NULL);
-	info = pi->misci;
-	fns = info->fns;
-	err = BCME_OK;
-
-	if (fns->txswctrlmapset != NULL)
-		err = (fns->txswctrlmapset)(fns->ctx, int_val);
-	else {
-		/* Not implemented for this phy. */
-		err = BCME_UNSUPPORTED;
-		PHY_ERROR(("Command not supported for this phy\n"));
-	}
-	return err;
-}
-int phy_misc_txswctrlmapget(phy_info_t *pi, int32 *ret_int_ptr)
-{
-	phy_misc_info_t *info;
-	phy_type_misc_fns_t *fns;
-	int err;
-	ASSERT(pi != NULL);
-	info = pi->misci;
-	fns = info->fns;
-	err = BCME_OK;
-
-	if (fns->txswctrlmapget != NULL)
-		fns->txswctrlmapget(fns->ctx, ret_int_ptr);
-	else
-	{
-		/* Not implemented for this phy. */
-		err = BCME_UNSUPPORTED;
-		PHY_ERROR(("Command not supported for this phy\n"));
-	}
-	return err;
-}
 
 bool
 wlc_phy_get_rxgainerr_phy(phy_info_t *pi, int16 *gainerr)
@@ -556,4 +429,120 @@ wlc_phy_ismuted(wlc_phy_t *pih)
 	phy_info_t *pi = (phy_info_t *)pih;
 
 	return PHY_MUTED(pi);
+}
+
+
+/*
+ * if bfe capable then return max no. of streams that sta can receive in a VHT
+ * NDP minus 1.
+ */
+uint8
+wlc_phy_get_bfe_ndp_recvstreams(wlc_phy_t *ppi)
+{
+	phy_info_t *pi = (phy_info_t *)ppi;
+	phy_misc_info_t *misci = pi->misci;
+	phy_type_misc_fns_t *fns = misci->fns;
+	phy_type_misc_ctx_t *ctx = fns->ctx;
+
+	ASSERT(fns->get_bfe_ndp_recvstreams);
+	return fns->get_bfe_ndp_recvstreams(ctx);
+}
+
+void
+phy_misc_set_ldpc_override(wlc_phy_t *ppi, bool ldpc)
+{
+	phy_info_t *pi = (phy_info_t *)ppi;
+	phy_misc_info_t *misci = pi->misci;
+	phy_type_misc_fns_t *fns = misci->fns;
+	phy_type_misc_ctx_t *ctx = fns->ctx;
+
+	if (fns->set_ldpc_override) {
+		fns->set_ldpc_override(ctx, ldpc);
+	}
+	return;
+}
+
+void
+wlc_phy_preamble_override_set(wlc_phy_t *ppi, int8 val)
+{
+	phy_info_t *pi = (phy_info_t *)ppi;
+	phy_misc_info_t *misci = pi->misci;
+	phy_type_misc_fns_t *fns = misci->fns;
+	phy_type_misc_ctx_t *ctx = fns->ctx;
+
+	if (fns->set_preamble_override) {
+		/* Phy specific implementation */
+		fns->set_preamble_override(ctx, val);
+	} else {
+		/* Default behaviour */
+		pi->n_preamble_override = val;
+	}
+}
+
+#ifdef WFD_PHY_LL
+void
+wlc_phy_wfdll_chan_active(wlc_phy_t * ppi, bool chan_active)
+{
+	phy_info_t *pi = (phy_info_t *)ppi;
+	phy_misc_info_t *misci = pi->misci;
+	phy_type_misc_fns_t *fns = misci->fns;
+	phy_type_misc_ctx_t *ctx = fns->ctx;
+
+	if (fns->set_wfdll_chan_active) {
+		fns->set_wfdll_chan_active(ctx, chan_active);
+	}
+}
+#endif /* WFD_PHY_LL */
+
+int
+phy_misc_set_lo_gain_nbcal(wlc_phy_t *ppi, bool lo_gain)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_misc_fns_t *fns = pi->misci->fns;
+
+	if (fns->set_lo_gain_nbcal != NULL) {
+		return (fns->set_lo_gain_nbcal)(fns->ctx, lo_gain);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
+}
+
+/* WARs */
+int
+phy_misc_set_filt_war(wlc_phy_t *ppi, bool filt_war)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_misc_fns_t *fns = pi->misci->fns;
+
+	if (fns->set_filt_war) {
+		return (fns->set_filt_war)(fns->ctx, filt_war);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
+}
+
+bool
+phy_misc_get_filt_war(wlc_phy_t *ppi)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_misc_fns_t *fns = pi->misci->fns;
+
+	if (fns->get_filt_war) {
+		return (fns->get_filt_war)(fns->ctx);
+	} else {
+		return FALSE;
+	}
+}
+
+int
+phy_misc_tkip_rifs_war(wlc_phy_t *ppi, uint8 rifs)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_misc_fns_t *fns = pi->misci->fns;
+
+	if (fns->tkip_rifs_war) {
+		return (fns->tkip_rifs_war)(fns->ctx, rifs);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
 }

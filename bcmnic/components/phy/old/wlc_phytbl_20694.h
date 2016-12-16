@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phytbl_20694.h 634922 2016-04-30 17:05:46Z yingxi $
+ * $Id: wlc_phytbl_20694.h 657402 2016-09-01 04:42:53Z $
  */
 
 #ifndef  _wlc_phytbl_20694_h_
@@ -73,21 +73,30 @@ uint16 RF0_logen5g_reg6_logen5g_buf_ctune_c0_5G_AUX;
 uint16 RF0_logen5g_reg6_logen5g_buf_ctune_c1_5G_AUX;
 } chan_info_radio20694_rffe_t;
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 extern const radio_20xx_dumpregs_t dumpregs_20694_rev36[];
 extern const radio_20xx_dumpregs_t dumpregs_20694_rev5[];
-#endif /* BCMDBG, BCMDBG_DUMP, BCMINTERNAL, DBG_PHY_IOV, BCMDBG_PHYDUMP */
+extern const radio_20xx_dumpregs_t dumpregs_20694_rev8[];
+extern const radio_20xx_dumpregs_t dumpregs_20694_rev9[];
+#endif 
 
 extern const chan_info_radio20694_rffe_t
     chan_tune_20694_rev5_fcbu_e_MAIN[NUM_ROWS_CHAN_TUNING_20694];
 extern const chan_info_radio20694_rffe_t
     chan_tune_20694_rev5_fcbu_e_AUX[NUM_ROWS_CHAN_TUNING_20694];
+extern const chan_info_radio20694_rffe_t
+    chan_tune_20694_rev8_MAIN[NUM_ROWS_CHAN_TUNING_20694];
+extern const chan_info_radio20694_rffe_t
+    chan_tune_20694_rev9_AUX[NUM_ROWS_CHAN_TUNING_20694];
+
 extern const chan_info_radio20694_t chan_tune_20694_rev361[NUM_ROWS_CHAN_TUNING_20694];
 extern radio_20xx_prefregs_t prefregs_20694_rev36_wlbga[];
 extern radio_20xx_prefregs_t prefregs_20694_rev5_main[];
 extern radio_20xx_prefregs_t prefregs_20694_rev5_aux[];
 extern const chan_info_radio20694_rffe_t chan_tune_20694_rev36_wlbga[NUM_ROWS_CHAN_TUNING_20694];
+extern radio_20xx_prefregs_t prefregs_20694_rev8_main[];
+extern radio_20xx_prefregs_t prefregs_20694_rev9_aux[];
 
 extern int8 BCMATTACHDATA(lna12_gain_tbl_2g_maj40)[2][N_LNA12_GAINS];
 extern int8 BCMATTACHDATA(lna12_gain_tbl_5g_maj40)[2][N_LNA12_GAINS];
@@ -102,4 +111,13 @@ extern int8 BCMATTACHDATA(tia_gain_tbl_maj40)[N_TIA_GAINS];
 extern int8 BCMATTACHDATA(tia_gainbits_tbl_maj40)[N_TIA_GAINS];
 extern int8 BCMATTACHDATA(biq01_gain_tbl_maj40)[2][N_BIQ01_GAINS];
 extern int8 BCMATTACHDATA(biq01_gainbits_tbl_maj40)[2][N_BIQ01_GAINS];
+extern int8 BCMATTACHDATA(lna12_gain_tbl_2g_maj40_min1)[2][N_LNA12_GAINS];
+extern int8 BCMATTACHDATA(lna12_gain_tbl_5g_maj40_min1)[2][N_LNA12_GAINS];
+extern uint8 BCMATTACHDATA(lna1_rout_map_2g_maj40_min1)[N_LNA12_GAINS];
+extern uint8 BCMATTACHDATA(lna1_rout_map_5g_maj40_min1)[N_LNA12_GAINS];
+extern uint8 BCMATTACHDATA(lna1_gain_map_2g_maj40_min1)[N_LNA12_GAINS];
+extern uint8 BCMATTACHDATA(lna1_gain_map_5g_maj40_min1)[N_LNA12_GAINS];
+
+extern uint16 BCMATTACHDATA(nap_lo_th_adj_maj40)[5];
+extern uint16 BCMATTACHDATA(nap_hi_th_adj_maj40)[5];
 #endif /* _WLC_PHYTBL_20694_H_ */

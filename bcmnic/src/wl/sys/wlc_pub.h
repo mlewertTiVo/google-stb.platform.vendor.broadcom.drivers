@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlc_pub.h 653755 2016-08-09 22:40:17Z $
+ * $Id: wlc_pub.h 672288 2016-11-25 11:46:09Z $
  */
 
 #ifndef _wlc_pub_h_
@@ -28,6 +28,7 @@
 #include <wlc_types.h>
 #include <siutils.h>
 #include <proto/802.11.h>
+#include <proto/802.11ax.h>
 #include <proto/bcmevent.h>
 #include <bcmutils.h>
 #include <wlc_utils.h>
@@ -47,9 +48,9 @@
 #endif /* SR_ATTACH_MOVE */
 
 
-#if defined(HNDCTF) || defined(WLCXO_SIM)
+#ifdef HNDCTF
 #include <ctf/hndctf.h>
-#endif /* defined(HNDCTF) || defined(WLCXO_SIM) */
+#endif /* HNDCTF */
 
 /* max # wlc timers. Each TDLS connection may dynamically allocate upto 2 timers */
 #define	MAX_TIMERS	(34 + WLC_MAXMFPS + WLC_MAXDLS_TIMERS)
@@ -63,8 +64,7 @@
 #define WLC_80_MHZ	80	/**< 80Mhz channel bandwidth */
 #define WLC_160_MHZ	160	/**< 160Mhz channel bandwidth */
 
-/* This macro is used for ratespec related initialization. Since for ULB mode the ratespec
- * values are same as that of 20MHz BW, hence default value returned has been changed
+/* This macro is used for ratespec related initialization.
  */
 #define CHSPEC_WLC_BW(chanspec)(\
 				(CHSPEC_IS160(chanspec) ||\
@@ -220,7 +220,7 @@ typedef struct wlc_tunables {
 	int max_ie_build_cbs;		/**< max # IE-build callbacks */
 	int max_vs_ie_build_cbs;	/**< max # VS IE-build callbacks */
 	int max_ie_parse_cbs;		/**< max # IE-parse callbacks */
-	int max_vs_ie_parse_cbs;	/**< max # IE-parse callbacks */
+	int max_vs_ie_parse_cbs;	/**< max # VS IE-parse callbacks */
 	int max_ie_regs;		/**< max # IE registries */
 	int num_rxivs;
 	int maxbestn;
@@ -248,6 +248,8 @@ typedef struct wlc_tunables {
 	int mrrs;		/**< max read request size */
 	int evpool_maxdata;	/* max data size for events from the event pool */
 	int evpool_size;	/* max pool size for the priority events */
+	int max_assoc_scan_results;	/* Limit the max bss allocation in assoc/roam scan. */
+	int max_scancache_results; /* Max scancache limit */
 } wlc_tunables_t;
 
 #if defined(STA) && defined(DBG_BCN_LOSS)
@@ -362,7 +364,7 @@ struct wlc_bss_info {
 	uint16		vht_txmcsmap;
 	uint16		vht_txmcsmap_prop;
 
-	uint32		he_capabilities;
+	he_mac_cap_t	he_mac_cap;
 
 
 	uint16	WPA_auth_support;	/* supporting WPA AKMs */
@@ -390,6 +392,7 @@ struct wlc_bss_info {
 #define WLC_BSS_40INTOL         0x0200  /**< BSS is forty intolerant */
 #define WLC_BSS_SGI_20          0x0400  /**< BSS supports 20MHz SGI */
 #define WLC_BSS_SGI_40          0x0800  /**< BSS supports 40MHz SGI */
+/**< 0x1000 is unused */
 #define WLC_BSS_CACHE           0x2000  /**< bss_info was collected from scan cache */
 #define WLC_BSS_FBT             0x8000  /**< BSS is FBT capable */
 
@@ -405,13 +408,12 @@ struct wlc_bss_info {
 #define WLC_BSS_160MHZ		0x0100  /**< BSS is VHT 160 MHz capable */
 #define WLC_BSS_SGI_160		0x0200  /**< BSS supports 160MHz SGI */
 #define WLC_BSS_MAX_STA_CNT	0x0400	/**< BSS load IE has max sta count */
-#define WLC_BSS_ULB_10_CAP	0x1000	/* BSS is 10MHz ULB Capable */
-#define WLC_BSS_ULB_5_CAP	0x2000	/* BSS is 5MHz ULB Capable */
-#define WLC_BSS_ULB_2P5_CAP	0x4000	/* BSS is 2.5MHz ULB Capable */
-#define WLC_BSS_OPER_MODE	0x8000  /* BSS supports operating mode notification */
+#define WLC_BSS_OPER_MODE	0x0800  /* BSS supports operating mode notification */
 
 /* bit values for bcnflags field */
 #define WLC_BSS_INTERWORK_PRESENT	0x01 /* interwork IE was present in last bcn recvd */
+#define WLC_BSS_MBO_CAPABLE           0x02 /* MBO AP Capability in last bcn/probe resp recvd */
+#define WLC_BSS_MBO_ASSOC_DISALLOWED  0x04 /* MBO Assoc Disallowed in last bcn/probe resp recvd */
 
 /* additional wlc_bss_info flag bit values (flags3 field) */
 #define WLC_BSS3_HE		0x0001	/* BSS is HE (802.11ax) capable */
@@ -449,7 +451,6 @@ typedef struct wlc_pub {
 	struct ether_addr	cur_etheraddr;	/**< our local ethernet addr, must be aligned */
 	uint		unit;			/**< device instance number */
 	uint		corerev;		/**< core revision */
-	uint8		corerev_minor;		/* core minor revision */
 	osl_t		*osh;			/**< pointer to os handle */
 	bool		up;			/**< interface up and running */
 	bool		hw_off;			/**< HW is off */
@@ -490,9 +491,6 @@ typedef struct wlc_pub {
 	/* PSTA */
 	int8		_psta;			/**< Proxy STA mode: disabled, proxy, repeater */
 	int8		_pktc;			/**< Packet chaining enabled or not */
-	int8		_cxo;			/* cached transmit/recv offload */
-	/* WLBTAMP */
-	bool		_bta;			/**< bta enabled or not */
 
 	bool		associated;		/**< true:part of [I]BSS, false: not */
 						/**< (union of stas_associated, aps_associated) */
@@ -510,8 +508,7 @@ typedef struct wlc_pub {
 	bool		_ampdu_rx;		/**< ampdu_rx enabled for HOST, UCODE or HW aggr */
 	/* WLAMSDU || WLAMSDU_TX */
 	bool		_amsdu_tx;		/**< true if currently amsdu agg is enabled */
-	bool		_cac;			/**< 802.11e CAC enabled */
-	bool		PAD;			/**< increased ROM compatibility */
+	bool		_ccx;			/**< enable: ccx */
 	/* WL11H */
 	uint		_spect_management;	/**< 11h spectrum management */
 	/* WL11K */
@@ -535,14 +532,16 @@ typedef struct wlc_pub {
 	bool		phy_bw160_capable;	/**< PHY 160MHz capable */
 	bool		phy_bw8080_capable;	/**< PHY 80+80MHz capable */
 
-#if defined(HNDCTF) || defined(WLCXO_SIM)
+#ifdef HNDCTF
 	ctf_brc_hot_t *brc_hot;			/**< hot ctf bridge cache entry */
 #else
 	void		*PAD;			/**< increased ROM compatibility */
-#endif /* defined(HNDCTF) || defined(WLCXO_SIM) */
+#endif /* HNDCTF */
 
 	uint32		wlfeatureflag;		/**< Flags to control sw features from registry */
-	int			psq_pkts_total;		/**< total num of ps pkts */
+
+	// TXQ_MUX: psq only hold pkts in ps-on transitions, so psq_pkts_total is not needed
+	int             psq_pkts_total;         /**< total num of ps pkts */
 
 	uint16		txmaxpkts;	/**< max number of large pkts allowed to be pending */
 
@@ -619,7 +618,7 @@ typedef struct wlc_pub {
 	bool		_bpreset;
 	/* WLPROBRESP_SW */
 	bool		_probresp_sw;
-	bool		PAD;	/**< increased ROM compatibility */
+	bool		_wapi_hw_wpi;	/**< HW WAPI_WPI enabled or not */
 
 	uint32		health;
 	uint32		ht_features;            /**< 802.11n proprietary rates */
@@ -632,9 +631,6 @@ typedef struct wlc_pub {
 	bool		_wowlpf_active;		/**< Is Wake mode actually active
 						 * (used during transition)
 						 */
-	/* NWOE */
-	bool            _nwoe;
-
 	uint8		d11tpl_phy_hdr_len;	/**< PLCP len for templates */
 	uint		max_addrma_idx;
 	uint16		m_amt_info_blk;		/**< base address of amt info block */
@@ -643,7 +639,6 @@ typedef struct wlc_pub {
 	/* WET_TUNNEL */
 	bool		wet_tunnel;	/**< true if wet_tunnel is enable */
 	int		_ol;			/**< Offloads */
-	bool		_bmon;		/**< BSSID monitor feature */
 
 	/* WL11AC */
 	uint16		vht_features;		/**< BRCM proprietary VHT features  bitmap */
@@ -668,9 +663,6 @@ typedef struct wlc_pub {
 	bool		_p2po;			/**< p2po enabled or not */
 	bool		_anqpo;			/**< anqpo enabled or not */
 
-	/* WL_OKC */
-	bool		_okc;
-
 	bool		_d0_filter;		/**< pkt filter enable bool */
 	bool		_olpc;			/**< Open Loop Phy Calibration enable/disable */
 	bool		_staprio;		/**< sta prio enable bool */
@@ -684,7 +676,6 @@ typedef struct wlc_pub {
 	bool		_wl_rxearlyrc;
 	bool		_tiny_pktjoin;
 	pktpool_t	*pktpool_lfrag;		/**< use the pktpool for buffers */
-	bool		_scancache_support;
 	bool		_fmc;			/**< WLFMC_ENAB enabled or not */
 	bool		_rcc;			/**< WLRCC_ENAB enabled or not */
 	/* WLAIBSS */
@@ -722,7 +713,6 @@ typedef struct wlc_pub {
 	bool		_osen;			/**< hotspot OSEN */
 	bool		_bwte;			/**< true if bt wlan tunnel engine supported */
 	bool		_wfds;			/**< wfds enabled or not */
-	bool		_nan;			/**< NAN enabled */
 	bool		_ltr_support;	/**< LTR supported by platform */
 	bool		_ltr;			/**< LTR cap enabled/disabled */
 	bool		_ht_prop_rates_capable;	/**< 802.11n proprietary rates */
@@ -745,7 +735,6 @@ typedef struct wlc_pub {
 	uint32		wake_event_enable;	/**< bitwise event flag */
 	uint32		wake_event_status;	/**< bitwise event status(reason for the wake) */
 	bool		_mesh;	/* Mesh support enable/disable flag */
-	bool		_ulb;			/* ULB Mode supported */
 	bool		_ucodedump;	/* enable/disable u code dump */
 	bool		_ulp;
 	bool		_cxnoa;         /* Extend NoA feature for synchronous BT traffic */
@@ -765,6 +754,7 @@ typedef struct wlc_pub {
 	/* WL11AX */
 	bool		_he_enab;		/**< HE (11AX) support */
 	uint32		he_features;            /**< 11ax proprietary features */
+
 	/* WLTWT */
 	bool		_twt;			/**< 11ax/11ah Target Wake Time support */
 
@@ -789,7 +779,17 @@ typedef struct wlc_pub {
 	bool		_bgdfs;			/* Background DFS with radar scan core */
 	bool            _amsdu_2g;              /* AMSDU 2G dynamic control */
 	bool		_chanim;		/* enable/disable chanim */
+	/* APF */
+	bool		_apf_filter;
 	bool            _pkt_filter6;		/* pkt filter6 enable bool */
+	bool		_cca_stats;		/* enable/disable cca_stats */
+	bool		_deltastats;		/* enable/disable deltastats */
+	uint8		corerev_minor;		/**< core minor revision */
+	bool _ndoe_support;	/* NDOE offload supported. */
+	bool		_vasip;			/* enable/disable vasip */
+	bool            _icmp;                  /* icmp enable */
+	bool		_ucm;			/* enable/disable UCM */
+	bool		_leakyapstats;		/* LeakyAPStats enabled */
 } wlc_pub_t;
 
 /** Shared portion of wlc_pub structure across WLC's in case of RSDB. */
@@ -810,7 +810,7 @@ typedef struct wlc_pub_cmn {
 	bool		_11d;
 	/* WLCNTRY */
 	bool		_autocountry;
-	bool        _rsdb_policy; /* host provided policy support. configured through rsdb_config */
+	bool	_rsdb_policy; /* host provided policy support. configured through rsdb_config */
 	bool		_shub;		/* sensor hub interface */
 	bool		 _wlpfn;		/* WLPFN */
 	bool		 _gscan;		/* gscan */
@@ -824,7 +824,25 @@ typedef struct wlc_pub_cmn {
 	bool            _radar;         /* Radar is supported or not */
 	bool            _wldfs;         /* DFS for AP is supported or not */
 	bool            _rsdb_dfs;      /* DFS support for RSDB is supported or not */
-	bool     _mbo;       /* mbo */
+	bool		_mbo;       /* mbo */
+	bool            _isrsdb_cmn_bandstate; /* Bandstate shared for RSDB chips */
+	/* WL_OKC */
+	bool		_okc;
+	uint8		_rsdb_scan; /* Downgraded RSDB Scan feature enabled or not */
+	bool		_rapsta_enab;	/* RAPSTA Enab flag */
+	bool		_rmon;		/* rssi monitor */
+	bool		_cac;			/**< 802.11e CAC enabled */
+	bool		_scancache_support;
+	uint32		drvrev_major;	/* drvrev: major */
+	uint32		drvrev_minor;	/* drvrev: minor */
+	uint32		drvrev_rc;	/* drvrev: rc */
+	uint32		drvrev_rc_inc;	/* drvrev: rc inc */
+	bool		_filsauth;		/* FILS authentication for OCE */
+	bool		_keep_alive;	/* enable/disable keep-alive */
+	bool		_oce;	/* oce */
+	bool		_scan_sumevt;	/* Scan_summary statistics */
+	bool		_nan;		/**< NAN enabled */
+	bool		_mbo_oce;       /* mbo-oce enabled or not */
 } wlc_pub_cmn_t;
 
 /* status per error RX pkt */
@@ -968,12 +986,6 @@ typedef struct {
 			uint8	exp_idx;
 			uint8	flags;
 		} ampdu_info_to_host;
-#ifdef WLCXO_DATA
-		struct {
-			uint16	txframeid;
-			uint16	aid;
-		} frame_info;
-#endif /* WLCXO_DATA */
 	} u;
 	struct scb	*_scb;		/**< Pointer to SCB for associated ea */
 	uint32		rspec;		/**< Phy rate for received packet */
@@ -1008,9 +1020,6 @@ typedef struct {
 
 #define WLPKTTAGCLEAR(p) bzero((char *)PKTTAG(p), sizeof(wlc_pkttag_t))
 #define WLRXPKTTAGCLEAR(p) bzero((char *)RXPKTTAG(p), sizeof(wlc_rxpkttag_t))
-
-#define WLCXO_PKTTAG_SZ		20
-#define WLCXO_RXPKTTAG_SZ	12
 
 /* Flags used in wlc_pkttag_t.
  * If adding a flag, be sure to check if WLPKTTAG_FLAG_MOVE should transfer it.
@@ -1048,8 +1057,6 @@ typedef struct {
 #define WLF_RX_KM		0x00008000	/**< ICV trimmed off Rx pkt: pktfetch case */
 #define WLF_EXEMPT_MASK		0x00030000	/**< mask for encryption exemption (Vista) */
 #define WLF_EXEMPT_SHIFT	16
-#define WLF_CXO_TXIV_OFLD_INIT	0x00010000	/**< TXIV to be initialized by ofld driver */
-#define WLF_CXO_TXIV_OFLD_INCR	0x00020000	/**< TXIV to be incremented by ofld driver */
 #define WLF_WME_NOACK		0x00040000	/**< pkt use WME No ACK policy */
 #ifdef DMATXRC
 #define WLF_PHDR		0x00080000	/**< pkt hdr */
@@ -1063,35 +1070,24 @@ typedef struct {
 #endif /* PROP_TXSTATUS */
 
 
-#define WLF_CXO_ATF_PKT		0x00100000	/**< packet released by atf */
-#define WLF_CXO_PKT		0x00200000	/**< CXO Offloaded Packet */
-#define	WLF_CXO_TSC_PAUSED	0x00400000	/**< TSC paused state */
-#define WLF_CXO_HOST_RXR_PKT	0x00800000	/**< reordered pkt */
-#define WLF_CXO_TXH_PKT		0x00800000	/**< pkt alloced from TXH pkt pool */
 /* reuse for rx replay checking */
 #define WLF_RX_PKTC_NOTFIRST	0x00200000  /* not the first packet in chanin */
 #define WLF_RX_PKTC_NOTLAST		0x00400000  /* not the last packet in chain */
 
 #define WLF_TDLS_TYPE		0x00800000	/**< pkt is of TDLS type */
-#define WLF_CXO_INTRABSS_PKT	0x01000000	/**< intrabss pkt sent via ofld path */
 #define WLF_TDLS_DIRECT		0x01000000	/**< pkt will use direct TDLS path */
 #define WLF_TDLS_APPATH         0x02000000      /**< pkt will use AP path */
-#define WLF_CXO_DIVERTED_PKT	0x02000000	/**< diverted by ofld drv to send via host path */
 #define WLF_USERTS		0x04000000	/**< protect the packet with RTS/CTS */
 #define WLF_RATE_AUTO		0x08000000 /**< pkt uses rates from the rate selection module */
 #define WLF_PROPTX_PROCESSED    0x10000000	/**< marks pkt proptx processed  */
 
-#define	WLF_CXO_INI_UPDATED	0x20000000	/**< AMPDU ini updated in ofld driver */
-
 #define WLF_MFP			0x20000000	/**< pkt is MFP */
 #define WLF_DATA		0x40000000	/**< pkt is pure data */
 
-#define WLF_CXO_ATXSZ		0x80000000	/**< ATXSZ indicator */
+#define WLF_WAI			0x80000000	/**< original pkt is WAI */
 
 /* re using wapi flag for mesh */
 #define WLF_MESH_RETX		0x80000000	/* mesh pkt identifier */
-
-#define WLF_CXO_TXFLAGS		(WLF_CXO_INI_UPDATED | WLF_CXO_TSC_PAUSED | WLF_CXO_PKT)
 
 /* Flags2 used in wlc_pkttag_t (8 bits). */
 #define WLF2_PCB1_MASK		0x0f	/**< see pcb1 definitions */
@@ -1105,7 +1101,10 @@ typedef struct {
 #define WLF2_HOSTREORDERAMPDU_INFO 0x20 /**< packet has info to help host reorder agg packets  */
 
 /* Flags3 used in wlc_pkttag_t (8 bits). */
+#if !defined(TXQ_MUX)
+// not needed for TXQ_MUX
 #define WLF3_SUPR		0x01	/**< pkt was suppressed due to PM 1 or NoA ABS */
+#endif /* TXQ_MUX */
 #define WLF3_FAVORED		0x02	/**< pkt is favored. Non-favored can be dropped */
 #define WLF3_NO_PMCHANGE	0x04	/**< don't touch pm state for this, e.g. keep_alive */
 #define WLF3_BYPASS_AMPDU	0x08	/**< flag to bypass AMPDU queuing */
@@ -1114,7 +1113,6 @@ typedef struct {
 #define WLF3_DATA_TCP_ACK	0x20	/**< pkt is TCP_ACK data */
 #define WLF3_AMPDU_REGMPDU	0x40	/**< rempdu in ampdu module */
 #define WLF3_DATA_WOWL_PKT	0x80
-#define WLF3_CXO_SCBPKTPEND_NOP	0x80	/**< pkt no need to check its txpktpend counter */
 /* Using the same flag as WOWL as its not used in Rx path */
 #define WLF3_REORDERDATA_PROCESSED 0x80
 
@@ -1140,10 +1138,12 @@ typedef struct {
 #define WLF2_PCB1_STA_PRB	1	/**< wlc_ap_sta|wds_probe_complete */
 #define WLF2_PCB1_PSP		2	/**< wlc_sendpspoll_complete */
 #define WLF2_PCB1_AF		3	/**< wlc_actionframetx_complete */
+								/**< pcb1 = 4 is unused */
 #define WLF2_PCB1_TKIP_CM	5	/**< wlc_tkip_countermeasure */
 #define WLF2_PCB1_RATE_PRB	6	/**< wlc_rateprobe_complete */
 #define WLF2_PCB1_HE_AF		7	/**< wlc_he_aftx_complete */
 #define WLF2_PCB1_PM_NOTIF	8	/**< wlc_pm_notif_complete */
+#define WLF2_PCB1_NAR		9	/* nar callback when pkt freed */
 #ifdef WL_RELMCAST
 #define WLF2_PCB1_RMC		10	/**< rmc callback when pkt freed */
 #endif /* WL_RELMCAST */
@@ -1166,11 +1166,7 @@ typedef struct {
 /* pcb2 */
 #define WLF2_PCB2_APSD		1	/**< wlc_apps_apsd_complete */
 #define WLF2_PCB2_PSP_RSP	2	/**< wlc_apps_psp_resp_complete */
-#ifdef WLCXO
-#define WLF2_PCB2_CXO_CTRL	3	/**< wlc_cxo_ctrl_pkt_cb */
-#else
 #define WLF2_PCB2_AIBSS_CTRL	3	/**< wlc_aibss_ctrl_pkt_txstatus */
-#endif
 
 /* macros to access the pkttag.flags2.pcb2 field */
 #define WLF2_PCB2(p)		((WLPKTTAG(p)->flags2 & WLF2_PCB2_MASK) >> WLF2_PCB2_SHIFT)
@@ -1219,12 +1215,6 @@ BWL_POST_PACKED_STRUCT rx_ctxt_t;
 #else
 #define WLPKTFLAG_AMSDU(pkttag)	FALSE
 #endif /* WLAMSDU */
-
-#ifdef WLCXO
-#define WLPKTFLAG_CXO(pkttag)	(((pkttag)->flags & WLF_CXO_PKT) != 0)
-#else
-#define WLPKTFLAG_CXO(pkttag)	FALSE
-#endif /* WLCXO */
 
 #if defined(MFP)
 /* flag for .11w Protected Management Frames(PMF) and ccx Management Frame Protection(MFP) */
@@ -1281,7 +1271,44 @@ BWL_POST_PACKED_STRUCT rx_ctxt_t;
 	#define WLC_CHANIM_ENAB(pub)	(0)
 #endif /* WLCHANIM */
 
+/* CCA_STATS support */
+#ifdef CCA_STATS
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define WL_CCA_STATS_ENAB(pub)	((pub)->_cca_stats)
+	#elif defined(CCA_STATS_DISABLED)
+		#define WL_CCA_STATS_ENAB(pub)	(0)
+	#else
+		#define WL_CCA_STATS_ENAB(pub)	((pub)->_cca_stats)
+	#endif
+#else
+	#define WL_CCA_STATS_ENAB(pub)	(0)
+#endif /* CCA_STATS */
 
+/* DELTASTATS support */
+#ifdef DELTASTATS
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define DELTASTATS_ENAB(pub)	((pub)->_deltastats)
+	#elif defined(DELTASTATS_DISABLED)
+		#define DELTASTATS_ENAB(pub)	(0)
+	#else
+		#define DELTASTATS_ENAB(pub)	((pub)->_deltastats)
+	#endif
+#else
+	#define DELTASTATS_ENAB(pub)	(0)
+#endif /* DELTASTATS */
+
+/* RSSI MONITOR support */
+#ifdef RSSI_MONITOR
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define RMON_ENAB(pub)		((pub)->cmn->_rmon)
+	#elif defined(RSSI_MONITOR_DISABLED)
+		#define RMON_ENAB(pub)		(0)
+	#else
+		#define RMON_ENAB(pub)		((pub)->cmn->_rmon)
+	#endif
+#else
+	#define RMON_ENAB(pub)		(0)
+#endif /* RSSI_MONITOR */
 
 #define WLPKTFLAG_RIFS(pkttag)	((pkttag)->flags & WLF_RIFS)
 
@@ -1300,6 +1327,9 @@ static INLINE int8
 wlc_pkttag_bsscfg_get(void *p)
 {
 	int8 idx = WLPKTTAG(p)->_bsscfgidx;
+#ifdef BCMDBG
+	ASSERT(BSSCFGIDX_ISVALID(idx));
+#endif /* BCMDBG */
 	return idx;
 }
 
@@ -1398,12 +1428,6 @@ wlc_pkttag_bsscfg_get(void *p)
 #else
 #define PKTC_ENAB(pub)	(0)
 #endif /* defined(PKTC) || defined(PKTC_DONGLE) */
-
-#ifdef WLCXO
-#define WLCXO_ENAB(pub)	((pub)->_cxo)
-#else
-#define WLCXO_ENAB(pub)	(0)
-#endif /* WLCXO */
 
 /* TX Beamforming Support */
 #if defined(WL_BEAMFORMING)
@@ -1567,8 +1591,7 @@ wlc_pkttag_bsscfg_get(void *p)
 #define SUPPORT_11N	(ENAB_1x1|ENAB_2x2)
 #define SUPPORT_HT	(ENAB_1x1|ENAB_2x2|ENAB_3x3)
 /* WL11N Support */
-#if defined(WL11N) && ((defined(NCONF) && (NCONF != 0)) || (defined(LCNCONF) && \
-	(LCNCONF != 0)) || (defined(LCN40CONF) && (LCN40CONF != 0)) || (defined(LCN20CONF) && \
+#if defined(WL11N) && ((defined(NCONF) && (NCONF != 0)) || (defined(LCN20CONF) && \
 	(LCN20CONF != 0)) || (defined(ACCONF) && (ACCONF != 0)) || (defined(ACCONF2) && \
 	(ACCONF2 != 0)) || (defined(HTCONF) && (HTCONF != 0)))
 #define N_ENAB(pub) ((pub)->_n_enab & SUPPORT_11N)
@@ -1929,7 +1952,7 @@ wlc_pkttag_bsscfg_get(void *p)
 #endif /* WLDLS */
 /* OKC Support */
 #ifdef WL_OKC
-#define OKC_ENAB(pub) ((pub)->_okc)
+#define OKC_ENAB(pub) ((pub)->cmn->_okc)
 #else
 #define OKC_ENAB(pub) 0
 #endif /* WL_OKC */
@@ -2025,9 +2048,18 @@ wlc_pkttag_bsscfg_get(void *p)
 		#define RSDB_ENAB(pub) (1)
 		#define RSDB_ACTIVE(pub) ((pub)->cmn->_rsdb_active)
 	#endif 
+
+	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define RSDB_CMN_BANDSTATE_ENAB(pub) ((pub)->cmn->_isrsdb_cmn_bandstate)
+	#elif defined(RSDB_CMN_BANDSTATE_DISABLED)
+		#define RSDB_CMN_BANDSTATE_ENAB(pub) (0)
+	#else
+		#define RSDB_CMN_BANDSTATE_ENAB(pub) (1)
+	#endif
 #else
 	#define RSDB_ENAB(pub) (0)
 	#define RSDB_ACTIVE(pub) (0)
+	#define RSDB_CMN_BANDSTATE_ENAB(pub) (0)
 #endif /* WLRSDB */
 
 /* BG DFS Radar scan */
@@ -2043,9 +2075,6 @@ wlc_pkttag_bsscfg_get(void *p)
 	#define BGDFS_ENAB(pub)		(0)
 #endif /* BGDFS */
 
-/* WLBTAMP Support */
-	#define BTA_ENAB(pub) ((void)(pub), 0)
-
 /* PIO Mode Support */
 #ifdef WLPIO
 #define PIO_ENAB(pub) ((pub)->_piomode)
@@ -2056,11 +2085,11 @@ wlc_pkttag_bsscfg_get(void *p)
 /* Call Admission Control support */
 #ifdef WLCAC
 	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
-		#define CAC_ENAB(pub)	((pub)->_cac)
+		#define CAC_ENAB(pub)	((pub)->cmn->_cac)
 	#elif defined(WLCAC_DISABLED)
 		#define CAC_ENAB(pub)	0
 	#else
-		#define CAC_ENAB(pub)	((pub)->_cac)
+		#define CAC_ENAB(pub)	((pub)->cmn->_cac)
 	#endif 
 #else
 	#define CAC_ENAB(pub) 0
@@ -2134,19 +2163,6 @@ wlc_pkttag_bsscfg_get(void *p)
 #endif /* ARPOE */
 
 
-#ifdef NWOE
-	#if defined(WL_ENAB_RUNTIME_CHECK)
-		#define NWOE_ENAB(pub)		((pub)->_nwoe)
-	#elif defined(NWOE_DISABLED)
-		#define NWOE_ENAB(pub)		(0)
-	#else
-		#define NWOE_ENAB(pub)		((pub)->_nwoe)
-	#endif /* defined(WL_ENAB_RUNTIME_CHECK) */
-#else
-	#define NWOE_ENAB(pub)			(0)
-#endif /* NWOE */
-
-
 #ifdef TRAFFIC_MGMT
 #define TRAFFIC_MGMT_ENAB(pub) ((pub)->_traffic_mgmt)
 	#define TRAFFIC_MGMT_ENAB(pub) ((pub)->_traffic_mgmt)
@@ -2183,6 +2199,18 @@ wlc_pkttag_bsscfg_get(void *p)
 #else
 	#define PKT_FILTER_ENAB(pub)		(0)
 #endif /* PACKET_FILTER */
+
+#ifdef APF
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define APF_ENAB(pub)		((pub)->_apf_filter)
+	#elif defined(APF_DISABLED)
+		#define APF_ENAB(pub)		(0)
+	#else
+		#define APF_ENAB(pub)		(1)
+	#endif
+#else
+	#define APF_ENAB(pub)			(0)
+#endif /* APF */
 
 #ifdef PACKET_FILTER2
 	#if defined(WL_ENAB_RUNTIME_CHECK)
@@ -2272,6 +2300,18 @@ wlc_pkttag_bsscfg_get(void *p)
 	#define TKO_ENAB(pub) 0
 #endif /* TKO */
 
+#ifdef ICMP
+	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define ICMP_ENAB(pub) ((pub)->_icmp)
+	#elif defined(ICMP_DISABLED)
+		#define ICMP_ENAB(pub)	(0)
+	#else
+		#define ICMP_ENAB(pub)	(1)
+	#endif
+#else
+	#define ICMP_ENAB(pub) 0
+#endif /* ICMP */
+
 #ifdef WL_ASSOC_RECREATE
 	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
 		#define ASSOC_RECREATE_ENAB(pub) ((pub)->_assoc_recreate)
@@ -2310,12 +2350,18 @@ wlc_pkttag_bsscfg_get(void *p)
 
 #ifdef WLNDOE
 	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define NDOE_SUPPORT(pub)	((pub)->_ndoe_support)
 		#define NDOE_ENAB(pub) ((pub)->_ndoe)
 	#elif defined(WLNDOE_DISABLED)
+		#define NDOE_SUPPORT(pub)	0
 		#define NDOE_ENAB(pub) 0
 	#else
+		#define NDOE_SUPPORT(pub)	1
 		#define NDOE_ENAB(pub) ((pub)->_ndoe)
 	#endif 
+#else
+	#define NDOE_SUPPORT(pub) 0
+	#define NDOE_ENAB(pub) 0
 #endif /* WLNDOE */
 
 #ifdef GTKOE
@@ -2568,27 +2614,29 @@ wlc_pkttag_bsscfg_get(void *p)
 #endif /* WL_BTCDYN */
 
 #ifdef WL_NAN
+	#define WLC_NAN_SET_ENAB(wlc, enable)	(wlc->pub->cmn->_nan = enable)
 	#if defined(WL_ENAB_RUNTIME_CHECK)
-		#define NAN_ENAB(pub)	((pub)->_nan)
+		#define NAN_ENAB(pub)	((pub)->cmn->_nan)
 	#elif defined(WL_NAN_DISABLED)
 		#define NAN_ENAB(pub)	(0)
 	#else
-		#define NAN_ENAB(pub)	((pub)->_nan)
+		#define NAN_ENAB(pub)	((pub)->cmn->_nan)
 	#endif /* defined(WL_ENAB_RUNTIME_CHECK) */
 #else
+	#define WLC_NAN_SET_ENAB(wlc, enable)
 	#define NAN_ENAB(pub)		(0)
 #endif /* WL_NAN */
 
 #ifdef WLSCANCACHE
 	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
-		#define SCANCACHE_SUPPORT(pub)	((pub)->_scancache_support)
+		#define SCANCACHE_SUPPORT(wlc)	((wlc)->pub->cmn->_scancache_support)
 	#elif defined(WLSCANCACHE_DISABLED)
-		#define SCANCACHE_SUPPORT(pub)	(0)
+		#define SCANCACHE_SUPPORT(wlc)	(0)
 	#else
-		#define SCANCACHE_SUPPORT(pub)	(1)
+		#define SCANCACHE_SUPPORT(wlc)	(1)
 	#endif 
 #else
-	#define SCANCACHE_SUPPORT(pub)		(0)
+	#define SCANCACHE_SUPPORT(wlc)		(0)
 #endif /* WLSCANCACHE */
 
 #ifdef WLFMC
@@ -2875,6 +2923,13 @@ extern const uint8 fifo2prio[];
 #define WL11H_ENAB(wlc)	((void)(wlc), FALSE)
 #endif /* WL11H */
 
+/* SLAVE RADAR Support */
+#ifdef BAND5G
+#define WL11H_STA_ENAB(wlc)	(!AP_ENAB((wlc)->pub) && WL11H_ENAB(wlc))
+#else
+#define WL11H_STA_ENAB(wlc)	0
+#endif /* BAND5G */
+
 /* Interworking -- 11u Support */
 #ifdef WL11U
 	#if defined(WL_ENAB_RUNTIME_CHECK)
@@ -2890,9 +2945,15 @@ extern const uint8 fifo2prio[];
 
 /* SW probe response Support */
 #ifdef WLPROBRESP_SW
-#define WLPROBRESP_SW_ENAB(wlc)	((wlc)->pub->_probresp_sw)
+	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define WLPROBRESP_SW_ENAB(wlc)	((wlc)->pub->_probresp_sw)
+	#elif defined(WLPROBRESP_SW_DISABLED)
+		#define WLPROBRESP_SW_ENAB(wlc)	(0)
+	#else
+		#define WLPROBRESP_SW_ENAB(wlc)	(1)
+	#endif
 #else
-#define WLPROBRESP_SW_ENAB(wlc)	FALSE
+	#define WLPROBRESP_SW_ENAB(wlc)		(0)
 #endif /* WLPROBRESP_SW */
 
 /* Link Power Control Support */
@@ -3074,7 +3135,6 @@ extern const uint8 fifo2prio[];
 /* dpc info */
 struct wlc_dpc_info {
 	uint processed;
-	uint32 cxo_macintstatus;	/* CXO: macintstatus before and after dpc */
 };
 
 /* BT WLAN Tunnel Engine */
@@ -3122,14 +3182,6 @@ extern void wlc_intrsrestore(struct wlc_info *wlc, uint32 macintmask);
 extern bool wlc_intrsupd(struct wlc_info *wlc);
 extern bool wlc_isr(struct wlc_info *wlc, bool *wantdpc);
 extern bool wlc_dpc(struct wlc_info *wlc, bool bounded, struct wlc_dpc_info *dpc);
-
-#ifdef WLCXO_CTRL
-extern int32 wlc_cxo_ctrl_sendpkt(wlc_info_t *wlc, void *sdu, wlc_if_t *wlcif);
-extern wlc_ipc_t *wlc_cxo_ctrl_ipc(void *wlc);
-extern wlc_cx_tsc_t *wlc_cxo_ctrl_txframe_offloadable(wlc_info_t *wlc, void *sdu,
-	wlc_if_t *wlcif);
-extern void wlc_cxo_ctrl_ofld_drv_suspend(wlc_info_t *wlc, bool suspend);
-#endif /* WLCXO_CTRL */
 
 extern bool wlc_sendpkt(struct wlc_info *wlc, void *sdu, struct wlc_if *wlcif);
 extern bool wlc_send80211_specified(wlc_info_t *wlc, void *sdu, uint32 rspec, struct wlc_if *wlcif);
@@ -3208,11 +3260,13 @@ extern int wlc_get_last_txpwr(wlc_info_t *wlc, wlc_txchain_pwr_t *last_pwr);
 /* helper functions */
 extern bool wlc_radio_monitor_stop(struct wlc_info *wlc);
 
-#if defined(WLTINYDUMP) || defined(WLMSG_ASSOC) || defined(WLMSG_PRPKT) || \
-	defined(WLMSG_OID) || defined(WLMSG_INFORM) || defined(WLMSG_WSEC) || defined(WLEXTLOG) \
-	|| defined(WLMSG_MESH) || defined(BCMDBG_MU)
+#if defined(WLTINYDUMP) || defined(BCMDBG) || defined(WLMSG_ASSOC) || \
+	defined(WLMSG_PRPKT) || defined(WLMSG_OID) || defined(BCMDBG_DUMP) || \
+	defined(WLMSG_INFORM) || defined(WLMSG_WSEC) || defined(WLEXTLOG) || \
+	defined(WLMSG_MESH) || defined(BCMDBG_ERR) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_RSDB)
 extern int wlc_format_ssid(char* buf, const uchar ssid[], uint ssid_len);
-#endif 
+#endif /* defined(WLTINYDUMP) || defined(BCMDBG) || defined(WLMSG_ASSOC) ... */
 
 #ifdef STA
 #ifdef BCMSUP_PSK
@@ -3242,11 +3296,11 @@ extern void wlc_wlcif_stats_get(wlc_info_t *wlc, wlc_if_t *wlcif, wl_if_stats_t 
 extern wlc_if_t *wlc_wlcif_get_by_index(wlc_info_t *wlc, uint idx);
 
 /* value for # replay counters currently supported */
-#if defined(WOWL) || defined(WLCXO)
+#ifdef WOWL
 #define WLC_REPLAY_CNTRS_VALUE	WPA_CAP_4_REPLAY_CNTRS
 #else
 #define WLC_REPLAY_CNTRS_VALUE	WPA_CAP_16_REPLAY_CNTRS
-#endif /* defined(WOWL) || defined(WLCXO) */
+#endif /* WOWL */
 
 
 /* priority to replay counter (Rx IV) entry index mapping. */
@@ -3451,6 +3505,19 @@ extern wlc_if_t *wlc_wlcif_get_by_index(wlc_info_t *wlc, uint idx);
 #define MEDIA_CLIENT_ENAB(pub) (0)
 #endif /* BCM_MEDIA_CLIENT */
 
+/* VASIP support */
+#ifdef WLVASIP
+	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define VASIP_ENAB(pub) ((pub)->_vasip)
+	#elif defined(WLVASIP_DISABLED)
+		#define VASIP_ENAB(pub) (0)
+	#else
+		#define VASIP_ENAB(pub) ((pub)->_vasip)
+	#endif
+#else
+	#define VASIP_ENAB(pub) (0)
+#endif /* WLVASIP */
+
 extern void wlc_devpwrstchg_change(wlc_info_t *wlc, bool hostmem_access_enabled);
 extern uint32 wlc_halt_device(wlc_info_t *wlc);
 
@@ -3501,19 +3568,18 @@ extern void wlc_generate_pme_to_host(wlc_info_t *wlc, bool pme_on);
 #else
 	#define LINKSTAT_ENAB(pub)	0
 #endif /* WL_LINKSTAT */
-
-/* Ultra-Low Bandwidth (ULB) Mode support */
-#ifdef WL11ULB
-	#if defined(WL_ENAB_RUNTIME_CHECK)
-		#define ULB_ENAB(pub)		((pub)->_ulb)
-	#elif defined(WL11ULB_DISABLED)
-		#define ULB_ENAB(pub)		(0)
+/* Keep-alive offloading */
+#if defined(KEEP_ALIVE)
+	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define KEEP_ALIVE_ENAB(pub)	(pub)->cmn->_keep_alive
+	#elif defined(KEEP_ALIVE_DISABLED)
+		#define KEEP_ALIVE_ENAB(pub)	0
 	#else
-		#define ULB_ENAB(pub)		((pub)->_ulb)
-	#endif /* defined(WL_ENAB_RUNTIME_CHECK) */
+		#define KEEP_ALIVE_ENAB(pub)	1
+	#endif
 #else
-	#define ULB_ENAB(pub)			(0)
-#endif /* WL11ULB */
+	#define KEEP_ALIVE_ENAB(pub)	0
+#endif /* KEEP_ALIVE */
 
 /* u-code dump support */
 #if defined(WL_ENAB_RUNTIME_CHECK)
@@ -3676,14 +3742,16 @@ extern void wlc_generate_pme_to_host(wlc_info_t *wlc, bool pme_on);
 
 /* AUXPMQ check on d11 rev. For x, use pub in high driver, wlc_hw in low */
 #ifdef WL_AUXPMQ
-#define AUXPMQ_ENAB(x)	((D11REV_GE((x)->corerev, 64)) && (D11REV_LT((x)->corerev, 80)))
+#define AUXPMQ_ENAB(x)	(((D11REV_GE((x)->corerev, 64)) && (D11REV_LT((x)->corerev, 80))) ||\
+				(D11REV_GE((x)->corerev, 128)))
 #else
 #define AUXPMQ_ENAB(x)	(0)
 #endif
 
-/* PSMX HW capability is present only in MAC with d11rev >=64  && < 80  */
+/* PSMX HW capability is present only in MAC with d11rev (>=64 && < 80) || > 128 */
 #ifdef WL_PSMX
-#define PSMX_HWCAP(pub) ((D11REV_GE((pub)->corerev, 64)) && (D11REV_LT((pub)->corerev, 80)))
+#define PSMX_HWCAP(pub) (((D11REV_GE((pub)->corerev, 64)) && (D11REV_LT((pub)->corerev, 80))) ||\
+				(D11REV_GE((pub)->corerev, 128)))
 #else
 #define PSMX_HWCAP(pub)	0
 #endif
@@ -3703,4 +3771,80 @@ extern void wlc_generate_pme_to_host(wlc_info_t *wlc, bool pme_on);
 #else
 	#define MBO_ENAB(pub)		(0)
 #endif /* WL_MBO */
+
+#ifdef WL_OCE
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define OCE_ENAB(pub)	((pub)->cmn->_oce)
+	#elif defined(WL_OCE_DISABLED)
+		#define OCE_ENAB(pub)	(0)
+	#else
+		#define OCE_ENAB(pub)	((pub)->cmn->_oce)
+	#endif /* defined(WL_ENAB_RUNTIME_CHECK) */
+#else
+	#define OCE_ENAB(pub)		(0)
+#endif /* WL_OCE */
+
+#ifdef RSDB_APSCAN
+	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define	RSDB_APSCAN_ENAB(pub)	\
+			((pub)->cmn->_rsdb_scan & SCAN_DOWNGRADED_CH_PRUNE_ROAM)
+	#elif defined(RSDB_APSCAN_DISABLED)
+		#define	RSDB_APSCAN_ENAB(pub) 0
+	#else
+		#define	RSDB_APSCAN_ENAB(pub) 1
+	#endif
+#else
+	#define	RSDB_APSCAN_ENAB(pub) 0
+#endif /* RSDB_APSCAN */
+
+#ifdef BCM_SFD
+	#if defined(BCM_SFD_DISABLED)
+		#define SFD_ENAB(pub) (0)
+	#else
+		#define SFD_ENAB(pub) (1)
+	#endif
+#else
+	#define SFD_ENAB(pub) (0)
+#endif /* BCM_SFD */
+
+#ifdef WL_UCM
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define UCM_ENAB(pub) (pub->_ucm)
+	#elif defined(wl_UCM_DISABLED)
+		#define UCM_ENAB(pub) (FALSE)
+	#else
+		#define UCM_ENAB(pub) (pub->_ucm)
+	#endif
+#else
+	#define UCM_ENAB(pub) (FALSE)
+#endif /* WL_UCM */
+
+#ifdef WL_FILSAUTH
+#define FILSAUTH_ENAB(pub)  ((pub)->_filsauth)
+#else
+#define FILSAUTH_ENAB(pub)      (0)
+#endif /* WL_FILSAUTH */
+
+#ifdef WL_MBO_OCE
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define MBO_OCE_ENAB(pub)	((pub)->cmn->_mbo_oce)
+	#else
+		#define MBO_OCE_ENAB(pub)	((pub)->cmn->_mbo_oce)
+	#endif /* defined(WL_ENAB_RUNTIME_CHECK) */
+#else
+	#define MBO_OCE_ENAB(pub)		(0)
+#endif /* WL_MBO_OCE */
+
+#ifdef WL_LEAKY_AP_STATS
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define WL_LEAKYAPSTATS_ENAB(pub)       ((pub)->_leakyapstats)
+	#elif defined(WL_LEAKY_AP_STATS_DISABLED)
+		#define WL_LEAKAPSTATS_ENAB(pub)       (0)
+	#else
+		#define WL_LEAKYAPSTATS_ENAB(pub)       ((pub)->_leakyapstats)
+	#endif
+#else
+	#define WL_LEAKYAPSTATS_ENAB(pub)       (0)
+#endif /* WL_LEAKY_AP_STATS */
+
 #endif /* _wlc_pub_h_ */

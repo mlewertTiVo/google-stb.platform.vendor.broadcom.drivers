@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_dbg.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_dbg.c 665388 2016-10-17 21:59:15Z $
  */
 
 #include <wlc_cfg.h>
@@ -34,7 +34,12 @@
 #include <wlc_tso.h>
 #include <wlc_dbg.h>
 
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC)
+#ifdef BCM_SFD
+#include <wlc_sfd.h>
+#endif
+
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || \
+	defined(WLMSG_ASSOC)
 static const char* errstr = "802.11 Header INCOMPLETE\n";
 static const char* fillstr = "------------";
 
@@ -268,10 +273,78 @@ wlc_print_dot11_mac_hdr(uint8* buf, int len)
 	printf("\n");
 	return;
 }
-#endif 
+#endif /* BCMDBG || WLMSG_PRHDRS || WLMSG_PRPKT || WLMSG_ASSOC */
 
+#if defined(WL11AC) && defined(BCMDBG)
+static void
+wlc_dump_vht_plcp(uint8 *plcp)
+{
+	/* compute VHT plcp - 6 B */
+	uint32 plcp0 = 0, plcp1 = 0;
+	char flagstr[16];
 
-#if defined(WLMSG_PRHDRS) || defined(ENABLE_CORECAPTURE)
+	const bcm_bit_desc_t plcp0_flags_bf[] = {
+		{VHT_SIGA1_20MHZ_VAL, "20MHz"},
+		{VHT_SIGA1_40MHZ_VAL, "40MHz"},
+		{VHT_SIGA1_80MHZ_VAL, "80MHz"},
+		{VHT_SIGA1_160MHZ_VAL, "160MHz"},
+		{0, NULL}
+	};
+
+	const bcm_bit_desc_ex_t plcp0_flags = {
+			VHT_SIGA1_BW_MASK,
+			&(plcp0_flags_bf[0])
+	};
+
+	plcp0 = (plcp[0] & 0xff);
+	plcp0 |= ((uint32)plcp[1] << 8);
+	plcp0 |= ((uint32)plcp[2] << 16);
+	plcp1 = (plcp[3] & 0xff);
+	plcp1 |= ((uint32)plcp[4] << 8);
+	plcp1 |= ((uint32)plcp[5] << 16);
+
+	if (!(plcp0 & VHT_SIGA1_CONST_MASK) ||
+		!(plcp1 & VHT_SIGA2_B9_RESERVED)) {
+		printf("non-vht plcp");
+		return;
+	}
+
+	if (plcp0 & VHT_SIGA1_STBC) {
+		printf("stbc ");
+	}
+
+	if (bcm_format_field(&(plcp0_flags), plcp0, flagstr, 16)) {
+		printf("%s ", flagstr);
+	}
+
+	/* (in SU) bit4-9 if pkt addressed to AP = 0, else 63 */
+	printf("gid=%d ", (plcp0 & VHT_SIGA1_GID_MASK) >> VHT_SIGA1_GID_SHIFT);
+
+	/* b10-b13 NSTS */
+	/* for SU b10-b12 set to num STS-1 (fr 0-7) */
+	printf("nsts=%d ",
+		(plcp0 & VHT_SIGA1_NSTS_SHIFT_MASK_USER0) >> VHT_SIGA1_NSTS_SHIFT);
+
+	/* b13-b21 partial AID: Set to value of TXVECTOR param PARTIAL_AID */
+	printf("partialAID=%x ",
+		(plcp0 & VHT_SIGA1_PARTIAL_AID_MASK) >> VHT_SIGA1_PARTIAL_AID_SHIFT);
+
+	if (plcp1 & VHT_SIGA2_GI_SHORT) {
+		printf("sgi ");
+	}
+
+	if (plcp1 & VHT_SIGA2_CODING_LDPC) {
+		printf("ldpc ");
+	}
+	printf("mcs_idx=%x ", (plcp1 >> VHT_SIGA2_MCS_SHIFT) & (RSPEC_VHT_MCS_MASK));
+
+	if (plcp1 & VHT_SIGA2_BEAMFORM_ENABLE) {
+		printf("txbf");
+	}
+}
+#endif	/* BCMDBG && WL11AC */
+
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(ENABLE_CORECAPTURE)
 static void
 wlc_print_d11txh(d11txh_t* txh)
 {
@@ -424,7 +497,15 @@ wlc_print_per_rate_info(wlc_info_t *wlc, d11actxh_t* acHdrPtr, uint8 rateIdx)
 	d11actxh_rate_t *rb;
 	d11actxh_rate_t *ri;
 
-	rb = WLC_TXD_RATE_INFO_GET(acHdrPtr, wlc->pub->corerev);
+#ifdef BCM_SFD
+	if (SFD_ENAB(wlc->pub)) {
+		rb = wlc_sfd_get_rate_info(wlc->sfd, acHdrPtr);
+	} else
+#endif
+	{
+		rb = WLC_TXD_RATE_INFO_GET(acHdrPtr, wlc->pub->corerev);
+	}
+
 	ri = &rb[rateIdx];
 
 	printf("TxD Rate[%d]:\n", rateIdx);
@@ -436,6 +517,9 @@ wlc_print_per_rate_info(wlc_info_t *wlc, d11actxh_t* acHdrPtr, uint8 rateIdx)
 	printf(" plcp: %02X %02X %02X %02X %02X %02X [",
 	       ri->plcp[0], ri->plcp[1], ri->plcp[2],
 	       ri->plcp[3], ri->plcp[4], ri->plcp[5]);
+#if defined(WL11AC) && defined(BCMDBG)
+	wlc_dump_vht_plcp(ri->plcp);
+#endif /* WL11AC */
 	printf("]\n");
 	printf(" FbwInfo 0x%04X TxRate 0x%04X RtsCtsControl 0x%04X Bfm0 0x%04X\n",
 		ltoh16(ri->FbwInfo), ltoh16(ri->TxRate), ltoh16(ri->RtsCtsControl),
@@ -445,9 +529,19 @@ wlc_print_per_rate_info(wlc_info_t *wlc, d11actxh_t* acHdrPtr, uint8 rateIdx)
 static void
 wlc_print_per_pkt_cache_ac(wlc_info_t *wlc, d11actxh_t* acHdrPtr)
 {
-	d11actxh_cache_t	*cache_info;
+	d11txh_cache_common_t	*cache_info;
+	d11actxh_cache_t	*d11ac_cache_info;
 
-	cache_info = WLC_TXD_CACHE_INFO_GET(acHdrPtr, wlc->pub->corerev);
+
+#ifdef BCM_SFD
+	if (SFD_ENAB(wlc->pub)) {
+		d11ac_cache_info = wlc_sfd_get_cache_info(wlc->sfd, acHdrPtr);
+	} else
+#endif
+	{
+		d11ac_cache_info = WLC_TXD_CACHE_INFO_GET(acHdrPtr, wlc->pub->corerev);
+	}
+	cache_info = &d11ac_cache_info->common;
 
 	printf("TxD Pkt More Info:\n");
 	wlc_print_byte(" BssIdEncAlg", cache_info->BssIdEncAlg);
@@ -457,8 +551,8 @@ wlc_print_per_pkt_cache_ac(wlc_info_t *wlc, d11actxh_t* acHdrPtr)
 	wlc_print_word(" AmpduDur", ltoh16(cache_info->AmpduDur));
 	wlc_print_byte(" BAWin", cache_info->BAWin);
 	wlc_printn_byte(" MaxAggLen", cache_info->MaxAggLen);
-	prhex(" TkipPH1Key", (uchar *)cache_info->TkipPH1Key, 10);
-	prhex(" TSCPN", (uchar *)cache_info->TSCPN, 6);
+	prhex(" TkipPH1Key", (uchar *)d11ac_cache_info->TkipPH1Key, 10);
+	prhex(" TSCPN", (uchar *)d11ac_cache_info->TSCPN, 6);
 }
 
 void
@@ -475,7 +569,13 @@ wlc_print_txdesc_ac(wlc_info_t *wlc, void* hdrsBegin)
 
 	if (acHdrPtr->PktInfo.MacTxControlLow & htol16(D11AC_TXC_HDR_FMT_SHORT)) {
 		len = D11AC_TXH_SHORT_LEN;
-	} else {
+	} else
+#ifdef BCM_SFD
+	if (SFD_ENAB(wlc->pub) && WLC_SFD_GET_SFDID(acHdrPtr->PktInfo.MacTxControlLow)) {
+		len = D11AC_TXH_SFD_LEN;
+	} else
+#endif
+	{
 		len = D11AC_TXH_LEN;
 	}
 
@@ -488,7 +588,11 @@ wlc_print_txdesc_ac(wlc_info_t *wlc, void* hdrsBegin)
 	 * per-rate and cache sections. Dump the addtional
 	 * sections if it is a long header.
 	 */
+#ifdef BCM_SFD
+	if ((len == D11AC_TXH_LEN) || (len == D11AC_TXH_SFD_LEN)) {
+#else
 	if (len == D11AC_TXH_LEN) {
+#endif
 		if (acHdrPtr->PktInfo.MacTxControlHigh & htol16(D11AC_TXC_FIX_RATE)) {
 			rate_count = 1;
 		} else {
@@ -519,10 +623,10 @@ wlc_print_txdesc(wlc_info_t *wlc, wlc_txd_t *txd)
 		wlc_print_d11txh(&txd->d11txh);
 	}
 }
-#endif 
+#endif /* BCMDBG || WLMSG_PRHDRS || defined(ENABLE_CORECAPTURE) */
 
 
-#if defined(WLMSG_PRHDRS)
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(ENABLE_CORECAPTURE)
 /* Debug print of short receive status header */
 static void
 wlc_recv_print_srxh(d11rxhdrshort_t *srxh)
@@ -611,6 +715,9 @@ void
 wlc_print_hdrs(wlc_info_t *wlc, const char *prefix, uint8 *frame,
                wlc_txd_t *txd, wlc_d11rxhdr_t *wrxh, uint len)
 {
+#if defined(WL11AC) && defined(BCMDBG)
+	uint8 *plcp;
+#endif
 	ASSERT(!(txd && wrxh));
 
 	printf("\nwl%d: %s:\n", wlc->pub->unit, prefix);
@@ -621,17 +728,31 @@ wlc_print_hdrs(wlc_info_t *wlc, const char *prefix, uint8 *frame,
 		wlc_recv_print_rxh(wlc, wrxh);
 	}
 
+#if defined(WL11AC) && defined(BCMDBG)
+	/* If 11ac rx, dump plcp
+	 *
+	 * Todo : use rxh->ge80.PhyRxStatus_0 for (corerev >=80) when new remapped
+	 * d11rxhdr_lt80_t format is deprecated
+	 */
+	if (wrxh && ((wrxh->rxhdr.lt80.PhyRxStatus_0 &
+		PRXS_FT_MASK(wlc->pub->corerev)) == PRXS0_STDN)) {
+		plcp = frame - D11_PHY_HDR_LEN;
+		wlc_dump_vht_plcp(plcp);
+	}
+#endif
 
 	if (len > 0) {
 		ASSERT(frame != NULL);
 		wlc_print_dot11_mac_hdr(frame, len);
 	}
 }
-#endif 
+#endif /* BCMDBG || WLMSG_PRHDRS || defined(ENABLE_CORECAPTURE) */
 
-#if defined(WLTINYDUMP) || defined(WLMSG_ASSOC) || defined(WLMSG_PRPKT) || \
-	defined(WLMSG_OID) || defined(WLMSG_INFORM) || defined(WLMSG_WSEC) || defined(WLEXTLOG) \
-	|| defined(WLMSG_MESH) || defined(DNG_DBGDUMP)
+#if defined(WLTINYDUMP) || defined(BCMDBG) || defined(WLMSG_ASSOC) || \
+	defined(WLMSG_PRPKT) || defined(WLMSG_OID) || defined(BCMDBG_DUMP) || \
+	defined(WLMSG_INFORM) || defined(WLMSG_WSEC) || defined(WLEXTLOG) || \
+	defined(WLMSG_MESH) || defined(BCMDBG_ERR) || defined(DNG_DBGDUMP) || \
+	defined(BCMDBG_RSDB)
 int
 wlc_format_ssid(char* buf, const uchar ssid[], uint ssid_len)
 {
@@ -657,9 +778,9 @@ wlc_format_ssid(char* buf, const uchar ssid[], uint ssid_len)
 
 	return (int)(p - buf);
 }
-#endif 
+#endif /* WLTINYDUMP || BCMDBG || WLMSG_ASSOC || WLMSG_PRPKT || WLMSG_OID || BCMDBG_DUMP */
 
-#if defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC)
 static const bcm_bit_desc_t cap_flags[] = {
 	{DOT11_CAP_ESS, "ESS"},
 	{DOT11_CAP_IBSS, "IBSS"},
@@ -761,11 +882,11 @@ wlc_print_bcn_prb(uint8 *frame, int len)
 	}
 	printf("\n");
 }
-#endif 
+#endif /* BCMDBG || WLMSG_PRPKT || WLMSG_ASSOC */
 
 #ifdef STA
 
-#if defined(WLMSG_PRPKT)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT)
 void
 wlc_print_assoc(wlc_info_t *wlc, struct dot11_management_header *mng, int len)
 {
@@ -851,11 +972,12 @@ wlc_print_assoc(wlc_info_t *wlc, struct dot11_management_header *mng, int len)
 
 	printf("\n");
 }
-#endif 
+#endif /* BCMDBG || WLMSG_PRPKT */
 
 #endif /* STA */
 
-#if (defined(WLMSG_PRPKT) && defined(STA))
+#if ((defined(BCMDBG) || defined(WLMSG_PRPKT)) && defined(STA)) || (defined(BCMDBG) || \
+	defined(BCMDBG_DUMP))
 struct wlc_id_name_entry {
 	int id;
 	const char *name;
@@ -918,10 +1040,23 @@ wlc_lookup_name(const wlc_id_name_table_t tbl, int id)
 
 	return unknown;
 }
-#endif 
+#endif /* ((BCMDBG || WLMSG_PRPKT) && STA) || ((BCMDBG || BCMDBG_DUMP)) */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void
+wlc_dump_ie(wlc_info_t *wlc, bcm_tlv_t *ie, struct bcmstrbuf *b)
+{
+	const char* name = wlc_lookup_name(dot11_ie_names, ie->id);
+	int j;
+	BCM_REFERENCE(wlc);
 
-#if defined(WLMSG_PRPKT)
+	bcm_bprintf(b, "ID: %d %s [%d]: ", ie->id, name, ie->len);
+	for (j = 0; j < ie->len; j ++)
+		bcm_bprintf(b, "%02x", ie->data[j]);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
+
+#if defined(BCMDBG) || defined(WLMSG_PRPKT)
 void
 wlc_print_ies(wlc_info_t *wlc, uint8 *ies, uint ies_len)
 {
@@ -970,4 +1105,4 @@ wlc_print_ies(wlc_info_t *wlc, uint8 *ies, uint ies_len)
 		prhex(NULL, ies, ies_len);
 	}
 }
-#endif 
+#endif /* BCMDBG || WLMSG_PRPKT */

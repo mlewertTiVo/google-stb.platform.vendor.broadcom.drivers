@@ -47,9 +47,25 @@
 #include <event_log.h>
 #endif
 
+#ifdef BCMDBG
+#define BCM_OBJR_DBG(x) printf x
+#else
 #define BCM_OBJR_DBG(x)
+#endif
 
+#if defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG)
+
+#if defined(ERR_USE_EVENT_LOG_RA)
+#define	BCM_OBJR_ERROR(args)	EVENT_LOG_RA(EVENT_LOG_TAG_OBJR_ERROR, args)
+#else
+#define	BCM_OBJR_ERROR(args)	EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_OBJR_ERROR, args)
+#endif /* ERR_USE_EVENT_LOG_RA */
+
+#elif defined(BCMDBG_ERR) || defined(BCMDBG)
+#define BCM_OBJR_ERROR(args)	printf args
+#else
 #define BCM_OBJR_ERROR(args)
+#endif	/* defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG) */
 
 struct obj_registry {
 	int count;
@@ -93,6 +109,19 @@ void
 bcm_obj_registry_free(obj_registry_t *objr, osl_t *osh)
 {
 	if (objr) {
+#ifdef BCMDBG
+		if (objr->value && objr->ref) {
+			/* Check if some stale refs are still present */
+			int i = 0;
+			for (i = 0; i < objr->count; i++) {
+				if (objr->ref[i] || objr->value[i]) {
+					BCM_OBJR_ERROR(("key:%d ref:%d value:%p\n",
+						i, objr->ref[i], objr->value[i]));
+					ASSERT(0);
+				}
+			}
+		}
+#endif /* BCMDBG */
 		if (objr->value)
 			MFREE(osh, objr->value, sizeof(void*) * objr->count);
 		if (objr->ref)
@@ -132,6 +161,10 @@ bcm_obj_registry_ref(obj_registry_t *objr, int key)
 {
 	int ref = 0;
 	if (objr && (key >= 0) && (key < objr->count)) {
+#ifdef BCMDBG
+		void *value = NULL;
+		value = objr->value[(int)key];
+#endif
 		ref = ++(objr->ref[(int)key]);
 		BCM_OBJR_DBG(("%s:%d: key[%d]=value[%p]/REF[%d]\n",
 			__FUNCTION__, __LINE__, (int)key, value, ref));
@@ -144,6 +177,10 @@ bcm_obj_registry_unref(obj_registry_t *objr, int key)
 {
 	int ref = 0;
 	if (objr && (key >= 0) && (key < objr->count)) {
+#ifdef BCMDBG
+		void *value = NULL;
+		value = objr->value[(int)key];
+#endif
 		ref = (objr->ref[(int)key]);
 		if (ref > 0) {
 			ref = --(objr->ref[(int)key]);
@@ -165,3 +202,32 @@ bcm_obj_registry_islast(obj_registry_t *objr)
 	}
 	return 1;
 }
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+int
+bcm_dump_objr(obj_registry_t *objr, struct bcmstrbuf *b)
+{
+	int i = 0;
+	BCM_OBJR_DBG(("%s: %d \n", __FUNCTION__, __LINE__));
+	if (objr) {
+		if (b) {
+			bcm_bprintf(b, "\nDumping Object Registry\n");
+			bcm_bprintf(b, "Key\tValue\t\tRef\n");
+			for (i = 0; i < objr->count; i++) {
+				bcm_bprintf(b, "%d\t%p\t%d\n",
+					i, objr->value[(int)i], objr->ref[(int)i]);
+			}
+		} else {
+			BCM_OBJR_DBG(("\nkey\tvalue\tref\n"));
+			for (i = 0; i < objr->count; i++) {
+				BCM_OBJR_DBG(("%d\t%p\t%d\n",
+					i, objr->value[(int)i], objr->ref[(int)i]));
+			}
+		}
+	}
+	else {
+		bcm_bprintf(b, "\nObject Registry is not present\n");
+	}
+	return BCME_OK;
+}
+#endif /* BCMDBG */

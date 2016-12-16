@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scan.h 644209 2016-06-17 12:06:37Z $
+ * $Id: wlc_scan.h 660516 2016-09-20 22:02:56Z $
  */
 
 
@@ -54,17 +54,18 @@ struct wlc_scan_info {
 	uint16		state;			/* scan state bits */
 	bool		in_progress;		/* scan in progress */
 	struct ether_addr bssid;
-	/* WLSCANCACHE */
-	bool		_scancache;		/* scan cache enable */
 	uint32		flag;			/* scan flag supplement of state bits */
 	bool		iscan_cont;		/* true if iscan continuing pass */
 };
 
 struct wlc_scan_cmn_info {
 	/* Add Scan Function Call Interface */
-	uint8 		usage;			/* scan engine usage */
+	uint8		usage;			/* scan engine usage */
 	int		bss_type;		/* Scan for Infra, IBSS, or Any */
 	bool		is_hotspot_scan;	/* hotspot scan */
+
+	/* WLSCANCACHE */
+	bool		_scancache;		/* scan cache enable */
 
 	/* STA */
 	uint32		scan_start_time;	/* for scan time accumulation... */
@@ -91,14 +92,14 @@ extern int wlc_scan_anyscan_in_progress(wlc_scan_info_t *scan);
 
 #ifdef WLSCANCACHE
 	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
-		#define SCANCACHE_ENAB(scan_info)	((scan_info)->_scancache)
+		#define SCANCACHE_ENAB(scan_info)	((scan_info)->wlc_scan_cmn->_scancache)
 	#elif defined(WLSCANCACHE_DISABLED)
-		#define SCANCACHE_ENAB(pub)	(0)
+		#define SCANCACHE_ENAB(scan_info)	(0)
 	#else
-		#define SCANCACHE_ENAB(scan)	((scan)->_scancache)
+		#define SCANCACHE_ENAB(scan_info)	((scan_info)->wlc_scan_cmn->_scancache)
 	#endif
 #else
-	#define SCANCACHE_ENAB(pub)	(0)
+	#define SCANCACHE_ENAB(scan_info)	(0)
 #endif /* WLSCANCACHE */
 
 extern wlc_scan_info_t *wlc_scan_attach(wlc_info_t *wlc, void *wl, osl_t *osh, uint);
@@ -183,12 +184,9 @@ extern uint32 wlc_get_curr_scan_time(wlc_info_t *wlc);
 extern uint32 wlc_curr_roam_scan_time(wlc_info_t *wlc);
 #endif /* STA */
 
-#ifdef WL_STF_ARBITRATOR
-extern void wlc_stf_arbi_handle_scan_ps_config_cores_intermediate(wlc_scan_info_t *scan_pub,
-       bool flag);
-#endif /* WL_STF_ARBITRATOR */
-
 extern wlc_bsscfg_t *wlc_scanmac_get_bsscfg(wlc_scan_info_t *scan, int macreq, wlc_bsscfg_t *cfg);
 struct ether_addr *wlc_scanmac_get_mac(wlc_scan_info_t *scan, int macreq, wlc_bsscfg_t *bsscfg);
 extern int wlc_scanmac_update(wlc_scan_info_t *scan);
+extern int wlc_scan_filter_channels(wlc_scan_info_t *scan_pub,
+	chanspec_t *chspec_list, int num);
 #endif /* _WLC_SCAN_H_ */

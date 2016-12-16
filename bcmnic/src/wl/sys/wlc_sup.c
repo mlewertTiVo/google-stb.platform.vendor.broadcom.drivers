@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_sup.c 636243 2016-05-07 00:18:15Z $
+ * $Id: wlc_sup.c 660248 2016-09-19 21:45:03Z $
  */
 
 /**
@@ -125,6 +125,18 @@
 #define SUP_CHECK_WPAPSK_SUP_TYPE(sup) (sup->sup_type == SUP_WPAPSK)
 
 
+
+#ifdef EVENT_LOG_COMPILE
+#define WL_SUP_INFO(args) do { \
+	if (EVENT_LOG_IS_LOG_ON(EVENT_LOG_TAG_SUP_INFO)) \
+		EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_SUP_INFO, args); \
+	} while (0)
+#define WL_SUP_ERROR(args) \
+	EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_SUP_ERROR, args)
+#else /* EVENT_LOG_COMPILE */
+#define WL_SUP_INFO(args)	WL_WSEC(args)
+#define WL_SUP_ERROR(args)	WL_WSEC(args)
+#endif /* EVENT_LOG_COMPILE */
 
 static int wlc_sup_doiovar(void *handle, uint32 actionid,
 	void *params, uint plen, void *arg, uint alen, uint vsize, struct wlc_if *wlcif);
@@ -316,6 +328,14 @@ BCMATTACHFN(wlc_sup_attach)(wlc_info_t *wlc)
 		WL_ERROR(("wl%d: auth wlc_module_register() failed\n", UNIT(sup_info)));
 		goto err;
 	}
+
+#ifdef EVENT_LOG_COMPILE
+	event_log_tag_start(EVENT_LOG_TAG_SUP_INFO, EVENT_LOG_SET_WL,
+		EVENT_LOG_TAG_FLAG_LOG | EVENT_LOG_TAG_FLAG_PRINT);
+	event_log_tag_start(EVENT_LOG_TAG_SUP_ERROR, EVENT_LOG_SET_WL,
+		EVENT_LOG_TAG_FLAG_LOG | EVENT_LOG_TAG_FLAG_PRINT);
+#endif
+
 	return sup_info;
 err:
 	MODULE_DETACH(sup_info, wlc_sup_detach);
@@ -738,7 +758,7 @@ wlc_wpa_sup_prepeapol(supplicant_t *sup, uint16 flags, wpa_msg_t msg)
 			wlc_fbt_addies(sup->wlc->fbt, sup->cfg, wpa_key);
 		}
 #endif /* WLFBT */
-		WL_WSEC(("wl%d: wlc_wpa_sup_sendeapol: sending message 2\n",
+		WL_SUP_INFO(("wl%d: wlc_wpa_sup_sendeapol: sending message 2\n",
 			UNIT(sup)));
 		break;
 
@@ -752,7 +772,7 @@ wlc_wpa_sup_prepeapol(supplicant_t *sup, uint16 flags, wpa_msg_t msg)
 		bzero(wpa_key, EAPOL_WPA_KEY_LEN);
 		hton16_ua_store((flags | PMSG4_REQUIRED), (uint8 *)&wpa_key->key_info);
 		hton16_ua_store(wpa->tk_len, (uint8 *)&wpa_key->key_len);
-		WL_WSEC(("wl%d: wlc_wpa_sup_sendeapol: sending message 4\n",
+		WL_SUP_INFO(("wl%d: wlc_wpa_sup_sendeapol: sending message 4\n",
 			UNIT(sup)));
 		break;
 
@@ -780,7 +800,7 @@ wlc_wpa_sup_prepeapol(supplicant_t *sup, uint16 flags, wpa_msg_t msg)
 		break;
 
 	default:
-		WL_WSEC(("wl%d: wlc_wpa_sup_sendeapol: unexpected message type %d\n",
+		WL_SUP_ERROR(("wl%d: wlc_wpa_sup_sendeapol: unexpected message type %d\n",
 		         UNIT(sup), msg));
 		break;
 	}
@@ -801,7 +821,7 @@ wlc_wpa_sup_prepeapol(supplicant_t *sup, uint16 flags, wpa_msg_t msg)
 		key_desc = flags & (WPA_KEY_DESC_V1 |  WPA_KEY_DESC_V2);
 		if (!wpa_make_mic(eapol_hdr, key_desc, wpa->eapol_mic_key,
 			mic)) {
-			WL_WSEC(("wl%d: wlc_wpa_sup_sendeapol: MIC generation failed\n",
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_sendeapol: MIC generation failed\n",
 			         UNIT(sup)));
 			return FALSE;
 		}
@@ -906,7 +926,7 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 
 	key_info = ntoh16_ua(&body->key_info);
 
-	WL_WSEC(("wl%d: wlc_wpa_sup_eapol: received EAPOL_WPA_KEY packet, KI:%x\n",
+	WL_SUP_INFO(("wl%d: wlc_wpa_sup_eapol: received EAPOL_WPA_KEY packet, KI:%x\n",
 		UNIT(sup), key_info));
 
 	if ((key_info & WPA_KEY_PAIRWISE) && !(key_info & WPA_KEY_MIC)) {
@@ -918,18 +938,21 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 	/* check for replay */
 	if (wpa_array_cmp(MAX_ARRAY, body->replay, wpa->replay, EAPOL_KEY_REPLAY_LEN) ==
 	    wpa->replay) {
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 		uchar *g = body->replay, *s = wpa->replay;
 		WL_WSEC(("wl%d: wlc_wpa_sup_eapol: ignoring replay ", UNIT(sup)));
 		WL_WSEC(("(got %02x%02x%02x%02x%02x%02x%02x%02x",
 				g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7]));
 		WL_WSEC((" last saw %02x%02x%02x%02x%02x%02x%02x%02x)\n",
 				s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]));
-#endif 
+		WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: got replay %02x%02x",
+			UNIT(sup), body->replay[6], body->replay[7]));
+		WL_SUP_ERROR((" last saw %02x%02x", wpa->replay[6], wpa->replay[7]));
+#endif /* BCMDBG || WLMSG_WSEC */
 
 		return TRUE;
 	}
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	{
 		uchar *g = body->replay, *s = wpa->replay;
 		WL_WSEC(("wl%d: wlc_wpa_sup_eapol: NO replay ", UNIT(sup)));
@@ -938,19 +961,19 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 		WL_WSEC((" last saw %02x%02x%02x%02x%02x%02x%02x%02x)\n",
 				s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]));
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 
 	/* check message MIC */
 	if (key_info & WPA_KEY_MIC) {
 		if (ntoh16(eapol->length) < OFFSETOF(eapol_wpa_key_header_t, data_len)) {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: missing MIC , discarding pkt\n",
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: missing MIC , discarding pkt\n",
 				UNIT(sup)));
 			return TRUE;
 		}
 		if (!wpa_check_mic(eapol, key_info & (WPA_KEY_DESC_V1|WPA_KEY_DESC_V2),
 			wpa->eapol_mic_key)) {
 			/* 802.11-2007 clause 8.5.3.3 - silently discard MIC failure */
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: MIC failure, discarding pkt\n",
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: MIC failure, discarding pkt\n",
 				UNIT(sup)));
 			return TRUE;
 		}
@@ -958,14 +981,14 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 
 	/* check data length is okay */
 	if (ntoh16(eapol->length) < OFFSETOF(eapol_wpa_key_header_t, data)) {
-		WL_WSEC(("wl%d: wlc_wpa_sup_eapol: too short - no data len, toss pkt\n",
+		WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: too short - no data len, toss pkt\n",
 			UNIT(sup)));
 		return TRUE;
 	}
 
 	data_len = ntoh16_ua(&body->data_len);
 	if (ntoh16(eapol->length) < (OFFSETOF(eapol_wpa_key_header_t, data) + data_len)) {
-		WL_WSEC(("wl%d: wlc_wpa_sup_eapol: not enough data - discarding pkt\n",
+		WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: not enough data - discarding pkt\n",
 			UNIT(sup)));
 		return TRUE;
 	}
@@ -976,7 +999,7 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 	bcopy(body->replay, wpa->last_replay, EAPOL_KEY_REPLAY_LEN);
 
 	/* decrypt key data field */
-	if (bcmwpa_is_wpa2_auth(wpa->WPA_auth) &&
+	if ((data_len) && bcmwpa_is_wpa2_auth(wpa->WPA_auth) &&
 	    (key_info & WPA_KEY_ENCRYPTED_DATA)) {
 
 		uint8 *data, *encrkey;
@@ -1013,13 +1036,16 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 		MFREE(sup->osh, rc4key, sizeof(rc4_ks_t));
 
 		if (!decr_status) {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: decryption of key"
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: decryption of key"
 					"data failed\n", UNIT(sup)));
 			wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_DECRYPT_KEY_DATA);
 			return FALSE;
 		}
 	}
-
+	else if ((key_info & WPA_KEY_ENCRYPTED_DATA) && (!data_len)) {
+		WL_WSEC(("wl%d:wlc_wpa_sup_eapol: zero length encrypted data\n",
+				UNIT(sup)));
+	}
 	key_len = ntoh16_ua(&body->key_len);
 	cipher = CRYPTO_ALGO_OFF;
 
@@ -1041,8 +1067,8 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				cipher = CRYPTO_ALGO_WEP128;
 						break;
 			} else {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: illegal use of ucast WEP128\n",
-				         UNIT(sup)));
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol:"
+					" illegal use of ucast WEP128\n", UNIT(sup)));
 				wlc_wpa_send_sup_status(sup_info, sup->cfg,
 					WLC_E_SUP_BAD_UCAST_WEP128);
 				return FALSE;
@@ -1052,14 +1078,14 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				cipher = CRYPTO_ALGO_WEP1;
 				break;
 			} else {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: illegal use of ucast WEP40\n",
-				         UNIT(sup)));
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol:"
+					" illegal use of ucast WEP40\n", UNIT(sup)));
 				wlc_wpa_send_sup_status(sup_info, sup->cfg,
 					WLC_E_SUP_BAD_UCAST_WEP40);
 				return FALSE;
 			}
 		default:
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: unsupported key_len = %d\n",
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: unsupported key_len = %d\n",
 			         UNIT(sup), key_len));
 			wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_UNSUP_KEY_LEN);
 			return FALSE;
@@ -1068,16 +1094,15 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 
 	if (key_info & WPA_KEY_PAIRWISE) {
 		if (wpa->ucipher != cipher) {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: unicast cipher mismatch in pairwise key"
-			         " message\n",
-			         UNIT(sup)));
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol:"
+				" unicast cipher mismatch in pairwise key message\n", UNIT(sup)));
 			wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_PW_KEY_CIPHER);
 			return FALSE;
 		}
 
 		if (!(key_info & WPA_KEY_MIC)) {
 
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: processing message 1\n",
+			WL_SUP_INFO(("wl%d: wlc_wpa_sup_eapol: processing message 1\n",
 			         UNIT(sup)));
 
 			/* Test message 1 key_info flags */
@@ -1085,8 +1110,8 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				: PMSG1_PROHIBITED;
 			required = encrypted ? (PMSG1_REQUIRED & ~WPA_KEY_SECURE) : PMSG1_REQUIRED;
 			if (((key_info & required) != required) || ((key_info & prohibited) != 0)) {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: unexpected key_info (0x%04x) in"
-				         " WPA pairwise key message 1\n",
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: unexpected key_info"
+				         " (0x%04x) in WPA pairwise key message 1\n",
 				         UNIT(sup), (uint)key_info));
 			}
 			wpa->state = WPA_SUP_STAKEYSTARTP_PREP_M2;
@@ -1104,15 +1129,20 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				                          WPA2_KEY_DATA_SUBTYPE_PMKID);
 				if (data_encap) {
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 					if (WL_WSEC_ON()) {
-						int i;
-						WL_WSEC(("wl%d: PMKID received: ", UNIT(sup)));
-						for (i = 0; i < WPA2_PMKID_LEN; i++)
-							WL_WSEC(("0x%x ", data_encap->data[i]));
-						WL_WSEC(("\n"));
+						uint8 *d = data_encap->data;
+						WL_SUP_INFO(("wl%d: PMKID received: ", UNIT(sup)));
+						WL_SUP_INFO(("%02x %02x %02x %02x"
+							" %02x %02x %02x %02x\n",
+							d[0], d[1], d[2], d[3],
+							d[4], d[5], d[6], d[7]));
+						WL_SUP_INFO(("%02x %02x %02x %02x"
+							" %02x %02x %02x %02x\n",
+							d[8], d[9], d[10], d[11],
+							d[12], d[13], d[14], d[15]));
 					}
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 
 					if (!wlc_sup_retrieve_pmk(sup, sup->cfg,
 						data_encap->data, &BSS_EA(sup),
@@ -1129,19 +1159,19 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				 * Restore the PMK derived from PSK.
 				 */
 				if (sup->wpa_info->pmk_psk_len > 0) {
-					WL_WSEC(("wl%d: %s: Restore PMK\n",
-						UNIT(sup), __FUNCTION__));
+					WL_SUP_INFO(("wl%d: wlc_wpa_sup_eapol: Restore PMK\n",
+						UNIT(sup)));
 					bcopy((char*)sup->wpa_info->pmk_psk, sup->wpa_info->pmk,
 						sup->wpa_info->pmk_psk_len);
 					sup->wpa_info->pmk_len = sup->wpa_info->pmk_psk_len;
 				}
 				else
-					WL_WSEC(("wl%d: %s: PMK from PSK not saved\n",
-						UNIT(sup), __FUNCTION__));
+					WL_SUP_INFO(("wl%d: wlc_wpa_sup_eapol:"
+						" PMK from PSK not saved\n", UNIT(sup)));
 			}
 #endif /* BCMSUP_PSK */
 			if (sup->wpa_info->pmk_len == 0) {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: No PMK available to compose"
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: No PMK available to compose"
 				         " pairwise msg 2\n",
 				         UNIT(sup)));
 				return TRUE;
@@ -1169,8 +1199,8 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				{
 					if (!memcmp(&PEER_EA(sup), &CUR_EA(sup), ETHER_ADDR_LEN)) {
 						/* something is wrong -- toss; invalid eapol */
-						WL_WSEC(("wl%d:%s: toss msg; same mac\n",
-							UNIT(sup), __FUNCTION__));
+						WL_SUP_INFO(("wl%d:wlc_wpa_sup_eapol:"
+							"toss msg; same mac\n", UNIT(sup)));
 						return TRUE;
 					} else {
 						wpa_calc_ptk(&PEER_EA(sup), &CUR_EA(sup),
@@ -1187,14 +1217,14 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 					(key_info & PMSG2_MATCH_FLAGS), PMSG2)) {
 					wpa->state = WPA_SUP_STAKEYSTARTP_WAIT_M3;
 				} else {
-					WL_WSEC(("wl%d: wlc_wpa_sup_eapol: send message 2 failed\n",
-					         UNIT(sup)));
+					WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol:"
+						"send message 2 failed\n", UNIT(sup)));
 					wlc_wpa_send_sup_status(sup_info, sup->cfg,
 						WLC_E_SUP_SEND_FAIL);
 				}
 			}
 		} else {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: processing message 3\n",
+			WL_SUP_INFO(("wl%d: wlc_wpa_sup_eapol: processing message 3\n",
 				UNIT(sup)));
 
 			/* Test message 3 key_info flags */
@@ -1205,7 +1235,7 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 
 			if (bcmwpa_is_wpa2_auth(wpa->WPA_auth)) {
 				prohibited = 0;
-					required = PMSG3_WPA2_REQUIRED;
+				required = PMSG3_WPA2_REQUIRED;
 			}
 
 			/* In case that M4 is lost in the air, M3 may come at the state of
@@ -1221,14 +1251,14 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 			if (((key_info & required) != required) ||
 				((key_info & prohibited) != 0))
 			{
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: unexpected key_info (0x%04x) in"
-				         " WPA pairwise key message 3\n",
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: unexpected key_info"
+				         " (0x%04x) in WPA pairwise key message 3\n",
 				         UNIT(sup), (uint)key_info));
 				return TRUE;
 			} else if (wpa->state < WPA_SUP_STAKEYSTARTP_PREP_M2 ||
 			           wpa->state > WPA_SUP_STAKEYSTARTG_PREP_G2) {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: unexpected 4-way msg 3 in state"
-				         " %d\n",
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: unexpected 4-way msg 3"
+				         " in state %d\n",
 				         UNIT(sup), wpa->state));
 				/* don't accept msg3 unless it follows msg1 */
 				return TRUE;
@@ -1237,9 +1267,9 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 
 			/* check anonce */
 			if (bcmp(body->nonce, wpa->anonce, sizeof(wpa->anonce))) {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: anonce in key message 3 doesn't"
-				         " match anonce in key message 1, discarding pkt \n",
-				         UNIT(sup)));
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: anonce in key message 3"
+				         " doesn't match anonce in key message 1,"
+				         " discarding pkt \n", UNIT(sup)));
 				return TRUE;
 			}
 
@@ -1251,8 +1281,8 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				wpa2ie = bcm_parse_tlvs(body->data, data_len, DOT11_MNG_RSN_ID);
 				/* verify RSN IE */
 				if (!wlc_wpa_sup_check_rsn(sup, wpa2ie)) {
-					WL_WSEC(("wl%d: wlc_wpa_sup_eapol: WPA IE mismatch in key"
-						" message 3\n", UNIT(sup)));
+					WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: WPA IE mismatch in"
+						" key message 3\n", UNIT(sup)));
 					wlc_wpa_send_sup_status(sup_info, sup->cfg,
 						WLC_E_SUP_MSG3_IE_MISMATCH);
 					/* should cause a deauth */
@@ -1265,8 +1295,8 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				if (len > ((uint16)TLV_HDR_LEN + (uint16)wpa2ie->len) &&
 					bcm_parse_tlvs((uint8*)wpa2ie + TLV_HDR_LEN + wpa2ie->len,
 					len - (TLV_HDR_LEN + wpa2ie->len), DOT11_MNG_RSN_ID)) {
-					WL_WSEC(("wl%d: wlc_wpa_sup_eapol: WPA IE contains more"
-						" than one RSN IE in key message 3\n",
+					WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: WPA IE contains"
+						" more than one RSN IE in key message 3\n",
 						UNIT(sup)));
 					wlc_wpa_send_sup_status(sup_info, sup->cfg,
 						WLC_E_SUP_MSG3_TOO_MANY_IE);
@@ -1280,8 +1310,8 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 			else if ((wpa->auth_wpaie_len != data_len) ||
 			         (bcmp(wpa->auth_wpaie, body->data,
 			               wpa->auth_wpaie_len))) {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: WPA IE mismatch in key message"
-				         " 3\n",
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol:"
+				         " WPA IE mismatch in key message 3\n",
 				         UNIT(sup)));
 				/* should cause a deauth */
 				wlc_wpa_senddeauth(sup->cfg, (char *)&PEER_EA(sup),
@@ -1293,7 +1323,7 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				(key_info & PMSG4_MATCH_FLAGS), PMSG4)) {
 				wpa->state = WPA_SUP_STAKEYSTARTG_WAIT_G1;
 			} else {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: send message 4 failed\n",
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: send message 4 failed\n",
 				         UNIT(sup)));
 				wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_SEND_FAIL);
 				return FALSE;
@@ -1328,24 +1358,23 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 				/* While INSTALL is in the `required' set this
 				 * test is a tripwire for when that changes
 				 */
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: INSTALL flag unset in 4-way msg"
-				         " 3\n",
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol:"
+				         " INSTALL flag unset in 4-way msg 3\n",
 				         UNIT(sup)));
 				wlc_wpa_send_sup_status(sup_info, sup->cfg,
 					WLC_E_SUP_NO_INSTALL_FLAG);
 				return FALSE;
 			}
 
-			if (bcmwpa_is_wpa2_auth(wpa->WPA_auth) &&
-			    TRUE) {
+			if (bcmwpa_is_wpa2_auth(wpa->WPA_auth)) {
 				eapol_wpa2_encap_data_t *data_encap;
 				eapol_wpa2_key_gtk_encap_t *gtk_kde;
 
 				/* extract GTK */
 				data_encap = wpa_find_gtk_encap(body->data, data_len);
 				if (!data_encap) {
-					WL_WSEC(("wl%d: wlc_wpa_sup_eapol: encapsulated GTK missing"
-					         " from message 3\n", UNIT(sup_info)));
+					WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: encapsulated GTK"
+					         " missing from message 3\n", UNIT(sup_info)));
 					wlc_wpa_send_sup_status(sup_info, sup->cfg,
 						WLC_E_SUP_MSG3_NO_GTK);
 					return FALSE;
@@ -1370,7 +1399,7 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 			if (bcmwpa_is_wpa2_auth(wpa->WPA_auth)) {
 				wpa->state = WPA_SUP_KEYUPDATE;
 
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: WPA2 key update complete\n",
+				WL_SUP_INFO(("wl%d: wlc_wpa_sup_eapol: WPA2 key update complete\n",
 				         UNIT(sup)));
 				wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_OTHER);
 
@@ -1395,21 +1424,21 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 	} else {
 		/* Pairwise flag clear; should be group key message. */
 		if (wpa->state <  WPA_SUP_STAKEYSTARTG_WAIT_G1) {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: unexpected group key msg1 in state %d\n",
-			         UNIT(sup), wpa->state));
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: unexpected group key msg1"
+			         " in state %d\n", UNIT(sup), wpa->state));
 			return TRUE;
 		}
 
 		if (SUP_CHECK_MCIPHER(sup)) {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: multicast cipher mismatch in group key"
-			         " message\n",
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: multicast cipher mismatch"
+			         " in group key message\n",
 			         UNIT(sup)));
 			wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_GRP_KEY_CIPHER);
 			return FALSE;
 		}
 
 		if ((key_info & GMSG1_REQUIRED) != GMSG1_REQUIRED) {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: unexpected key_info (0x%04x)in"
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: unexpected key_info (0x%04x)in"
 				 "WPA group key message\n",
 				 UNIT(sup), (uint)key_info));
 			return TRUE;
@@ -1424,8 +1453,8 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 			data_len = ntoh16_ua(&body->data_len);
 			data_encap = wpa_find_gtk_encap(body->data, data_len);
 			if (!data_encap) {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: encapsulated GTK missing from"
-					" group message 1\n", UNIT(sup)));
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: encapsulated GTK missing"
+					" from group message 1\n", UNIT(sup)));
 				wlc_wpa_send_sup_status(sup_info, sup->cfg,
 					WLC_E_SUP_GRP_MSG1_NO_GTK);
 				return FALSE;
@@ -1487,7 +1516,7 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 
 			wpa->gtk_len = key_len;
 			if (!decr_status) {
-				WL_WSEC(("wl%d: wlc_wpa_sup_eapol: GTK decrypt failure\n",
+				WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: GTK decrypt failure\n",
 				         UNIT(sup)));
 				wlc_wpa_send_sup_status(sup_info, sup->cfg,
 					WLC_E_SUP_GTK_DECRYPT_FAIL);
@@ -1505,11 +1534,11 @@ wlc_wpa_sup_eapol(supplicant_t *sup, eapol_header_t *eapol, bool encrypted)
 			(key_info & GMSG2_MATCH_FLAGS), GMSG2)) {
 			wpa->state = WPA_SUP_KEYUPDATE;
 
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: key update complete\n",
+			WL_SUP_INFO(("wl%d: wlc_wpa_sup_eapol: key update complete\n",
 			         UNIT(sup)));
 			wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_OTHER);
 		} else {
-			WL_WSEC(("wl%d: wlc_wpa_sup_eapol: send grp msg 2 failed\n",
+			WL_SUP_ERROR(("wl%d: wlc_wpa_sup_eapol: send grp msg 2 failed\n",
 			         UNIT(sup)));
 			wlc_wpa_send_sup_status(sup_info, sup->cfg, WLC_E_SUP_SEND_FAIL);
 		}
@@ -1583,7 +1612,7 @@ wlc_sup_wpapsk_start(supplicant_t *sup, uint8 *sup_ies, uint sup_ies_len,
 	}
 
 	if ((sup->sup_type == SUP_WPAPSK) && (sup->wpa_info->pmk_len == 0)) {
-		WL_WSEC(("wl%d: wlc_sup_wpapsk_start: no PMK material found\n", UNIT(sup)));
+		WL_SUP_ERROR(("wl%d: wlc_sup_wpapsk_start: no PMK material found\n", UNIT(sup)));
 		ret = FALSE;
 	}
 
@@ -1954,16 +1983,16 @@ wlc_sup_eapol(struct wlc_sup_info *sup_info, struct wlc_bsscfg *cfg, eapol_heade
 		    eap_hdr->code == EAP_REQUEST) {
 			if (sup->wpa->WPA_auth & WPA_AUTH_UNSPECIFIED ||
 			    sup->wpa->WPA_auth & WPA2_AUTH_UNSPECIFIED) {
-				WL_WSEC(("wl%d: wlc_sup_eapol: EAP-Identity Request received - "
+				WL_SUP_INFO(("wl%d: wlc_sup_eapol: EAP-Identity Request received - "
 				         "reset supplicant state and clear PMK\n", UNIT(sup)));
 				sup->wpa->state = WPA_SUP_INITIALIZE;
 				sup->wpa_info->pmk_len = 0;
 			} else {
-				WL_WSEC(("wl%d: wlc_sup_eapol: EAP-Identity Request ignored\n",
+				WL_SUP_ERROR(("wl%d: wlc_sup_eapol: EAP-Identity Request ignored\n",
 				         UNIT(sup)));
 			}
 		} else {
-			WL_WSEC(("wl%d: wlc_sup_eapol: EAP packet ignored\n", UNIT(sup)));
+			WL_SUP_ERROR(("wl%d: wlc_sup_eapol: EAP packet ignored\n", UNIT(sup)));
 		}
 	}
 #endif /* BCMSUP_PSK */
@@ -2281,7 +2310,7 @@ wlc_wpa_psk_timer(void *arg)
 	}
 	/* Report timeout event */
 	if (sup->cfg->associated && sup->wpa->state != WPA_SUP_KEYUPDATE) {
-		WL_WSEC(("wl%d: wlc_wpa_psk_timer: 4-way handshake timeout\n",
+		WL_SUP_ERROR(("wl%d: wlc_wpa_psk_timer: 4-way handshake timeout\n",
 		         UNIT(sup)));
 		wlc_wpa_send_sup_status(sup->m_handle, sup->cfg, WLC_E_SUP_WPA_PSK_TMO);
 	}
@@ -2333,7 +2362,7 @@ wlc_sup_handle_joinstart(wlc_sup_info_t *sup_info, wlc_bsscfg_t *cfg)
 {
 	supplicant_t *sup = SUP_BSSCFG_CUBBY(sup_info, cfg);
 	wlc_info_t *wlc;
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	char *ssidbuf;
 	const char *ssidstr;
 #endif
@@ -2342,7 +2371,7 @@ wlc_sup_handle_joinstart(wlc_sup_info_t *sup_info, wlc_bsscfg_t *cfg)
 		return;
 	wlc = sup->wlc;
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	ssidbuf = (char *) MALLOC(wlc->osh, SSID_FMT_BUF_LEN);
 	if (ssidbuf) {
 		wlc_format_ssid(ssidbuf, cfg->SSID, cfg->SSID_len);
@@ -2367,7 +2396,7 @@ wlc_sup_handle_joinstart(wlc_sup_info_t *sup_info, wlc_bsscfg_t *cfg)
 		wlc_pmkid_clear_store(wlc->pmkid_info, cfg);
 	}
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	if (ssidbuf != NULL)
 		 MFREE(wlc->osh, (void *)ssidbuf, SSID_FMT_BUF_LEN);
 #endif
@@ -2492,7 +2521,7 @@ wlc_sup_retrieve_pmk(supplicant_t *sup, wlc_bsscfg_t *cfg, uint8 *data,
 	}
 	/* Check for npmkid_sup instead of npmkid else retrieving of pmkid fails */
 	if (i == sup->npmkid_sup) {
-		WL_WSEC(("wl%d: wlc_sup_retrieve_pmk: unrecognized"
+		WL_SUP_ERROR(("wl%d: wlc_sup_retrieve_pmk: unrecognized"
 				 " PMKID in WPA pairwise key message 1\n",
 				 UNIT(sup)));
 		return TRUE;
@@ -2552,7 +2581,7 @@ wlc_sup_set_pmkid(wlc_sup_info_t *sup_info, wlc_bsscfg_t *cfg, uint8 *pmk, ushor
 	ASSERT(sup);
 
 	if (ETHER_ISNULLADDR(auth_ea)) {
-		WL_WSEC(("wl%d: wlc_sup_set_pmkid: can't calculate PMKID - NULL BSSID\n",
+		WL_SUP_ERROR(("wl%d: wlc_sup_set_pmkid: can't calculate PMKID - NULL BSSID\n",
 			UNIT(sup)));
 		return BCME_BADARG;
 	}

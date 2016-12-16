@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_cache.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: phy_lcn20_cache.h 606042 2015-12-14 06:21:23Z $
  */
 
 #ifndef _phy_lcn20_cache_h_

@@ -39,7 +39,7 @@
 /* Forward declarations */
 typedef uint16 bcm_iov_cmd_id_t;
 typedef uint16 bcm_iov_cmd_flags_t;
-typedef uint16 bcm_iov_cmd_iovf_t;
+typedef uint16 bcm_iov_cmd_mflags_t;
 typedef struct bcm_iov_cmd_info bcm_iov_cmd_info_t;
 typedef struct bcm_iov_cmd_digest bcm_iov_cmd_digest_t;
 typedef struct bcm_iov_cmd_tlv_info bcm_iov_cmd_tlv_info_t;
@@ -101,9 +101,9 @@ typedef int (*bcm_iov_cmd_set_t)(const bcm_iov_cmd_digest_t *dig,
 
 /*
  * Batched commands will have the following memory layout
- * +--------+---------+-----+-------+
- * |version |count    | pad |sub-cmd|
- * +--------+---------+-----+-------+
+ * +--------+---------+--------+-------+
+ * |version |count    | is_set |sub-cmd|
+ * +--------+---------+--------+-------+
  * version >= 0x8000
  * count = number of sub-commands encoded in the iov buf
  * sub-cmd one or more sub-commands for processing
@@ -118,11 +118,21 @@ typedef int (*bcm_iov_cmd_set_t)(const bcm_iov_cmd_digest_t *dig,
  * command data = encapsulated IOVAR data as a single structure or packed TLVs for each
  * individual sub-command.
  */
+struct bcm_iov_batch_subcmd {
+	uint16 id;
+	uint16 len;
+	union {
+		uint32 options;
+		uint32 status;
+	} u;
+	uint8 data[1];
+};
+
 struct bcm_iov_batch_buf {
 	uint16 version;
 	uint8 count;
-	uint8 pad; /* Align sub-commands on 32 bit boundary */
-	bcm_xtlv_t cmds[1];
+	uint8 is_set; /* to differentiate set or get */
+	struct bcm_iov_batch_subcmd cmds[0];
 };
 
 /* non-batched command version = major|minor w/ major <= 127 */
@@ -132,16 +142,6 @@ struct bcm_iov_buf {
 	bcm_iov_cmd_id_t id;
 	uint16 data[1]; /* 32 bit alignment may be repurposed by the command */
 	/* command specific data follows */
-};
-
-struct bcm_iov_batch_subcmd {
-	uint16 id;
-	uint16 len;
-	union {
-		uint32 options;
-		uint32 status;
-	} u;
-	uint8 data[1];
 };
 
 /* iov options flags */
@@ -164,13 +164,13 @@ enum {
  * only if XTLV_DATA cmd flag is selected
  */
 struct bcm_iov_cmd_info {
-    bcm_iov_cmd_id_t		cmd;		/* the (sub)command - module specific */
-    bcm_iov_cmd_flags_t		flags;
-    bcm_iov_cmd_iovf_t		iovf;		/* IOV flags - same as for normal iovars */
-    bcm_xtlv_opts_t		xtlv_opts;
+	bcm_iov_cmd_id_t	cmd;		/* the (sub)command - module specific */
+	bcm_iov_cmd_flags_t	flags;		/* checked by bcmiov but set by module */
+	bcm_iov_cmd_mflags_t	mflags;		/* owned and checked by module */
+	bcm_xtlv_opts_t		xtlv_opts;
 	bcm_iov_cmd_validate_t	validate_h;	/* command validation handler */
-    bcm_iov_cmd_get_t		get_h;
-    bcm_iov_cmd_set_t		set_h;
+	bcm_iov_cmd_get_t	get_h;
+	bcm_iov_cmd_set_t	set_h;
 	uint16			xtlvs_off;	/* offset to beginning of xtlvs in cmd data */
 	uint16			min_len_set;
 	uint16			max_len_set;

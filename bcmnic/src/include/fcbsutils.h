@@ -24,7 +24,11 @@
 #define FCBS_INFO(args)
 #define FCBS_DBG(args)
 
+#ifdef BCMDBG_ERR
 #define	FCBS_ERR(args)	printf args
+#else
+#define	FCBS_ERR(args)	printf args
+#endif	/* BCMDBG_ERR */
 
 #define FCBS_MAX_ROM_SEQ	100
 #define FCBS_MAX_ROM_SUB_SEQ	100

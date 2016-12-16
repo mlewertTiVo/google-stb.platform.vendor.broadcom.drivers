@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_chanmgr.c 610412 2016-01-06 23:43:14Z vyass $
+ * $Id: phy_ht_chanmgr.c 610412 2016-01-06 23:43:14Z $
  */
 
 #include <typedefs.h>

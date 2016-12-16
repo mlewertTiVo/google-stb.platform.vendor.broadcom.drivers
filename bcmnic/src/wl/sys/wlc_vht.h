@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_vht.h 638403 2016-05-17 19:01:20Z $
+ * $Id: wlc_vht.h 665073 2016-10-14 20:33:29Z $
  */
 
 
@@ -30,6 +30,11 @@
 #include "proto/802.11.h"
 #include "wlc_types.h"
 #include "proto/monitor.h"
+
+/* narrow band type */
+#define NARROW_BW_NONE 0
+#define NARROW_BW_20 1
+#define NARROW_BW_40 2
 
 /* Macro Definitions */
 #define VHT_AP_DOWNGRADE_BACKOFF	50

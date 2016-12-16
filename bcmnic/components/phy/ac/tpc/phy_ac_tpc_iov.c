@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_tpc_iov.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_ac_tpc_iov.c 658512 2016-09-08 07:03:22Z $
  */
 
 #include <phy_ac_tpc.h>
@@ -29,13 +29,6 @@ enum {
 };
 
 static const bcm_iovar_t phy_ac_tpc_iovars[] = {
-#if (defined(BCMINTERNAL) || defined(WLTEST) || defined(ATE_BUILD))
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-	{"phy_txpwr_ovrinitbaseidx", IOV_OVRINITBASEIDX, (IOVF_SET_UP|IOVF_GET_UP), 0,
-	IOVT_UINT8, 0},
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-	{"phy_tone_txpwr", IOV_PHY_TONE_TXPWR, (IOVF_SET_UP), 0, IOVT_INT8, 0},
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) || defined(ATE_BUILD) */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -45,42 +38,23 @@ static int
 phy_ac_tpc_doiovar(void *ctx, uint32 aid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
 {
-#if (defined(BCMINTERNAL) || defined(WLTEST) || defined(ATE_BUILD))
 	phy_info_t *pi = (phy_info_t *)ctx;
 	int err = BCME_OK;
 	int int_val = 0;
 	int32 *ret_int_ptr = (int32 *)a;
 
 	BCM_REFERENCE(*ret_int_ptr);
+	BCM_REFERENCE(*pi);
 
 	if (plen >= (uint)sizeof(int_val))
 		bcopy(p, &int_val, sizeof(int_val));
 
 	switch (aid) {
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-	case IOV_GVAL(IOV_OVRINITBASEIDX):
-		*ret_int_ptr = pi->tpci->data->ovrinitbaseidx;
-		break;
-	case IOV_SVAL(IOV_OVRINITBASEIDX):
-		pi->tpci->data->ovrinitbaseidx = (bool)int_val;
-		wlc_phy_txpwr_ovrinitbaseidx(pi);
-		break;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-	case IOV_SVAL(IOV_PHY_TONE_TXPWR):
-		if (!pi->sh->clk) {
-		   err = BCME_NOCLK;
-		   break;
-		}
-		wlc_phy_tone_pwrctrl_loop(pi, (int8)int_val);
-		break;
 	default:
-		err = BCME_UNSUPPORTED;
+		err = BCME_OK;
 		break;
 	}
 	return err;
-#else /* defined(BCMINTERNAL) || defined(WLTEST) || defined(ATE_BUILD) */
-	return BCME_UNSUPPORTED;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) || defined(ATE_BUILD) */
 }
 
 /* register iovar table to the system */

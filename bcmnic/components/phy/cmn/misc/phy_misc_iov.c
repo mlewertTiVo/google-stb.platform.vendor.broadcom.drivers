@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_misc_iov.c 643558 2016-06-15 05:34:16Z changbo $
+ * $Id: phy_misc_iov.c 658512 2016-09-08 07:03:22Z $
  */
 
 #include <wlc_cfg.h>
@@ -24,23 +24,26 @@
 #include <wlc_iocv_types.h>
 #include <wlc_iocv_reg.h>
 
-/* iovar table */
+/* iovar ids */
+enum {
+	IOV_PHY_RXIQ_EST = 1,
+	IOV_PHY_RXIQ_EST_SWEEP = 2,
+	IOV_PHY_TX_TONE = 3,
+	IOV_PHY_TXLO_TONE = 4
+};
 
+/* iovar table */
 static const bcm_iovar_t phy_misc_iovars[] = {
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG) || defined(ATE_BUILD)
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 	{"phy_tx_tone", IOV_PHY_TX_TONE,
 	(IOVF_SET_UP | IOVF_MFG), 0, IOVT_UINT32, 0
 	},
 	{"phy_txlo_tone", IOV_PHY_TXLO_TONE,
 	(IOVF_SET_UP | IOVF_MFG), 0, IOVT_UINT8, 0
 	},
+#endif 
 	{"phy_rxiqest", IOV_PHY_RXIQ_EST,
 	IOVF_SET_UP, 0, IOVT_UINT32, IOVT_UINT32
-	},
-#endif /* BCMINTERNAL || WLTEST || WFD_PHY_LL_DEBUG || ATE_BUILD */
-	{"phy_txswctrlmap", IOV_PHY_TXSWCTRLMAP,
-	0, 0, IOVT_INT8, 0
 	},
 	{NULL, 0, 0, 0, 0, 0}
 };
@@ -48,6 +51,12 @@ static const bcm_iovar_t phy_misc_iovars[] = {
 #ifndef ALL_NEW_PHY_MOD
 #include <wlc_phy_int.h>
 #endif
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 static int
 phy_misc_doiovar(void *ctx, uint32 aid,
@@ -73,12 +82,12 @@ phy_misc_doiovar(void *ctx, uint32 aid,
 
 	case IOV_SVAL(IOV_PHY_RXIQ_EST):
 	{
-		err = wlc_phy_iovar_set_rx_iq_est(pi, int_val, err);
+		err = wlc_phy_iovar_set_rx_iq_est(pi, p, plen, err);
 		break;
 	}
 
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG) || defined(ATE_BUILD)
+
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 	case IOV_GVAL(IOV_PHY_TX_TONE):
 	case IOV_GVAL(IOV_PHY_TXLO_TONE):
 		*ret_int_ptr = pi->phy_tx_tone_freq;
@@ -91,15 +100,7 @@ phy_misc_doiovar(void *ctx, uint32 aid,
 	case IOV_SVAL(IOV_PHY_TXLO_TONE):
 		wlc_phy_iovar_txlo_tone(pi);
 		break;
-#endif /* BCMINTERNAL || WLTEST || WFD_PHY_LL_DEBUG || ATE_BUILD */
-	case IOV_GVAL(IOV_PHY_TXSWCTRLMAP): {
-		err = phy_misc_txswctrlmapget(pi, ret_int_ptr);
-		break;
-	}
-	case IOV_SVAL(IOV_PHY_TXSWCTRLMAP): {
-		err = phy_misc_txswctrlmapset(pi, int_val);
-		break;
-	}
+#endif 
 	default:
 		err = BCME_UNSUPPORTED;
 		break;

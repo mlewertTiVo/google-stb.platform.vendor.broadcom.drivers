@@ -1160,21 +1160,21 @@ wl_pfn(void *wl, cmd_t *cmd, char **argv)
 	return err;
 }
 
-#define NUM_PFN_NETINFO_SUPPORTED 22
-#define WL_PFN_BESTNET_LEN	(int)(sizeof(wl_pfn_scanresults_t) + \
-				(NUM_PFN_NETINFO_SUPPORTED * sizeof(wl_pfn_net_info_t)))
-#define WL_PFN_BESTNET_LEN_V2	(int)(sizeof(wl_pfn_scanresults_v2_t) + \
-				(NUM_PFN_NETINFO_SUPPORTED * sizeof(wl_pfn_net_info_v2_t)))
-#define PFN_SCANRESULT_VERSION_V2	2
+/* Use MEDLEN for efficient read, pre-calculate maximum possible nets for later checks */
+#define WL_MAX_BESTNET_V1 ((WLC_IOCTL_MEDLEN - OFFSETOF(wl_pfn_scanresults_v1_t, netinfo)) \
+			   / sizeof(wl_pfn_net_info_v1_t))
+#define WL_MAX_BESTNET_V2 ((WLC_IOCTL_MEDLEN - OFFSETOF(wl_pfn_scanresults_v2_t, netinfo)) \
+			   / sizeof(wl_pfn_net_info_v2_t))
 
 static int
 wl_pfnbest(void *wl, cmd_t *cmd, char **argv)
 {
 	int	err;
-	wl_pfn_scanresults_t *bestnet;
-	wl_pfn_net_info_t *netinfo;
+	wl_pfn_scanresults_v1_t *bestnet_v1;
+	wl_pfn_net_info_v1_t *netinfo_v1;
 	wl_pfn_scanresults_v2_t *bestnet_v2;
 	wl_pfn_net_info_v2_t *netinfo_v2;
+	uint status;
 	uint32 i, j;
 
 	UNUSED_PARAMETER(cmd);
@@ -1183,43 +1183,34 @@ wl_pfnbest(void *wl, cmd_t *cmd, char **argv)
 		fprintf(stderr, "Invalid parameter %s\n", *argv);
 		return BCME_USAGE_ERROR;
 	}
-	bestnet = (wl_pfn_scanresults_t *)malloc(WL_PFN_BESTNET_LEN);
-	if (bestnet == NULL) {
-		fprintf(stderr, "Failed to allocate buffer of %d bytes\n", WL_PFN_BESTNET_LEN);
-		return BCME_NOMEM;
-	}
 
-	bzero(bestnet, WL_PFN_BESTNET_LEN);
-	while (bestnet->status != PFN_COMPLETE) {
-		if ((err = wlu_iovar_get(wl, "pfnbest", (void *)bestnet, WL_PFN_BESTNET_LEN))) {
+	/* Use generic buffer to read and parse results */
+	bestnet_v1 = (wl_pfn_scanresults_v1_t *)buf;
+	bestnet_v2 = (wl_pfn_scanresults_v2_t *)buf;
+
+	/* Read results until completion indicated */
+	do {
+		bzero(buf, WLC_IOCTL_MEDLEN);
+
+		if ((err = wlu_iovar_get(wl, "pfnbest", (void*)buf, WLC_IOCTL_MEDLEN))) {
 			fprintf(stderr, "pfnbest fail\n");
-			free(bestnet);
 			return err;
 		}
-		if (bestnet->version == PFN_SCANRESULT_VERSION_V2) {
-			if (bestnet_v2 == NULL) {
-			  bestnet_v2 = (wl_pfn_scanresults_v2_t *)malloc(WL_PFN_BESTNET_LEN_V2);
-			  if (bestnet_v2 == NULL) {
-				fprintf(stderr, "Failed to allocate buffer of %d bytes\n",
-					WL_PFN_BESTNET_LEN_V2);
-				return BCME_NOMEM;
-			  }
-			  memcpy(bestnet_v2, bestnet, WL_PFN_BESTNET_LEN);
-			}
 
-			if (bestnet_v2->count >
-					(WL_PFN_BESTNET_LEN_V2 / sizeof(wl_pfn_net_info_v2_t)))
-			{
-				fprintf(stderr, "invalid data\n");
-				free(bestnet_v2);
-				return -1;
+		if (bestnet_v2->version == PFN_SCANRESULTS_VERSION_V2) {
+			/* Use version 2 variables for processing */
+			status = bestnet_v2->status;
+			if (bestnet_v2->count > WL_MAX_BESTNET_V2) {
+				fprintf(stderr, "Invalid data, count %d exceeds max buflen\n",
+					bestnet_v2->count);
+				return BCME_ERROR;
 			}
 
 			printf("ver %d, status %d, count %d\n",
 				bestnet_v2->version, bestnet_v2->status, bestnet_v2->count);
 			netinfo_v2 = bestnet_v2->netinfo;
 			for (i = 0; i < bestnet_v2->count; i++) {
-				for (j = 0; j < netinfo->pfnsubnet.SSID_len; j++)
+				for (j = 0; j < netinfo_v2->pfnsubnet.SSID_len; j++)
 					printf("%c", netinfo_v2->pfnsubnet.u.SSID[j]);
 				printf("\n");
 				printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -1234,81 +1225,89 @@ wl_pfnbest(void *wl, cmd_t *cmd, char **argv)
 					netinfo_v2->timestamp);
 				netinfo_v2++;
 			}
-		} else {
-			if (bestnet->count >
-					(WL_PFN_BESTNET_LEN / sizeof(wl_pfn_net_info_t)))
-			{
-				fprintf(stderr, "invalid data\n");
-				free(bestnet);
-				return -1;
+		} else if (bestnet_v1->version == PFN_SCANRESULTS_VERSION_V1) {
+			/* Use version 1 variables for processing */
+			status = bestnet_v1->status;
+			if (bestnet_v1->count > WL_MAX_BESTNET_V1) {
+				fprintf(stderr, "Invalid data, count %d exceeds max buflen\n",
+				        bestnet_v1->count);
+				return BCME_ERROR;
 			}
 
 			printf("ver %d, status %d, count %d\n",
-					bestnet->version, bestnet->status, bestnet->count);
-			netinfo = bestnet->netinfo;
-			for (i = 0; i < bestnet->count; i++) {
-				for (j = 0; j < netinfo->pfnsubnet.SSID_len; j++)
-					printf("%c", netinfo->pfnsubnet.SSID[j]);
+			       bestnet_v1->version, bestnet_v1->status, bestnet_v1->count);
+			netinfo_v1 = bestnet_v1->netinfo;
+			for (i = 0; i < bestnet_v1->count; i++) {
+				for (j = 0; j < netinfo_v1->pfnsubnet.SSID_len; j++)
+					printf("%c", netinfo_v1->pfnsubnet.SSID[j]);
 				printf("\n");
 				printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-						netinfo->pfnsubnet.BSSID.octet[0],
-						netinfo->pfnsubnet.BSSID.octet[1],
-						netinfo->pfnsubnet.BSSID.octet[2],
-						netinfo->pfnsubnet.BSSID.octet[3],
-						netinfo->pfnsubnet.BSSID.octet[4],
-						netinfo->pfnsubnet.BSSID.octet[5]);
+						netinfo_v1->pfnsubnet.BSSID.octet[0],
+						netinfo_v1->pfnsubnet.BSSID.octet[1],
+						netinfo_v1->pfnsubnet.BSSID.octet[2],
+						netinfo_v1->pfnsubnet.BSSID.octet[3],
+						netinfo_v1->pfnsubnet.BSSID.octet[4],
+						netinfo_v1->pfnsubnet.BSSID.octet[5]);
 				printf("channel: %d, RSSI: %d, timestamp: %d\n",
-					netinfo->pfnsubnet.channel, netinfo->RSSI,
-					netinfo->timestamp);
-				netinfo++;
+					netinfo_v1->pfnsubnet.channel, netinfo_v1->RSSI,
+					netinfo_v1->timestamp);
+				netinfo_v1++;
 			}
+		} else {
+			fprintf(stderr, "Unrecognized version %d\n", bestnet_v1->version);
+			return BCME_ERROR;
 		}
-	}
+	} while (status != PFN_COMPLETE);
 
-	free(bestnet);
-	if (bestnet_v2 != NULL)
-		free(bestnet_v2);
 	return 0;
 }
+
+/* Use MEDLEN for efficient read, pre-calculate maximum possible nets for later checks */
+#define WL_MAX_LBESTNET_V1 ((WLC_IOCTL_MEDLEN - OFFSETOF(wl_pfn_lscanresults_v1_t, netinfo)) \
+			    / sizeof(wl_pfn_net_info_v1_t))
+#define WL_MAX_LBESTNET_V2 ((WLC_IOCTL_MEDLEN - OFFSETOF(wl_pfn_lscanresults_v2_t, netinfo)) \
+			    / sizeof(wl_pfn_lnet_info_v2_t))
 
 static int
 wl_pfnlbest(void *wl, cmd_t *cmd, char **argv)
 {
 	int	err;
-	wl_pfn_lscanresults_t *bestnet;
-	wl_pfn_lnet_info_t *netinfo;
+	wl_pfn_lscanresults_v1_t *bestnet_v1;
+	wl_pfn_lnet_info_v1_t *netinfo_v1;
 	wl_pfn_lscanresults_v2_t *bestnet_v2;
 	wl_pfn_lnet_info_v2_t *netinfo_v2;
+	uint status;
 	uint32 i, j;
 
 	UNUSED_PARAMETER(cmd);
 
 	if (*++argv) {
 		fprintf(stderr, "Invalid parameter %s\n", *argv);
-		return -1;
+		return BCME_USAGE_ERROR;
 	}
-	bestnet = (wl_pfn_lscanresults_t *)malloc(WL_PFN_BESTNET_LEN);
-	if (bestnet == NULL) {
-		fprintf(stderr, "Failed to allocate buffer of %d bytes\n", WL_PFN_BESTNET_LEN);
-		return -1;
-	}
-	bzero(bestnet, WL_PFN_BESTNET_LEN);
-	while (bestnet->status == PFN_INCOMPLETE) {
-		if ((err = wlu_iovar_get(wl, "pfnlbest", (void *)bestnet, WL_PFN_BESTNET_LEN))) {
-			fprintf(stderr, "pfnbest fail\n");
+
+	/* Use generic buffer to read and parse results */
+	bestnet_v1 = (wl_pfn_lscanresults_v1_t *)buf;
+	bestnet_v2 = (wl_pfn_lscanresults_v2_t *)buf;
+
+	/* Read results until completion indicated */
+	do {
+		bzero(buf, WLC_IOCTL_MEDLEN);
+
+		if ((err = wlu_iovar_get(wl, "pfnlbest", (void *)buf, WLC_IOCTL_MEDLEN))) {
+			fprintf(stderr, "pfnlbest fail\n");
 			return err;
 		}
-		if (bestnet->version == PFN_LBEST_SCAN_RESULT_VERSION) {
-			if (bestnet_v2 == NULL) {
-				bestnet_v2 = (wl_pfn_lscanresults_v2_t *)malloc
-						(WL_PFN_BESTNET_LEN_V2);
-				if (bestnet_v2 == NULL) {
-					fprintf(stderr, "Failed to allocate buffer of %d bytes\n",
-							WL_PFN_BESTNET_LEN_V2);
-					return BCME_NOMEM;
-				}
-				memcpy(bestnet_v2, bestnet, WL_PFN_BESTNET_LEN);
+
+		if (bestnet_v2->version == PFN_LBEST_SCAN_RESULT_VERSION_V2) {
+			/* Use version 2 variables for processing */
+			status = bestnet_v2->status;
+			if (bestnet_v2->count > WL_MAX_LBESTNET_V2) {
+				fprintf(stderr, "Invalid data, count %d exceeds max buflen\n",
+					bestnet_v2->count);
+				return BCME_ERROR;
 			}
+
 			printf("ver %d, status %d, count %d\n",
 				bestnet_v2->version, bestnet_v2->status, bestnet_v2->count);
 			netinfo_v2 = bestnet_v2->netinfo;
@@ -1329,33 +1328,41 @@ wl_pfnlbest(void *wl, cmd_t *cmd, char **argv)
 				printf("RTT0: %d, RTT1: %d\n", netinfo_v2->rtt0, netinfo_v2->rtt1);
 				netinfo_v2++;
 			}
-		} else {
+		} else if (bestnet_v1->version == PFN_LBEST_SCAN_RESULT_VERSION_V1) {
+			/* Use version 1 variables for processing */
+			status = bestnet_v1->status;
+			if (bestnet_v1->count > WL_MAX_LBESTNET_V1) {
+				fprintf(stderr, "Invalid data, count %d exceeds max buflen\n",
+				        bestnet_v1->count);
+				return BCME_ERROR;
+			}
+
 			printf("ver %d, status %d, count %d\n",
-				bestnet->version, bestnet->status, bestnet->count);
-			netinfo = bestnet->netinfo;
-			for (i = 0; i < bestnet->count; i++) {
-				for (j = 0; j < netinfo->pfnsubnet.SSID_len; j++)
-					printf("%c", netinfo->pfnsubnet.SSID[j]);
+			       bestnet_v1->version, bestnet_v1->status, bestnet_v1->count);
+			netinfo_v1 = bestnet_v1->netinfo;
+			for (i = 0; i < bestnet_v1->count; i++) {
+				for (j = 0; j < netinfo_v1->pfnsubnet.SSID_len; j++)
+					printf("%c", netinfo_v1->pfnsubnet.SSID[j]);
 				printf("\n");
 				printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-						netinfo->pfnsubnet.BSSID.octet[0],
-						netinfo->pfnsubnet.BSSID.octet[1],
-						netinfo->pfnsubnet.BSSID.octet[2],
-						netinfo->pfnsubnet.BSSID.octet[3],
-						netinfo->pfnsubnet.BSSID.octet[4],
-						netinfo->pfnsubnet.BSSID.octet[5]);
+						netinfo_v1->pfnsubnet.BSSID.octet[0],
+						netinfo_v1->pfnsubnet.BSSID.octet[1],
+						netinfo_v1->pfnsubnet.BSSID.octet[2],
+						netinfo_v1->pfnsubnet.BSSID.octet[3],
+						netinfo_v1->pfnsubnet.BSSID.octet[4],
+						netinfo_v1->pfnsubnet.BSSID.octet[5]);
 				printf("channel: %d, flags: %d, RSSI: %d, timestamp: %d\n",
-						netinfo->pfnsubnet.channel, netinfo->flags,
-						netinfo->RSSI, netinfo->timestamp);
-				printf("RTT0: %d, RTT1: %d\n", netinfo->rtt0, netinfo->rtt1);
-				netinfo++;
+						netinfo_v1->pfnsubnet.channel, netinfo_v1->flags,
+						netinfo_v1->RSSI, netinfo_v1->timestamp);
+				printf("RTT0: %d, RTT1: %d\n", netinfo_v1->rtt0, netinfo_v1->rtt1);
+				netinfo_v1++;
 			}
+		} else {
+			fprintf(stderr, "Unrecognized version %d\n", bestnet_v1->version);
+			return BCME_ERROR;
 		}
-	}
+	} while (status == PFN_INCOMPLETE);
 
-	free(bestnet);
-	if (bestnet_v2 != NULL)
-		free(bestnet_v2);
 	return 0;
 }
 
@@ -1371,20 +1378,21 @@ wl_pfnbest_bssid(void *wl, cmd_t *cmd, char **argv)
 
 	if (*++argv) {
 		fprintf(stderr, "Invalid parameter %s\n", *argv);
-		return -1;
+		return BCME_ERROR;
 	}
-	bestnet = (wl_pfn_scanhist_bssid_t *)malloc(WL_PFN_BESTNET_LEN);
-	if (bestnet == NULL) {
-		fprintf(stderr, "Failed to allocate buffer of %d bytes\n", WL_PFN_BESTNET_LEN);
-		return -1;
-	}
-	memset(bestnet, 0, WL_PFN_BESTNET_LEN);
-	while (bestnet->status != PFN_COMPLETE) {
+
+	/* Use generic buffer to read and parse results */
+	bestnet = (wl_pfn_scanhist_bssid_t *)buf;
+
+	do {
+		memset(bestnet, 0, WLC_IOCTL_MEDLEN);
+
 		if ((err = wlu_iovar_get(wl, "pfnbest_bssid",
-		                         (void *)bestnet, WL_PFN_BESTNET_LEN))) {
+		                         (void *)bestnet, WLC_IOCTL_MEDLEN))) {
 			fprintf(stderr, "pfnbest_bssid fail\n");
 			return err;
 		}
+
 		printf("ver %d, status %d, count %d\n",
 		       bestnet->version, bestnet->status, bestnet->count);
 		netinfo = bestnet->netinfo;
@@ -1400,7 +1408,7 @@ wl_pfnbest_bssid(void *wl, cmd_t *cmd, char **argv)
 			       netinfo->channel, netinfo->RSSI, netinfo->timestamp);
 			netinfo++;
 		}
-	}
+	} while (bestnet->status != PFN_COMPLETE);
 
 	return 0;
 }
@@ -1460,7 +1468,7 @@ wl_pfn_mem(void *wl, cmd_t *cmd, char **argv)
 static void
 wl_pfn_printnet(void *ptr, int event_type)
 {
-	wl_pfn_net_info_t *netinfo = ((wl_pfn_scanresults_t *)ptr)->netinfo;
+	wl_pfn_net_info_v1_t *netinfo_v1;
 	wl_pfn_net_info_v2_t *netinfo_v2;
 	uint32 i, j;
 
@@ -1476,7 +1484,7 @@ wl_pfn_printnet(void *ptr, int event_type)
 		return;
 	}
 
-	if (((wl_pfn_scanresults_t *)ptr)->version == PFN_SCANRESULT_VERSION_V2) {
+	if (((wl_pfn_scanresults_v2_t *)ptr)->version == PFN_SCANRESULTS_VERSION_V2) {
 		netinfo_v2 = ((wl_pfn_scanresults_v2_t *)ptr)->netinfo;
 		printf("ver %d, status %d, count %d\n",
 			((wl_pfn_scanresults_v2_t *)ptr)->version,
@@ -1495,32 +1503,33 @@ wl_pfn_printnet(void *ptr, int event_type)
 					netinfo_v2->pfnsubnet.BSSID.octet[4],
 					netinfo_v2->pfnsubnet.BSSID.octet[5]);
 			printf("channel %d, RSSI %d, timestamp %d\n",
-			  netinfo_v2->pfnsubnet.channel, netinfo_v2->RSSI, netinfo_v2->timestamp);
-
+			       netinfo_v2->pfnsubnet.channel, netinfo_v2->RSSI,
+			       netinfo_v2->timestamp);
 			netinfo_v2++;
 		}
-	} else {
-
+	} else  if (((wl_pfn_scanresults_v1_t *)ptr)->version == PFN_SCANRESULTS_VERSION_V1) {
+		netinfo_v1 = ((wl_pfn_scanresults_v1_t *)ptr)->netinfo;
 		printf("ver %d, status %d, count %d\n",
-			((wl_pfn_scanresults_t *)ptr)->version,
-			((wl_pfn_scanresults_t *)ptr)->status,
-			((wl_pfn_scanresults_t *)ptr)->count);
-		for (i = 0; i < ((wl_pfn_scanresults_t *)ptr)->count; i++) {
+			((wl_pfn_scanresults_v1_t *)ptr)->version,
+			((wl_pfn_scanresults_v1_t *)ptr)->status,
+			((wl_pfn_scanresults_v1_t *)ptr)->count);
+		for (i = 0; i < ((wl_pfn_scanresults_v1_t *)ptr)->count; i++) {
 			printf("%d. ", i + 1);
-			for (j = 0; j < netinfo->pfnsubnet.SSID_len; j++)
-				printf("%c", netinfo->pfnsubnet.SSID[j]);
+			for (j = 0; j < netinfo_v1->pfnsubnet.SSID_len; j++)
+				printf("%c", netinfo_v1->pfnsubnet.SSID[j]);
 			printf("\n");
 			printf("BSSID %02x:%02x:%02x:%02x:%02x:%02x\n",
-					netinfo->pfnsubnet.BSSID.octet[0],
-					netinfo->pfnsubnet.BSSID.octet[1],
-					netinfo->pfnsubnet.BSSID.octet[2],
-					netinfo->pfnsubnet.BSSID.octet[3],
-					netinfo->pfnsubnet.BSSID.octet[4],
-					netinfo->pfnsubnet.BSSID.octet[5]);
+					netinfo_v1->pfnsubnet.BSSID.octet[0],
+					netinfo_v1->pfnsubnet.BSSID.octet[1],
+					netinfo_v1->pfnsubnet.BSSID.octet[2],
+					netinfo_v1->pfnsubnet.BSSID.octet[3],
+					netinfo_v1->pfnsubnet.BSSID.octet[4],
+					netinfo_v1->pfnsubnet.BSSID.octet[5]);
 			printf("channel %d, RSSI %d, timestamp %d\n",
-				netinfo->pfnsubnet.channel, netinfo->RSSI, netinfo->timestamp);
+			       netinfo_v1->pfnsubnet.channel, netinfo_v1->RSSI,
+			       netinfo_v1->timestamp);
 
-			netinfo++;
+			netinfo_v1++;
 		}
 	}
 }
@@ -1537,8 +1546,8 @@ wl_pfn_event_check(void *wl, cmd_t *cmd, char **argv)
 	int                 event_type;
 	struct ether_addr   *addr;
 	char                eabuf[ETHER_ADDR_STR_LEN];
-	wl_pfn_scanresults_t *ptr;
-	wl_pfn_net_info_t   *info;
+	wl_pfn_scanresults_v1_t *ptr_v1;
+	wl_pfn_net_info_v1_t   *info_v1;
 	wl_pfn_scanresults_v2_t *ptr_v2;
 	wl_pfn_net_info_v2_t	*info_v2;
 	uint32              i, j;
@@ -1551,12 +1560,13 @@ wl_pfn_event_check(void *wl, cmd_t *cmd, char **argv)
 	if (*++argv) {
 		if (strlen(*argv) >= IFNAMSIZ) {
 			printf("Interface name %s too long\n", *argv);
-			return -1;
+			return BCME_USAGE_ERROR;
 		}
 		strncpy(ifnames, *argv, IFNAMSIZ);
 	} else {
 		strncpy(ifnames, ((struct ifreq *)wl)->ifr_name, (IFNAMSIZ - 1));
 	}
+
 	ifnames[IFNAMSIZ - 1] = '\0';
 
 	memset(&ifr, 0, sizeof(ifr));
@@ -1565,14 +1575,14 @@ wl_pfn_event_check(void *wl, cmd_t *cmd, char **argv)
 	fd = socket(PF_PACKET, SOCK_RAW, hton16(ETHER_TYPE_BRCM));
 	if (fd < 0) {
 		printf("Cannot create socket %d\n", fd);
-		return -1;
+		return BCME_ERROR;
 	}
 
 	err = ioctl(fd, SIOCGIFINDEX, &ifr);
 	if (err < 0) {
 		printf("Cannot get index %d\n", err);
 		close(fd);
-		return -1;
+		return BCME_ERROR;
 	}
 
 	memset(&sll, 0, sizeof(sll));
@@ -1583,8 +1593,12 @@ wl_pfn_event_check(void *wl, cmd_t *cmd, char **argv)
 	if (err < 0) {
 		printf("Cannot get index %d\n", err);
 		close(fd);
-		return -1;
+		return BCME_ERROR;
 	}
+
+	/* Pre-set the results pointers for any data we might receive */
+	ptr_v1 = (wl_pfn_scanresults_v1_t *)(data + sizeof(bcm_event_t));
+	ptr_v2 = (wl_pfn_scanresults_v2_t *)(data + sizeof(bcm_event_t));
 
 	while (1) {
 		recv(fd, data, sizeof(data), 0);
@@ -1605,16 +1619,14 @@ wl_pfn_event_check(void *wl, cmd_t *cmd, char **argv)
 
 		if (ntoh32(event->event.datalen)) {
 			if (WLC_E_PFN_SCAN_COMPLETE == event_type) {
-				ptr = (wl_pfn_scanresults_t *)(data + sizeof(bcm_event_t));
 				/* Version check for PFN */
-				if (ptr->version == PFN_SCANRESULT_VERSION_V2) {
-					ptr_v2 =
-					  (wl_pfn_scanresults_v2_t *)(data + sizeof(bcm_event_t));
+				if (ptr_v2->version == PFN_SCANRESULTS_VERSION_V2) {
 					info_v2 = ptr_v2->netinfo;
 					foundcnt = ptr_v2->count & 0xffff;
 					lostcnt = ptr_v2->count >> 16;
 					printf("ver %d, status %d, found %d, lost %d\n",
-						ptr_v2->version, ptr_v2->status, foundcnt, lostcnt);
+						ptr_v2->version, ptr_v2->status,
+					       foundcnt, lostcnt);
 					if (foundcnt)
 						printf("Network found:\n");
 					for (i = 0; i < foundcnt; i++) {
@@ -1652,59 +1664,62 @@ wl_pfn_event_check(void *wl, cmd_t *cmd, char **argv)
 							info_v2->pfnsubnet.channel, info_v2->RSSI,
 							info_v2->timestamp);
 						info_v2++;
+					}
+				} else if (ptr_v1->version == PFN_SCANRESULTS_VERSION_V1) {
+					info_v1 = ptr_v1->netinfo;
+					foundcnt = ptr_v1->count & 0xffff;
+					lostcnt = ptr_v1->count >> 16;
+					printf("ver %d, status %d, found %d, lost %d\n",
+						ptr_v1->version, ptr_v1->status,
+					       foundcnt, lostcnt);
+					if (foundcnt)
+						printf("Network found:\n");
+					for (i = 0; i < foundcnt; i++) {
+						printf("%d. ", i + 1);
+						for (j = 0; j < info_v1->pfnsubnet.SSID_len; j++)
+							printf("%c", info_v1->pfnsubnet.SSID[j]);
+						printf("\n");
+						printf("BSSID %02x:%02x:%02x:%02x:%02x:%02x\n",
+								info_v1->pfnsubnet.BSSID.octet[0],
+								info_v1->pfnsubnet.BSSID.octet[1],
+								info_v1->pfnsubnet.BSSID.octet[2],
+								info_v1->pfnsubnet.BSSID.octet[3],
+								info_v1->pfnsubnet.BSSID.octet[4],
+								info_v1->pfnsubnet.BSSID.octet[5]);
+						printf("channel %d, RSSI %d, timestamp %d\n",
+							info_v1->pfnsubnet.channel, info_v1->RSSI,
+							info_v1->timestamp);
+						info_v1++;
+					}
+					if (lostcnt)
+						printf("Network lost:\n");
+					for (i = 0; i < lostcnt; i++) {
+						printf("%d. ", i + 1);
+						for (j = 0; j < info_v1->pfnsubnet.SSID_len; j++)
+							printf("%c", info_v1->pfnsubnet.SSID[j]);
+						printf("\n");
+						printf("BSSID %02x:%02x:%02x:%02x:%02x:%02x\n",
+								info_v1->pfnsubnet.BSSID.octet[0],
+								info_v1->pfnsubnet.BSSID.octet[1],
+								info_v1->pfnsubnet.BSSID.octet[2],
+								info_v1->pfnsubnet.BSSID.octet[3],
+								info_v1->pfnsubnet.BSSID.octet[4],
+								info_v1->pfnsubnet.BSSID.octet[5]);
+						printf("channel %d, RSSI %d, timestamp %d\n",
+							info_v1->pfnsubnet.channel, info_v1->RSSI,
+							info_v1->timestamp);
+						info_v1++;
 					}
 				} else {
-					info = ptr->netinfo;
-					foundcnt = ptr->count & 0xffff;
-					lostcnt = ptr->count >> 16;
-					printf("ver %d, status %d, found %d, lost %d\n",
-						ptr->version, ptr->status, foundcnt, lostcnt);
-					if (foundcnt)
-						printf("Network found:\n");
-					for (i = 0; i < foundcnt; i++) {
-						printf("%d. ", i + 1);
-						for (j = 0; j < info->pfnsubnet.SSID_len; j++)
-							printf("%c", info->pfnsubnet.SSID[j]);
-						printf("\n");
-						printf("BSSID %02x:%02x:%02x:%02x:%02x:%02x\n",
-								info->pfnsubnet.BSSID.octet[0],
-								info->pfnsubnet.BSSID.octet[1],
-								info->pfnsubnet.BSSID.octet[2],
-								info->pfnsubnet.BSSID.octet[3],
-								info->pfnsubnet.BSSID.octet[4],
-								info->pfnsubnet.BSSID.octet[5]);
-						printf("channel %d, RSSI %d, timestamp %d\n",
-							info->pfnsubnet.channel, info->RSSI,
-							info->timestamp);
-						info++;
-					}
-					if (lostcnt)
-						printf("Network lost:\n");
-					for (i = 0; i < lostcnt; i++) {
-						printf("%d. ", i + 1);
-						for (j = 0; j < info->pfnsubnet.SSID_len; j++)
-							printf("%c", info->pfnsubnet.SSID[j]);
-						printf("\n");
-						printf("BSSID %02x:%02x:%02x:%02x:%02x:%02x\n",
-								info->pfnsubnet.BSSID.octet[0],
-								info->pfnsubnet.BSSID.octet[1],
-								info->pfnsubnet.BSSID.octet[2],
-								info->pfnsubnet.BSSID.octet[3],
-								info->pfnsubnet.BSSID.octet[4],
-								info->pfnsubnet.BSSID.octet[5]);
-						printf("channel %d, RSSI %d, timestamp %d\n",
-							info->pfnsubnet.channel, info->RSSI,
-							info->timestamp);
-						info++;
-					}
-				}  /* (ptr->version == PFN_SCANRESULT_VERSION_V2) */
+					fprintf(stderr, "Unrecognized version %d\n",
+					        ptr_v1->version);
+					return BCME_ERROR;
+				}
 			} else if ((WLC_E_PFN_NET_FOUND == event_type) ||
 			           (WLC_E_PFN_NET_LOST == event_type) ||
 			           (WLC_E_PFN_BSSID_NET_FOUND == event_type) ||
 			           (WLC_E_PFN_BSSID_NET_LOST == event_type)) {
-				wl_pfn_printnet(
-				   (void *)(data + sizeof(bcm_event_t)),
-				                            event_type);
+				wl_pfn_printnet((void *)(data + sizeof(bcm_event_t)), event_type);
 			}
 
 			if (WLC_E_LINK == event_type || WLC_E_NDIS_LINK == event_type) {
@@ -2508,10 +2523,12 @@ wl_mpf_state(void *wl, cmd_t *cmd, char **argv)
 				fprintf(stderr, "Invalid name\n");
 				mpstatep->name[WL_MPF_STATE_NAME_MAX-1] = '\0';
 			}
+#if 0
 			printf("Type %d: state %d, name %s (%s)\n",
 			       dtoh16(mpstatep->type), dtoh16(mpstatep->state),
-			       (strlen(mpstatep->name) ? mpstatep->name : "(unknown)"),
+			       (mpstatep->name ? mpstatep->name : "(unknown)"),
 			       ((mpstatep->force) ? "forced" : "auto"));
+#endif
 		}
 	} else {
 		/* Should be one argument, but need to determine what kind */

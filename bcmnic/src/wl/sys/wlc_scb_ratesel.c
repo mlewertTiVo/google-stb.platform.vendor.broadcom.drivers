@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scb_ratesel.c 644052 2016-06-17 03:04:30Z $
+ * $Id: wlc_scb_ratesel.c 661109 2016-09-23 07:54:52Z $
  */
 
 
@@ -25,6 +25,7 @@
 #include <siutils.h>
 #include <bcmendian.h>
 #include <wlioctl.h>
+#include <bcmdevs.h>
 
 #include <proto/802.11.h>
 #include <d11.h>
@@ -48,7 +49,6 @@
 #include <wlc_vht.h>
 #include <wlc_ht.h>
 #include <wlc_lq.h>
-#include <wlc_ulb.h>
 #include <wlc_stf.h>
 
 #ifdef WL_FRAGDUR
@@ -121,7 +121,13 @@ static int wlc_scb_ratesel_doiovar(void *hdl, uint32 actionid,
 
 static int wlc_scb_ratesel_scb_init(void *context, struct scb *scb);
 static void wlc_scb_ratesel_scb_deinit(void *context, struct scb *scb);
+static int wlc_scb_ratesel_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg);
+
+#ifdef BCMDBG
+static void wlc_scb_ratesel_dump_scb(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_scb_ratesel_dump_scb NULL
+#endif
 
 static ratespec_t wlc_scb_ratesel_getcurspec(wlc_ratesel_info_t *wrsi,
 	struct scb *scb, uint8 ac);
@@ -149,29 +155,31 @@ static wl_tx_bw_t rspecbw_to_bcmbw(uint8 bw);
 static void wlc_scb_ratesel_siso_downgrade(wlc_info_t *wlc, struct scb *scb);
 #endif
 
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
+
 wlc_ratesel_info_t *
 BCMATTACHFN(wlc_scb_ratesel_attach)(wlc_info_t *wlc)
 {
 	wlc_ratesel_info_t *wrsi;
-#ifdef WL11AC
-	ppr_support_rates_t *ppr_rates;
-#endif
+	scb_cubby_params_t cubby_params;
 
-	if (!(wrsi = (wlc_ratesel_info_t *)MALLOC(wlc->osh, sizeof(wlc_ratesel_info_t)))) {
+	if (!(wrsi = (wlc_ratesel_info_t *)MALLOCZ(wlc->osh, sizeof(*wrsi)))) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
 			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
 		return NULL;
 	}
 
-	bzero((char *)wrsi, sizeof(wlc_ratesel_info_t));
 #ifdef WL11AC
-	if (!(ppr_rates = (ppr_support_rates_t *)MALLOC(wlc->osh, sizeof(ppr_support_rates_t)))) {
+	if (!(wrsi->ppr_rates = (ppr_support_rates_t *)MALLOCZ(wlc->osh,
+		sizeof(ppr_support_rates_t)))) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
 			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
-		return NULL;
+		goto fail;
 	}
-	bzero(ppr_rates, sizeof(*ppr_rates));
-	wrsi->ppr_rates = ppr_rates;
 #endif
 	wrsi->wlc = wlc;
 	wrsi->pub = wlc->pub;
@@ -189,11 +197,16 @@ BCMATTACHFN(wlc_scb_ratesel_attach)(wlc_info_t *wlc)
 	}
 
 	/* reserve cubby in the scb container for per-scb-ac private data */
-	wrsi->scb_handle = wlc_scb_cubby_reserve(wlc, wlc_scb_ratesel_cubby_sz(),
-	                                        wlc_scb_ratesel_scb_init,
-	                                        wlc_scb_ratesel_scb_deinit,
-	                                        wlc_scb_ratesel_dump_scb,
-	                                        (void *)wlc);
+	bzero(&cubby_params, sizeof(cubby_params));
+
+	cubby_params.context = wlc;
+	cubby_params.fn_init = wlc_scb_ratesel_scb_init;
+	cubby_params.fn_deinit = wlc_scb_ratesel_scb_deinit;
+	cubby_params.fn_dump = wlc_scb_ratesel_dump_scb;
+	cubby_params.fn_update = wlc_scb_ratesel_scb_update;
+
+	wrsi->scb_handle = wlc_scb_cubby_reserve_ext(wlc, wlc_scb_ratesel_cubby_sz(),
+		&cubby_params);
 
 	if (wrsi->scb_handle < 0) {
 		WL_ERROR(("wl%d: %s:wlc_scb_cubby_reserve failed\n", wlc->pub->unit, __FUNCTION__));
@@ -213,6 +226,11 @@ fail:
 	if (wrsi->rsi)
 		wlc_ratesel_detach(wrsi->rsi);
 
+#ifdef WL11AC
+	if (wrsi->ppr_rates) {
+		MFREE(wlc->osh, wrsi->ppr_rates, sizeof(*wrsi->ppr_rates));
+	}
+#endif
 	MFREE(wlc->osh, wrsi, sizeof(wlc_ratesel_info_t));
 	return NULL;
 }
@@ -230,6 +248,19 @@ BCMATTACHFN(wlc_scb_ratesel_detach)(wlc_ratesel_info_t *wrsi)
 	MFREE(wrsi->pub->osh, wrsi->ppr_rates, sizeof(ppr_support_rates_t));
 #endif
 	MFREE(wrsi->pub->osh, wrsi, sizeof(wlc_ratesel_info_t));
+}
+
+static int
+wlc_scb_ratesel_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg)
+{
+#ifdef WL_LPC
+	wlc_info_t *wlc = (wlc_info_t *)context;
+	wlc_info_t *new_wlc = new_cfg->wlc;
+	wlc_ratesel_info_t *wrsi = wlc->wrsi;
+	ratesel_cubby_t *cubby_info = SCB_RATESEL_INFO(wrsi, scb);
+	wlc_ratesel_lpc_update(new_wlc->wrsi->rsi, cubby_info->scb_cubby);
+#endif
+	return BCME_OK;
 }
 
 /* alloc per ac cubby space on scb attach. */
@@ -298,15 +329,12 @@ wlc_scb_ratesel_doiovar(void *hdl, uint32 actionid,
 
 	BCM_REFERENCE(plen);
 	BCM_REFERENCE(val_size);
+	BCM_REFERENCE(bsscfg);
 
 	wlc = wrsi->wlc;
 	/* update bsscfg w/provided interface context */
 	bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
 	ASSERT(bsscfg != NULL);
-
-	if (!bsscfg) {
-		return BCME_ERROR;
-	}
 
 	switch (actionid) {
 	default:
@@ -327,6 +355,26 @@ wlc_scb_ratesel_get_cubby(wlc_ratesel_info_t *wrsi, struct scb *scb, uint8 ac)
 	return (SCB_RATESEL_CUBBY(wrsi, scb, ac));
 }
 
+#ifdef BCMDBG
+static void
+wlc_scb_ratesel_dump_scb(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = (wlc_info_t *)ctx;
+	wlc_ratesel_info_t *wrsi = wlc->wrsi;
+	int ac;
+	rcb_t *rcb;
+
+	if (SCB_INTERNAL(scb))
+		return;
+
+	wlc_dump_rspec(wlc->scbstate, wlc_scb_ratesel_get_primary(wlc, scb, NULL), b);
+
+	for (ac = 0; ac < WME_MAX_AC(wlc, scb); ac++) {
+		rcb = SCB_RATESEL_CUBBY(wrsi, scb, ac);
+		wlc_ratesel_dump_rcb(rcb, ac, b);
+	}
+}
+#endif /* BCMDBG */
 
 
 #ifdef WL11N
@@ -479,8 +527,7 @@ wlc_scb_ratesel_get_primary(wlc_info_t *wlc, struct scb *scb, void *pkt)
 				mimo_txbw = RSPEC_BW_40MHZ;
 #ifdef WLMCHAN
 				if (MCHAN_ENAB(wlc->pub) && BSSCFG_AP(scb->bsscfg) &&
-					(WLC_ULB_CHSPEC_ISLE20(wlc,
-						scb->bsscfg->current_bss->chanspec))) {
+					(CHSPEC_IS20(scb->bsscfg->current_bss->chanspec))) {
 					mimo_txbw = RSPEC_BW_20MHZ;
 				}
 #endif /* WLMCHAN */
@@ -953,10 +1000,15 @@ wlc_scb_ratesel_init(wlc_info_t *wlc, struct scb *scb)
 		if (WME_PER_AC_MAXRATE_ENAB(wrsi->pub) && SCB_WME(scb))
 			max_rate = (uint32)wrsi->wlc->wme_max_rate[ac];
 #endif
-		clm_rateset = wlc_scb_ratesel_get_ppr_rates(wlc, rspecbw_to_bcmbw(bw));
-		if (clm_rateset)
-			wlc_scb_ratesel_ppr_filter(wlc, clm_rateset, &new_rateset,
+		if (!((ACREV_IS(wlc->band->phyrev, 32) ||
+			ACREV_IS(wlc->band->phyrev, 33)) &&
+			(wlc->pub->boardflags2 & BFL2_TXPWRCTRL_EN) == 0)) {
+			clm_rateset =
+				wlc_scb_ratesel_get_ppr_rates(wlc, rspecbw_to_bcmbw(bw));
+			if (clm_rateset)
+				wlc_scb_ratesel_ppr_filter(wlc, clm_rateset, &new_rateset,
 					SCB_VHT_CAP(scb));
+		}
 
 		wlc_ratesel_init(wrsi->rsi, state, scb, &new_rateset, bw, sgi_tx, ldpc_tx,
 			vht_ldpc_tx, vht_ratemask, active_antcfg_num, antselid_init, max_rate, 0);
@@ -1095,9 +1147,10 @@ wlc_scb_ratesel_get_ppr_rates(wlc_info_t *wlc, wl_tx_bw_t bw)
 {
 #ifdef WL11AC
 	wlc_ratesel_info_t *wrsi = wlc->wrsi;
-	if (wrsi->ppr_rates->chanspec != wlc->chanspec ||
-		wrsi->ppr_rates->country != wlc_get_country(wlc)) {
-		wlc_scb_ratesel_ppr_upd(wlc);
+	if ((wrsi->ppr_rates->chanspec != wlc->chanspec ||
+		wrsi->ppr_rates->country != wlc_get_country(wlc)) &&
+		(wlc_scb_ratesel_ppr_upd(wlc) != BCME_OK)) {
+			return NULL;
 	}
 
 	switch (bw) {
@@ -1175,13 +1228,13 @@ wlc_scb_ratesel_ppr_updbmp(wlc_info_t *wlc, ppr_t *target_pwrs)
 	wlc_scb_ratesel_get_ppr_rates_bitmp(wlc, target_pwrs, WL_TX_BW_20,
 		&wrsi->ppr_rates->ppr_20_rates);
 #if defined(WL11N) || defined(WL11AC)
-	if (CHSPEC_IS40(wlc->chanspec)) {
+	if (CHSPEC_BW_GE(wlc->chanspec, WL_CHANSPEC_BW_40)) {
 		wlc_scb_ratesel_get_ppr_rates_bitmp(wlc, target_pwrs, WL_TX_BW_40,
 			&wrsi->ppr_rates->ppr_40_rates);
 	}
 #endif
 #if defined(WL11AC)
-	if (CHSPEC_IS80(wlc->chanspec)) {
+	if (CHSPEC_BW_GE(wlc->chanspec, WL_CHANSPEC_BW_80)) {
 		wlc_scb_ratesel_get_ppr_rates_bitmp(wlc, target_pwrs, WL_TX_BW_80,
 			&wrsi->ppr_rates->ppr_80_rates);
 	}
@@ -1193,29 +1246,38 @@ wlc_scb_ratesel_ppr_updbmp(wlc_info_t *wlc, ppr_t *target_pwrs)
 }
 
 /* Update ppr enabled rates bitmap */
-extern void
+extern int
 wlc_scb_ratesel_ppr_upd(wlc_info_t *wlc)
 {
 	phy_tx_power_t power;
-	wl_tx_bw_t ppr_bw;
 	ppr_t* reg_limits = NULL;
 	int ret;
 
 	wlc_cm_info_t *wlc_cm = wlc->cmi;
 	clm_country_t country = wlc_get_country(wlc);
+	wl_tx_bw_t ppr_bw = PPR_CHSPEC_BW(wlc->chanspec);
+	uint pprsize = ppr_size(ppr_bw);
 
+	int8 pwr[pprsize];
+	int8 reg[pprsize];
+	int8 board[pprsize];
 
 	bzero(&power, sizeof(power));
 
-	ppr_bw = ppr_get_max_bw();
-	if ((power.ppr_target_powers = ppr_create(wlc->osh, ppr_bw)) == NULL) {
-		goto free_power;
+	if ((power.ppr_target_powers = ppr_create_prealloc(ppr_bw, pwr, pprsize)) == NULL) {
+		ret = BCME_ERROR;
+		ASSERT(0);
+		goto fail;
 	}
-	if ((power.ppr_board_limits = ppr_create(wlc->osh, ppr_bw)) == NULL) {
-		goto free_power;
+	if ((power.ppr_board_limits = ppr_create_prealloc(ppr_bw, board, pprsize)) == NULL) {
+		ret = BCME_ERROR;
+		ASSERT(0);
+		goto fail;
 	}
-	if ((reg_limits = ppr_create(wlc->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
-		goto free_power;
+	if ((reg_limits = ppr_create_prealloc(ppr_bw, reg, pprsize)) == NULL) {
+		ret = BCME_ERROR;
+		ASSERT(0);
+		goto fail;
 	}
 	wlc_channel_reg_limits(wlc_cm, wlc->chanspec, reg_limits);
 
@@ -1224,7 +1286,7 @@ wlc_scb_ratesel_ppr_upd(wlc_info_t *wlc)
 		WL_ERROR(("wl%d: %s: PHY func fail Return value = %d\n",
 			wlc->pub->unit,
 			__FUNCTION__, ret));
-		goto free_power;
+		goto fail;
 	}
 
 	/* update the rate bitmap with retrieved target power */
@@ -1232,13 +1294,9 @@ wlc_scb_ratesel_ppr_upd(wlc_info_t *wlc)
 
 	wlc->wrsi->ppr_rates->country = country;
 	wlc->wrsi->ppr_rates->chanspec = wlc->chanspec;
-free_power:
-	if (power.ppr_board_limits)
-		ppr_delete(wlc->osh, power.ppr_board_limits);
-	if (power.ppr_target_powers)
-		ppr_delete(wlc->osh, power.ppr_target_powers);
-	if (reg_limits)
-		ppr_delete(wlc->osh, reg_limits);
+	return BCME_OK;
+fail:
+	return ret;
 }
 
 #ifdef WLATF
@@ -1276,6 +1334,18 @@ static wl_tx_bw_t rspecbw_to_bcmbw(uint8 bw)
 
 	return bcmbw;
 }
+
+void
+wlc_scb_ratesel_get_ratecap(wlc_ratesel_info_t *wrsi, struct scb *scb, uint8 *sgi,
+	uint16 mcs_bitmap[], uint8 ac)
+{
+	rcb_t *state = wlc_scb_ratesel_get_cubby(wrsi, scb, ac);
+
+	wlc_ratesel_get_ratecap(state, sgi, mcs_bitmap);
+
+	return;
+}
+
 #ifdef WLRSDB
 /* Clear the wrsi->ppr_rates->chanspec
  * variable to force ppr update after mode switch.

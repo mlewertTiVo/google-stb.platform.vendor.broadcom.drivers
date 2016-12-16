@@ -22,7 +22,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhdioctl.h 610128 2016-01-06 07:53:05Z $
+ * $Id: dhdioctl.h 660496 2016-09-20 19:28:50Z $
  */
 
 #ifndef _dhdioctl_h_
@@ -32,23 +32,18 @@
 
 #if defined(__FreeBSD__)
 /* NetBSD 2.0 does not have SIOCDEVPRIVATE. This is NetBSD 2.0 specific */
-#define SIOCDEVPRIVATE	_IOWR('i', 139, struct ifreq)
+#define SIOCDEVPRIVATE  _IOWR('i', 139, struct ifreq)
 #endif
-
-/* require default structure packing */
-#define BWL_DEFAULT_PACKING
-#include <packed_section_start.h>
-
 
 /* Linux network driver ioctl encoding */
 typedef struct dhd_ioctl {
-	uint cmd;	/* common ioctl definition */
+	uint32 cmd;	/* common ioctl definition */
 	void *buf;	/* pointer to user buffer */
-	uint len;	/* length of user buffer */
-	bool set;	/* get or set request (optional) */
-	uint used;	/* bytes read or written (optional) */
-	uint needed;	/* bytes needed (optional) */
-	uint driver;	/* to identify target driver */
+	uint32 len;	/* length of user buffer */
+	uint32 set;	/* get or set request boolean (optional) */
+	uint32 used;	/* bytes read or written (optional) */
+	uint32 needed;	/* bytes needed (optional) */
+	uint32 driver;	/* to identify target driver */
 } dhd_ioctl_t;
 
 /* Underlying BUS definition */
@@ -57,6 +52,7 @@ enum {
 	BUS_TYPE_SDIO, /* for SDIO dongles */
 	BUS_TYPE_PCIE /* for PCIE dongles */
 };
+
 
 /* per-driver magic numbers */
 #define DHD_IOCTL_MAGIC		0x00444944
@@ -111,6 +107,11 @@ enum {
 #define DHD_MSGTRACE_VAL	0x200000
 #define DHD_FWLOG_VAL		0x400000
 #define DHD_DBGIF_VAL		0x800000
+#ifdef DHD_PCIE_NATIVE_RUNTIMEPM
+#define DHD_RPM_VAL		0x1000000
+#endif /* DHD_PCIE_NATIVE_RUNTIMEPM */
+#define DHD_PKT_MON_VAL		0x2000000
+#define DHD_PKT_MON_DUMP_VAL	0x4000000
 
 
 /* Enter idle immediately (no timeout) */
@@ -120,8 +121,5 @@ enum {
 #define DHD_IDLE_ACTIVE	0	/* Do not request any SD clock change when idle */
 #define DHD_IDLE_STOP   (-1)	/* Request SD clock be stopped (and use SD1 mode) */
 
-
-/* require default structure packing */
-#include <packed_section_end.h>
 
 #endif /* _dhdioctl_h_ */

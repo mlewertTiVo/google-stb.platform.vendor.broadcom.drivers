@@ -10,13 +10,12 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_key_aes.c 643153 2016-06-13 16:09:35Z $
+ * $Id: km_key_aes.c 656165 2016-08-25 11:38:27Z $
  */
 
 #include "km_key_aes_pvt.h"
-#ifdef WLCXO_CTRL
-#include <wlc_cxo_types.h>
-#include <wlc_cxo_tsc.h>
+#ifdef BCM_SFD
+#include <wlc_sfd.h>
 #endif
 
 /* internal interface */
@@ -33,7 +32,57 @@
 #define key_aes_tx_gcm(k, p, h, b, l, s) BCME_UNSUPPORTED
 #endif /* !BCMGCMP */
 
+#if defined(BCMDBG)
+/* check aes key for compatible algo vs (key, icv, iv) sizes
+ * note: all gcm/gmac algorithms have longer icv
+ */
+static bool
+key_aes_valid(const wlc_key_t *key)
+{
+	bool valid = FALSE;
+	switch (key->info.algo) {
+	case CRYPTO_ALGO_AES_CCM:
+#ifdef MFP
+	case CRYPTO_ALGO_BIP:
+#endif /* MFP */
+		valid = (key->info.key_len == AES_KEY_MIN_SIZE) &&
+			(key->info.iv_len == AES_KEY_IV_SIZE) &&
+			(key->info.icv_len == AES_KEY_MIN_ICV_SIZE);
+		break;
+
+	case CRYPTO_ALGO_AES_GCM:
+	case CRYPTO_ALGO_BIP_GMAC:
+		valid = (key->info.key_len == AES_KEY_MIN_SIZE) &&
+			(key->info.iv_len == AES_KEY_IV_SIZE) &&
+			(key->info.icv_len == AES_KEY_MAX_ICV_SIZE);
+		break;
+
+	case CRYPTO_ALGO_AES_CCM256:
+#ifdef MFP
+	case CRYPTO_ALGO_BIP_CMAC256:
+#endif /* MFP */
+	case CRYPTO_ALGO_AES_GCM256:
+	case CRYPTO_ALGO_BIP_GMAC256:
+		valid = (key->info.key_len == AES_KEY_MAX_SIZE) &&
+			(key->info.iv_len == AES_KEY_IV_SIZE) &&
+			(key->info.icv_len == AES_KEY_MAX_ICV_SIZE);
+		break;
+
+	case CRYPTO_ALGO_AES_OCB_MSDU:
+	case CRYPTO_ALGO_AES_OCB_MPDU:
+		valid = (key->info.key_len == AES_KEY_MIN_SIZE) &&
+			(key->info.iv_len == DOT11_IV_AES_OCB_LEN) &&
+			(key->info.icv_len == AES_KEY_MIN_ICV_SIZE);
+		break;
+	default:
+		break;
+	}
+	return valid;
+}
+#define AES_KEY_VALID(_key) key_aes_valid(_key)
+#else
 #define AES_KEY_VALID(_key) AES_KEY_ALGO_VALID(_key)
+#endif /* BCMDBG */
 
 static void
 key_aes_seq_to_body(wlc_key_t *key, uint8 *seq, uint8 *body)
@@ -434,6 +483,15 @@ key_aes_rx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 #endif /* MFP || CCX */
 	}
 
+#ifdef BCMDBG
+	/* uc mgmt or uc/mc data frames; no bip for these */
+	if (AES_KEY_ALGO_BIPXX(key)) {
+		err = BCME_UNSUPPORTED;
+		goto done;
+	}
+
+	KM_ASSERT(!WLC_KEY_IS_MGMT_GROUP(&key->info));
+#endif /* BCMDBG */
 
 	/* ext iv bit must be set for all except ocb modes */
 	if (!(body[KEY_ID_BODY_OFFSET] & DOT11_EXT_IV_FLAG) &&
@@ -612,6 +670,9 @@ key_aes_tx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 	int err = BCME_OK;
 	aes_key_t *aes_key;
 	uint16 fc;
+#ifdef BCMDBG
+	bool gen_err = FALSE;
+#endif
 
 	KM_DBG_ASSERT(AES_KEY_VALID(key));
 
@@ -623,29 +684,17 @@ key_aes_tx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 
 	aes_key = (aes_key_t *)key->algo_impl.ctx;
 
+#ifdef BCMDBG
+	if (key->info.flags & WLC_KEY_FLAG_GEN_REPLAY) {
+		key->info.flags &= ~WLC_KEY_FLAG_GEN_REPLAY;
+	} else
+#endif /* BCMDBG */
 	{
 		if (!AES_KEY_ALGO_OCBXX(key)) {
 			if (KEY_SEQ_IS_MAX(aes_key->tx_seq)) {
 				err = BCME_BADKEYIDX;
 				goto done;
 			}
-#ifdef WLCXO_CTRL
-			/* Do not update txiv in offload for MPF frames. */
-			if (WLCXO_ENAB(key->wlc->pub) &&
-			    ((WLPKTTAG(pkt)->flags & WLF_MFP) == 0)) {
-				wlc_cx_tsc_t *tsc = NULL;
-				ASSERT(pkt != NULL);
-#ifdef WLCXO_IPC
-				tsc = wlc_cxo_ctrl_tsc_find(key->wlc, -1, &hdr->a1, NULL);
-#else
-				tsc = wlc_cxo_tsc_find(key->wlc->wlc_cx, -1, &hdr->a1, NULL);
-#endif
-				if (tsc != NULL) {
-					WLPKTTAG(pkt)->flags |= WLF_CXO_TXIV_OFLD_INIT;
-					WLPKTTAG(pkt)->flags |= WLF_CXO_TXIV_OFLD_INCR;
-				}
-			}
-#endif /* WLCXO_CTRL */
 			KEY_SEQ_INCR(aes_key->tx_seq, AES_KEY_SEQ_SIZE);
 		} else {
 			uint32 val = ltoh32_ua(aes_key->tx_seq);
@@ -661,21 +710,53 @@ key_aes_tx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 	key_aes_seq_to_body(key, aes_key->tx_seq, body);
 
 	if (WLC_KEY_IN_HW(&key->info) && txd != NULL) {
-		if (!KEY_USE_AC_TXD(key)) {
-			d11txh_t *txh = (d11txh_t *)&txd->d11txh;
-			memcpy(txh->IV, body, key->info.iv_len);
-		} else {
+		if (KEY_USE_AC_TXD(key)) {
 			d11actxh_t * txh = (d11actxh_t *)&txd->txd;
 			d11actxh_cache_t	*cache_info;
 
-			cache_info = WLC_TXD_CACHE_INFO_GET(txh, KEY_PUB(key)->corerev);
+#ifdef BCM_SFD
+			if (SFD_ENAB(key->wlc->pub) && PKTISSFDFRAME(key->wlc->osh, pkt)) {
+				cache_info = wlc_sfd_get_cache_info(key->wlc->sfd, txh);
+			} else
+#endif
+			{
+				cache_info = WLC_TXD_CACHE_INFO_GET(txh, KEY_PUB(key)->corerev);
+			}
+
 			memcpy(cache_info->TSCPN, aes_key->tx_seq,
 				MIN(sizeof(cache_info->TSCPN), AES_KEY_SEQ_SIZE));
+		} else if (!KEY_USE_REV80_TXD(key)) {
+			d11txh_t *txh = (d11txh_t *)&txd->d11txh;
+			memcpy(txh->IV, body, key->info.iv_len);
 		}
 
 		goto done;
 	}
 
+#ifdef BCMDBG
+	if (key->info.flags & (WLC_KEY_FLAG_GEN_MFP_ACT_ERR|
+		WLC_KEY_FLAG_GEN_MFP_DISASSOC_ERR |
+		WLC_KEY_FLAG_GEN_MFP_DEAUTH_ERR)) {
+		uint16 fk = (fc & FC_KIND_MASK);
+		wlc_key_flags_t flags = key->info.flags;
+		if ((flags & WLC_KEY_FLAG_GEN_MFP_ACT_ERR) && fk == FC_ACTION) {
+			gen_err = TRUE;
+			flags &= ~WLC_KEY_FLAG_GEN_MFP_ACT_ERR;
+		}
+		if ((flags & WLC_KEY_FLAG_GEN_MFP_DISASSOC_ERR) && fk == FC_DISASSOC) {
+			gen_err = TRUE;
+			flags &= ~WLC_KEY_FLAG_GEN_MFP_DISASSOC_ERR;
+		}
+		if ((flags & WLC_KEY_FLAG_GEN_MFP_DEAUTH_ERR) && fk == FC_DEAUTH) {
+			gen_err = TRUE;
+			flags &= ~WLC_KEY_FLAG_GEN_MFP_DEAUTH_ERR;
+		}
+		key->info.flags = flags;
+
+		if (gen_err)
+			aes_key->key[0] = ~aes_key->key[0];
+	}
+#endif /* BCMDBG */
 
 	switch (key->info.algo) {
 	case CRYPTO_ALGO_AES_CCM:
@@ -691,12 +772,68 @@ key_aes_tx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 		break;
 	}
 
+#ifdef BCMDBG
+	if (gen_err)
+		aes_key->key[0] = ~aes_key->key[0];
+#endif
 
 done:
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+key_aes_dump(const wlc_key_t *key, struct bcmstrbuf *b)
+{
+	size_t i;
+	KM_DBG_ASSERT(AES_KEY_VALID(key));
+
+	if (WLC_KEY_IS_MGMT_GROUP(&key->info)) {
+		aes_igtk_t *aes_igtk;
+		aes_igtk = (aes_igtk_t *)key->algo_impl.ctx;
+		bcm_bprintf(b, "\taes igtk: ");
+		for (i = 0; i < key->info.key_len; ++i)
+			bcm_bprintf(b, "%02x", aes_igtk->key[i]);
+		bcm_bprintf(b, "\n");
+
+		bcm_bprintf(b, "\taes seq: 0x");
+		for (i = AES_KEY_SEQ_SIZE; i > 0; --i)
+			bcm_bprintf(b, "%02x", aes_igtk->seq[i-1]);
+		bcm_bprintf(b, "\n");
+	} else {
+		aes_key_t *aes_key;
+		aes_key = (aes_key_t *)key->algo_impl.ctx;
+
+		bcm_bprintf(b, "\taes key: ");
+		for (i = 0; i < key->info.key_len; ++i)
+			bcm_bprintf(b, "%02x", aes_key->key[i]);
+		bcm_bprintf(b, "\n");
+
+		bcm_bprintf(b, "\taes tx_seq: 0x");
+		for (i = AES_KEY_SEQ_SIZE; i > 0; --i)
+			bcm_bprintf(b, "%02x", aes_key->tx_seq[i-1]);
+		bcm_bprintf(b, "\n");
+
+		bcm_bprintf(b, "\taes rx_seq:\n");
+		for (i = 0; i < (size_t)KEY_NUM_RX_SEQ(key); ++i) {
+			size_t j;
+			uint8 *rx_seq;
+
+			bcm_bprintf(b, "\t\t%02d: 0x", i);
+			rx_seq = AES_KEY_RX_SEQ(key, aes_key, i);
+			for (j = AES_KEY_SEQ_SIZE; j > 0; --j)
+				bcm_bprintf(b, "%02x", rx_seq[j - 1]);
+
+			bcm_bprintf(b, "\n");
+		}
+	}
+	return BCME_OK;
+}
+
+#define KEY_AES_DUMP key_aes_dump
+#else
 #define KEY_AES_DUMP NULL
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static const key_algo_callbacks_t
 km_key_aes_callbacks = {

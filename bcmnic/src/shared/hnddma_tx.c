@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hnddma_tx.c 650258 2016-07-20 22:39:09Z $
+ * $Id: hnddma_tx.c 654730 2016-08-16 09:04:55Z $
  */
 
 /**
@@ -44,9 +44,8 @@
 
 #ifdef BCMLFRAG
 static int dma64_txfast_lfrag(dma_info_t *di, void *p0, bool commit);
+static int dma64_txfast_sfd(dma_info_t *di, void *p0, bool commit);
 #endif /* BCMLFRAG */
-
-#ifndef WLCXO_DATA
 
 void
 dma32_txreclaim(dma_info_t *di, txd_range_t range)
@@ -299,14 +298,9 @@ bogus:
 	          start, end, di->txout, forceall));
 	return (NULL);
 }
-#endif /* !WLCXO_DATA */
 
 void BCMFASTPATH
-#ifdef WLCXO_DATA
-cxo_data_dma64_txreclaim(dma_info_t *di, txd_range_t range)
-#else
 dma64_txreclaim(dma_info_t *di, txd_range_t range)
-#endif /* WLXO_DATA */
 {
 	void *p;
 
@@ -343,19 +337,11 @@ dma64_txreclaim(dma_info_t *di, txd_range_t range)
  *   the error(toss frames) could be fatal and cause many subsequent hard to debug problems
  */
 int BCMFASTPATH
-#ifdef WLCXO_DATA
-cxo_data_dma64_txfast(dma_info_t *di, void *p0, bool commit)
-#else
 dma64_txfast(dma_info_t *di, void *p0, bool commit)
-#endif /* WLXO_DATA */
 {
 	void *p, *next;
 	uchar *data;
 	uint len;
-#ifdef WLCXO_DATA
-	uint8 *frag;
-	uint frag_sof;
-#endif
 	uint16 txout;
 	uint32 flags = 0;
 	dmaaddr_t pa;
@@ -371,6 +357,10 @@ dma64_txfast(dma_info_t *di, void *p0, bool commit)
 	/* new DMA routine for LFRAGS */
 #ifdef BCMLFRAG
 	if (BCMLFRAG_ENAB()) {
+		if (PKTISSFDFRAME(di->osh, p0)) {
+			return dma64_txfast_sfd(di, p0, commit);
+		}
+
 		if (PKTISTXFRAG(di->osh, p0)) {
 			return dma64_txfast_lfrag(di, p0, commit);
 		}
@@ -388,31 +378,9 @@ dma64_txfast(dma_info_t *di, void *p0, bool commit)
 		uint nsegs, j, segsadd;
 		hnddma_seg_map_t *map = NULL;
 
-#ifdef WLCXO_DATA
-		frag_sof = 0;
-		frag = PKTFRAG(di->osh, p);
-		if (frag != NULL) {
-			if (PKTFRAGITER(di->osh, p) == 0) {
-				data = PKTDATA(di->osh, p);
-				len = PKTLEN(di->osh, p);
-				next = p;
-				PKTFRAGITERNEXT(di->osh, p);
-				if (p == p0)
-					frag_sof = 1;
-			} else {
-				data = frag;
-				len = PKTFRAGLEN(di->osh, p, 0);
-				next = PKTNEXT(di->osh, p);
-				PKTFRAGITERNEXT(di->osh, p);
-				p = next;
-			}
-		} else
-#endif /* WLCXO_DATA */
-		{
-			data = PKTDATA(di->osh, p);
-			len = PKTLEN(di->osh, p);
-			next = PKTNEXT(di->osh, p);
-		}
+		data = PKTDATA(di->osh, p);
+		len = PKTLEN(di->osh, p);
+		next = PKTNEXT(di->osh, p);
 #ifdef BCM_DMAPAD
 		if (DMAPADREQUIRED(di)) {
 			len += PKTDMAPAD(di->osh, p);
@@ -460,17 +428,9 @@ dma64_txfast(dma_info_t *di, void *p0, bool commit)
 		segsadd = 0;
 		for (j = 1; j <= nsegs; j++) {
 			flags = 0;
-#ifdef WLCXO_DATA
-			if (frag) {
-				if (frag_sof) {
-					flags |= D64_CTRL1_SOF;
-				}
-			} else
-#endif
-			{
-				if (p == p0 && j == 1)
-					flags |= D64_CTRL1_SOF;
-			}
+
+			if (p == p0 && j == 1)
+				flags |= D64_CTRL1_SOF;
 
 			/* With a DMA segment list, Descriptor table is filled
 			 * using the segment list instead of looping over
@@ -595,8 +555,6 @@ outoftxd:
 	return (-1);
 }
 
-#if !defined(WLCXO_DATA) || !defined(WLCXO_FULL)
-
 /** get the address of the var in order to change later */
 uintptr
 _dma_getvar(dma_info_t *di, const char *name)
@@ -639,7 +597,7 @@ dma64_dd_upd_64_from_struct(dma_info_t *di, dma64dd_t *ddring, dma64dd_t *dd, ui
 			W_SM(&ddring[outidx].ctrl2, BUS_SWAP32(dd->ctrl2 | D64_CTRL2_PARITY));
 		}
 	}
-#if (defined(__ARM_ARCH_7A__) && defined(CA7)) || defined(STB)
+#if defined(__ARM_ARCH_7A__) && defined(CA7)
 	/* memory barrier before posting the descriptor */
 	DMB();
 #endif
@@ -916,7 +874,6 @@ dma_get_txd_memaddr(hnddma_t *dmah, uint32 *addrlo, uint32 *addrhi, uint idx)
 	*addrlo = BUS_SWAP32(R_SM(&di->txd64[idx].addrlow));
 	*addrhi = BUS_SWAP32(R_SM(&di->txd64[idx].addrhigh));
 }
-#endif /* !WLCXO_DATA || !WLCXO_FULL */
 
 #ifdef BCMLFRAG
 /*
@@ -1045,6 +1002,166 @@ program_frags:
 
 outoftxd:
 	DMA_ERROR(("%s: %s: out of txds !!!\n", di->name, __FUNCTION__));
+	di->hnddma.txavail = 0;
+	di->hnddma.txnobuf++;
+	return (-1);
+}
+
+static int BCMFASTPATH
+dma64_txfast_sfd(dma_info_t *di, void *p0, bool commit)
+{
+	void *p, *next;
+	uchar *data;
+	uint len;
+	uint16 txout;
+	uint32 flags = 0;
+	dmaaddr_t pa;
+	dma64addr_t pa64 = {0, 0};
+	uint8 i = 0, j = 0;
+	uint8 *desc0, *desc1;
+	uint16 len0, len1;
+
+	txout = di->txout;
+
+	/*
+	 * Lfrag - Program the descriptor for Lfrag data first before
+	 * considering the individual fragments
+	 */
+	for (p = p0; p; p = next) {
+		uint ftot = 0;
+		uint nsegs = 1;
+
+		if (p == p0) {
+			(*di->fn)(di->ctx, p, &desc0, &len0, &desc1, &len1);
+
+			pa = DMA_MAP(di->osh, desc0, len0, DMA_TX,
+					p, &di->txp_dmah[txout]);
+			if (p == p0)
+				flags |= D64_CTRL1_SOF;
+			if (txout == (di->ntxd - 1))
+				flags |= D64_CTRL1_EOT;
+			if (di->burstsize_ctrl)
+				flags |= D64_CTRL1_NOTPCIE;
+
+			dma64_dd_upd(di, di->txd64, pa, txout, &flags, len0);
+
+			ASSERT(di->txp[txout] == NULL);
+			txout = NEXTTXD(txout);
+
+			flags = 0;
+			if (txout == (di->ntxd - 1))
+				flags |= D64_CTRL1_EOT;
+			if (di->burstsize_ctrl)
+				flags |= D64_CTRL1_NOTPCIE;
+
+			pa = DMA_MAP(di->osh, desc1, len1, DMA_TX,
+					desc1, &di->txp_dmah[txout]);
+
+			dma64_dd_upd(di, di->txd64, pa, txout, &flags, len1);
+
+			ASSERT(di->txp[txout] == NULL);
+			txout = NEXTTXD(txout);
+
+			PKTPULL(di->osh, p, len0);
+		}
+
+		next = PKTNEXT(di->osh, p);
+		data = PKTDATA(di->osh, p);
+		len  = PKTLEN(di->osh, p);
+
+		if (PKTISFRAG(di->osh, p)) {
+			ftot = PKTFRAGTOTNUM(di->osh, p);
+		}
+
+		if (len == 0) {
+			/* Should not happen ideally unless this is a chained lfrag */
+			goto program_frags;
+		}
+#ifndef BCM_SECURE_DMA
+		pa = DMA_MAP(di->osh, data, len, DMA_TX, p, &di->txp_dmah[txout]);
+#endif /* BCM_SECURE_DMA */
+		{
+			if ((nsegs+ftot) > (uint)(di->ntxd - NTXDACTIVE(di->txin, di->txout) - 1))
+				goto outoftxd;
+		}
+
+		for (j = 1; j <= nsegs; j++) {
+			flags = 0;
+
+			if (txout == (di->ntxd - 1))
+				flags |= D64_CTRL1_EOT;
+			if (di->burstsize_ctrl)
+				flags |= D64_CTRL1_NOTPCIE;
+
+			if ((j == nsegs) && (ftot == 0) && (next == NULL))
+				flags |= (D64_CTRL1_IOC | D64_CTRL1_EOF);
+
+				dma64_dd_upd(di, di->txd64, pa, txout,
+					&flags, len);
+
+			ASSERT(di->txp[txout] == NULL);
+			txout = NEXTTXD(txout);
+		}
+
+		if (p == p0)
+			PKTPUSH(di->osh, p, len0);
+
+program_frags:
+		/*
+		 * Now, walk the chain of fragments in this lfrag allocating
+		 * and initializing transmit descriptor entries.
+		 */
+		for (i = 1, j = 1; j <= ftot; i++, j++) {
+			flags = 0;
+			if (PKTFRAGISCHAINED(di->osh, i)) {
+				 i = 1;
+				 p = PKTNEXT(di->osh, p);
+				 ASSERT(p != NULL);
+				 next = PKTNEXT(di->osh, p);
+			}
+
+			len = PKTFRAGLEN(di->osh, p, i);
+
+#ifdef BCM_DMAPAD
+			if (DMAPADREQUIRED(di)) {
+				len += PKTDMAPAD(di->osh, p);
+			}
+#endif /* BCM_DMAPAD */
+
+			pa64.loaddr = PKTFRAGDATA_LO(di->osh, p, i);
+			pa64.hiaddr = PKTFRAGDATA_HI(di->osh, p, i);
+
+			if ((j == ftot) && (next == NULL))
+				flags |= (D64_CTRL1_IOC | D64_CTRL1_EOF);
+			if (txout == (di->ntxd - 1))
+				flags |= D64_CTRL1_EOT;
+
+			/* War to handle 64 bit dma address for now */
+			dma64_dd_upd_64_from_params(di, di->txd64, pa64, txout, &flags, len);
+
+			ASSERT(di->txp[txout] == NULL);
+			txout = NEXTTXD(txout);
+		}
+	}
+
+	/* save the packet */
+	di->txp[PREVTXD(txout)] = p0;
+
+	/* bump the tx descriptor index */
+	di->txout = txout;
+
+	/* kick the chip */
+	if (commit) {
+		dma64_txcommit_local(di);
+	}
+
+	/* tx flow control */
+	di->hnddma.txavail = di->ntxd - NTXDACTIVE(di->txin, di->txout) - 1;
+
+	return (0);
+
+outoftxd:
+	DMA_ERROR(("%s: dma_txfast: out of txds !!!\n", di->name));
 	di->hnddma.txavail = 0;
 	di->hnddma.txnobuf++;
 	return (-1);

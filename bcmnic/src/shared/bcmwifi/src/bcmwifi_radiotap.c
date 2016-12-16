@@ -19,13 +19,12 @@
  *
  *
  * <<Broadcom-WL-IPTag/Open:>>
- * $Id: bcmwifi_radiotap.c 623869 2016-03-09 12:42:32Z $
+ * $Id: bcmwifi_radiotap.c 663980 2016-10-07 19:14:26Z $
  */
 
 
 #include <bcmutils.h>
 #include <bcmendian.h>
-#include <d11.h>
 #include <bcmwifi_channels.h>
 #include <bcmwifi_radiotap.h>
 

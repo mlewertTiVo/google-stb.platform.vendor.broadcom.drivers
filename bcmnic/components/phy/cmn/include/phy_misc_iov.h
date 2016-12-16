@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_misc_iov.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: phy_misc_iov.h 606042 2015-12-14 06:21:23Z $
  */
 
 #ifndef _phy_misc_iov_t_

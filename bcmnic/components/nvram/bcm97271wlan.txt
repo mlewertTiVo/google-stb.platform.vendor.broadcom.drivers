@@ -7,11 +7,11 @@ boardflags4=0x8
 # BEFORE CHECK-IN BEFORE CHECK-IN BEFORE CHECK-IN
 # How to use the command svn propset before checking in a nvram file
 # > svn add bcm943569usb.txt (if not existent yet)
-# If there is already a line having the command like NVRAMRev=$Rev: 657765 $ it is ok,
+# If there is already a line having the command like NVRAMRev=$Rev: 672269 $ it is ok,
 # the command svn propset svn:keywords Rev <nvram file name> updates the $Rev number
 # > svn propset svn:keywords Rev bcm943569usb.txt
 # > svn ci -m "nvram for p341 using a2 chip and usb31 host connector" bcm943569usb.txt
-NVRAMRev=$Rev: 657765 $
+NVRAMRev=$Rev: 672269 $
 sromrev=13
 srom13sig=0x4d55
 # ^^^^ do not know, check?
@@ -86,7 +86,7 @@ papdcap5g=0
 #gainctrlsph=0
 # ^^^^ 4 bits, chech what it is - only used with SROM
 
-tempthresh=120
+tempthresh=110
 tempoffset=255
 ###NEr: here is how srom13 twiki page defines vars above
 #thermal	0x78ff	Upper 2 nibb: tempthresh, Lower: tempoffset , max. die temp. = 120C
@@ -107,7 +107,7 @@ xtalfreq=54000
 
 phycal_tempdelta=40
 # ^^^^ Temperature delta, in degrees C, when exceeded will initiate Perodic calibration. Range 0-63
-temps_period=1
+temps_period=15
 # ^^^^ NEr:poling interval 1 sec
 temps_hysteresis=5
 # ^^^^ NEr:unit = deg C
@@ -409,6 +409,7 @@ swctrlmap4_misc5g_fem7to4=0
 ########################################################
 
 paprdis=1
+low_adc_rate_en=1
 
 # Links:
 # see http://hwnbu-twiki.sj.broadcom.com/bin/view/Mwgroup/SromRev13 for the meaning of variables above

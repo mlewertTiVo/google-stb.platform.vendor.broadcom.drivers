@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_btcx.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_ac_btcx.c 659187 2016-09-13 04:45:39Z $
  */
 
 #include <phy_cfg.h>
@@ -23,9 +23,12 @@
 #include "phy_type_btcx.h"
 #include <phy_ac.h>
 #include <phy_ac_btcx.h>
+#include <phy_ac_noise.h>
 #include <phy_ac_rxgcrs.h>
 #include <phy_rxgcrs.h>
 #include <phy_wd.h>
+#include <phy_stf.h>
+#include <phy_misc_api.h>
 
 /* ************************ */
 /* Modules used by this module */
@@ -53,8 +56,7 @@ struct phy_ac_btcx_info {
 	phy_info_t			*pi;
 	phy_ac_info_t		*aci;
 	phy_btcx_info_t		*cmn_info;
-	int32	btc_mode;
-	int32	ltecx_mode;
+	phy_ac_btcx_data_t	*data; /* shared data */
 	uint16	btcx_femctrl_save;
 	uint16	btcx_femctrl_bt_val;
 	uint16	btcx_femctrl_wlan_val;
@@ -65,6 +67,11 @@ struct phy_ac_btcx_info {
 /* add other variable size variables here at the end */
 };
 
+typedef struct {
+	phy_ac_btcx_info_t info;
+	phy_ac_btcx_data_t data;
+} phy_ac_btcx_mem_t;
+
 /* local functions */
 static int phy_ac_btcx_init(phy_type_btcx_ctx_t *ctx);
 #if !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX)
@@ -73,6 +80,7 @@ static bool phy_ac_wd_btcx_desense(phy_wd_ctx_t *ctx);
 static bool phy_ac_wd_wars(phy_wd_ctx_t *ctx);
 static void wlc_phy_btc_adjust_acphy(phy_type_btcx_ctx_t *ctx, bool btactive);
 static void wlc_phy_btcx_invert_prisel_polarity(phy_ac_btcx_info_t *btcxi, int8 state);
+static void phy_ac_btcx_adjust_preempt_on_bt_activity(phy_ac_btcx_info_t *btcxi);
 
 /* local functions */
 static void phy_ac_btcx_nvram_attach(phy_info_t *pi);
@@ -86,9 +94,6 @@ static void phy_ac_btcx_override_disable(phy_type_btcx_ctx_t *ctx);
 static void phy_ac_btcx_femctrl_mask(phy_type_btcx_ctx_t *ctx);
 #endif
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int phy_ac_btcx_get_preemptstatus(phy_type_btcx_ctx_t *ctx, int32* ret_ptr);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 
 #if !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX)
 static int wlc_phy_desense_ltecx_acphy(phy_type_btcx_ctx_t *ctx, int32 mode);
@@ -98,6 +103,7 @@ static int wlc_phy_desense_btcoex_acphy(phy_type_btcx_ctx_t *ctx, int32 mode);
 #endif /* !defined(WLC_DISABLE_ACI) */
 static int phy_ac_btcx_set_restage_rxgain(phy_type_btcx_ctx_t *ctx, int32 set_val);
 static int phy_ac_btcx_get_restage_rxgain(phy_type_btcx_ctx_t *ctx, int32 *ret_val);
+static int phy_ac_btcx_set_mode(phy_type_btcx_ctx_t *ctx, int btc_mode);
 
 /* register phy type specific implementation */
 phy_ac_btcx_info_t *
@@ -110,13 +116,14 @@ BCMATTACHFN(phy_ac_btcx_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	/* allocate all storage together */
-	if ((btcx_info = phy_malloc(pi, sizeof(phy_ac_btcx_info_t))) == NULL) {
+	if ((btcx_info = phy_malloc(pi, sizeof(phy_ac_btcx_mem_t))) == NULL) {
 		PHY_ERROR(("%s: phy_malloc failed\n", __FUNCTION__));
 		goto fail;
 	}
 	btcx_info->pi = pi;
 	btcx_info->aci = aci;
 	btcx_info->cmn_info = cmn_info;
+	btcx_info->data = &(((phy_ac_btcx_mem_t *) btcx_info)->data);
 
 	/* register watchdog fn */
 #if !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX)
@@ -149,22 +156,20 @@ BCMATTACHFN(phy_ac_btcx_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 #if (!defined(WL_SISOCHIP) && defined(SWCTRL_TO_BT_IN_COEX))
 	fns.femctrl_mask = phy_ac_btcx_femctrl_mask;
 #endif
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	fns.get_preemptstatus = phy_ac_btcx_get_preemptstatus;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-#if !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX) && defined(BCMINTERNAL)
+#if !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX)
 	fns.desense_ltecx = wlc_phy_desense_ltecx_acphy;
-#endif /* !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX) && defined (BCMINTERNAL) */
+#endif /* !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX) */
 #if !defined(WLC_DISABLE_ACI)
 	fns.desense_btc = wlc_phy_desense_btcoex_acphy;
 #endif /* !defined(WLC_DISABLE_ACI) */
 	fns.set_restage_rxgain = phy_ac_btcx_set_restage_rxgain;
 	fns.get_restage_rxgain = phy_ac_btcx_get_restage_rxgain;
+	fns.mode_set = phy_ac_btcx_set_mode;
 	fns.ctx = btcx_info;
 
 	/* Initialize std param */
-	aci->poll_adc_WAR = FALSE;
-	btcx_info->btc_mode = 0;
+	btcx_info->data->poll_adc_WAR = FALSE;
+	btcx_info->data->btc_mode = 0;
 
 	if (phy_btcx_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_btcx_register_impl failed\n", __FUNCTION__));
@@ -179,7 +184,7 @@ BCMATTACHFN(phy_ac_btcx_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	/* error handling */
 fail:
 	if (btcx_info != NULL)
-		phy_mfree(pi, btcx_info, sizeof(phy_ac_btcx_info_t));
+		phy_mfree(pi, btcx_info, sizeof(phy_ac_btcx_mem_t));
 	return NULL;
 }
 
@@ -198,19 +203,7 @@ BCMATTACHFN(phy_ac_btcx_unregister_impl)(phy_ac_btcx_info_t *btcx_info)
 	/* unregister from common */
 	phy_btcx_unregister_impl(cmn_info);
 
-	phy_mfree(pi, btcx_info, sizeof(phy_ac_btcx_info_t));
-}
-
-int32
-phy_ac_btcx_get_btc_mode(phy_ac_btcx_info_t *btcxi)
-{
-	return btcxi->btc_mode;
-}
-
-int32
-phy_ac_btcx_get_ltecx_mode(phy_ac_btcx_info_t *btcxi)
-{
-	return btcxi->ltecx_mode;
+	phy_mfree(pi, btcx_info, sizeof(phy_ac_btcx_mem_t));
 }
 
 #if (!defined(WL_SISOCHIP) && defined(SWCTRL_TO_BT_IN_COEX))
@@ -239,6 +232,13 @@ phy_ac_btcx_init(phy_type_btcx_ctx_t *ctx)
 	}
 #endif /* !defined(WL_SISOCHIP) && defined(SWCTRL_TO_BT_IN_COEX) */
 	return BCME_OK;
+}
+
+/* inter-module data API */
+phy_ac_btcx_data_t *
+phy_ac_btcx_get_data(phy_ac_btcx_info_t *btcxi)
+{
+	return btcxi->data;
 }
 
 #if !defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX)
@@ -287,7 +287,7 @@ wlc_phy_desense_ltecx_acphy(phy_type_btcx_ctx_t *ctx, int32 mode)
 
 	/* Start with everything at 0 */
 	bzero(&lte_desense, sizeof(acphy_desense_values_t));
-	btcxi->ltecx_mode = mode;
+	btcxi->data->ltecx_mode = mode;
 	if (mode == 0) {
 		btcxi->ltecx_elna_bypass_status = 0;
 	}
@@ -319,7 +319,7 @@ wlc_phy_desense_btcoex_acphy(phy_type_btcx_ctx_t *ctx, int32 mode)
 	phy_ac_btcx_info_t *btcxi = (phy_ac_btcx_info_t *) ctx;
 	phy_info_t *pi = btcxi->pi;
 	acphy_desense_values_t bt_desense;
-	int32 old_mode = btcxi->btc_mode;
+	int32 old_mode = btcxi->data->btc_mode;
 
 	if (ACPHY_ENABLE_FCBS_HWACI(pi) && !ACPHY_HWACI_WITH_DESENSE_ENG(pi)) {
 		return BCME_OK;
@@ -338,7 +338,7 @@ wlc_phy_desense_btcoex_acphy(phy_type_btcx_ctx_t *ctx, int32 mode)
 
 	/* Start with everything at 0 */
 	bzero(&bt_desense, sizeof(acphy_desense_values_t));
-	btcxi->btc_mode = mode;
+	btcxi->data->btc_mode = mode;
 	bt_desense.on = (mode > 0);
 	switch (mode) {
 	case 1: /* BT power =  -30dBm, -35dBm */
@@ -377,7 +377,13 @@ wlc_phy_desense_btcoex_acphy(phy_type_btcx_ctx_t *ctx, int32 mode)
 		break;
 	case 7: /* Case added for 4359 */
 		bt_desense.lna1_tbl_desense = 3;	/* 1 */
-		bt_desense.mixer_setting_desense = 4; /* Value should be between 2-11 for Tiny */
+		if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+			/* To account for CRSMinPwrTh for INIT gain chnage */
+			bt_desense.clipgain_desense[0] = 6;
+		} else {
+			/* Value should be take between 2-11 for Tiny */
+			bt_desense.mixer_setting_desense = 4;
+		}
 		break;
 
 	default:
@@ -411,17 +417,6 @@ wlc_phy_desense_btcoex_acphy(phy_type_btcx_ctx_t *ctx, int32 mode)
 }
 #endif /* !defined(WLC_DISABLE_ACI) */
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int
-phy_ac_btcx_get_preemptstatus(phy_type_btcx_ctx_t *ctx, int32* ret_ptr)
-{
-	phy_ac_btcx_info_t *btcxi = (phy_ac_btcx_info_t *)ctx;
-	bool curr_channel_in_2G = CHSPEC_IS2G(btcxi->pi->radio_chanspec);
-	int bt_active_in_curr_band = (btcxi->cmn_info->data->bt_active) & curr_channel_in_2G;
-	*ret_ptr = (int32) (bt_active_in_curr_band << 1) | (btcxi->aci->current_preemption_status);
-	return BCME_OK;
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 
 static void
 wlc_phy_btc_adjust_acphy(phy_type_btcx_ctx_t *ctx, bool btactive)
@@ -434,14 +429,15 @@ wlc_phy_btc_adjust_acphy(phy_type_btcx_ctx_t *ctx, bool btactive)
 	  wlc_phy_mlua_adjust_acphy(pi, btactive);
 	  wlapi_enable_mac(pi->sh->physhim);
 	}
+
+	phy_ac_btcx_adjust_preempt_on_bt_activity(btcxi);
 }
 
 static void
 wlc_phy_stop_bt_toggle_acphy(phy_ac_btcx_info_t *btcxi)
 {
 	phy_info_t *pi = btcxi->pi;
-	uint8 phyrxchain = pi->sh->phyrxchain;
-	uint8 phytxchain = pi->sh->phytxchain;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 	int8 shared_ant_mask;
 	if (BOARDFLAGS(GENERIC_PHY_INFO(pi)->boardflags) & BFL_FEM_BT) {
 		if (BOARDFLAGS(GENERIC_PHY_INFO(pi)->boardflags2) & BFL2_BT_SHARE_ANT0)
@@ -453,8 +449,8 @@ wlc_phy_stop_bt_toggle_acphy(phy_ac_btcx_info_t *btcxi)
 
 	if (btcxi->bt_sw_state == AUTO) {
 		phy_utils_phyreg_enter(pi);
-		if (((phytxchain & shared_ant_mask) == 0) &&
-			((shared_ant_mask & phyrxchain) == 0)) {
+		if (((stf_shdata->phytxchain & shared_ant_mask) == 0) &&
+			((shared_ant_mask & stf_shdata->phyrxchain) == 0)) {
 			wlc_phy_set_femctrl_bt_wlan_ovrd_acphy(btcxi, 1, FALSE);
 			/* forced bt switch to BT side instead of toggling */
 		} else
@@ -517,7 +513,7 @@ wlc_phy_set_bt_on_core1_acphy(phy_info_t *pi, uint8 bt_fem_val, uint16 gpioen)
 		/* bt control lines in gpio 5,6,7 */
 		WRITE_PHYREG(pi, gpioLoOutEn, 0xe0);
 
-		pi->u.pi_acphy->poll_adc_WAR = TRUE;
+		pi->u.pi_acphy->btcxi->data->poll_adc_WAR = TRUE;
 
 		/* 4360A0 : Force in WLAN mode, as A0 does not have inv_btcx_prisel bit,
 		   and we have to change top level MAC definition of prisel (too complicated)
@@ -526,7 +522,7 @@ wlc_phy_set_bt_on_core1_acphy(phy_info_t *pi, uint8 bt_fem_val, uint16 gpioen)
 		MOD_PHYREG(pi, BT_FemControl, bt_en, 0);
 		MOD_PHYREG(pi, BT_FemControl, bt_en_ovrd, 1);
 	} else {
-		pi->u.pi_acphy->poll_adc_WAR = FALSE;
+		pi->u.pi_acphy->btcxi->data->poll_adc_WAR = FALSE;
 
 		/* bt_prisel is active low */
 		MOD_PHYREG(pi, BT_SwControl, inv_btcx_prisel, 1);
@@ -589,7 +585,8 @@ wlc_phy_set_femctrl_bt_wlan_ovrd_acphy(phy_type_btcx_ctx_t *ctx, int8 state, boo
 	else
 #endif	/* WL_SISOCHIP && SWCTRL_TO_BT_IN_COEX */
 	{
-		if (BCM4349_CHIP(pi->sh->chip) || CHIPID(pi->sh->chip) == BCM4364_CHIP_ID) {
+		if (BCM4349_CHIP(pi->sh->chip) || CHIPID(pi->sh->chip) == BCM4364_CHIP_ID ||
+			CHIPID(pi->sh->chip) == BCM4347_CHIP_ID) {
 			/* invert prisel polarity */
 			wlc_phy_btcx_invert_prisel_polarity(btcxi, state);
 		} else {
@@ -619,7 +616,8 @@ wlc_phy_get_femctrl_bt_wlan_ovrd_acphy(phy_type_btcx_ctx_t *ctx)
 	phy_ac_btcx_info_t *btcxi = (phy_ac_btcx_info_t *)ctx;
 	phy_info_t *pi = btcxi->pi;
 
-	if (BCM4349_CHIP(pi->sh->chip) || CHIPID(pi->sh->chip) == BCM4364_CHIP_ID) {
+	if (BCM4349_CHIP(pi->sh->chip) || CHIPID(pi->sh->chip) == BCM4364_CHIP_ID ||
+		CHIPID(pi->sh->chip) == BCM4347_CHIP_ID) {
 		state = btcxi->btswitch;
 	} else {
 		wlapi_suspend_mac_and_wait(pi->sh->physhim);
@@ -634,20 +632,21 @@ wlc_phy_get_femctrl_bt_wlan_ovrd_acphy(phy_type_btcx_ctx_t *ctx)
 	return state;
 }
 
-void
-wlc_phy_adjust_preempt_on_bt_activity_acphy(wlc_phy_t *pih)
+static void
+phy_ac_btcx_adjust_preempt_on_bt_activity(phy_ac_btcx_info_t *btcxi)
 {
-	phy_info_t *pi = (phy_info_t*)pih;
+	phy_info_t *pi = btcxi->pi;
+	phy_ac_noise_info_t *ni = pi->u.pi_acphy->noisei;
 
 	/* Enter if 4350 in 2G + preemption enabled */
 	if (IS_4350(pi) && CHSPEC_IS2G(pi->radio_chanspec) &&
 	(pi->sh->interference_mode & ACPHY_ACI_PREEMPTION)) {
 		int btc_mode = wlapi_bmac_btc_mode_get(pi->sh->physhim);
-		uint8 aci_status = (uint8) (pi->u.pi_acphy->hw_aci_status);
+		uint8 aci_status = (uint8) (phy_ac_noise_get_data(ni)->hw_aci_status);
 		/* btc_mode 0 */
 		if (btc_mode == WL_BTC_DISABLE) {
 			/* Restore default 2G preemption settings */
-			wlc_phy_preempt(pi, TRUE, FALSE);
+			phy_ac_noise_preempt(ni, TRUE, FALSE);
 			/* Adjust preeemption clip count thresholds
 			 * based on ACI detected/undetected
 			 */
@@ -655,7 +654,7 @@ wlc_phy_adjust_preempt_on_bt_activity_acphy(wlc_phy_t *pih)
 		}
 		else if (btc_mode == WL_BTC_HYBRID) {
 			/* Disable preemption if BT active */
-			wlc_phy_preempt(pi, !(pi->btcxi->data->bt_active), FALSE);
+			phy_ac_noise_preempt(ni, !(pi->btcxi->data->bt_active), FALSE);
 			/* If BT not active adjust
 			 * preeemption clip count thresholds
 			 * based on ACI detected/undetected
@@ -859,24 +858,23 @@ wlc_phy_ac_femctrl_mask_on_band_change_btcx(phy_ac_btcx_info_t *btcxi)
 }
 #endif	/* !WL_SISOCHIP && SWCTRL_TO_BT_IN_COEX */
 
-void
-wlc_phy_btc_dyn_preempt(phy_info_t *pi)
+static int
+phy_ac_btcx_set_mode(phy_type_btcx_ctx_t *ctx, int btc_mode)
 {
-	uint16 pktabortctl = pi->u.pi_acphy->pktabortctl;
-	int btc_mode;
+	phy_info_t *pi = ((phy_ac_btcx_info_t *)ctx)->pi;
+	uint16 pktabortctl = phy_ac_noise_get_data(pi->u.pi_acphy->noisei)->pktabortctl;
 
 	if (!pi->sh->clk || D11REV_LT(pi->sh->corerev, 47)) {
-		return;
+		return BCME_NOTREADY;
 	}
 
-	btc_mode = wlapi_bmac_btc_mode_get(pi->sh->physhim);
-
 	if (btc_mode == WL_BTC_DISABLE || btc_mode == WL_BTC_DEFAULT) {
-	        WRITE_PHYREG(pi, PktAbortCtrl, pktabortctl);
+		WRITE_PHYREG(pi, PktAbortCtrl, pktabortctl);
 		pktabortctl = 0;
 	}
 
 	wlapi_bmac_write_shm(pi->sh->physhim, M_BTCX_PKTABORTCTL_VAL(pi), pktabortctl);
+	return BCME_OK;
 }
 
 static int
@@ -890,7 +888,7 @@ phy_ac_btcx_set_restage_rxgain(phy_type_btcx_ctx_t *ctx, int32 set_val)
 		return BCME_NOTREADY;
 	}
 #ifndef WLC_DISABLE_ACI
-	if (btcxi->btc_mode != set_val) {
+	if (btcxi->data->btc_mode != set_val) {
 		wlapi_suspend_mac_and_wait(btcxi->pi->sh->physhim);
 		phy_btcx_desense_btc(btcxi->pi, set_val);
 		wlapi_enable_mac(btcxi->pi->sh->physhim);
@@ -903,6 +901,6 @@ static int
 phy_ac_btcx_get_restage_rxgain(phy_type_btcx_ctx_t *ctx, int32 *ret_val)
 {
 	phy_ac_btcx_info_t *btcxi = (phy_ac_btcx_info_t *)ctx;
-	*ret_val = btcxi->btc_mode;
+	*ret_val = btcxi->data->btc_mode;
 	return BCME_OK;
 }

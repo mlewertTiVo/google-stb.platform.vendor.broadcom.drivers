@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_txpwrcap_api.h 630712 2016-04-11 19:05:53Z kentryu $
+ * $Id: phy_txpwrcap_api.h 652728 2016-08-03 07:25:22Z $
  */
 
 #ifndef _phy_txpwrcap_api_h_
@@ -23,7 +23,7 @@
 #include <typedefs.h>
 #include <phy_api.h>
 
-int wlc_phy_cellstatus_override_set(phy_info_t *pi, int value);
+int phy_txpwrcap_cellstatus_override_set(phy_info_t *pi, int value);
 int wlc_phyhal_txpwrcap_get_cellstatus(wlc_phy_t *pih, int32* cellstatus);
 void wlc_phyhal_txpwrcap_set_cellstatus(wlc_phy_t *pih, int32 cellstatus);
 int wlc_phy_txpwrcap_tbl_set(wlc_phy_t *pih, wl_txpwrcap_tbl_t *txpwrcap_tbl);

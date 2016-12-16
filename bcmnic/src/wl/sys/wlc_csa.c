@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_csa.c 635530 2016-05-04 06:24:27Z $
+ * $Id: wlc_csa.c 665073 2016-10-14 20:33:29Z $
  */
 
 /**
@@ -74,6 +74,8 @@
 #include <wlc_event_utils.h>
 #include <wlc_scan_utils.h>
 #include <wlc_dfs.h>
+#include <wlc_rsdb.h>
+#include <phy_misc_api.h>
 
 /* IOVar table */
 /* No ordering is imposed */
@@ -94,6 +96,7 @@ struct wlc_csa_info {
 	wlc_info_t *wlc;
 	int cfgh;			/* bsscfg cubby handle */
 	int scbh;			/* scb cubby handle */
+	bcm_notif_h csa_notif_hdl;
 };
 
 /* local functions */
@@ -105,11 +108,18 @@ static int wlc_csa_doiovar(void *ctx, uint32 actionid,
 /* cubby */
 static int wlc_csa_bsscfg_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_csa_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg);
+static int wlc_csa_cubby_set(void *ctx, wlc_bsscfg_t *bsscfg, const uint8 *data, int len);
+static int wlc_csa_cubby_get(void *ctx, wlc_bsscfg_t *bsscfg, uint8 *data, int *len);
 static int wlc_csa_scb_init(void *ctx, struct scb *scb);
 static void wlc_csa_scb_deinit(void *ctx, struct scb *scb);
 static uint wlc_csa_scb_secsz(void *ctx, struct scb *scb);
+#ifdef BCMDBG
+static void wlc_csa_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+static void wlc_csa_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_csa_bsscfg_dump NULL
 #define wlc_csa_scb_dump NULL
+#endif
 
 /* up/down */
 static void wlc_csa_bsscfg_up_down(void *ctx, bsscfg_up_down_event_data_t *evt_data);
@@ -126,6 +136,15 @@ static void wlc_send_public_action_switch_channel(wlc_csa_info_t *csam, wlc_bssc
 /* channel switch */
 #ifdef AP
 static int wlc_csa_apply_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg);
+#endif
+
+/* RSDB module callback register for handling clone events */
+#ifdef WLRSDB
+static void wlc_csa_rsdb_clone_handler(void *ctx, rsdb_cfg_clone_upd_t *notif_data);
+#endif
+
+#ifdef STA
+static void wlc_csa_process_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg);
 #endif
 
 /* unicast csa action ack */
@@ -148,6 +167,8 @@ static int wlc_csa_csw_write_wide_bw_ie(void *ctx, wlc_iem_build_data_t *build);
 static int wlc_csa_bcn_parse_csa_ie(void *ctx, wlc_iem_parse_data_t *data);
 static int wlc_csa_bcn_parse_ext_csa_ie(void *ctx, wlc_iem_parse_data_t *data);
 #endif /* STA */
+static void wlc_csa_obss_dynbw_notif_cb_notif(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg,
+	int status, int signal, chanspec_t chanspec);
 
 /* cubby structure and access macros */
 typedef struct {
@@ -165,7 +186,7 @@ typedef struct {
 #define CSA_UNICAST_RELOCATION_PENDING	0x1
 #define CSA_UNICAST_RELOCATION_SUCCESS	0x2
 #define CSA_UNICAST_ACK_COUNTER	3
-
+#define WLC_CSA_BSSCFG_CUBBY_SIZE	(sizeof(wlc_csa_t))
 typedef struct {
 	uint8	dcs_relocation_state; /* unicast CSA state */
 	uint8	dcs_ack_counter; /* unicast CSA ACK counter */
@@ -185,6 +206,9 @@ wlc_csa_info_t *
 BCMATTACHFN(wlc_csa_attach)(wlc_info_t *wlc)
 {
 	wlc_csa_info_t *csam;
+	bcm_notif_module_t *notif;
+	bsscfg_cubby_params_t bsscfg_cubby_params;
+
 #ifdef AP
 	uint16 bcnfstbmp = FT2BMP(FC_BEACON) | FT2BMP(FC_PROBE_RESP);
 #endif
@@ -197,13 +221,23 @@ BCMATTACHFN(wlc_csa_attach)(wlc_info_t *wlc)
 	}
 	csam->wlc = wlc;
 
-	/* reserve cubby in the bsscfg container for per-bsscfg private data */
-	if ((csam->cfgh = wlc_bsscfg_cubby_reserve(wlc, sizeof(wlc_csa_t *),
-	                wlc_csa_bsscfg_init, wlc_csa_bsscfg_deinit, wlc_csa_bsscfg_dump,
-	                (void *)csam)) < 0) {
+	/* reserve cubby space in the bsscfg container for per-bsscfg private data */
+	bzero(&bsscfg_cubby_params, sizeof(bsscfg_cubby_params));
+	bsscfg_cubby_params.context = csam;
+	bsscfg_cubby_params.fn_deinit = wlc_csa_bsscfg_deinit;
+	bsscfg_cubby_params.fn_init = wlc_csa_bsscfg_init;
+	bsscfg_cubby_params.fn_get = wlc_csa_cubby_get;
+	bsscfg_cubby_params.fn_set = wlc_csa_cubby_set;
+	bsscfg_cubby_params.config_size = WLC_CSA_BSSCFG_CUBBY_SIZE;
+#if defined(BCMDBG) || defined(WLDUMP)
+	bsscfg_cubby_params.fn_dump = wlc_csa_bsscfg_dump;
+#endif
+	if ((csam->cfgh = wlc_bsscfg_cubby_reserve_ext(wlc, sizeof(wlc_csa_t *),
+	                                                      &bsscfg_cubby_params)) < 0) {
 		WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve() failed\n",
 		          wlc->pub->unit, __FUNCTION__));
 		goto fail;
+
 	}
 
 	bzero(&cubby_params, sizeof(cubby_params));
@@ -281,6 +315,23 @@ BCMATTACHFN(wlc_csa_attach)(wlc_info_t *wlc)
 		goto fail;
 	};
 
+	notif = wlc->notif;
+	ASSERT(notif != NULL);
+	if (bcm_notif_create_list(notif, &csam->csa_notif_hdl) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: csa bcm_notif_create_list() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#ifdef WLRSDB
+	if (RSDB_ENAB(wlc->pub)) {
+		if (wlc_rsdb_cfg_clone_register(wlc->rsdbinfo,
+			wlc_csa_rsdb_clone_handler, csam) != BCME_OK) {
+			WL_ERROR(("wl%d: %s: wlc_rsdb_cfg_clone_register failed\n",
+				wlc->pub->unit, __FUNCTION__));
+			goto fail;
+		}
+	}
+#endif
 	return csam;
 
 	/* error handling */
@@ -295,15 +346,24 @@ BCMATTACHFN(wlc_csa_detach)(wlc_csa_info_t *csam)
 {
 	wlc_info_t *wlc = csam->wlc;
 
+#ifdef WLRSDB
+	if (RSDB_ENAB(wlc->pub)) {
+		(void)wlc_rsdb_cfg_clone_unregister(wlc->rsdbinfo,
+			wlc_csa_rsdb_clone_handler, csam);
+	}
+#endif
+
 	wlc_module_unregister(wlc->pub, "csa", csam);
 
 	/* unregister bsscfg up/down callbacks */
 	wlc_bsscfg_updown_unregister(wlc, wlc_csa_bsscfg_up_down, csam);
-
+	if (csam->csa_notif_hdl != NULL) {
+		bcm_notif_delete_list(&csam->csa_notif_hdl);
+	}
 	MFREE(wlc->osh, csam, sizeof(wlc_csa_info_t));
 }
 
-static const uint8 BCMINITDATA(csw_ie_tags)[] = {
+static const wlc_iem_tag_t BCMINITDATA(csw_ie_tags)[] = {
 	DOT11_MNG_WIDE_BW_CHANNEL_SWITCH_ID,
 	DOT11_MNG_VHT_TRANSMIT_POWER_ENVELOPE_ID,
 };
@@ -316,7 +376,7 @@ wlc_csa_up(void *ctx)
 	wlc_info_t *wlc = csam->wlc;
 
 	/* ignore the return code */
-	(void)wlc_ier_sort_cbtbl(wlc->ier_csw, csw_ie_tags, sizeof(csw_ie_tags));
+	(void)wlc_ier_sort_cbtbl(wlc->ier_csw, csw_ie_tags, ARRAYSIZE(csw_ie_tags));
 #endif
 
 	return BCME_OK;
@@ -383,6 +443,18 @@ wlc_csa_doiovar(void *ctx, uint32 actionid,
 			break;
 		}
 
+#ifdef BCMDBG
+		if (BSSCFG_STA(bsscfg)) {
+			if (!bsscfg->up) {
+				err = BCME_NOTREADY;
+				break;
+			}
+
+			wlc_send_action_switch_channel_ex(csam, bsscfg, &bsscfg->BSSID,
+				csa, DOT11_SM_ACTION_CHANNEL_SWITCH);
+			break;
+		}
+#endif /* BCMDBG */
 
 		FOREACH_UP_AP(wlc, idx, apcfg) {
 			err = wlc_csa_do_channel_switch(csam, apcfg,
@@ -469,6 +541,54 @@ wlc_csa_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	*pcsa = NULL;
 }
 
+/* bsscfg cubby copy */
+static int
+wlc_csa_cubby_get(void *ctx, wlc_bsscfg_t *bsscfg, uint8 *data, int *len)
+{
+	wlc_csa_info_t *csam = (wlc_csa_info_t *)ctx;
+	wlc_csa_t *csa_cubby = NULL;
+
+	ASSERT(bsscfg != NULL);
+	ASSERT(data != NULL);
+	if (*len < WLC_CSA_BSSCFG_CUBBY_SIZE) {
+		WL_ERROR(("wl%d: %s: Buffer too short\n", csam->wlc->pub->unit, __FUNCTION__));
+		*len = WLC_CSA_BSSCFG_CUBBY_SIZE;
+		return BCME_BUFTOOSHORT;
+	}
+	csa_cubby = CSA_BSSCFG_CUBBY(csam, bsscfg);
+	ASSERT(csa_cubby != NULL);
+	memcpy(data, (uint8*)csa_cubby, WLC_CSA_BSSCFG_CUBBY_SIZE);
+	*len = WLC_CSA_BSSCFG_CUBBY_SIZE;
+	return BCME_OK;
+}
+
+/* bsscfg cubby copy */
+static int
+wlc_csa_cubby_set(void *ctx, wlc_bsscfg_t *bsscfg, const uint8 *data, int len)
+{
+	wlc_csa_info_t *csam = (wlc_csa_info_t *)ctx;
+	wlc_csa_t *csa_cubby = NULL;
+	struct wl_timer *csa_timer_cp = NULL;
+
+	ASSERT(bsscfg != NULL);
+	ASSERT(data != NULL);
+	ASSERT(len <= WLC_CSA_BSSCFG_CUBBY_SIZE);
+	csa_cubby = CSA_BSSCFG_CUBBY(csam, bsscfg);
+	ASSERT(csa_cubby != NULL);
+	/* Here we take a backup of the csa_timer
+	* pointer, because the data buffer contains
+	* the complete struct take from old wlc.
+	* Once we copy the buffer, we will overwrite
+	* the csa_timer pointer from backup value.
+	* New wlc has new pointer for csa_timer.
+	*/
+	csa_timer_cp = csa_cubby->csa_timer;
+	memcpy((uint8*)csa_cubby, data, len);
+	/* Restore the back up value */
+	csa_cubby->csa_timer = csa_timer_cp;
+	return BCME_OK;
+}
+
 static int
 wlc_csa_scb_init(void *ctx, struct scb *scb)
 {
@@ -513,6 +633,36 @@ static uint wlc_csa_scb_secsz(void *ctx, struct scb *scb)
 	return sizeof(wlc_csa_scb_cubby_t);
 }
 
+#ifdef BCMDBG
+static void
+wlc_csa_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_csa_info_t *csam = (wlc_csa_info_t *)ctx;
+	wlc_csa_t *csa = CSA_BSSCFG_CUBBY(csam, cfg);
+
+	ASSERT(csa != NULL);
+
+	/* CSA info */
+	bcm_bprintf(b, "\tcsa->csa_timer %p\n", OSL_OBFUSCATE_BUF(csa->csa_timer));
+	bcm_bprintf(b, "\tcsa->csa.mode %d, csa->csa.count %d\n",
+	            csa->csa.mode, csa->csa.count);
+	bcm_bprintf(b, "\tcsa->csa.chspec 0x%x, csa->csa.reg %d \n",
+	            csa->csa.chspec, csa->csa.reg);
+}
+
+static void
+wlc_csa_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_csa_info_t *csam = (wlc_csa_info_t *)ctx;
+	wlc_csa_scb_cubby_t *csa_scb = CSA_SCB_CUBBY(csam, scb);
+
+	ASSERT(csa_scb != NULL);
+
+	/* CSA info */
+	bcm_bprintf(b, "     csa_scb->dcs_relocation_state %d, csa_scb->dcs_ack_counter %d\n",
+	            csa_scb->dcs_relocation_state, csa_scb->dcs_ack_counter);
+}
+#endif /* BCMDBG */
 
 static void
 wlc_csa_bsscfg_up_down(void *ctx, bsscfg_up_down_event_data_t *evt_data)
@@ -615,7 +765,9 @@ wlc_csa_timeout(void *arg)
 	struct scb_iter scbiter;
 	struct scb *scb;
 	bool switch_chnl = TRUE;
-
+#ifdef WL_RESTRICTED_APSTA
+	uint8 apsta_restrict = FALSE;
+#endif
 	ASSERT(csa != NULL);
 
 	if (!wlc->pub->up)
@@ -634,24 +786,6 @@ wlc_csa_timeout(void *arg)
 	csa->csa.count = 0;
 	csa->csa.mode = DOT11_CSA_MODE_ADVISORY;
 
-#ifdef STA
-	if ((active_assoc_cfg != NULL) &&
-	    ((active_assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA) ||
-	     (active_assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA_ROAM_FAIL))) {
-		wlc_11h_set_spect_state(wlc->m11h, active_assoc_cfg, NEED_TO_SWITCH_CHANNEL, 0);
-		wlc_ap_mute(wlc, TRUE, active_assoc_cfg, -1);
-		if (active_assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA) {
-			wlc_join_bss(active_assoc_cfg);
-		}
-		else {
-			wlc_roam_complete(active_assoc_cfg, WLC_E_STATUS_FAIL,
-			                  &active_assoc_cfg->BSSID,
-			                  active_assoc_cfg->target_bss->bss_type);
-		}
-		return;
-	}
-#endif /* STA */
-
 	if (BSSCFG_AP(cfg) && (csa->csa.frame_type == CSA_UNICAST_ACTION_FRAME)) {
 		FOREACH_BSS_SCB(wlc->scbstate, &scbiter, cfg, scb) {
 			struct scb *psta_prim = wlc_ap_get_psta_prim(wlc->ap, scb);
@@ -661,6 +795,9 @@ wlc_csa_timeout(void *arg)
 			if (!SCB_ISMULTI(scb) && SCB_ASSOCIATED(scb) &&
 				(psta_prim == NULL) &&
 				(csa_scb->dcs_relocation_state != CSA_UNICAST_RELOCATION_SUCCESS)) {
+#if defined(BCMDBG)
+				char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 				WL_CHANINT(("dcs: csa ack pending from %s\n",
 				            bcm_ether_ntoa(&scb->ea, eabuf)));
 				switch_chnl = FALSE;
@@ -668,7 +805,23 @@ wlc_csa_timeout(void *arg)
 			}
 		}
 	}
-
+#ifdef WLRSDB
+	if (RSDB_ENAB(wlc->pub) && BSSCFG_STA(cfg) && (wlc_11h_get_spect_state(wlc->m11h, cfg) &
+		NEED_TO_SWITCH_CHANNEL) &&
+		wlc_rsdb_handle_sta_csa(wlc->rsdbinfo, cfg, csa->csa.chspec)) {
+		/* It seems that channel switch needs a clone to other wlc.
+		* Complete cloning and handle the channel switch in the RSDB callback.
+		*/
+		csa->channel_sw.secs = 0;
+		if (wlc->block_datafifo & DATA_BLOCK_QUIET) {
+			wlc_block_datafifo(wlc, DATA_BLOCK_QUIET, 0);
+		}
+		WL_REGULATORY(("wl%d.%d Defer channel switch on this wlc .."
+			"try on wlc%d after clone..\n", WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
+			WLCWLUNIT(wlc_rsdb_get_other_wlc(wlc))));
+		return;
+	}
+#endif /* WLRSDB */
 	if (BSSCFG_AP(cfg) && (csa->csa.frame_type == CSA_UNICAST_ACTION_FRAME)) {
 		/* When multiple STAs assoc to AP, due to interference, some STA
 		 * maynot ack csa. checking all the STAs acking csa would cause
@@ -728,10 +881,74 @@ wlc_csa_timeout(void *arg)
 	if (BSSCFG_STA(cfg) || (BSSCFG_AP(cfg) && switch_chnl))
 		wlc_bss_mac_event(wlc, cfg, WLC_E_CSA_COMPLETE_IND, NULL,
 			WLC_E_STATUS_SUCCESS, 0, 0, &csa->csa.mode, sizeof(csa->csa.mode));
+	wlc_csa_obss_dynbw_notif_cb_notif(csam, cfg,
+		BCME_OK, CSA_CHANNEL_CHANGE_END, csa->csa.chspec);
 
 	csa->csa.count = 0;
 	csa->csa.mode = DOT11_CSA_MODE_ADVISORY;
+	if (wlc->block_datafifo & DATA_BLOCK_QUIET) {
+		wlc_block_datafifo(wlc, DATA_BLOCK_QUIET, 0);
+	}
+
+#ifdef STA
+#ifdef WL_RESTRICTED_APSTA
+	if (RAPSTA_ENAB(wlc->pub) && !P2P_GO(wlc, cfg) && (active_assoc_cfg != NULL)) {
+		wlc_bss_info_t *bi;
+		bi = wlc_assoc_get_join_target(wlc, 0);
+		apsta_restrict = wlc_channel_apsta_restriction(wlc->cmi, bi->chanspec,
+			wlc->chanspec);
+	}
+#endif
+	if ((active_assoc_cfg != NULL) &&
+#ifdef WL_RESTRICTED_APSTA
+		(RAPSTA_ENAB(wlc->pub) && !apsta_restrict) &&
+#endif
+		((active_assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA) ||
+		(active_assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA_ROAM_FAIL))) {
+		wlc_11h_set_spect_state(wlc->m11h, active_assoc_cfg, NEED_TO_SWITCH_CHANNEL, 0);
+		wlc_ap_mute(wlc, TRUE, active_assoc_cfg, -1);
+		if (active_assoc_cfg->assoc->state == AS_WAIT_FOR_AP_CSA) {
+			wlc_join_bss(active_assoc_cfg);
+		}
+		else {
+			wlc_roam_complete(active_assoc_cfg, WLC_E_STATUS_FAIL,
+				&active_assoc_cfg->BSSID,
+				active_assoc_cfg->target_bss->bss_type);
+		}
+		return;
+	}
+#endif /* STA */
 }
+
+#ifdef WLRSDB
+static void
+wlc_csa_rsdb_clone_handler(void *ctx, rsdb_cfg_clone_upd_t *notif_data)
+{
+	wlc_bsscfg_t *cfg = notif_data->cfg;
+	wlc_info_t *to_wlc = notif_data->to_wlc;
+	wlc_csa_info_t *to_csam = to_wlc->csa;
+
+	ASSERT(notif_data->cfg != NULL);
+
+	BCM_REFERENCE(cfg);
+
+	switch (notif_data->type) {
+		case CFG_CLONE_END: {
+			if (BSSCFG_STA(cfg) && (wlc_11h_get_spect_state(to_wlc->m11h, cfg)
+				& NEED_TO_SWITCH_CHANNEL)) {
+				WL_REGULATORY(("wl%d: Handle CSA clone callbck. Process pending"
+					" STA channel switch\n", WLCWLUNIT(to_wlc)));
+				wlc_11h_set_spect_state(to_wlc->m11h, cfg, NEED_TO_SWITCH_CHANNEL,
+					0);
+				wlc_csa_process_channel_switch(to_csam, cfg);
+			}
+			break;
+		}
+		default:
+			break;
+	}
+}
+#endif /* WLRSDB */
 
 #ifdef STA
 /* STA: Handle incoming Channel Switch Anouncement */
@@ -814,7 +1031,12 @@ wlc_csa_process_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg)
 			goto ignore_csa;
 		}
 	}
-
+	if ((csa->csa.chspec == WLC_BAND_PI_RADIO_CHANSPEC) &&
+		(csa->csa.chspec == current_bss->chanspec)) {
+		WL_REGULATORY(("wl%d: %s: Already on chan 0x%x, skip switching\n",
+			wlc->pub->unit, __FUNCTION__, csa->csa.chspec));
+		goto ignore_csa;
+	}
 	secs = (bi_us * csa->csa.count)/1000000;
 
 	if (csa->csa.mode && WL11H_ENAB(wlc) && !CHSPEC_IS2G(wlc->home_chanspec)) {
@@ -832,12 +1054,8 @@ wlc_csa_process_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg)
 		return;
 	}
 
-	wlc_sync_txfifo(wlc, cfg->wlcif->qi, BITMAP_SYNC_ALL_TX_FIFOS, FLUSHFIFO);
-
-	WL_REGULATORY(("wl%d.%d: %s: Recved CSA: mode %d, chanspec %s, count %d, secs %d\n",
-	               wlc->pub->unit, cfg->_idx, __FUNCTION__,
-	               csa->csa.mode, wf_chspec_ntoa_ex(csa->csa.chspec, chanbuf), csa->csa.count,
-	               secs));
+	wlc_csa_obss_dynbw_notif_cb_notif(csam, cfg,
+		BCME_OK, CSA_CHANNEL_CHANGE_START, csa->csa.chspec);
 
 	if (PSTA_ENAB(wlc->pub)) {
 		/* Do channel switch imediately, in case of last beacon of CSA announcement */
@@ -848,6 +1066,34 @@ wlc_csa_process_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg)
 		 */
 		switch_now = ((secs < 2) && (csa->csa.mode || (secs == 0)));
 	}
+
+	/* Are we already on the required channel ? */
+	if (csa->csa.chspec == cfg->current_bss->chanspec) {
+		goto ignore_csa;
+	}
+
+#ifdef WLRSDB
+	if (RSDB_ENAB(wlc->pub) && switch_now &&
+		wlc_rsdb_handle_sta_csa(wlc->rsdbinfo, cfg, csa->csa.chspec)) {
+		/* It seems that channel switch needs a clone to other wlc.
+		* Complete cloning and handle the channel switch in the RSDB callback.
+		*/
+		WL_REGULATORY(("wl%d.%d Defer channel switch on this wlc .. "
+			"try on wlc%d after clone..\n", WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
+			WLCWLUNIT(wlc_rsdb_get_other_wlc(wlc))));
+		wlc_11h_set_spect_state(wlc->m11h, cfg, NEED_TO_SWITCH_CHANNEL,
+			NEED_TO_SWITCH_CHANNEL);
+		return;
+	}
+#endif /* WLRSDB */
+
+	wlc_sync_txfifo(wlc, cfg->wlcif->qi, BITMAP_SYNC_ALL_TX_FIFOS, FLUSHFIFO);
+
+	WL_REGULATORY(("wl%d.%d: %s: Recved CSA: mode %d, chanspec %s, count %d, secs %d\n",
+	               wlc->pub->unit, cfg->_idx, __FUNCTION__,
+	               csa->csa.mode, wf_chspec_ntoa_ex(csa->csa.chspec, chanbuf), csa->csa.count,
+	               secs));
+
 	if (switch_now) {
 		wl_del_timer(wlc->wl, csa->csa_timer);
 		WL_REGULATORY(("%s: switch is only %d secs, switching now\n", __FUNCTION__, secs));
@@ -860,6 +1106,8 @@ wlc_csa_process_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg)
 			csa->csa.count = 0;
 			csa->csa.mode = DOT11_CSA_MODE_ADVISORY;
 		wlc_csa_train_txpower(csam, cfg);
+		wlc_csa_obss_dynbw_notif_cb_notif(csam, cfg,
+			BCME_OK, CSA_CHANNEL_CHANGE_END, csa->csa.chspec);
 		return;
 	}
 
@@ -1188,7 +1436,7 @@ wlc_write_chan_switch_wrapper_ie(wlc_csa_info_t *csam, wl_chan_switch_t *cs,
 	cp += TLV_HDR_LEN;
 
 	/* build IEs */
-	if (wlc_ier_build_frame(wlc->ier_csw, cfg, WLC_IEM_FC_UNK,
+	if (wlc_ier_build_frame(wlc->ier_csw, cfg, WLC_IEM_FC_IER,
 	                        &cbparm, cp, cp_len) != BCME_OK) {
 		WL_ERROR(("wl%d: %s: wlc_ier_build_frame failed\n",
 		          wlc->pub->unit, __FUNCTION__));
@@ -1599,6 +1847,13 @@ wlc_recv_csa_action(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg,
 	bcm_tlv_t *ies;
 	uint ies_len;
 	uint8 extch = DOT11_EXT_CH_NONE;
+#if defined(BCMDBG) && defined(AP)
+#ifdef WL11AC
+	bcm_tlv_t *wide_bw_ie;
+	uint8 channel_width = VHT_OP_CHAN_WIDTH_20_40;
+	uint bw = WL_CHANSPEC_BW_20;
+#endif /* WL11AC */
+#endif /* BCMDBG && AP */
 
 	ASSERT(cfg != NULL);
 
@@ -1655,11 +1910,50 @@ wlc_recv_csa_action(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg,
 			tlv_log.t, sts.t));
 	}
 #endif /* WL_EVENT_LOG_COMPILE */
+#if defined(BCMDBG) && defined(AP)
+#ifdef WL11AC
+	/* check if we have an wide bandwidth channel switch ie */
+	if (VHT_ENAB(wlc->pub)) {
+		/* Check for 11ac spec IE */
+		wide_bw_ie = bcm_parse_tlvs_min_bodylen(ies, ies_len,
+			DOT11_MNG_WIDE_BW_CHANNEL_SWITCH_ID, DOT11_WIDE_BW_SWITCH_IE_LEN);
+		if (wide_bw_ie != NULL) {
+			channel_width = ((dot11_wide_bw_chan_switch_ie_t *)
+			                 wide_bw_ie)->channel_width;
+			bw = channel_width_to_bw(((dot11_wide_bw_chan_switch_ie_t *)
+			                 wide_bw_ie)->channel_width);
+			WL_REGULATORY(("wl%d: wlc_recv_csa_action: mode %d, channel %d, count %d,"
+			   "channel width %d\n", wlc->pub->unit, csa_ie->mode,
+			   csa_ie->channel, csa_ie->count, channel_width));
+			}
+	}
+#endif /* WL11AC */
+#endif /* BCMDBG && AP */
 
 	WL_REGULATORY(("wl%d: wlc_recv_csa_action: mode %d, channel %d, count %d, extension %d\n",
 	               wlc->pub->unit, csa_ie->mode, csa_ie->channel, csa_ie->count, extch));
 	BCM_REFERENCE(extch);
 
+#if defined(BCMDBG) && defined(AP)
+	if (BSSCFG_AP(cfg)) {
+		chanspec_t chspec;
+#ifdef WL11AC
+		if (channel_width != VHT_OP_CHAN_WIDTH_20_40) {
+			chspec = wlc_get_vht_chanspec(wlc, csa_ie->channel, bw);
+		} else
+#endif /* WL11AC */
+		if (extch == DOT11_EXT_CH_NONE) {
+			chspec = CH20MHZ_CHSPEC(csa_ie->channel);
+		} else if (extch == DOT11_EXT_CH_UPPER) {
+			chspec = CH40MHZ_CHSPEC(csa_ie->channel, WL_CHANSPEC_CTL_SB_UPPER);
+		} else {
+			chspec = CH40MHZ_CHSPEC(csa_ie->channel, WL_CHANSPEC_CTL_SB_LOWER);
+		}
+
+		wlc_csa_do_channel_switch(csam, cfg, chspec, csa_ie->mode, csa_ie->count, 0,
+			CSA_BROADCAST_ACTION_FRAME);
+	}
+#endif /* BCMDBG && AP */
 
 	return;
 }
@@ -1739,14 +2033,8 @@ wlc_csa_do_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg,
 	wlc_info_t *wlc = csam->wlc;
 	wlc_csa_t *csa = CSA_BSSCFG_CUBBY(csam, cfg);
 	int bcmerror;
-#ifdef WLMCHAN
-	chanspec_t chspec;
-#endif /* WLMCHAN */
 
 	ASSERT(csa != NULL);
-#ifdef WLMCHAN
-	chspec = csa->csa.chspec;
-#endif /* WLMCHAN */
 
 	if (!BSSCFG_AP(cfg))
 		return BCME_NOTAP;
@@ -1760,7 +2048,8 @@ wlc_csa_do_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg,
 	if (!wlc_valid_chanspec_db(wlc->cmi, chanspec)) {
 		return BCME_BADCHAN;
 	}
-
+	wlc_csa_obss_dynbw_notif_cb_notif(csam, cfg,
+		BCME_OK, CSA_CHANNEL_CHANGE_START, chanspec);
 	csa->csa.mode = (mode != 0) ? 1 : 0;
 	csa->csa.count = count;
 	csa->csa.chspec = chanspec;
@@ -1787,8 +2076,8 @@ wlc_csa_do_channel_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg,
 		if (P2P_GO(wlc, cfg)) {
 			WL_ERROR(("wl%d: %s: Update mchan chanspec due to P2P ECSA operation. "
 				"(0x%X->0x%X)\n", wlc->pub->unit, __FUNCTION__,
-				wlc_mchan_get_chanspec(wlc->mchan, cfg), chspec));
-			wlc_mchan_config_go_chanspec(wlc->mchan, cfg, chspec);
+				wlc_mchan_get_chanspec(wlc->mchan, cfg), chanspec));
+			wlc_mchan_config_go_chanspec(wlc->mchan, cfg, chanspec);
 		}
 #endif /* WLMCHAN */
 		if (mode != 0) {
@@ -1847,6 +2136,9 @@ wlc_csa_do_switch(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg, chanspec_t chspec)
 	csa->csa.chspec = chspec;
 	csa->csa.reg = wlc_get_regclass(wlc->cmi, chspec);
 	csa->csa.count = cfg->current_bss->dtim_period + 1;
+
+	wlc_csa_obss_dynbw_notif_cb_notif(csam, cfg,
+		BCME_OK, CSA_CHANNEL_CHANGE_START, csa->csa.chspec);
 
 	wlc_csa_apply_channel_switch(csam, cfg);
 }
@@ -2106,6 +2398,8 @@ wlc_csa_do_csa(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg, wl_chan_switch_t *cs, bo
 
 	if (docs) {
 		wlc_do_chanswitch(cfg, cs->chspec);
+		wlc_csa_obss_dynbw_notif_cb_notif(csam, cfg,
+			BCME_OK, CSA_CHANNEL_CHANGE_END, csa->csa.chspec);
 	}
 	else {
 		/* dpc handles NEED_TO_UPDATE_BCN, NEED_TO_SWITCH_CHANNEL */
@@ -2127,5 +2421,37 @@ wlc_csa_get_csa_count(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg)
 	ASSERT(csa != NULL);
 
 	return csa->csa.count;
+}
+
+/* These functions register/unregister a callback that wlc_prot obss_notif_cb_notif may invoke. */
+int
+wlc_csa_obss_dynbw_notif_cb_register(wlc_csa_info_t *csam,
+	wlc_csa_notif_cb_fn_t cb, void *arg)
+{
+	bcm_notif_h hdl = csam->csa_notif_hdl;
+	return bcm_notif_add_interest(hdl, (bcm_notif_client_callback)cb, arg);
+}
+
+int
+wlc_csa_obss_dynbw_notif_cb_unregister(wlc_csa_info_t *csam,
+	wlc_csa_notif_cb_fn_t cb, void *arg)
+{
+	bcm_notif_h hdl = csam->csa_notif_hdl;
+	return bcm_notif_remove_interest(hdl, (bcm_notif_client_callback)cb, arg);
+}
+
+static void
+wlc_csa_obss_dynbw_notif_cb_notif(wlc_csa_info_t *csam,
+	wlc_bsscfg_t *cfg, int status,
+	int signal, chanspec_t new_chanspec)
+{
+	wlc_csa_notif_cb_data_t notif_data;
+	bcm_notif_h hdl = csam->csa_notif_hdl;
+	notif_data.cfg = cfg;
+	notif_data.status = status;
+	notif_data.signal = signal;
+	notif_data.chanspec = new_chanspec;
+	bcm_notif_signal(hdl, &notif_data);
+	return;
 }
 #endif /* WLCSA */

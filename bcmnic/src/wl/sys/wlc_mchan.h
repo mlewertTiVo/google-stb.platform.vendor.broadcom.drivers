@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mchan.h 661976 2016-09-28 00:55:57Z $
+ * $Id: wlc_mchan.h 649628 2016-07-18 16:49:24Z $
  */
 
 
@@ -47,6 +47,7 @@ void wlc_mchan_config_go_chanspec(mchan_info_t *mchan, wlc_bsscfg_t *cfg, chansp
 chanspec_t wlc_mchan_configd_go_chanspec(mchan_info_t *mchan, wlc_bsscfg_t *cfg);
 bool wlc_mchan_ap_tbtt_setup(wlc_info_t *wlc, wlc_bsscfg_t *ap_cfg);
 extern uint16 wlc_mchan_get_chanspec(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg);
+extern wlc_bsscfg_t *wlc_mchan_get_blocking_bsscfg(mchan_info_t *mchan);
 extern void wlc_mchan_reset_blocking_bsscfg(mchan_info_t *mchan);
 #if defined(WLRSDB) && defined(WL_MODESW)
 extern void wlc_mchan_set_clone_pending(mchan_info_t* mchan, bool value);

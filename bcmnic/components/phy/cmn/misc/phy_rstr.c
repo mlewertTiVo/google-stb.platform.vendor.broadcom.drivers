@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rstr.c 643558 2016-06-15 05:34:16Z changbo $
+ * $Id: phy_rstr.c 669455 2016-11-09 14:26:01Z $
  */
 
 #include <typedefs.h>
@@ -28,16 +28,18 @@ const char BCMATTACHDATA(rstr_calmgr)[] = "calmgr";
 const char BCMATTACHDATA(rstr_interference)[] = "interference";
 const char BCMATTACHDATA(rstr_tssilimucod)[] = "tssilimucod";
 const char BCMATTACHDATA(rstr_rssicorrnorm)[] = "rssicorrnorm";
-const char BCMATTACHDATA(rstr_rssicorrnorm5g)[] = "rssicorrnorm5g";
-const char BCMATTACHDATA(rstr_rssicorratten5g)[] = "rssicorratten5g";
-const char BCMATTACHDATA(rstr_rssicorrperrg2g)[] = "rssicorrperrg2g";
-const char BCMATTACHDATA(rstr_rssicorrperrg5g)[] = "rssicorrperrg5g";
 const char BCMATTACHDATA(rstr_5g_cga)[] = "5g_cga";
 const char BCMATTACHDATA(rstr_2g_cga)[] = "2g_cga";
 const char BCMATTACHDATA(rstr_tempthresh)[] = "tempthresh";
 const char BCMATTACHDATA(rstr_temps_hysteresis)[] = "temps_hysteresis";
+const char BCMATTACHDATA(rstr_phyrxdesens)[] = "phyrxdesens";
 const char BCMATTACHDATA(rstr_ldpc)[] = "ldpc";
 const char BCMATTACHDATA(rstr_core2slicemap)[] = "core2slicemap";
+
+#ifdef RADIO_HEALTH_CHECK
+const char BCMATTACHDATA(rstr_rhc_tempthresh)[] = "rhc_tempthresh";
+const char BCMATTACHDATA(rstr_rhc_temp_fail_time)[] = "rhc_temp_fail_time";
+#endif /* RADIO_HEALTH_CHECK */
 
 #ifdef WL_PROXDETECT
 const char BCMATTACHDATA(rstr_proxd_basekival)[] = "proxd_basekival";
@@ -59,6 +61,7 @@ const char BCMATTACHDATA(rstr_proxdt_ack)[] = "proxdt_ack";
 const char BCMATTACHDATA(rstr_proxd_sub80m40m)[] = "proxd_sub80m40m";
 const char BCMATTACHDATA(rstr_proxd_sub80m20m)[] = "proxd_sub80m20m";
 const char BCMATTACHDATA(rstr_proxd_sub40m20m)[] = "proxd_sub40m20m";
+const char BCMATTACHDATA(rstr_proxd_seq_kval)[] = "proxd_seq_kal";
 #endif /* WL_PROXDETECT */
 
 /* reclaim strings that are only used in attach functions */
@@ -71,6 +74,7 @@ const char BCMATTACHDATA(rstr_txswctrlmap_2g_mask)[]           = "txswctrlmap_2g
 const char BCMATTACHDATA(rstr_txswctrlmap_5g)[]                = "txswctrlmap_5g";
 const char BCMATTACHDATA(rstr_fem_table_init_val)[]            = "fem_table_init_val";
 const char BCMATTACHDATA(rstr_asymmetricjammermod)[]           = "asymmetricjammermod";
+const char BCMATTACHDATA(rstr_lesi_en)[] = "lesimode";
 
 /* Used by et module ac layer */
 const char BCMATTACHDATA(rstr_et_mode)[] = "etmode";
@@ -78,6 +82,9 @@ const char BCMATTACHDATA(rstr_et_mode)[] = "etmode";
 /* Used by noise module ac specific layer */
 const char BCMATTACHDATA(rstr_noiselvl2gaD)[]                  = "noiselvl2ga%d";
 const char BCMATTACHDATA(rstr_noiselvl5gaD)[]                  = "noiselvl5ga%d";
+
+/* Radio Band Capability Indicator */
+const char BCMATTACHDATA(rstr_bandcap)[] = "bandcap";
 
 /* Used by TPC module for SROM reading */
 const char BCMATTACHDATA(rstr_maxp2ga0)[] = "maxp2ga0";
@@ -275,6 +282,8 @@ const char BCMATTACHDATA(rstr_clb2gslice0core1)[]              = "clb2gslice0cor
 const char BCMATTACHDATA(rstr_clb2gslice1core1)[]              = "clb2gslice1core1";
 const char BCMATTACHDATA(rstr_clb5gslice0core1)[]              = "clb5gslice0core1";
 const char BCMATTACHDATA(rstr_clb5gslice1core1)[]              = "clb5gslice1core1";
+const char BCMATTACHDATA(rstr_btc_prisel_mask)[]               = "btc_prisel_mask";
+const char BCMATTACHDATA(rstr_btc_prisel_ant_mask)[]           = "btc_prisel_ant_mask";
 
 /* ACPHY MISC params */
 const char BCMATTACHDATA(rstr_rawtempsense)[]                  = "rawtempsense";
@@ -308,7 +317,8 @@ const char BCMATTACHDATA(rstr_rud_agc_enable)[]                = "rud_agc_enable
 const char BCMATTACHDATA(rstr_rssi_delta_2gS)[]                = "rssi_delta_2g%s";
 const char BCMATTACHDATA(rstr_rssi_delta_5gS)[]                = "rssi_delta_5g%s";
 const char BCMATTACHDATA(rstr_rssi_cal_freq_grp_2g)[]          = "rssi_cal_freq_grp_2g";
-
+const char BCMATTACHDATA(rstr_num_rssi_cal_gi_2g)[]               = "num_rssi_cal_gi_2g";
+const char BCMATTACHDATA(rstr_num_rssi_cal_gi_5g)[]               = "num_rssi_cal_gi_5g";
 const char BCMATTACHDATA(rstr_dot11b_opts)[]                   = "rstr_dot11b_opts";
 const char BCMATTACHDATA(rstr_tiny_maxrxgain)[]                = "rstr_tiny_maxrxgain";
 
@@ -331,6 +341,8 @@ const char BCMATTACHDATA(rstr_phyrxdesens)[] = "phyrxdesens";
 
 /* reclaim strings that are only used in attach functions */
 const char BCMATTACHDATA(rstr_pagc2g)[] = "pagc2g";
+const char BCMATTACHDATA(rstr_sw_txchain_mask)[] = "sw_txchain_mask";
+const char BCMATTACHDATA(rstr_sw_rxchain_mask)[] = "sw_rxchain_mask";
 const char BCMATTACHDATA(rstr_pagc5g)[] = "pagc5g";
 const char BCMATTACHDATA(rstr_rpcal2g)[] = "rpcal2g";
 const char BCMATTACHDATA(rstr_rpcal2gcore3)[] = "rpcal2gcore3";
@@ -377,11 +389,18 @@ const char BCMATTACHDATA(rstr_paprrmcsgamma5g80)[] = "paprrmcsgamma5g80";
 const char BCMATTACHDATA(rstr_paprrmcsgain5g20)[] = "paprrmcsgain5g20";
 const char BCMATTACHDATA(rstr_paprrmcsgain5g40)[] = "paprrmcsgain5g40";
 const char BCMATTACHDATA(rstr_paprrmcsgain5g80)[] = "paprrmcsgain5g80";
+const char BCMATTACHDATA(rstr_paprrmcsgamma2g_ch13)[] = "paprrmcsgamma2g_ch13";
+const char BCMATTACHDATA(rstr_paprrmcsgamma2g_ch1)[] = "paprrmcsgamma2g_ch1";
+const char BCMATTACHDATA(rstr_paprrmcsgain2g_ch13)[] = "paprrmcsgain2g_ch13";
+const char BCMATTACHDATA(rstr_paprrmcsgain2g_ch1)[] = "paprrmcsgain2g_ch1";
 const char BCMATTACHDATA(rstr_oob_gaint)[] = "useoobgaint";
 const char BCMATTACHDATA(rstr_vcodivmode)[] = "vcodivmode";
 const char BCMATTACHDATA(rstr_fdss_interp_en)[] = "fdss_interp_en";
 const char BCMATTACHDATA(rstr_fdss_level_2g)[] = "fdss_level_2g";
 const char BCMATTACHDATA(rstr_fdss_level_5g)[] = "fdss_level_5g";
+const char BCMATTACHDATA(rstr_fdss_bandedge_2g_en)[] = "fdss_bandedge_2g_en";
+const char BCMATTACHDATA(rstr_fdss_level_2g_ch13)[] = "fdss_level_2g_ch13";
+const char BCMATTACHDATA(rstr_fdss_level_2g_ch1)[] = "fdss_level_2g_ch1";
 const char BCMATTACHDATA(rstr_ldo3p3_voltage)[] = "ldo3p3_voltage";
 const char BCMATTACHDATA(rstr_paldo3p3_voltage)[] = "paldo3p3_voltage";
 const char BCMATTACHDATA(rstr_epacal2g_mask)[] = "epacal2g_mask";
@@ -394,11 +413,12 @@ const char BCMATTACHDATA(rstr_lowpowerrange2g)[] = "lowpowerrange2g";
 const char BCMATTACHDATA(rstr_lowpowerrange5g)[] = "lowpowerrange5g";
 const char BCMATTACHDATA(rstr_paprdis)[] = "paprdis";
 const char BCMATTACHDATA(rstr_papdwar)[] = "papdwar";
-
+const char BCMATTACHDATA(rstr_low_adc_rate_en)[] = "low_adc_rate_en";
 
 const char BCMATTACHDATA(rstr_tssisleep_en)[] = "tssisleep_en";
 const char BCMATTACHDATA(ed_thresh2g)[] = "ed_thresh2g";
 const char BCMATTACHDATA(ed_thresh5g)[] = "ed_thresh5g";
+const char BCMATTACHDATA(hwaci_sw_mitigation)[] = "hwaci_sw_mitigation";
 const char BCMATTACHDATA(rstr_LTEJ_WAR_en)[] = "LTEJ_WAR_en";
 const char BCMATTACHDATA(rstr_thresh_noise_cal)[] = "thresh_noise_cal";
 const char BCMATTACHDATA(rstr_bphyscale)[] = "bphyscale";
@@ -436,7 +456,7 @@ const char BCMATTACHDATA(rstr_fccpwrch13)[] = "fccpwrch13";
 const char BCMATTACHDATA(rstr_fccpwroverride)[] = "fccpwroverride";
 #endif /* FCC_PWR_LIMIT_2G */
 
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 const char BCMATTACHDATA(rstr_perratedpd2g)[] = "perratedpd2g";
 const char BCMATTACHDATA(rstr_perratedpd5g)[] = "perratedpd5g";
 #endif
@@ -447,11 +467,7 @@ const char BCMATTACHDATA(rstr_txfdiqcalenable)[] = "txfdiqcalenable";
 
 const char BCMATTACHDATA(rstr_w1clipmod)[] = "w1clipmod";
 
-#if (defined(WLTEST) || defined(BCMINTERNAL))
-const char BCMATTACHDATA(rstr_cbuck_out)[] = "cbuck_out_mfg";
-#else
 const char BCMATTACHDATA(rstr_cbuck_out)[] = "cbuck_out";
-#endif
 const char BCMATTACHDATA(rstr_ldo3p3_2g)[]	= "ldo3p3_2g";
 const char BCMATTACHDATA(rstr_ldo3p3_5g)[]	= "ldo3p3_5g";
 const char BCMATTACHDATA(rstr_ccktpc_loop_en)[] = "ccktpc_loop_en";
@@ -491,3 +507,142 @@ const char BCMATTACHDATA(rstr_swdiv_antmap5g_main)[] = "swdiv_antmap5g_main";
 const char BCMATTACHDATA(rstr_swdiv_antmap2g_aux)[] = "swdiv_antmap2g_aux";
 const char BCMATTACHDATA(rstr_swdiv_antmap5g_aux)[] = "swdiv_antmap5g_aux";
 #endif /* WLC_SW_DIVERSITY */
+
+const char BCMATTACHDATA(rstr_elna2g)[] = "elna2g";
+const char BCMATTACHDATA(rstr_elna5g)[] = "elna5g";
+const char BCMATTACHDATA(rstr_aa2g)[] = "aa2g";
+const char BCMATTACHDATA(rstr_aa5g)[] = "aa5g";
+const char BCMATTACHDATA(rstr_tssipos2g)[] = "tssipos2g";
+const char BCMATTACHDATA(rstr_pdetrange2g)[] = "pdetrange2g";
+const char BCMATTACHDATA(rstr_antswctl2g)[] = "antswctl2g";
+const char BCMATTACHDATA(rstr_tssipos5g)[] = "tssipos5g";
+const char BCMATTACHDATA(rstr_pdetrange5g)[] = "pdetrange5g";
+const char BCMATTACHDATA(rstr_antswctl5g)[] = "antswctl5g";
+const char BCMATTACHDATA(rstr_bw40po)[] = "bw40po";
+const char BCMATTACHDATA(rstr_cddpo)[] = "cddpo";
+const char BCMATTACHDATA(rstr_stbcpo)[] = "stbcpo";
+const char BCMATTACHDATA(rstr_bwduppo)[] = "bwduppo";
+const char BCMATTACHDATA(rstr_txpid2ga0)[] = "txpid2ga0";
+const char BCMATTACHDATA(rstr_txpid2ga1)[] = "txpid2ga1";
+const char BCMATTACHDATA(rstr_pa2gw0a2)[] = "pa2gw0a2";
+const char BCMATTACHDATA(rstr_pa2gw1a2)[] = "pa2gw1a2";
+const char BCMATTACHDATA(rstr_pa2gw2a2)[] = "pa2gw2a2";
+const char BCMATTACHDATA(rstr_maxp5gla2)[] = "maxp5gla2";
+const char BCMATTACHDATA(rstr_pa5glw0a2)[] = "pa5glw0a2";
+const char BCMATTACHDATA(rstr_pa5glw1a2)[] = "pa5glw1a2";
+const char BCMATTACHDATA(rstr_pa5glw2a2)[] = "pa5glw2a2";
+const char BCMATTACHDATA(rstr_pa5gw0a2)[] = "pa5gw0a2";
+const char BCMATTACHDATA(rstr_pa5gw1a2)[] = "pa5gw1a2";
+const char BCMATTACHDATA(rstr_pa5gw2a2)[] = "pa5gw2a2";
+const char BCMATTACHDATA(rstr_maxp5gha2)[] = "maxp5gha2";
+const char BCMATTACHDATA(rstr_pa5ghw0a2)[] = "pa5ghw0a2";
+const char BCMATTACHDATA(rstr_pa5ghw1a2)[] = "pa5ghw1a2";
+const char BCMATTACHDATA(rstr_pa5ghw2a2)[] = "pa5ghw2a2";
+const char BCMATTACHDATA(rstr_pa2gw0a0)[] = "pa2gw0a0";
+const char BCMATTACHDATA(rstr_pa2gw0a1)[] = "pa2gw0a1";
+const char BCMATTACHDATA(rstr_pa2gw1a0)[] = "pa2gw1a0";
+const char BCMATTACHDATA(rstr_pa2gw1a1)[] = "pa2gw1a1";
+const char BCMATTACHDATA(rstr_pa2gw2a0)[] = "pa2gw2a0";
+const char BCMATTACHDATA(rstr_pa2gw2a1)[] = "pa2gw2a1";
+const char BCMATTACHDATA(rstr_itt2ga0)[] = "itt2ga0";
+const char BCMATTACHDATA(rstr_itt2ga1)[] = "itt2ga1";
+const char BCMATTACHDATA(rstr_cck2gpo)[] = "cck2gpo";
+const char BCMATTACHDATA(rstr_ofdm2gpo)[] = "ofdm2gpo";
+const char BCMATTACHDATA(rstr_mcs2gpo0)[] = "mcs2gpo0";
+const char BCMATTACHDATA(rstr_mcs2gpo1)[] = "mcs2gpo1";
+const char BCMATTACHDATA(rstr_mcs2gpo2)[] = "mcs2gpo2";
+const char BCMATTACHDATA(rstr_mcs2gpo3)[] = "mcs2gpo3";
+const char BCMATTACHDATA(rstr_mcs2gpo4)[] = "mcs2gpo4";
+const char BCMATTACHDATA(rstr_mcs2gpo5)[] = "mcs2gpo5";
+const char BCMATTACHDATA(rstr_mcs2gpo6)[] = "mcs2gpo6";
+const char BCMATTACHDATA(rstr_mcs2gpo7)[] = "mcs2gpo7";
+const char BCMATTACHDATA(rstr_txpid5gla0)[] = "txpid5gla0";
+const char BCMATTACHDATA(rstr_txpid5gla1)[] = "txpid5gla1";
+const char BCMATTACHDATA(rstr_maxp5gla0)[] = "maxp5gla0";
+const char BCMATTACHDATA(rstr_maxp5gla1)[] = "maxp5gla1";
+const char BCMATTACHDATA(rstr_pa5glw0a0)[] = "pa5glw0a0";
+const char BCMATTACHDATA(rstr_pa5glw0a1)[] = "pa5glw0a1";
+const char BCMATTACHDATA(rstr_pa5glw1a0)[] = "pa5glw1a0";
+const char BCMATTACHDATA(rstr_pa5glw1a1)[] = "pa5glw1a1";
+const char BCMATTACHDATA(rstr_pa5glw2a0)[] = "pa5glw2a0";
+const char BCMATTACHDATA(rstr_pa5glw2a1)[] = "pa5glw2a1";
+const char BCMATTACHDATA(rstr_ofdm5glpo)[] = "ofdm5glpo";
+const char BCMATTACHDATA(rstr_mcs5glpo0)[] = "mcs5glpo0";
+const char BCMATTACHDATA(rstr_mcs5glpo1)[] = "mcs5glpo1";
+const char BCMATTACHDATA(rstr_mcs5glpo2)[] = "mcs5glpo2";
+const char BCMATTACHDATA(rstr_mcs5glpo3)[] = "mcs5glpo3";
+const char BCMATTACHDATA(rstr_mcs5glpo4)[] = "mcs5glpo4";
+const char BCMATTACHDATA(rstr_mcs5glpo5)[] = "mcs5glpo5";
+const char BCMATTACHDATA(rstr_mcs5glpo6)[] = "mcs5glpo6";
+const char BCMATTACHDATA(rstr_mcs5glpo7)[] = "mcs5glpo7";
+const char BCMATTACHDATA(rstr_txpid5ga0)[] = "txpid5ga0";
+const char BCMATTACHDATA(rstr_txpid5ga1)[] = "txpid5ga1";
+const char BCMATTACHDATA(rstr_pa5gw0a0)[] = "pa5gw0a0";
+const char BCMATTACHDATA(rstr_pa5gw0a1)[] = "pa5gw0a1";
+const char BCMATTACHDATA(rstr_pa5gw1a0)[] = "pa5gw1a0";
+const char BCMATTACHDATA(rstr_pa5gw1a1)[] = "pa5gw1a1";
+const char BCMATTACHDATA(rstr_pa5gw2a0)[] = "pa5gw2a0";
+const char BCMATTACHDATA(rstr_pa5gw2a1)[] = "pa5gw2a1";
+const char BCMATTACHDATA(rstr_itt5ga0)[] = "itt5ga0";
+const char BCMATTACHDATA(rstr_itt5ga1)[] = "itt5ga1";
+const char BCMATTACHDATA(rstr_ofdm5gpo)[] = "ofdm5gpo";
+const char BCMATTACHDATA(rstr_mcs5gpo0)[] = "mcs5gpo0";
+const char BCMATTACHDATA(rstr_mcs5gpo1)[] = "mcs5gpo1";
+const char BCMATTACHDATA(rstr_mcs5gpo2)[] = "mcs5gpo2";
+const char BCMATTACHDATA(rstr_mcs5gpo3)[] = "mcs5gpo3";
+const char BCMATTACHDATA(rstr_mcs5gpo4)[] = "mcs5gpo4";
+const char BCMATTACHDATA(rstr_mcs5gpo5)[] = "mcs5gpo5";
+const char BCMATTACHDATA(rstr_mcs5gpo6)[] = "mcs5gpo6";
+const char BCMATTACHDATA(rstr_mcs5gpo7)[] = "mcs5gpo7";
+const char BCMATTACHDATA(rstr_txpid5gha0)[] = "txpid5gha0";
+const char BCMATTACHDATA(rstr_txpid5gha1)[] = "txpid5gha1";
+const char BCMATTACHDATA(rstr_maxp5gha0)[] = "maxp5gha0";
+const char BCMATTACHDATA(rstr_maxp5gha1)[] = "maxp5gha1";
+const char BCMATTACHDATA(rstr_pa5ghw0a0)[] = "pa5ghw0a0";
+const char BCMATTACHDATA(rstr_pa5ghw0a1)[] = "pa5ghw0a1";
+const char BCMATTACHDATA(rstr_pa5ghw1a0)[] = "pa5ghw1a0";
+const char BCMATTACHDATA(rstr_pa5ghw1a1)[] = "pa5ghw1a1";
+const char BCMATTACHDATA(rstr_pa5ghw2a0)[] = "pa5ghw2a0";
+const char BCMATTACHDATA(rstr_pa5ghw2a1)[] = "pa5ghw2a1";
+const char BCMATTACHDATA(rstr_ofdm5ghpo)[] = "ofdm5ghpo";
+const char BCMATTACHDATA(rstr_mcs5ghpo0)[] = "mcs5ghpo0";
+const char BCMATTACHDATA(rstr_mcs5ghpo1)[] = "mcs5ghpo1";
+const char BCMATTACHDATA(rstr_mcs5ghpo2)[] = "mcs5ghpo2";
+const char BCMATTACHDATA(rstr_mcs5ghpo3)[] = "mcs5ghpo3";
+const char BCMATTACHDATA(rstr_mcs5ghpo4)[] = "mcs5ghpo4";
+const char BCMATTACHDATA(rstr_mcs5ghpo5)[] = "mcs5ghpo5";
+const char BCMATTACHDATA(rstr_mcs5ghpo6)[] = "mcs5ghpo6";
+const char BCMATTACHDATA(rstr_mcs5ghpo7)[] = "mcs5ghpo7";
+const char BCMATTACHDATA(rstr_nonbf_logen_mode_en)[] = "nonbf_logen_mode_en";
+
+const char BCMATTACHDATA(rstr_triso2g)[] = "triso2g";
+const char BCMATTACHDATA(rstr_triso5g)[] = "triso5g";
+const char BCMATTACHDATA(rstr_pa2gw0a3)[] = "pa2gw0a3";
+const char BCMATTACHDATA(rstr_pa2gw1a3)[] = "pa2gw1a3";
+const char BCMATTACHDATA(rstr_pa2gw2a3)[] = "pa2gw2a3";
+const char BCMATTACHDATA(rstr_maxp5ga3)[] = "maxp5ga3";
+const char BCMATTACHDATA(rstr_pa5gw0a3)[] = "pa5gw0a3";
+const char BCMATTACHDATA(rstr_pa5gw1a3)[] = "pa5gw1a3";
+const char BCMATTACHDATA(rstr_pa5gw2a3)[] = "pa5gw2a3";
+const char BCMATTACHDATA(rstr_maxp5gla3)[] = "maxp5gla3";
+const char BCMATTACHDATA(rstr_pa5glw2a3)[] = "pa5glw2a3";
+const char BCMATTACHDATA(rstr_pa5glw0a3)[] = "pa5glw0a3";
+const char BCMATTACHDATA(rstr_pa5glw1a3)[] = "pa5glw1a3";
+const char BCMATTACHDATA(rstr_maxp5gha3)[] = "maxp5gha3";
+const char BCMATTACHDATA(rstr_pa5ghw0a3)[] = "pa5ghw0a3";
+const char BCMATTACHDATA(rstr_pa5ghw1a3)[] = "pa5ghw1a3";
+const char BCMATTACHDATA(rstr_pa5ghw2a3)[] = "pa5ghw2a3";
+
+const char BCMATTACHDATA(rstr_legofdmbw202gpo)[] = "legofdmbw202gpo";
+const char BCMATTACHDATA(rstr_legofdmbw20ul2gpo)[] = "legofdmbw20ul2gpo";
+const char BCMATTACHDATA(rstr_legofdmbw205glpo)[] = "legofdmbw205glpo";
+const char BCMATTACHDATA(rstr_legofdmbw20ul5glpo)[] = "legofdmbw20ul5glpo";
+const char BCMATTACHDATA(rstr_legofdmbw205gmpo)[] = "legofdmbw205gmpo";
+const char BCMATTACHDATA(rstr_legofdmbw20ul5gmpo)[] = "legofdmbw20ul5gmpo";
+const char BCMATTACHDATA(rstr_legofdmbw205ghpo)[] = "legofdmbw205ghpo";
+const char BCMATTACHDATA(rstr_legofdmbw20ul5ghpo)[] = "legofdmbw20ul5ghpo";
+const char BCMATTACHDATA(rstr_mcsbw20ul2gpo)[] = "mcsbw20ul2gpo";
+const char BCMATTACHDATA(rstr_mcsbw20ul5glpo)[] = "mcsbw20ul5glpo";
+const char BCMATTACHDATA(rstr_mcsbw20ul5gmpo)[] = "mcsbw20ul5gmpo";
+const char BCMATTACHDATA(rstr_mcsbw20ul5ghpo)[] = "mcsbw20ul5ghpo";
+const char BCMATTACHDATA(rstr_legofdm40duppo)[] = "legofdm40duppo";

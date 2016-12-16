@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scan_priv.h 638671 2016-05-18 15:33:37Z $
+ * $Id: wlc_scan_priv.h 660516 2016-09-20 22:02:56Z $
  */
 
 #ifndef _WLC_SCAN_PRIV_H_
@@ -89,7 +89,7 @@ struct scan_info {
 	uint8		scan_tx_pwrsave;	/* reduce txchain to save power in scan tx */
 	uint8		scan_ps_txchain;	/* track txchain and restore after scan complete */
 	uint8		scan_ps_rxchain;	/* track rxchain and restore after scan complete */
-	uint8		scan_pwrsave_enable;	/* turn on/off single core scanning */
+	uint8		scan_pwrsave_enable;	/* moved to scan_info_cmn */
 
 	wlc_bsscfg_t *scanmac_bsscfg;		/* scanmac bsscfg */
 	wl_scanmac_config_t scanmac_config;	/* scanmac config */
@@ -101,9 +101,15 @@ struct scan_info {
 	scan_state_t state;			/* Channel scheduler state */
 	wl_scan_summary_t *scan_sum_chan_info;
 	/* keep all these debugging related fields at the end */
+#ifdef BCMDBG
+		uint8	debug;
+		uint8	test;
+		struct wl_timer *test_timer;		/* timer for various tests */
+#endif
 		uint32	timeslot_id;
-		uint8	scan_mimo_override;		/* force MIMO scan on this scan */
+		uint8	scan_mimo_override;		/* moved to scan_info_cmn */
 		void	*stf_scan_req;			/* STF Arbitrator request */
+		bool	defer_probe;			/* OCE probe request deferral */
 };
 struct scan_info_cmn {
 	/* Scan private shared elements.. */
@@ -138,6 +144,8 @@ struct scan_info_cmn {
 	wl_scan_summary_t *scn_summary;	/* parallel scan statistics */
 	uint16 scan_sync_id;	/* sync id counter for scan_summary */
 
+	uint8	scan_pwrsave_enable;	/* turn on/off single core scanning */
+	uint8	scan_mimo_override;	/* force MIMO scan on this scan */
 };
 typedef struct scan_iter_params {
 	wlc_bss_list_t *bss_list;	/* list on which cached items will be added */
@@ -257,8 +265,6 @@ typedef struct scan_iter_params {
 	wlc_ap_mute(SCAN_WLC(scan), mute, cfg, user)
 #define wlc_scan_tx_resume(scan) \
 	wlc_tx_resume(SCAN_WLC(scan))
-#define wlc_scan_send_q(scan) \
-	wlc_send_active_q(SCAN_WLC(scan))
 #define wlc_scan_11d_scan_start(scan) \
 	wlc_11d_scan_start(SCAN_WLC(scan)->m11d)
 #define wlc_scan_11d_scan_complete(scan, status) \

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_et.h 623369 2016-03-07 20:07:03Z vyass $
+ * $Id: phy_type_et.h 623369 2016-03-07 20:07:03Z $
  */
 
 #ifndef _phy_type_et_h_

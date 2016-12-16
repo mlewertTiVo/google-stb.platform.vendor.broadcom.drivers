@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_11d.c 623137 2016-03-05 00:20:57Z $
+ * $Id: wlc_11d.c 663073 2016-10-04 01:33:08Z $
  */
 
 /**
@@ -57,15 +57,11 @@
 
 /* IOVar table */
 /* No ordering is imposed */
-enum {
-	IOV_AUTOCOUNTRY_DEFAULT,
-	IOV_AUTOCOUNTRY,
-#ifdef CNTRY_DEFAULT
-	IOV_CNTRY_DEFAULT,
-#endif /* CNTRY_DEFAULT */
-#ifdef LOCALE_PRIORITIZATION_2G
-	IOV_CCODE_PR_2G,
-#endif /* LOCALE_PRIORITIZATION_2G */
+enum wlc_11d_iov {
+	IOV_AUTOCOUNTRY_DEFAULT = 1,
+	IOV_AUTOCOUNTRY = 2,
+	IOV_CNTRY_DEFAULT = 3,
+	IOV_CCODE_PR_2G = 4,
 	IOV_LAST
 };
 
@@ -110,10 +106,10 @@ typedef struct wlc_11d_shared {
 	chanvec_t supported_channels;
 	char best_abbrev[WLC_CNTRY_BUF_SZ];
 	int best_chans;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	struct ether_addr best_bssid;
 	chanspec_t best_chanspec;
-#endif 
+#endif /* defined(BCMDBG) || defined(WLMSG_INFORM) */
 } wlc_11d_shared_t;
 
 
@@ -130,6 +126,9 @@ struct wlc_11d_info {
 /* module */
 static int wlc_11d_doiovar(void *ctx, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_11d_dump(void *ctx, struct bcmstrbuf *b);
+#endif /* BCMDBG || BCMDBG_DUMP */
 static int wlc_11d_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif);
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
@@ -167,6 +166,13 @@ BCMATTACHFN(wlc_11d_attach)(wlc_info_t *wlc)
 	}
 	(void) obj_registry_ref(wlc->objr, OBJR_11D_CMN_INFO);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	if (wlc_dump_register(wlc->pub, "11d", wlc_11d_dump, m11d) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	if (wlc_module_register(wlc->pub, wlc_11d_iovars, "11d", m11d, wlc_11d_doiovar,
 	                        NULL, NULL, NULL) != BCME_OK) {
@@ -400,6 +406,21 @@ wlc_11d_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif)
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_11d_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_11d_info_t *m11d = (wlc_11d_info_t *)ctx;
+	wlc_info_t *wlc = m11d->wlc;
+
+	bcm_bprintf(b, "reg_domain:%d\n", WL11D_ENAB(wlc));
+	bcm_bprintf(b, "autocountry:%d autocountry_def:%s adopted_from_ap:%d awaiting:%d\n",
+	            WLC_AUTOCOUNTRY_ENAB(wlc), m11d->cmn->autocountry_default,
+	            m11d->cmn->autocountry_adopted_from_ap, m11d->cmn->awaiting_cntry_info);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #ifdef STA
 /* Determine if the country channel information is compatible with the current association.
@@ -521,10 +542,10 @@ wlc_11d_bss_eval(wlc_11d_info_t *m11d, wlc_bss_info_t *bi,
 	clm_country_locales_t locale_new;
 	int x_band;
 	int err;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
 	char ssidbuf[SSID_FMT_BUF_LEN];
-#endif	
+#endif	/* BCMDBG || WLMSG_INFORM */
 
 	ASSERT(bi != NULL);
 	x_band = 0;
@@ -612,7 +633,7 @@ wlc_11d_bss_eval(wlc_11d_info_t *m11d, wlc_bss_info_t *bi,
 		strncpy(m11d->cmn->best_abbrev, country_abbrev,
 		        sizeof(m11d->cmn->best_abbrev) - 1);
 
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 		m11d->cmn->best_bssid = bi->BSSID;
 #endif
 	}
@@ -648,9 +669,9 @@ wlc_11d_scan_complete(wlc_11d_info_t *m11d, int status)
 	wlc_info_t *wlc = m11d->wlc;
 	wlc_bss_info_t *bi;
 	uint i;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif	
+#endif	/* BCMDBG || WLMSG_INFORM */
 
 	/* This routine should only be called if we are still looking for country information. */
 	if (!m11d->cmn->awaiting_cntry_info)

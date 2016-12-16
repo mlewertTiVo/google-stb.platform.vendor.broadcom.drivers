@@ -26,9 +26,6 @@ enum {
 };
 
 static const bcm_iovar_t phy_rxspur_iovars[] = {
-#if defined(WLTEST)
-	{"phy_force_spurmode", IOV_PHY_FORCE_SPURMODE, IOVF_SET_UP, 0, IOVT_UINT32, 0},
-#endif /* WLTEST */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -38,23 +35,18 @@ static int
 phy_rxspur_doiovar(void *ctx, uint32 aid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
 {
-#if defined(WLTEST)
 	phy_info_t *pi = (phy_info_t *)ctx;
 	int32 int_val = 0;
 	int err = BCME_OK;
 	int32 *ret_int_ptr = (int32 *)a;
 
+	BCM_REFERENCE(ret_int_ptr);
+	BCM_REFERENCE(pi);
+
 	if (plen >= (uint)sizeof(int_val))
 		bcopy(p, &int_val, sizeof(int_val));
 
 	switch (aid) {
-	case IOV_SVAL(IOV_PHY_FORCE_SPURMODE):
-		err = phy_rxspur_set_force_spurmode(pi->rxspuri, (int16) int_val);
-		break;
-
-	case IOV_GVAL(IOV_PHY_FORCE_SPURMODE):
-		err = phy_rxspur_get_force_spurmode(pi->rxspuri, ret_int_ptr);
-		break;
 
 	default:
 		err = BCME_UNSUPPORTED;
@@ -62,9 +54,6 @@ phy_rxspur_doiovar(void *ctx, uint32 aid,
 	}
 
 	return err;
-#else /* WLTEST */
-	return BCME_UNSUPPORTED;
-#endif /* WLTEST */
 }
 
 /* register iovar table to the system */

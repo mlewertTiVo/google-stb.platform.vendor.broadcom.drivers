@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: event_log.h 631341 2016-04-14 03:11:09Z $
+ * $Id: event_log.h 657831 2016-09-02 18:52:56Z $
  */
 
 #ifndef _EVENT_LOG_H_
@@ -37,7 +37,11 @@
 /* We make sure that the block size will fit in a single packet
  *  (allowing for a bit of overhead on each packet
  */
+#if defined(BCMPCIEDEV)
+#define EVENT_LOG_MAX_BLOCK_SIZE	1648
+#else
 #define EVENT_LOG_MAX_BLOCK_SIZE	1400
+#endif
 #define EVENT_LOG_WL_BLOCK_SIZE		0x200
 #define EVENT_LOG_PSM_BLOCK_SIZE	0x200
 #define EVENT_LOG_BUS_BLOCK_SIZE	0x200

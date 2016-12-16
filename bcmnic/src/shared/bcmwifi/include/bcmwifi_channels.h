@@ -20,7 +20,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmwifi_channels.h 648738 2016-07-13 13:12:11Z $
+ * $Id: bcmwifi_channels.h 655845 2016-08-24 01:05:41Z $
  */
 
 #ifndef	_bcmwifi_channels_h_
@@ -419,6 +419,11 @@ typedef struct {
  */
 #define CHANSPEC_STR_LEN    20
 
+/*
+ * This function returns TRUE if both the chanspec can co-exist in PHY.
+ * Addition to control channel, the function checks for side band for 2g 40 channels
+ */
+extern bool wf_chspec_coexist(chanspec_t chspec1, chanspec_t chspec2);
 
 #define CHSPEC_IS_BW_160_WIDE(chspec) (CHSPEC_BW(chspec) == WL_CHANSPEC_BW_160 ||\
 	CHSPEC_BW(chspec) == WL_CHANSPEC_BW_8080)

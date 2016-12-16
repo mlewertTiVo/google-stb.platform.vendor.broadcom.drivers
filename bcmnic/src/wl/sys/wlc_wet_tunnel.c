@@ -279,6 +279,9 @@ BCMATTACHFN(wlc_wet_tunnel_attach)(wlc_info_t *wlc)
 	/* register module */
 	wlc_module_register(wlc->pub, wet_tunnel_iovars, "wet_tunnel", weth,
 		wet_tunnel_doiovar, NULL, NULL, NULL);
+#ifdef BCMDBG
+	wlc_dump_register(wlc->pub, "wet_tunnel", (dump_fn_t)wlc_wet_tunnel_dump, (void *)weth);
+#endif
 
 	return weth;
 }
@@ -409,6 +412,9 @@ wet_tunnel_arp_proc(wlc_wet_tunnel_info_t *weth,
 {
 	wet_tunnel_sta_t *sta;
 	uint8 *iaddr;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	/*
 	 * Replace source MAC in Ethernet header as well as source MAC in
@@ -643,6 +649,9 @@ wet_tunnel_dhcpc_proc(wlc_wet_tunnel_info_t *weth,
 	uint8 *eh, uint8 *iph, uint8 *udph, uint8 *dhcp, int length, int send)
 {
 	wet_tunnel_sta_t *sta;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	/* only interested in requests when sending to server */
 	if (!send && *(dhcp + DHCP_TYPE_OFFSET) != DHCP_TYPE_REQUEST)
@@ -687,6 +696,9 @@ wet_tunnel_dhcps_proc(wlc_wet_tunnel_info_t *weth,
 	uint8 *eh, uint8 *iph, uint8 *udph, uint8 *dhcp, int length, int send)
 {
 	wet_tunnel_sta_t *sta;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	/* only interested in replies when receiving from server */
 	if (!send || *(dhcp + DHCP_TYPE_OFFSET) != DHCP_TYPE_REPLY)
@@ -743,6 +755,9 @@ wet_tunnel_sta_update_all(wlc_wet_tunnel_info_t *weth, uint8 *iaddr, struct ethe
 {
 	wet_tunnel_sta_t *sta;
 	int i;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 	/* find the existing one and remove it from the old IP hash link */
 	if (!wet_tunnel_sta_find_mac(weth, eaddr, &sta)) {
 		i = WET_TUNNEL_STA_HASH_IP(sta->ip);
@@ -840,6 +855,9 @@ wet_tunnel_sta_update_mac(wlc_wet_tunnel_info_t *weth, struct ether_addr *eaddr,
 {
 	wet_tunnel_sta_t *sta;
 	int i;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	/* find the existing one */
 	if (!wet_tunnel_sta_find_mac(weth, eaddr, &sta))
@@ -874,6 +892,9 @@ wet_tunnel_sta_remove_mac_entry(wlc_wet_tunnel_info_t *weth, struct ether_addr *
 {
 	wet_tunnel_sta_t *sta, *prev;
 	int i = WET_TUNNEL_STA_HASH_MAC(eaddr->octet);
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 	int found = 0;
 
 	/* find the existing one */
@@ -1006,3 +1027,32 @@ wlc_wet_tunnel_multi_packet_forward(wlc_info_t *wlc, osl_t *osh,
 
 	return -1;
 }
+
+#ifdef BCMDBG
+int
+wlc_wet_tunnel_dump(wlc_wet_tunnel_info_t *weth, struct bcmstrbuf *b)
+{
+	char eabuf1[ETHER_ADDR_STR_LEN];
+	char eabuf2[ETHER_ADDR_STR_LEN];
+	wet_tunnel_sta_t *sta;
+	int i;
+
+	bcm_bprintf(b, "Entry\tEnetAddr\t\tWetAddr\t\t\tInetAddr\tIdle (seconds)\n");
+	for (i = 0; i < WET_TUNNEL_NUMSTAS; i++) {
+		if (i == (WET_TUNNEL_NUMSTAS - 1))
+			continue;
+		if (weth->sta[i].next)
+			continue;
+		/* format the entry dump */
+		sta = &weth->sta[i];
+		bcm_bprintf(b, "%u\t%s\t%s\t%u.%u.%u.%u\t%d\n",
+			i,
+			bcm_ether_ntoa(&sta->mac, eabuf1),
+			bcm_ether_ntoa(&sta->wetmac, eabuf2),
+			sta->ip[0], sta->ip[1], sta->ip[2], sta->ip[3],
+			weth->pub->now - sta->used);
+	}
+
+	return 0;
+}
+#endif	/* #ifdef BCMDBG */

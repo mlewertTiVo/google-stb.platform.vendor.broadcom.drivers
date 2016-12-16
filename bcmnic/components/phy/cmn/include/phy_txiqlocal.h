@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_txiqlocal.h 633369 2016-04-22 08:36:32Z changbo $
+ * $Id: phy_txiqlocal.h 633369 2016-04-22 08:36:32Z $
  */
 
 #ifndef _phy_txiqlocal_h_

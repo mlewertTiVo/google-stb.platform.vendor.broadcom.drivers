@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_temp.h 630449 2016-04-09 00:27:18Z vyass $
+ * $Id: phy_type_temp.h 656120 2016-08-25 08:17:57Z $
  */
 
 #ifndef _phy_type_temp_h_
@@ -34,6 +34,7 @@ typedef uint16 (*phy_type_temp_throt_fn_t)(phy_type_temp_ctx_t *ctx);
 typedef int (*phy_type_temp_get_fn_t)(phy_type_temp_ctx_t *ctx);
 typedef void (*phy_type_temp_upd_gain_fn_t)(phy_type_temp_ctx_t *ctx, int16 *gain_err_temp_adj);
 typedef int (*phy_type_temp_dump_fn_t)(phy_type_temp_ctx_t *ctx, struct bcmstrbuf *b);
+typedef int16 (*phy_type_temp_do_tempsense_fn_t)(phy_type_temp_ctx_t *ctx);
 typedef struct {
 	/* temp. throttle */
 	phy_type_temp_throt_fn_t throt;
@@ -43,6 +44,8 @@ typedef struct {
 	phy_type_temp_upd_gain_fn_t upd_gain;
 	/* update upd gain wit respect to gain calibration temperature */
 	phy_type_temp_upd_gain_fn_t upd_gain_cal;
+	/* do tempsense */
+	phy_type_temp_do_tempsense_fn_t do_tempsense;
 	/* context */
 	phy_type_temp_ctx_t *ctx;
 } phy_type_temp_fns_t;

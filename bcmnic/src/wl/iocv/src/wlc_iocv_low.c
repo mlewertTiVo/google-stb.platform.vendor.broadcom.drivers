@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_iocv_low.c 626396 2016-03-21 18:23:15Z $
+ * $Id: wlc_iocv_low.c 651348 2016-07-26 17:13:07Z $
  */
 
 #include <typedefs.h>
@@ -73,7 +73,11 @@ static wlc_iocv_low_t *g_iocv_low = NULL;
 #define WLC_IOCV_LOW(ii) ((wlc_iocv_low_t *)(ii)->obj)
 
 /* debug */
+#ifdef BCMDBG
+#define WL_IOCV_ERR(x) printf x
+#else
 #define WL_IOCV_ERR(x)
+#endif
 
 /* local functions */
 static int wlc_iocv_low_reg_iovt(wlc_iocv_info_t *ii, wlc_iovt_desc_t *iovd);
@@ -218,7 +222,7 @@ wlc_iocv_low_dispatch_iov(wlc_iocv_info_t *ii, uint16 tid, uint32 aid,
 	if (low->iovt[tid].patch_disp_fn) {
 		int err = (low->iovt[tid].patch_disp_fn)
 		        (low->iovt[tid].ctx, aid, p, p_len, a, a_len, var_sz, wlcif);
-		if (err != BCME_UNSUPPORTED) {
+		if (err != BCME_IOCTL_PATCH_UNSUPPORTED) {
 			return err;
 		}
 	}

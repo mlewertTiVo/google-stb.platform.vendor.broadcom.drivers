@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_tbl.c 633216 2016-04-21 20:17:37Z vyass $
+ * $Id: phy_tbl.c 657351 2016-08-31 23:00:22Z $
  */
 
 #include <phy_cfg.h>
@@ -43,13 +43,12 @@ static int phy_tbl_init(phy_init_ctx_t *ctx);
 #ifndef BCMNODOWN
 static int phy_tbl_down(phy_init_ctx_t *ctx);
 #endif
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(BCMINTERNAL)) || \
-	defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG_PHYDUMP)
 static int phy_tbl_dumptbl(void *ctx, struct bcmstrbuf *b);
 static uint16 phytbl_page_parser(phy_table_info_t *ti);
 static void phy_tbl_process_dumptbl(phy_tbl_info_t *info,
 		phy_table_info_t *ti, struct bcmstrbuf *b);
-#endif /* ((BCMDBG || BCMDBG_DUMP) && BCMINTERNAL) || BCMDBG_PHYDUMP */
+#endif 
 
 /* attach/detach */
 phy_tbl_info_t *
@@ -86,10 +85,12 @@ BCMATTACHFN(phy_tbl_attach)(phy_info_t *pi)
 #endif
 
 	/* register dump callback */
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(BCMINTERNAL)) || \
-	defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG_PHYDUMP)
 	phy_dbg_add_dump_fn(pi, "phytbl", phy_tbl_dumptbl, info);
-#endif /* ((BCMDBG || BCMDBG_DUMP) && BCMINTERNAL) || BCMDBG_PHYDUMP */
+#endif 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	phy_dbg_add_dump_fn(pi, "phytxv0", phy_tbl_dump_txv0, info);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	return info;
 
@@ -163,8 +164,7 @@ BCMUNINITFN(phy_tbl_down)(phy_init_ctx_t *ctx)
 }
 #endif
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(BCMINTERNAL)) || \
-	defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG_PHYDUMP)
 static int
 phy_tbl_dumptbl(void *ctx, struct bcmstrbuf *b)
 {
@@ -275,12 +275,6 @@ phy_tbl_do_dumptbl(phy_tbl_info_t *info, phy_table_info_t *ti, struct bcmstrbuf 
 		phy_tbl_process_dumptbl(info, ti, b);
 
 	} else if (TRUE &&
-#if defined(BCMINTERNAL) || defined(WLTEST)
-			!((pi->nphy_tbldump_minidx >= 0) &&
-			(ti->table < (uint)pi->nphy_tbldump_minidx)) &&
-			!((pi->nphy_tbldump_maxidx >= 0) &&
-			(ti->table > (uint)pi->nphy_tbldump_maxidx)) &&
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 			!(fns->tblfltr && !(fns->tblfltr)(pi, ti))) {
 		phy_tbl_process_dumptbl(info, ti, b);
 	}
@@ -289,4 +283,19 @@ phy_tbl_do_dumptbl(phy_tbl_info_t *info, phy_table_info_t *ti, struct bcmstrbuf 
 	if ((pi->pdpi->entry == 0) && (++pi->pdpi->page >= np))
 		pi->pdpi->page = 0;
 }
-#endif /* ((BCMDBG || BCMDBG_DUMP) && BCMINTERNAL) || BCMDBG_PHYDUMP */
+#endif 
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+int
+phy_tbl_dump_txv0(void *ctx, struct bcmstrbuf *b)
+{
+	phy_tbl_info_t *tbli = (phy_tbl_info_t *)ctx;
+	phy_type_tbl_fns_t *fns = tbli->fns;
+
+	if (fns->dump_txv0 != NULL) {
+		return (fns->dump_txv0)(fns->ctx, b);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
+}
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */

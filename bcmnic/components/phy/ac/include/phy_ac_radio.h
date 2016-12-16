@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_radio.h 650087 2016-07-20 12:04:23Z luka $
+ * $Id: phy_ac_radio.h 657098 2016-08-31 03:16:05Z $
  */
 
 #ifndef _phy_ac_radio_h_
@@ -29,9 +29,6 @@
 #include <wlc_phytbl_20696.h>
 
 
-#ifdef ATE_BUILD
-#include <wl_ate.h>
-#endif /* ATE_BUILD */
 
 
 /** 20695 dac buffer macros */
@@ -86,7 +83,14 @@ typedef struct _acphy_pmu_mimo_lp_opt_radregs_t {
 	uint16 pmu_cfg4[PHY_CORE_MAX];
 } acphy_pmu_mimo_lp_opt_radregs_t;
 
+typedef enum {
+	PLL_2G,
+	PLL_5G
+} radio_pll_sel_t;
+
 typedef struct phy_ac_radio_data {
+	/* this data is shared between radio , chanmgr and rxspur */
+	int fc; /* Center Freq */
 	/* this data is shared between radio and chanmgr */
 	uint16	rccal_gmult;
 	uint16	rccal_gmult_rc;
@@ -94,8 +98,20 @@ typedef struct phy_ac_radio_data {
 	uint8	vcodivmode;
 	uint8	srom_txnospurmod2g; /* 2G Tx spur optimization */
 	uint8	srom_txnospurmod5g; /* 5G Tx spur optimization (Only used in ac radio) */
+	/* this data is shared between radio , chanmgr and misc */
+	uint8	dac_mode;
 	/* this data is shared between radio and dsi */
 	int8	use_5g_pll_for_2g; /* Parameter to indicate Use 5G PLL for 2G */
+	/* this data is shared between radio, chanmgr and papdcal */
+	uint8	ulp_tx_mode; /* Parameter which determines the DAC frequency on 43012A0 */
+	/* this data is shared between radio, chanmgr, papdcal and samp  */
+	uint8	ulp_adc_mode; /* Parameter which determines the ADC frequency on 43012A0 */
+	/* this data is shared only by ac radio iovar */
+	uint8	acphy_force_lpvco_2G;
+	uint8	acphy_lp_status;
+	uint8	acphy_4335_radio_pd_status;
+	/* this data is shared between radio, calmgr and vcocal */
+	radio_pll_sel_t pll_sel; /* Parameter to indicate PLL used */
 } phy_ac_radio_data_t;
 
 /* forward declaration */
@@ -108,6 +124,8 @@ void phy_ac_radio_unregister_impl(phy_ac_radio_info_t *info);
 
 /* inter-module data API */
 phy_ac_radio_data_t *phy_ac_radio_get_data(phy_ac_radio_info_t *radioi);
+/* this is used by papdcal */
+void phy_ac_radio_set_modes(phy_ac_radio_info_t *radioi, uint8 dac, uint8 adc);
 
 /* query and parse idcode */
 uint32 phy_ac_radio_query_idcode(phy_info_t *pi);
@@ -158,7 +176,7 @@ extern int wlc_phy_chan2freq_20694(phy_info_t *pi, uint8 channel,
 	const chan_info_radio20694_rffe_t **chan_info);
 extern int wlc_phy_chan2freq_20696(phy_info_t *pi, uint8 channel,
 	const chan_info_radio20696_rffe_t **chan_info);
-extern void wlc_phy_radio20694_afe_div_ratio(phy_info_t *pi, uint8 ulp_tx_mode, uint8 ulp_adc_mode);
+extern void wlc_phy_radio20694_afe_div_ratio(phy_info_t *pi, uint8 use_ovr, uint8 ipapd);
 extern void wlc_phy_radio20696_afe_div_ratio(phy_info_t *pi);
 extern void
 wlc_phy_radio20695_txdac_bw_setup(phy_info_t *pi, uint8 filter_type, uint8 dacbw);
@@ -177,5 +195,4 @@ void wlc_phy_dac_rate_mode_acphy(phy_info_t *pi, uint8 dac_rate_mode);
 
 void phy_ac_radio_cal_init(phy_info_t *pi);
 void phy_ac_radio_cal_reset(phy_info_t *pi, int16 idac_i, int16 idac_q);
-
 #endif /* _phy_ac_radio_h_ */

@@ -12,10 +12,11 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_common.h 641549 2016-06-03 06:47:47Z $
+ * $Id: wlu_common.h 663318 2016-10-04 19:02:16Z $
  */
 #include <wlioctl.h>
 #include <bcmutils.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,14 +24,13 @@
 #include <assert.h>
 
 #if defined(EDK_RELEASE_VERSION) || (EDK_RELEASE_VERSION >= 0x00020000)
-#define fprintf(stream, fmt, args...) printf(fmt, ##args)
 #define strtoul(nptr, endptr, base) bcm_strtoul((nptr), (endptr), (base))
-#define strtol(nptr, endptr, base)  (int32)bcm_strtoul((nptr), (endptr), (base))
+#define strtol(nptr, endptr, base)  (long)bcm_strtoul((nptr), (endptr), (base))
 #endif /* defined(EDK_RELEASE_VERSION) || (EDK_RELEASE_VERSION >= 0x00020000) */
+
 
 #define stricmp strcasecmp
 #define strnicmp strncasecmp
-
 
 /* IOCTL swapping mode for Big Endian host with Little Endian dongle.  Default to off */
 /* The below macros handle endian mis-matches between wl utility and wl driver. */

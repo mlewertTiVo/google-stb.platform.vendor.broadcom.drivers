@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_linux.c 657844 2016-09-02 20:52:35Z $
+ * $Id: wl_linux.c 673024 2016-11-30 17:51:21Z $
  */
 
 
@@ -33,6 +33,7 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 14)
 #include <linux/module.h>
 #endif
+
 
 #include <linux/types.h>
 #include <linux/errno.h>
@@ -62,7 +63,7 @@
 #include <asm/uaccess.h>
 #include <asm/unaligned.h>
 
-#if !defined(BCMDONGLEHOST)
+#if !defined(LINUX_HYBRID)
 #include <wlc_cfg.h>
 #endif
 
@@ -141,6 +142,9 @@ struct iw_statistics *wl_get_wireless_stats(struct net_device *dev);
 #ifdef TKO
 #include <wl_tko.h>
 #endif
+#ifdef ICMP
+#include <wl_icmp.h>
+#endif
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 
 #ifdef BCMDBUS
@@ -167,18 +171,24 @@ struct iw_statistics *wl_get_wireless_stats(struct net_device *dev);
 #endif
 
 
-#ifdef BCM7271
-#ifdef PLATFORM_INTEGRATED_WIFI
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
 #include <linux/platform_device.h>
 #include <linux/of.h>
-#include <bcmnvram.h>
-#else /* PLATFORM_INTEGRATED_WIFI */
-#include <wl_linux_bcm7xxx.h>
-#endif /* PLATFORM_INTEGRATED_WIFI */
-#undef CONFIG_PCI
-#endif /* BCM7271 */
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
+
+#if defined(STBSOC_CHAR_DRV)
+#include <linux/cdev.h>
+#include <linux/device.h>
+#endif /* STBSOC_CHAR_DRV */
 
 #include <wl_linux.h>
+#ifdef BCMASSERT_LOG
+#include <bcm_assert_log.h>
+#endif
+
+#ifdef STB_SOC_WIFI
+#include <wl_stbsoc.h>
+#endif /* STB_SOC_WIFI */
 
 #ifdef WL_THREAD
 #include <linux/kthread.h>
@@ -186,10 +196,8 @@ struct iw_statistics *wl_get_wireless_stats(struct net_device *dev);
 
 #if defined(USE_CFG80211)
 #include <wl_cfg80211.h>
-#if !defined(BCMDONGLEHOST)
 #include <net/rtnetlink.h>
 #include <wldev_common.h>
-#endif /* !BCMDONGLEHOST */
 #endif /* CFG80211 */
 
 #ifdef DPSTA
@@ -212,20 +220,9 @@ struct iw_statistics *wl_get_wireless_stats(struct net_device *dev);
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
 
-#ifdef WLCXO_CTRL
-#include <wlc_cxo_types.h>
-#include <wlc_cxo_ipc.h>
-#include <linux/kthread.h>
-#endif
-
-#ifdef WLCXO_FULL
-#include "wl_cxo.h"
-#endif
-
 #ifdef WLRSDB
 #include <wlc_rsdb.h>
 #endif /* WLRSDB */
-
 static void wl_timer(ulong data);
 static void _wl_timer(wl_timer_t *t);
 static struct net_device *wl_alloc_linux_if(wl_if_t *wlif);
@@ -251,10 +248,6 @@ static int wl_found = 0;
 #if defined(CONFIG_WL_MODULE) && defined(CONFIG_BCM47XX) && defined(WLRSDB)
 static int rsdb_found = 0;
 #endif /* CONFIG_WL_MODULE && CONFIG_BCM47XX && WLRSDB */
-
-#ifdef WLCXO_IPC
-static void wl_cxo_ctrl_ipc_task(wl_task_t *task);
-#endif
 
 #ifdef LINUX_CRYPTO
 struct ieee80211_tkip_data {
@@ -308,7 +301,12 @@ static int BCMFASTPATH wl_start(struct sk_buff *skb, struct net_device *dev);
 #endif
 static int wl_start_int(wl_info_t *wl, wl_if_t *wlif, struct sk_buff *skb);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
+static struct rtnl_link_stats64* wl_get_stats64(struct net_device *dev,
+		struct rtnl_link_stats64 *stats);
+#else
 static struct net_device_stats *wl_get_stats(struct net_device *dev);
+#endif /* KERNEL_VERSION >= 2.6.36 */
 static int wl_set_mac_address(struct net_device *dev, void *addr);
 static void wl_set_multicast_list(struct net_device *dev);
 static void _wl_set_multicast_list(struct net_device *dev);
@@ -342,6 +340,9 @@ static int wl_read_proc(struct seq_file *m, void *v);
 static int wl_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, void *data);
 #endif /* Kernel >= 3.10.0 */
 #endif /* #if defined(CONFIG_PROC_FS) */
+#if defined(BCMDBG)
+static int wl_dump(wl_info_t *wl, struct bcmstrbuf *b);
+#endif
 static struct wl_if *wl_alloc_if(wl_info_t *wl, int iftype, uint unit, struct wlc_if* wlc_if);
 static void wl_free_if(wl_info_t *wl, wl_if_t *wlif);
 static void wl_get_driver_info(struct net_device *dev, struct ethtool_drvinfo *info);
@@ -390,7 +391,7 @@ static dev_link_t *dev_list = NULL;
 
 
 
-#ifdef PLATFORM_INTEGRATED_WIFI
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
 /*
  * Platform driver type used here for integrated WIFI connected with an internal bus.
  */
@@ -399,28 +400,25 @@ static int wl_plat_drv_remove(struct platform_device *pdev);
 static void wl_plat_drv_shutdown(struct platform_device *pdev);
 static int wl_plat_drv_suspend(struct platform_device *pdev, pm_message_t state);
 static int wl_plat_drv_resume(struct platform_device *pdev);
-#endif /* PLATFORM_INTEGRATED_WIFI */
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
 
-#ifdef STB_SOC_WIFI
-static void wl_soc_wifi_enable_intrs(wl_info_t *wl);
-static void wl_soc_wifi_disable_intrs(wl_info_t *wl);
-static void wl_soc_wifi_d2h_isr(wl_info_t *wl);
-static void wl_soc_wifi_d2h_intstatus(wl_info_t *wl);
-#endif /* STB_SOC_WIFI */
+#if defined(STBSOC_CHAR_DRV)
+#define WL_CHAR_DRV_DEV_NAME  "wl_char_drv"
+static int wl_char_drv_init(void);
+static void wl_char_drv_deinit(void);
+static int wl_char_drv_open(struct inode *inode, struct file *file);
+static int wl_char_drv_release(struct inode *inode, struct file  *file);
+static long wl_char_drv_ioctl(struct file  *filp, unsigned int  cmd, unsigned long uMsg);
+#endif /* STBSOC_CHAR_DRV */
 
-#if defined(PLATFORM_INTEGRATED_WIFI) /* && defined(SPLITNIC) */
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF) /* && \
+	defined(BCM_NIC_SPLIT) */
 MODULE_LICENSE("GPL");
-#else /* PLATFORM_INTEGRATED_WIFI */
+#else /* PLATFORM_INTEGRATED_WIFI  && CONFIG_OF */
 MODULE_LICENSE("Proprietary");
-#endif /* PLATFORM_INTEGRATED_WIFI */
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
 
-#if defined(BCM7271) && !defined(PLATFORM_INTEGRATED_WIFI)
-wl_info_t *
-wl_attach(uint16 vendor, uint16 device, ulong regs,
-		uint bustype, void *btparam, uint irq, uchar* bar1_addr, uint32 bar1_size,
-		uchar* bar2_addr, uint32 bar2_size, void *cmndata);
-#endif /* BCM7271 && !PLATFORM_INTEGRATED_WIFI */
-
+#if defined(CONFIG_PCI)
 struct wl_cmn_data {
 	void *objrptr;
 	void *oshcmnptr;
@@ -428,7 +426,6 @@ struct wl_cmn_data {
 	uint16 device;
 };
 
-#if defined(CONFIG_PCI)
 static struct wl_cmn_data wlcmndata;
 /* recognized PCI IDs */
 static struct pci_device_id wl_id_table[] =
@@ -442,47 +439,49 @@ MODULE_DEVICE_TABLE(pci, wl_id_table);
 #endif 
 
 
+#ifdef BCMDBG
+static int msglevel = 0xdeadbeef;
+module_param(msglevel, int, 0);
+static int msglevel2 = 0xdeadbeef;
+module_param(msglevel2, int, 0);
+static int phymsglevel = 0xdeadbeef;
+module_param(phymsglevel, int, 0);
+#endif /* BCMDBG */
 
-
-#if defined(BCM7271)
-
-/* force to use WL_ALL_PASSIVE and txworkq */
-static int passivemode = 1;
-module_param(passivemode, int, 0);
-static int txworkq = 1;
-module_param(txworkq, int, 0);
-
-#else /* !defined(BCM7271) */
+#ifdef BCMDBG_ASSERT
+static int assert_type = 0xdeadbeef;
+module_param(assert_type, int, 0);
+#endif
 
 #if defined(WL_ALL_PASSIVE)
 /* WL Passive Mode: Enable(1)/Disable(0) */
-#ifdef WLP2P
+#if defined(WLP2P) || defined(STB_SOC_WIFI)
 static int passivemode = 1;
-module_param(passivemode, int, 1);
-#else /* WLP2P */
+module_param(passivemode, int, 0);
+#else /* WLP2P || STB_SOC_WIFI */
 static int passivemode = 0;
 module_param(passivemode, int, 0);
-#endif /* WLP2P */
-#else
+#endif /* WLP2P || STB_SOC_WIFI */
+#else /* WL_ALL_PASSIVE */
 static int passivemode = 0;
 module_param(passivemode, int, 0);
-#endif /* WLP2P */
+#endif /* WL_ALL_PASSIVE */
 
+#ifdef STB_SOC_WIFI
+static int txworkq = 1;
+module_param(txworkq, int, 0);
+#else /* STB_SOC_WIFI */
 static int txworkq = 0;
 module_param(txworkq, int, 0);
+#endif /* STB_SOC_WIFI */
 
-#endif /* defined(BCM7271) */
-
-#ifdef WLCXO_SIM
-#define WL_TXHPKTQ_THRESH 512
-static int wl_txhpktq_thresh = WL_TXHPKTQ_THRESH;
-#endif
-
-#ifdef WLCXO_CTRL
+#ifdef STB_SOC_WIFI
 #define WL_TXQ_THRESH	512
-#else
+#define DEVID  0
+static uint16 stb_devid = DEVID;
+#else /* STB_SOC_WIFI */
 #define WL_TXQ_THRESH	0
-#endif
+#endif /* STB_SOC_WIFI */
 static int wl_txq_thresh = WL_TXQ_THRESH;
 module_param(wl_txq_thresh, int, 0);
 
@@ -503,12 +502,13 @@ static void wl_dpsta_dwds_register(wl_info_t *wl, wlc_bsscfg_t *cfg);
 static void wl_dpsta_psta_register(wl_info_t *wl, wlc_bsscfg_t *cfg);
 #endif
 #endif /* DPSTA */
-
-#if defined(BCM7271)
-static int nompc = 1;
-#else
-static int nompc = 0;
+#if defined(BCMDBG)
+static struct ether_addr local_ea;
+static char *macaddr = NULL;
+module_param(macaddr, charp, S_IRUGO);
 #endif
+
+static int nompc = 0;
 module_param(nompc, int, 0);
 
 #ifdef quote_str
@@ -524,43 +524,14 @@ module_param(nompc, int, 0);
 #define BRCM_WLAN_IFNAME eth%d
 #endif
 
-#ifdef WLCXO_IPC
-static int wl_swq_thread(void *data);
-static struct swq_struct *wl_swq_create(wl_info_t *wl, uint8 *name, uint32 cpu);
-static void wl_swq_destroy(wl_info_t *wl);
-static int32 wl_swq_add_work(struct swq_struct *swq, struct work_struct *work);
-#define SCHEDULE_WORK(wl, work) \
-({ \
-	int32 error; \
-	if (WLCXO_ENAB(wl->pub)) \
-		error = wl_swq_add_work((wl)->cxo_ctrl_wq, (work)); \
-	else \
-		error = schedule_work(work); \
-	error; \
-})
-#define SCHEDULE_WORK_ON(wl, cpu, work) \
-({ \
-	int32 error; \
-	if (WLCXO_ENAB(wl->pub)) \
-		error = wl_swq_add_work((wl)->cxo_ctrl_wq, (work)); \
-	else \
-		error = schedule_work_on((cpu), (work)); \
-	error; \
-})
-#else
 #define SCHEDULE_WORK(wl, work)		schedule_work(work)
 #define SCHEDULE_WORK_ON(wl, cpu, work)	schedule_work_on((cpu), (work))
-#endif /* WLCXO_IPC */
 static char intf_name[IFNAMSIZ] = quote_str(BRCM_WLAN_IFNAME);
 
 /* allow override of default wlan interface name at insmod time */
 module_param_string(intf_name, intf_name, IFNAMSIZ, 0);
 
 /* BCMSLTGT: slow target */
-#ifdef BCM7271
-#else /* !BCM7271 */
-
-#endif /* BCM7271 */
 
 /*
  * Before CT DMA is mature enough, here ctdma is off by default, but you can pass
@@ -571,14 +542,19 @@ static int ctdma = 0;
 module_param(ctdma, int, 0);
 #endif
 
-#if defined(USE_CFG80211) && !defined(BCMDONGLEHOST)
+#if defined(USE_CFG80211)
 int passive_channel_skip = 0;
 module_param(passive_channel_skip, int, (S_IRUSR|S_IWUSR));
-#endif /* defined(USE_CFG80211) && !defined(BCMDONGLEHOST) */
+#endif /* defined(USE_CFG80211) */
 
 #ifndef SRCBASE
 #define SRCBASE "."
 #endif
+
+#if defined(USE_CFG80211)
+struct net_device *wl_net_find(void *wl, const char* ifname);
+int wl_net_attach(void *netdev, int bssidx);
+#endif /* defined(USE_CFG80211) */
 
 #define FOREACH_WL(wl_cmn, idx, current_wl) \
 	for ((idx) = 0; (int) (idx) < MAX_RSDB_MAC_NUM; (idx)++) \
@@ -640,7 +616,11 @@ static const struct net_device_ops wl_netdev_ops =
 #else
 	.ndo_start_xmit = wl_start,
 #endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
+	.ndo_get_stats64 = wl_get_stats64,
+#else
 	.ndo_get_stats = wl_get_stats,
+#endif /* KERNEL_VERSION >= 2.6.36 */
 	.ndo_set_mac_address = wl_set_mac_address,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 2, 0)
 	.ndo_set_rx_mode = wl_set_multicast_list,
@@ -650,7 +630,7 @@ static const struct net_device_ops wl_netdev_ops =
 	.ndo_do_ioctl = wl_ioctl
 };
 
-#if defined(USE_CFG80211) && !defined(BCMDONGLEHOST)
+#if defined(USE_CFG80211)
 static int wl_preinit_ioctls(struct net_device *ndev)
 {
 
@@ -701,13 +681,13 @@ static int wl_preinit_ioctls(struct net_device *ndev)
 #ifdef WL_CFG80211
 	setbit(eventmask, WLC_E_ESCAN_RESULT);
 
-#if defined(WLP2P) && defined(WL_ENABLE_P2P_IF)
+#if defined(WLP2P) && (defined(WL_ENABLE_P2P_IF) || defined(WL_CFG80211_P2P_DEV_IF))
 
 	setbit(eventmask, WLC_E_ACTION_FRAME_RX);
 	setbit(eventmask, WLC_E_ACTION_FRAME_COMPLETE);
 	setbit(eventmask, WLC_E_ACTION_FRAME_OFF_CHAN_COMPLETE);
 	setbit(eventmask, WLC_E_P2P_DISC_LISTEN_COMPLETE);
-#endif  /* defined(WLP2P) && defined(WL_ENABLE_P2P_IF) */
+#endif  /* defined(WLP2P) && (defined(WL_ENABLE_P2P_IF) || defined(WL_CFG80211_P2P_DEV_IF)) */
 
 #ifdef WL_SDO
 	setbit(eventmask, WLC_E_SERVICE_FOUND);
@@ -729,13 +709,17 @@ static int wl_preinit_ioctls(struct net_device *ndev)
 done:
 	return ret;
 }
-#endif /* USE_CFG80211 */
+#endif /* defined(USE_CFG80211) */
 
 #ifdef WL_MONITOR
 static const struct net_device_ops wl_netdev_monitor_ops =
 {
 	.ndo_start_xmit = wl_monitor_start,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
+	.ndo_get_stats64 = wl_get_stats64,
+#else
 	.ndo_get_stats = wl_get_stats,
+#endif /* KERNEL_VERSION >= 2.6.36 */
 	.ndo_do_ioctl = wl_ioctl
 };
 #endif /* WL_MONITOR */
@@ -790,6 +774,38 @@ wl_if_setup(struct net_device *dev)
 #endif
 } /* wl_if_setup */
 
+#if defined(USE_CFG80211)
+struct net_device *wl_net_find(void *wl, const char* ifname)
+{
+	if (wl && ifname) {
+		wl_if_t *wlif = ((wl_info_t *)wl)->if_list;
+		do {
+			/* WL_ERROR(("%s: wlif->name = %s \n", __FUNCTION__, wlif->dev->name)); */
+			/* WL_ERROR(("%s: ifname = %s\n", __FUNCTION__, ifname)); */
+			if (strcmp (wlif->dev->name, ifname) == 0) {
+					return wlif->dev;
+			}
+			else
+				wlif = wlif->next;
+		}
+		while (wlif);
+	}
+
+	return NULL;
+}
+
+int
+wl_net_attach(void *netdev, int ifidx)
+{
+	struct net_device *dev = (struct net_device *)netdev;
+
+	if (dev) {
+		wl_if_setup(dev);
+	}
+	return 0;
+}
+#endif /* defined(USE_CFG80211) */
+
 #ifdef HNDCTF
 
 static void
@@ -807,6 +823,14 @@ wl_ctf_detach(ctf_t *ci, void *arg)
 	return;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wl_dump_ctf(wl_info_t *wl, struct bcmstrbuf *b)
+{
+	ctf_dump(wl->cih, b);
+	return 0;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 #endif /* HNDCTF */
 
 #if defined(CONFIG_PROC_FS)
@@ -827,126 +851,6 @@ static const struct file_operations wl_proc_fops = {
 };
 #endif /* #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0)) */
 #endif /* #if defined(CONFIG_PROC_FS) */
-
-#ifdef WLCXO_IPC
-#if defined(STRICT_GCC_WARNINGS) && defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == \
-	4 && __GNUC_MINOR__ >= 6))
-#define BCM_SET_LIST_FIRST_ENTRY(entry, ptr, type, member) \
-_Pragma("GCC diagnostic push") \
-_Pragma("GCC diagnostic ignored \"-Wcast-qual\"") \
-(entry) = list_first_entry((ptr), type, member); \
-_Pragma("GCC diagnostic pop") \
-
-#else
-#define BCM_SET_LIST_FIRST_ENTRY(entry, ptr, type, member) \
-(entry) = list_first_entry((ptr), type, member); \
-
-#endif /* STRICT_GCC_WARNINGS */
-
-static int
-wl_swq_thread(void *data)
-{
-	unsigned long flags;
-	struct swq_struct *swq = (struct swq_struct *)data;
-	struct work_struct *work;
-
-	current->flags |= PF_NOFREEZE;
-
-	while (!kthread_should_stop()) {
-		/* Wait for work items to be added */
-		wait_event_interruptible(swq->thread_waitq, !list_empty(&swq->work_list));
-
-		if (kthread_should_stop())
-			break;
-
-		/* Process work items */
-		while (1) {
-			spin_lock_irqsave(&swq->lock, flags);
-			if (list_empty(&swq->work_list)) {
-				spin_unlock_irqrestore(&swq->lock, flags);
-				break;
-			}
-			BCM_SET_LIST_FIRST_ENTRY(work, &swq->work_list, struct work_struct, entry);
-			clear_bit(0, work_data_bits(work));
-			list_del_init(&work->entry);
-			spin_unlock_irqrestore(&swq->lock, flags);
-
-			/* Call the work handler */
-			work->func(work);
-		}
-	}
-
-	/* Cleanup */
-	return 0;
-}
-
-/*
- * Add work to work queue.
- */
-static int32
-wl_swq_add_work(struct swq_struct *swq, struct work_struct *work)
-{
-	int32 ret = 0;
-	unsigned long flags = 0;
-
-	spin_lock_irqsave(&swq->lock, flags);
-	if (!test_and_set_bit(0, work_data_bits(work))) {
-		list_add_tail(&work->entry, &swq->work_list);
-		ret = 1;
-		spin_unlock_irqrestore(&swq->lock, flags);
-		wake_up_interruptible(&swq->thread_waitq);
-	} else
-		spin_unlock_irqrestore(&swq->lock, flags);
-	return ret;
-}
-
-/*
- * Create simple light wt workqueue.
- */
-static struct swq_struct *
-wl_swq_create(wl_info_t *wl, uint8 *name, uint32 cpu)
-{
-	struct swq_struct *swq;
-
-	swq = MALLOCZ(wl->osh, sizeof(*swq));
-	if (swq == NULL)
-		return NULL;
-
-	/* Create kernel thread for given workqueue */
-	swq->thread = kthread_create(wl_swq_thread, swq, name);
-	if (IS_ERR(swq->thread))
-		return NULL;
-
-	spin_lock_init(&swq->lock);
-	init_waitqueue_head(&swq->thread_waitq);
-	INIT_LIST_HEAD(&swq->work_list);
-
-	kthread_bind(swq->thread, cpu);
-	wake_up_process(swq->thread);
-
-	return swq;
-}
-/*
- * destroy wt workqueue
- */
-static void
-wl_swq_destroy(wl_info_t *wl)
-{
-	struct swq_struct *swq = wl->cxo_ctrl_wq;
-
-	if (!swq)
-		return;
-
-	if (swq->thread) {
-		force_sig(SIGKILL, swq->thread);
-		kthread_stop(swq->thread);
-		swq->thread = NULL;
-	}
-
-	MFREE(wl->osh, swq, sizeof(*swq));
-
-}
-#endif /* WLCXO_IPC */
 
 /* Below define is only for router platform */
 #if defined(CONFIG_WL_MODULE) && defined(CONFIG_BCM47XX)
@@ -1012,12 +916,7 @@ wl_rsdb_block_netdev(struct wl_cmn_data *cmndata, uint unit)
  * a warning that this function is defined but not used if we declare
  * it as static.
  */
-
-#if defined(BCM7271) && !defined(PLATFORM_INTEGRATED_WIFI)
-wl_info_t *
-#else
 static wl_info_t *
-#endif /* BCM7271 && !PLATFORM_INTEGRATED_WIFI */
 wl_attach(uint16 vendor, uint16 device, ulong regs,
 	uint bustype, void *btparam, uint irq, uchar* bar1_addr, uint32 bar1_size,
 	uchar* bar2_addr, uint32 bar2_size, void *cmndata)
@@ -1030,11 +929,8 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 #endif
 	osl_t *osh;
 	int unit, err;
-
 #ifdef WLRSDB
 	unsigned int pci_barwin_sz = PCI_BAR0_WINSZ * 2;
-#elif defined(BCM7271)
-	unsigned int pci_barwin_sz = SI_REG_BASE_SIZE;
 #else
 	unsigned int pci_barwin_sz = PCIE2_BAR0_WINSZ;
 #endif
@@ -1051,7 +947,11 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 #ifdef CTFPOOL
 	int32 ctfpoolsz;
 #endif
+#if !defined(STB_SOC_WIFI)
 	struct wl_cmn_data	*commmondata = (struct wl_cmn_data	*)cmndata;
+#else
+	struct wl_cmn_data *commmondata = NULL;
+#endif /* !defined(STB_SOC_WIFI) */
 	int primary_idx = 0;
 	uint online_cpus, iomode = 0;
 	unit = wl_found + instance_base;
@@ -1094,10 +994,6 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 	wl->unit = unit;
 	atomic_set(&wl->callbacks, 0);
 
-#if defined(BCM7271) && !defined(PLATFORM_INTEGRATED_WIFI)
-	wl->bcm7xxx = wl_bcm7xxx_attach(wl);
-#endif /* BCM7271 */
-
 
 #ifdef CONFIG_SMP
 	/* initialize number of online cpus */
@@ -1105,7 +1001,7 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 #if defined(BCM47XX_CA9)
 	if (online_cpus > 1) {
 		if (wl_txq_thresh == 0)
-			wl_txq_thresh = TXQ_CNT_THRESH;
+			wl_txq_thresh = 512;
 	}
 #endif /* BCM47XX_CA9 */
 #else
@@ -1118,14 +1014,6 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 #ifdef WL_ALL_PASSIVE
 	wl->all_dispatch_mode = (passivemode == 0) ? TRUE : FALSE;
 	if (WL_ALL_PASSIVE_ENAB(wl)) {
-#ifdef WLCXO_IPC
-		/* create workqueue on host processor to process events from offload
-		 * processor as well as others. bind the ctrl task to cpu 1.
-		 */
-		wl->cxo_ctrl_wq = wl_swq_create(wl, "wl-cx-ctrl-ipc", 1);
-		if (IS_ERR(wl->cxo_ctrl_wq))
-			goto fail;
-#endif
 		/* init tx work queue for wl_start/send pkt; no need to destroy workitem  */
 		MY_INIT_WORK(&wl->txq_task.work, (work_func_t)wl_start_txqwork);
 		wl->txq_task.context = wl;
@@ -1180,11 +1068,9 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 		wl->piomode = piomode;
 		WL_TRACE(("PCI/%s\n", wl->piomode ? "PIO" : "DMA"));
 	}
-#ifdef BCM7271
 	else if (bustype == SI_BUS) {
-	WL_TRACE(("USING SI_BUS\n"));
+		/* Do nothing */
 	}
-#endif 
 	else if (bustype == RPC_BUS) {
 		/* Do nothing */
 	} else {
@@ -1198,11 +1084,7 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 		goto fail;
 	}
 
-#ifdef BCM7271
-	WL_ERROR(("%s(%d) REG_MAP PHY=0x%08x VIR=0x%p REG_MAP_SIZE=0x%08x\n",
-		__FUNCTION__, __LINE__, (uint32)dev->base_addr, wl->regsva, pci_barwin_sz));
-#endif /* BCM7271 */
-#if defined(VASIP_HW_SUPPORT)
+#if defined(WLVASIP)
 	wl->bar1_addr = bar1_addr;
 	wl->bar1_size = bar1_size;
 	wl->bar2_addr = bar2_addr;
@@ -1216,10 +1098,9 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 		sema_init(&wl->sem, 1);
 
 	spin_lock_init(&wl->txq_lock);
-#ifdef WLCXO_SIM
-	g_txhpktq_lock = &wl->txq_lock;
+#ifdef BCMASSERT_LOG
+	bcm_assertlog_init();
 #endif
-
 
 #ifdef WL_OBJ_REGISTRY
 	if (commmondata->sih) {
@@ -1271,10 +1152,6 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 	wl->cih = ctf_attach(osh, ctf_name, &wl_msg_level, wl_ctf_detach, wl);
 #endif /* HNDCTF */
 
-#ifdef WLCXO_FULL
-	wl->wl_cxo = wl_cxo_attach(osh);
-#endif /* WLCXO_FULL */
-
 	if (wl->piomode)
 		iomode = IOMODE_TYPE_PIO;
 #if defined(BCM_DMA_CT) && !defined(BCM_DMA_CT_DISABLED)
@@ -1288,21 +1165,13 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 		printf("wl driver %s failed with code %d\n", EPI_VERSION_STR, err);
 		goto fail;
 	}
-
 	wl->pub = wlc_pub(wl->wlc);
 
+	/* Some platforms do not pass commondata. Need to check before we access it. */
 	if (commmondata != NULL) {
-		/* Make sure object has been allocated */
 		commmondata->device = device;
 		commmondata->sih =  wl->pub->sih;
 	}
-
-#if defined(WLCXO_IPC)
-	if (WLCXO_ENAB(wl->pub)) {
-		wl->ipc = wlc_cxo_ctrl_ipc(wl->wlc);
-		ASSERT(wl->ipc != NULL);
-	}
-#endif
 
 	/* Populate wlcif of the primary interface in wlif */
 	primary_idx = WLC_BSSCFG_IDX(wlc_bsscfg_primary(wl->wlc));
@@ -1330,19 +1199,20 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 	WL_INFORM(("wl%d: Created the proc entry %s \n", unit, tmp));
 #endif /* #if defined(CONFIG_PROC_FS) */
 
-	bcopy(&wl->pub->cur_etheraddr, dev->dev_addr, ETHER_ADDR_LEN);
+#ifdef BCMDBG
+	if (macaddr != NULL) { /* user command line override */
+		int dbg_err;
 
-#ifdef WLCXO_CTRL
-	if (online_cpus > 1 && txworkq == 0) {
-#ifdef WLCXO_SIM
-		ASSERT(WL_ALL_PASSIVE_ENAB(wl));
-		txworkq = 1;
-#else
-		txworkq = 0;
-#endif
-		printf("%s: txworkq set to %d\n", __FUNCTION__, txworkq);
+		WL_ERROR(("wl%d: setting MAC ADDRESS %s\n", unit, macaddr));
+		bcm_ether_atoe(macaddr, &local_ea);
+
+		dbg_err = wlc_iovar_op(wl->wlc, "cur_etheraddr", NULL, 0, &local_ea,
+			ETHER_ADDR_LEN, IOV_SET, NULL);
+		if (dbg_err)
+			WL_ERROR(("wl%d: Error setting MAC ADDRESS\n", unit));
 	}
-#endif /* WLCXO_CTRL */
+#endif /* BCMDBG */
+	bcopy(&wl->pub->cur_etheraddr, dev->dev_addr, ETHER_ADDR_LEN);
 
 #ifndef NAPI_POLL
 	/* setup the bottom half handler */
@@ -1423,6 +1293,9 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 
 #ifdef HNDCTF
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wl->pub, "ctf", (dump_fn_t)wl_dump_ctf, (void *)wl);
+#endif
 #endif /* HNDCTF */
 
 #ifdef CTFPOOL
@@ -1439,12 +1312,9 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 
 	/* register our interrupt handler */
 	{
-		if (!WLCXO_ENAB(wl->pub)) {
-			/* Request irq for cxo full and non cxo driver cases */
-			if (request_irq(irq, wl_isr, IRQF_SHARED, dev->name, wl)) {
-				WL_ERROR(("wl%d: request_irq() failed\n", unit));
-				goto fail;
-			}
+		if (request_irq(irq, wl_isr, IRQF_SHARED, dev->name, wl)) {
+			WL_ERROR(("wl%d: request_irq() failed\n", unit));
+			goto fail;
 		}
 		dev->irq = irq;
 
@@ -1454,29 +1324,40 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 	WL_ERROR(("Using Wireless Extension\n"));
 #endif
 
-#if defined(USE_CFG80211)
+#if defined(STB_SOC_WIFI)
+	wl->plat_info = (struct wl_platform_info *)cmndata;
+#endif /* STB_SOC_WIFI */
 
-#if !defined(BCMDONGLEHOST)
+#if defined(USE_CFG80211)
 	wl_preinit_ioctls(dev);
-#endif /* !BCMDONGLEHOST */
 
 	parentdev = NULL;
 	if (wl->bcm_bustype == PCI_BUS) {
+		struct pci_dev *pci_dev = (struct pci_dev *)btparam;
+		if (pci_dev != NULL)
+			SET_NETDEV_DEV(dev, &pci_dev->dev);
 		parentdev = &((struct pci_dev *)btparam)->dev;
 	}
-#ifdef BCM7271
-	wl_cfg80211_attach(dev, parentdev);
+#if defined(STB_SOC_WIFI) && defined(PLATFORM_INTEGRATED_WIFI)
+	else if (wl->bcm_bustype == SI_BUS) {
+		struct device *pdev_dev = (struct device *)btparam;
+		if (pdev_dev != NULL)
+			SET_NETDEV_DEV(dev, pdev_dev);
+		parentdev = pdev_dev;
+	}
+#endif /* STB_SOC_WIFI && PLATFORM_INTEGRATED_WIFI */
+#if defined(STB_SOC_WIFI) && !defined(PLATFORM_INTEGRATED_WIFI)
+	wl_cfg80211_attach(dev, parentdev, wl);
 #else
 	if (parentdev) {
-		if (wl_cfg80211_attach(dev, parentdev)) {
+		if (wl_cfg80211_attach(dev, parentdev, wl)) {
 			goto fail;
 		}
-	}
-	else {
-		WL_ERROR(("unsupported bus type\n"));
+	} else {
+		WL_ERROR(("wl%d: parentdev is NULL\n", unit));
 		goto fail;
 	}
-#endif /* BCM7271 */
+#endif /* STB_SOC_WIFI && !PLATFORM_INTEGRATED_WIFI */
 #else
 
 	if (wl->bcm_bustype == PCI_BUS) {
@@ -1577,6 +1458,9 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 		goto fail;
 	}
 
+#ifdef BCMDBG
+	wlc_dump_register(wl->pub, "wl", (dump_fn_t)wl_dump, (void *)wl);
+#endif
 
 	if (device > 0x9999)
 		printf("%s: Broadcom BCM%d 802.11 Wireless Controller " EPI_VERSION_STR,
@@ -1585,6 +1469,9 @@ wl_attach(uint16 vendor, uint16 device, ulong regs,
 		printf("%s: Broadcom BCM%04x 802.11 Wireless Controller " EPI_VERSION_STR,
 			dev->name, device);
 
+#ifdef BCMDBG
+	printf(" (Compiled in " SRCBASE " at " __TIME__ " on " __DATE__ ")");
+#endif /* BCMDBG */
 	printf("\n");
 
 #if defined(CONFIG_WL_MODULE) && defined(CONFIG_BCM47XX)
@@ -1653,6 +1540,10 @@ wl_read_proc(struct seq_file *m, void *v)
 	wl = (wl_info_t *)v;
 
 	WL_LOCK(wl);
+#if defined(BCMDBG)
+	/* pass space delimited variables for dumping */
+	wlc_iovar_op(wl->wlc, "dump", NULL, 0, buffer, sizeof(buffer), IOV_GET, NULL);
+#endif
 	WL_UNLOCK(wl);
 
 	seq_puts(m, buffer);
@@ -1669,6 +1560,19 @@ wl_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, voi
 
 	len = pos = begin = 0;
 
+#if defined(BCMDBG)
+	{
+	wl_info_t *wl;
+
+	wl = (wl_info_t*) data;
+
+	WL_LOCK(wl);
+	/* pass space delimited variables for dumping */
+	wlc_iovar_op(wl->wlc, "dump", NULL, 0, buffer, PAGE_SIZE, IOV_GET, NULL);
+	len = strlen(buffer);
+	WL_UNLOCK(wl);
+	}
+#endif
 	pos = begin + len;
 
 	if (pos < offset) {
@@ -1688,9 +1592,6 @@ wl_read_proc(char *buffer, char **start, off_t offset, int length, int *eof, voi
 } /* wl_read_proc */
 #endif /* #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 10, 0)) */
 #endif /* #if defined(CONFIG_PROC_FS) */
-
-#if defined(BCM7271) && !defined(PLATFORM_INTEGRATED_WIFI)
-#else /* !BCM7271 && !PLATFORM_INTEGRATED_WIFI */
 
 /* For now, JTAG, SDIO, and PCI are mutually exclusive.  When this changes, remove
  * #if !defined(BCMJTAG) && !defined(BCMSDIO) ... #endif conditionals.
@@ -1762,7 +1663,7 @@ wl_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		pci_write_config_dword(pdev, 0x40, val & 0xffff00ff);
 #endif /* LINUXSTA_PS */
 
-#if defined(VASIP_HW_SUPPORT)
+#if defined(WLVASIP)
 	bar1_size = pci_resource_len(pdev, 2);
 	bar1_addr = (uchar *)ioremap_nocache(pci_resource_start(pdev, 2),
 		bar1_size);
@@ -1910,7 +1811,15 @@ static struct pci_driver wl_pci_driver = {
 
 
 
-#ifdef PLATFORM_INTEGRATED_WIFI
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
+static const struct of_device_id plat_devices_of_match[] = {
+#ifdef STB_SOC_WIFI
+	{ .compatible = "brcm,bcm7271-wlan", },
+#endif /* STB_SOC_WIFI */
+	{ .compatible = "", } /* Empty terminated list */
+};
+MODULE_DEVICE_TABLE(of, plat_devices_of_match);
+
 static struct platform_driver wl_plat_drv = {
 	.probe	=		wl_plat_drv_probe,
 	.remove =		wl_plat_drv_remove,
@@ -1923,7 +1832,18 @@ static struct platform_driver wl_plat_drv = {
 		.of_match_table = plat_devices_of_match,
 		},
 };
-#endif /* PLATFORM_INTEGRATED_WIFI */
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
+
+#if defined(STBSOC_CHAR_DRV)
+static wl_char_drv_dev_t *gpDev = NULL;
+
+struct file_operations wl_char_drv_ops = {
+	.owner          = THIS_MODULE,
+	.open           = wl_char_drv_open,
+	.release        = wl_char_drv_release,
+	.unlocked_ioctl = wl_char_drv_ioctl,
+};
+#endif /* STBSOC_CHAR_DRV */
 
 #if defined(BCM_DNGL_EMBEDIMAGE)
 
@@ -1944,6 +1864,36 @@ wl_module_init(void)
 {
 	int error = -ENODEV;
 
+#ifdef BCMDBG
+	if (msglevel != 0xdeadbeef)
+		wl_msg_level = msglevel;
+	else {
+		const char *var = getvar(NULL, "wl_msglevel");
+		if (var)
+			wl_msg_level = bcm_strtoul(var, NULL, 0);
+	}
+	printf("%s: msglevel set to 0x%x\n", __FUNCTION__, wl_msg_level);
+	if (msglevel2 != 0xdeadbeef)
+		wl_msg_level2 = msglevel2;
+	else {
+		const char *var = getvar(NULL, "wl_msglevel2");
+		if (var)
+			wl_msg_level2 = bcm_strtoul(var, NULL, 0);
+	}
+	printf("%s: msglevel2 set to 0x%x\n", __FUNCTION__, wl_msg_level2);
+	{
+		extern uint32 phyhal_msg_level;
+
+		if (phymsglevel != 0xdeadbeef)
+			phyhal_msg_level = phymsglevel;
+		else {
+			const char *var = getvar(NULL, "phy_msglevel");
+			if (var)
+				phyhal_msg_level = bcm_strtoul(var, NULL, 0);
+		}
+		printf("%s: phymsglevel set to 0x%x\n", __FUNCTION__, phyhal_msg_level);
+	}
+#endif /* BCMDBG */
 
 #if defined(WL_ALL_PASSIVE)
 	{
@@ -1958,21 +1908,64 @@ wl_module_init(void)
 	}
 #endif /* defined(WL_ALL_PASSIVE) */
 
+#ifdef BCMDBG_ASSERT
+	/* Use the module param assert_type, if specified, to set our assert behavior */
+	if (assert_type != 0xdeadbeef) {
+		g_assert_type = assert_type;
+	} else {
+		g_assert_type = 0;
+	}
+#endif /* BCMDBG_ASSERT */
 
 #if defined(CONFIG_WL_ALL_PASSIVE_RUNTIME) || defined(WL_ALL_PASSIVE)
 	{
 		char *var = getvar(NULL, "wl_txq_thresh");
 		if (var)
 			wl_txq_thresh = bcm_strtoul(var, NULL, 0);
+#ifdef BCMDBG
+			WL_PRINT(("%s: wl_txq_thresh set to 0x%x\n",
+				__FUNCTION__, wl_txq_thresh));
+#endif
 	}
 #endif /* CONFIG_WL_ALL_PASSIVE_RUNTIME || WL_ALL_PASSIVE */
 
 
 
 #ifdef CONFIG_PCI
-	if (!(error = pci_module_init(&wl_pci_driver)))
-		return (0);
+	{
+		uint16 devid = 0x0;
 
+#ifdef STB_SOC_WIFI
+		stb_devid = wl_stbsoc_get_devid();
+		if (stb_devid == 0)
+			WL_ERROR(("Can't find devid in nvram.txt\n"));
+		else
+			devid = stb_devid;
+#else /* STB_SOC_WIFI */
+		const char *var = getvar(NULL, "devid");
+		if (var)
+			devid = bcm_strtoul(var, NULL, 0);
+#endif /* STB_SOC_WIFI */
+
+		switch (devid) {
+			case BCM7271_D11AC_ID:
+			case BCM7271_D11AC2G_ID:
+			case BCM7271_D11AC5G_ID:
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
+				if (!(error = platform_driver_register(&wl_plat_drv)))
+					return 0;
+#elif defined(STBSOC_CHAR_DRV)
+				/* Use char driver if platform not used. */
+				if (!(error = wl_char_drv_init()))
+					return 0;
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
+				break;
+			default:
+				if (!(error = pci_module_init(&wl_pci_driver)))
+					return (0);
+				break;
+		}
+	}
 #ifdef WL_PCMCIA
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0)
 	if (!(error = pcmcia_register_driver(&wl_driver)))
@@ -1998,12 +1991,6 @@ wl_module_init(void)
 	}
 #endif /* BCMDBUS */
 
-#ifdef PLATFORM_INTEGRATED_WIFI
-	if (!(error = platform_driver_register(&wl_plat_drv))) {
-		return 0;
-	}
-#endif /* PLATFORM_INTEGRATED_WIFI */
-
 	return (error);
 } /* wl_module_init */
 
@@ -2019,7 +2006,33 @@ wl_module_exit(void)
 
 
 #ifdef CONFIG_PCI
-	pci_unregister_driver(&wl_pci_driver);
+	{
+		uint16 devid = 0x0;
+
+#ifdef STB_SOC_WIFI
+		devid = stb_devid;
+#else /* STB_SOC_WIFI */
+		const char *var = getvar(NULL, "devid");
+		if (var)
+			devid = bcm_strtoul(var, NULL, 0);
+#endif /* STB_SOC_WIFI */
+
+		switch (devid) {
+			case BCM7271_D11AC_ID:
+			case BCM7271_D11AC2G_ID:
+			case BCM7271_D11AC5G_ID:
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
+				platform_driver_unregister(&wl_plat_drv);
+#elif defined(STBSOC_CHAR_DRV)
+				/* Use char driver if platform not used. */
+				wl_char_drv_deinit();
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
+				break;
+			default:
+				pci_unregister_driver(&wl_pci_driver);
+				break;
+		}
+	}
 
 #ifdef WL_PCMCIA
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 0)
@@ -2043,15 +2056,10 @@ wl_module_exit(void)
 #ifdef BCMDBUS
 	dbus_deregister();
 #endif /* BCMDBUS */
-
-#ifdef PLATFORM_INTEGRATED_WIFI
-	platform_driver_unregister(&wl_plat_drv);
-#endif /* PLATFORM_INTEGRATED_WIFI */
 } /* wl_module_exit */
 
 module_init(wl_module_init);
 module_exit(wl_module_exit);
-#endif /* BCM7271 and PLATFORM_INTEGRATED_WIFI! */
 
 /**
  * This function frees the WL per-device resources.
@@ -2073,7 +2081,7 @@ wl_free(wl_info_t *wl)
 	wlc_iovar_setint(wl->wlc, "sr_enable", 0);
 #endif /* SAVERESTORE */
 	{
-		if (!WLCXO_ENAB(wl->pub) && wl->dev && wl->dev->irq)
+		if (wl->dev && wl->dev->irq)
 			free_irq(wl->dev->irq, wl);
 	}
 
@@ -2175,9 +2183,17 @@ wl_free(wl_info_t *wl)
 	while (atomic_read(&wl->callbacks) > 0)
 		schedule();
 
+#if defined(USE_CFG80211)
+		  wl_cfg80211_detach(wl_get_cfg(NULL));
+#endif /* defined(USE_CFG80211) */
+
 	/* free timers */
 	for (t = wl->timers; t; t = next) {
 		next = t->next;
+#ifdef BCMDBG
+		if (t->name)
+			MFREE(wl->osh, t->name, strlen(t->name) + 1);
+#endif
 		MFREE(wl->osh, t, sizeof(wl_timer_t));
 	}
 
@@ -2192,7 +2208,7 @@ wl_free(wl_info_t *wl)
 	}
 	wl->regsva = NULL;
 	/* move following code under bustype */
-#if defined(VASIP_HW_SUPPORT)
+#if defined(WLVASIP)
 	if (wl->bar1_addr) {
 		iounmap(wl->bar1_addr);
 		wl->bar1_addr = NULL;
@@ -2223,28 +2239,11 @@ wl_free(wl_info_t *wl)
 #endif /* LINUX_CRYPTO */
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 14) */
 
-#ifdef WL_ALL_PASSIVE
-	if (WL_ALL_PASSIVE_ENAB(wl)) {
-
-#if defined(WLCXO_SIM) && defined(WLCXO_IPC)
-		g_d2c_cxo_ctrl_wq = NULL;
-#endif
-
-#ifdef WLCXO_IPC
-		if (wl->cxo_ctrl_wq) {
-			wl_swq_destroy(wl);
-			wl->cxo_ctrl_wq = NULL;
-		}
-#endif
-	}
-#endif /* WL_ALL_PASSIVE */
-
 	wl_txq_free(wl);
 
-#ifdef WLCXO_SIM
-	wl_txhpktq_free(wl);
+#ifdef BCMASSERT_LOG
+	bcm_assertlog_deinit();
 #endif
-
 
 #ifdef CTFPOOL
 	/* free the buffers in fast pool */
@@ -2269,11 +2268,6 @@ wl_free(wl_info_t *wl)
 	}
 	wl->objr = NULL;
 #endif
-#ifdef WLCXO_FULL
-	if (wl->wl_cxo != NULL) {
-		wl_cxo_detach(wl->wl_cxo);
-	}
-#endif /* WLCXO_FULL */
 
 	MFREE(osh, wl, sizeof(wl_info_t));
 
@@ -2347,7 +2341,6 @@ wl_close(struct net_device *dev)
 		netif_down(dev);
 		netif_stop_queue(dev);
 	}
-
 	WL_UNLOCK(wl);
 
 	OLD_MOD_DEC_USE_COUNT;
@@ -2407,7 +2400,7 @@ wl_start_int(wl_info_t *wl, wl_if_t *wlif, struct sk_buff *skb)
 	WL_TRACE(("wl%d: wl_start: len %d data_len %d summed %d csum: 0x%x\n",
 		wl->pub->unit, skb->len, skb->data_len, skb->ip_summed, (uint32)skb->csum));
 
-	_WL_LOCK(wl);
+	WL_LOCK(wl);
 
 	/* Convert the packet. Mainly attach a pkttag */
 	pkt = PKTFRMNATIVE(wl->osh, skb);
@@ -2421,7 +2414,7 @@ wl_start_int(wl_info_t *wl, wl_if_t *wlif, struct sk_buff *skb)
 			if (wl_arp_send_proc(arpi, pkt) ==
 				ARP_REPLY_HOST) {
 				PKTFREE(wl->osh, pkt, TRUE);
-				_WL_UNLOCK(wl);
+				WL_UNLOCK(wl);
 				return 0;
 			}
 		}
@@ -2444,14 +2437,9 @@ wl_start_int(wl_info_t *wl, wl_if_t *wlif, struct sk_buff *skb)
 #endif
 
 
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(wl->pub))
-		wlc_cxo_ctrl_sendpkt(wl->wlc, pkt, wlif->wlcif);
-	else
-#endif
-		wlc_sendpkt(wl->wlc, pkt, wlif->wlcif);
+	wlc_sendpkt(wl->wlc, pkt, wlif->wlcif);
 
-	_WL_UNLOCK(wl);
+	WL_UNLOCK(wl);
 
 	return (0);
 } /* wl_start_int */
@@ -2505,59 +2493,6 @@ wl_schedule_task(wl_info_t *wl, void (*fn)(struct wl_task *task), void *context)
 	return 0;
 }
 #endif /* defined(AP) || defined(WL_ALL_PASSIVE) || defined(WL_MONITOR) */
-
-#ifdef WLCXO_CTRL
-typedef struct wl_cx_task {
-	struct work_struct	work;
-	void			*context;
-	wl_info_t		*wl;
-	void			(*fn)(void *ctx);
-} wl_cx_task_t;
-
-static void
-wl_cxo_scheduled_fn(struct work_struct *work)
-{
-	wl_cx_task_t *task = (wl_cx_task_t *)work;
-	void *context = task->context;
-	wl_info_t *wl = task->wl;
-
-	WL_WMF(("wl%d: wl_cxo_scheduled_fn\n", wl->pub->unit));
-	WL_LOCK(wl);
-	task->fn(context);
-	WL_UNLOCK(wl);
-
-	MFREE(wl->osh, task, sizeof(*task));
-}
-
-int32
-wl_cxo_schedule_fn(wl_info_t *wl, void (*fn)(void *ctx), void *context)
-{
-	wl_cx_task_t *task;
-
-	WL_WMF(("wl%d: wl_schedule_task\n", wl->pub->unit));
-
-	if (!(task = MALLOC(wl->osh, sizeof(*task)))) {
-		WL_ERROR(("wl%d: wl_schedule_task: out of memory, malloced %d bytes\n",
-			wl->pub->unit, MALLOCED(wl->osh)));
-		return -ENOMEM;
-	}
-
-	MY_INIT_WORK(&task->work, (work_func_t)wl_cxo_scheduled_fn);
-	task->fn = fn;
-	task->context = context;
-	task->wl = wl;
-
-	if (!SCHEDULE_WORK(wl, &task->work)) {
-		WL_ERROR(("wl%d: schedule_work() failed\n", wl->pub->unit));
-		MFREE(wl->osh, task, sizeof(*task));
-		return -ENOMEM;
-	}
-
-	atomic_inc(&wl->callbacks);
-
-	return 0;
-}
-#endif /* WLCXO_CTRL */
 
 /****************
 priv_link is the private struct that we tell netdev about.  This in turn point to a wlif.
@@ -2619,6 +2554,11 @@ static void
 wl_free_if(wl_info_t *wl, wl_if_t *wlif)
 {
 	wl_if_t *p;
+
+#if defined(USE_CFG80211)
+	s32 pre_locked = -1;
+#endif
+
 	ASSERT(wlif);
 	ASSERT(wl);
 
@@ -2633,13 +2573,24 @@ wl_free_if(wl_info_t *wl, wl_if_t *wlif)
 		if (wl->cih)
 			ctf_dev_unregister(wl->cih, wlif->dev);
 #endif /* HNDCTF */
-		unregister_netdev(wlif->dev);
-		wlif->dev_registered = FALSE;
-	}
 
 #if defined(USE_CFG80211)
-	wl_cfg80211_detach(wl_get_cfg(wlif->dev));
-#endif
+		pre_locked = wl_cfg80211_ifdel_ops(wlif->dev);
+		WL_TRACE(("%s: Start unregister netdev %s\n", __FUNCTION__, wlif->dev->name));
+		if (rtnl_is_locked() && pre_locked == 0) {
+			WL_TRACE(("%s: locked. call unregister_netdevice\n", __FUNCTION__));
+			unregister_netdevice(wlif->dev);
+		}
+		else
+#endif /* defined(USE_CFG80211) */
+			unregister_netdev(wlif->dev);
+		wlif->dev_registered = FALSE;
+		WL_TRACE(("%s: unregister netdev done %s\n", __FUNCTION__, wlif->dev->name));
+
+#if defined(USE_CFG80211)
+		wl_cfg80211_notify_ifdel(wlif->dev);
+#endif /* USE_CFG80211 */
+	}
 	/* remove the interface from the interface linked list */
 	p = wl->if_list;
 	if (p == wlif)
@@ -2652,6 +2603,11 @@ wl_free_if(wl_info_t *wl, wl_if_t *wlif)
 	}
 
 	if (wlif->dev) {
+#if defined(USE_CFG80211)
+		while (wlif->dev->reg_state != NETREG_UNREGISTERED) {
+			msleep(1);
+		}
+#endif /* defined(USE_CFG80211) */
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 24))
 		MFREE(wl->osh, wlif->dev->priv, sizeof(priv_link_t));
 		MFREE(wl->osh, wlif->dev, sizeof(struct net_device));
@@ -2761,6 +2717,10 @@ _wl_add_if(wl_task_t *task)
 	wl_info_t *wl = wlif->wl;
 	struct net_device *dev;
 	wlc_bsscfg_t *cfg;
+#if defined(USE_CFG80211)
+	s32 pre_locked = -1;
+#endif /* defined(USE_CFG80211) */
+
 
 	WL_TRACE(("%s\n", __FUNCTION__));
 
@@ -2795,11 +2755,31 @@ _wl_add_if(wl_task_t *task)
 
 	bcopy(&cfg->cur_etheraddr, dev->dev_addr, ETHER_ADDR_LEN);
 
-	if (register_netdev(dev)) {
-		WL_ERROR(("wl%d: wl_add_if: register_netdev() failed for \"%s\"\n",
-			wl->pub->unit, dev->name));
+#if defined(USE_CFG80211)
+	WL_TRACE(("%s: Start register_netdev() %s\n", __FUNCTION__, wlif->name));
+	pre_locked = wl_cfg80211_setup_vwdev(dev, 0, P2PAPI_BSSCFG_CONNECTION);
+	if (pre_locked == -1)
+	{
+		WL_ERROR(("%s: Setup cfg80211 netdev failed. name=%s\n", __FUNCTION__, wlif->name));
 		goto done;
 	}
+	if (rtnl_is_locked() && (pre_locked == 0)) {
+		WL_TRACE(("%s: it is locked, name=%s\n", __FUNCTION__, wlif->name));
+		if (register_netdevice(dev)) {
+			WL_ERROR(("wl%d: wl_add_if: register_netdev() failed for \"%s\"\n",
+				wl->pub->unit, dev->name));
+			goto done;
+		}
+	} else
+#endif /* defined(USE_CFG80211) */
+	{
+		if (register_netdev(dev)) {
+			WL_ERROR(("wl%d: wl_add_if: register_netdev() failed for \"%s\"\n",
+				wl->pub->unit, dev->name));
+			goto done;
+		}
+	}
+	WL_TRACE(("%s: register_netdev succeed\n", __FUNCTION__));
 	wlif->dev_registered = TRUE;
 
 
@@ -2845,8 +2825,26 @@ wl_add_if(wl_info_t *wl, struct wlc_if *wlcif, uint unit, struct ether_addr *rem
 	/* netdev isn't ready yet so stash name here for now and
 	   copy into netdev when it becomes ready
 	 */
-	(void)snprintf(wlif->name, sizeof(wlif->name), "%s%d.%d", devname, wl->pub->unit,
-	               wlif->subunit);
+#if defined(USE_CFG80211)
+	if (wl_cfg80211_query_if_name(wlif->dev, wlif->name) == -1)
+	{
+		WL_TRACE(("wpa virtual interface name does not exist. Change to %s\n", wlif->name));
+		sprintf(wlif->name, "%s%d.%d", devname, wl->pub->unit, wlif->subunit);
+	}
+	else {
+		WL_TRACE(("wpa virtual interface name exist. (%s)\n", wlif->name));
+	}
+#else
+	if (remote) {
+		wlc_bsscfg_t *cfg = wlc_bsscfg_find_by_wlcif(wl->wlc, wlcif);
+		ASSERT(cfg != NULL);
+		(void)snprintf(wlif->name, sizeof(wlif->name), "%s%d.%d.%d", devname, wl->pub->unit,
+				WLC_BSSCFG_IDX(cfg), wlif->subunit);
+	} else {
+		(void)snprintf(wlif->name, sizeof(wlif->name), "%s%d.%d", devname, wl->pub->unit,
+			wlif->subunit);
+	}
+#endif /* defined(USE_CFG80211) */
 
 	if (wl_schedule_task(wl, _wl_add_if, wlif)) {
 		MFREE(wl->osh, wlif, sizeof(wl_if_t) + sizeof(struct net_device));
@@ -2917,26 +2915,6 @@ wl_del_if(wl_info_t *wl, wl_if_t *wlif)
 	}
 }
 
-#ifdef WLCXO
-#ifndef WLCXO_IPC
-/* Return pointer to lock var */
-void *
-wl_lockvar(wl_info_t *wl)
-{
-	return (void *)&wl->sem;
-}
-#endif /* WLCXO_IPC */
-
-#ifdef HNDCTF
-/* Return pointer to lock var */
-ctf_t *
-wl_cihvar(wl_info_t *wl)
-{
-	return wl->cih;
-}
-#endif /* HNDCTF */
-#endif /* WLCXO */
-
 /** Return pointer to interface name */
 char *
 wl_ifname(wl_info_t *wl, wl_if_t *wlif)
@@ -2986,24 +2964,14 @@ wl_reset(wl_info_t *wl)
 void BCMFASTPATH
 wl_intrson(wl_info_t *wl)
 {
-	if (WLCXO_ENAB(wl->pub))
-		wlc_intrson(wl->wlc);
-	else {
-		unsigned long flags = 0;
+	unsigned long flags = 0;
 
-		INT_LOCK(wl, flags);
-		wlc_intrson(wl->wlc);
-		INT_UNLOCK(wl, flags);
-	}
-
-#ifdef BCM7271
+	INT_LOCK(wl, flags);
+	wlc_intrson(wl->wlc);
 #ifdef STB_SOC_WIFI
-		wl_soc_wifi_enable_intrs(wl);
-#else /* STB_SOC_WIFI */
-		wl_bcm7xxx_interrupt_enable();
-#endif /* STB_SOC_WIFI  */
-#endif /* BCM7271 */
-
+	wl_stbsoc_enable_intrs(wl->plat_info);
+#endif /* STB_SOC_WIFI */
+	INT_UNLOCK(wl, flags);
 }
 
 bool
@@ -3018,37 +2986,23 @@ wl_intrsoff(wl_info_t *wl)
 	unsigned long flags = 0;
 	uint32 status;
 
-	if (WLCXO_ENAB(wl->pub))
-		status = wlc_intrsoff(wl->wlc);
-	else {
-		INT_LOCK(wl, flags);
-		status = wlc_intrsoff(wl->wlc);
-		INT_UNLOCK(wl, flags);
-	}
-
-#ifdef BCM7271
+	INT_LOCK(wl, flags);
+	status = wlc_intrsoff(wl->wlc);
 #ifdef STB_SOC_WIFI
-		wl_soc_wifi_disable_intrs(wl);
-#else /* STB_SOC_WIFI */
-		wl_bcm7xxx_interrupt_disable();
-#endif /* STB_SOC_WIFI  */
-#endif /* BCM7271 */
-
+	wl_stbsoc_disable_intrs(wl->plat_info);
+#endif /* STB_SOC_WIFI */
+	INT_UNLOCK(wl, flags);
 	return status;
 }
 
 void
 wl_intrsrestore(wl_info_t *wl, uint32 macintmask)
 {
-	if (WLCXO_ENAB(wl->pub))
-		wlc_intrsrestore(wl->wlc, macintmask);
-	else {
-		unsigned long flags = 0;
+	unsigned long flags = 0;
 
-		INT_LOCK(wl, flags);
-		wlc_intrsrestore(wl->wlc, macintmask);
-		INT_UNLOCK(wl, flags);
-	}
+	INT_LOCK(wl, flags);
+	wlc_intrsrestore(wl->wlc, macintmask);
+	INT_UNLOCK(wl, flags);
 }
 
 int
@@ -3327,7 +3281,7 @@ wl_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	if (cmd == SIOCETHTOOL)
 		return (wl_ethtool(wl, (void*)ifr->ifr_data, wlif));
 
-#if defined(OEM_ANDROID)
+#if defined(USE_CFG80211) && defined(OEM_ANDROID)
 	if (cmd == SIOCDEVPRIVATE+1)
 		return wl_android_priv_cmd(dev, ifr, cmd);
 #endif /* OEM_ANDROID */
@@ -3413,6 +3367,48 @@ done2:
 	return (OSL_ERROR(bcmerror));
 } /* wl_ioctl */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
+static struct rtnl_link_stats64*
+wl_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
+{
+	wl_info_t *wl;
+	wl_if_t *wlif;
+	wl_if_stats_t wlif_stats;
+
+	if (!dev)
+		return NULL;
+
+	if ((wl = WL_INFO_GET(dev)) == NULL)
+		return NULL;
+
+	if ((wlif = WL_DEV_IF(dev)) == NULL)
+		return NULL;
+
+	memset(&wlif_stats, 0, sizeof(wl_if_stats_t));
+	wlc_wlcif_stats_get(wl->wlc, wlif->wlcif, &wlif_stats);
+
+	stats->rx_packets = WLCNTVAL(wlif_stats.rxframe);
+	stats->tx_packets = WLCNTVAL(wlif_stats.txframe);
+	stats->rx_bytes = WLCNTVAL(wlif_stats.rxbyte);
+	stats->tx_bytes = WLCNTVAL(wlif_stats.txbyte);
+	stats->rx_errors = WLCNTVAL(wlif_stats.rxerror);
+	stats->tx_errors = WLCNTVAL(wlif_stats.txerror);
+	stats->collisions = 0;
+	stats->rx_length_errors = 0;
+	/*
+	 * Stats which are not kept per interface
+	 * come from per radio stats
+	 */
+	stats->rx_over_errors = WLCNTVAL(wl->pub->_cnt->rxoflo);
+	stats->rx_crc_errors = WLCNTVAL(wl->pub->_cnt->rxcrc);
+	stats->rx_frame_errors = 0;
+	stats->rx_fifo_errors = WLCNTVAL(wl->pub->_cnt->rxoflo);
+	stats->rx_missed_errors = 0;
+	stats->tx_fifo_errors = 0;
+
+	return stats;
+}
+#else
 static struct net_device_stats*
 wl_get_stats(struct net_device *dev)
 {
@@ -3441,6 +3437,7 @@ wl_get_stats(struct net_device *dev)
 	memcpy(stats, stats_watchdog, sizeof(struct net_device_stats));
 	return (stats);
 }
+#endif /* KERNEL_VERSION >= 2.6.36 */
 
 #ifdef USE_IW
 struct iw_statistics *
@@ -3663,13 +3660,10 @@ wl_isr(int irq, void *dev_id, struct pt_regs *ptregs)
 
 	WL_ISRLOCK(wl, flags);
 
-#ifdef BCM7271
 #ifdef STB_SOC_WIFI
-	wl_soc_wifi_d2h_isr(wl);
-#else /* STB_SOC_WIFI */
-	wl_bcm7xxx_d2h_int2_isr();
-#endif /* STB_SOC_WIFI  */
-#endif /* BCM7271 */
+	/* device to host interrupt handler */
+	wl_stbsoc_d2h_isr(wl->plat_info);
+#endif /* STB_SOC_WIFI */
 
 	/* call common first level interrupt handler */
 	if ((ours = wlc_isr(wl->wlc, &wantdpc))) {
@@ -3701,10 +3695,9 @@ wl_isr(int irq, void *dev_id, struct pt_regs *ptregs)
 #endif /* NAPI_POLL */
 		}
 	}
-
 #ifdef STB_SOC_WIFI
 	/* re-enable device to host interrupt */
-	wl_soc_wifi_d2h_intstatus(wl);
+	wl_stbsoc_d2h_intstatus(wl->plat_info);
 #endif /* STB_SOC_WIFI */
 
 	WL_ISRUNLOCK(wl, flags);
@@ -3742,13 +3735,9 @@ wl_dpc(ulong data)
 	WL_LOCK(wl);
 #endif /* NAPI_POLL */
 
-#ifdef WLCXO_CTRL
-	ASSERT(!WLCXO_ENAB(wl->pub));
-#endif
-
 	/* call the common second level interrupt handler */
 	if (wl->pub->up) {
-		wlc_dpc_info_t dpci = {0, 0};
+		wlc_dpc_info_t dpci = {0};
 
 		if (wl->resched) {
 			unsigned long flags = 0;
@@ -3887,64 +3876,6 @@ wl_sendup_event(wl_info_t *wl, wl_if_t *wlif, void *p)
 	wl_sendup(wl, wlif, p, 1);
 }
 
-#if defined(WLCXO_SIM) && defined(WLCXO_IPC)
-void
-wl_cxo_ctrl_ipc_init(struct wl_info *wl)
-{
-	/* Initialize task struct for host ipc receive */
-	MY_INIT_WORK(&wl->ipc_task.work, (work_func_t)wl_cxo_ctrl_ipc_task);
-	wl->ipc_task.context = wl;
-	/* initialize cxo ipc globals */
-	g_d2c_ipc_hdl = &wl->ipc_task.work;
-	g_d2c_cxo_ctrl_wq = wl->cxo_ctrl_wq;
-	sema_init(&wl->ctrl_ret_sem, 0);
-	g_d2c_ipc_ret_hdl = &wl->ctrl_ret_sem;
-	smp_wmb();
-}
-#endif /* WLCXO_SIM && WLCXO_IPC */
-
-#ifdef WLCXO_SIM
-/**
- * Called by host driver to indicate a new message to offload driver.
- */
-void
-wl_cxo_new_msg_intr(wl_info_t *wl)
-{
-	ASSERT(wl != NULL);
-
-	/* Indication to offload driver that a new ipc message is pending */
-	schedule_work_on(1, (struct work_struct *)(uintptr)g_c2d_ipc_hdl);
-}
-#endif /* WLCXO_SIM */
-
-#if defined(WLCXO_IPC)
-void
-wl_cxo_ret_msg_intr(wl_info_t *wl)
-{
-	ASSERT(wl != NULL);
-
-	/* Indication to offload driver that a new ipc message is pending */
-	up((struct semaphore *)(uintptr)g_c2d_ipc_ret_hdl);
-}
-
-void
-wl_cxo_wait_for_ipc_event(wl_info_t *wl)
-{
-	down((struct semaphore *)(uintptr)g_d2c_ipc_ret_hdl);
-}
-
-static void
-wl_cxo_ctrl_ipc_task(wl_task_t *task)
-{
-	wl_info_t *wl = (wl_info_t *)task->context;
-
-	_WL_LOCK(wl);
-	while (wlc_cxo_ipc_msg_handle(wl->ipc) == BCME_OK)
-		;
-	_WL_UNLOCK(wl);
-}
-#endif /* WLCXO_IPC */
-
 /**
  * The last parameter was added for the build. Caller of
  * this function should pass 1 for now.
@@ -4080,10 +4011,6 @@ sendup_next:
 		}
 		WL_APSTA_RX(("wl_sendup: dev name is %s (wl) \n", wl->dev->name));
 		WL_APSTA_RX(("wl_sendup: hard header len %d (wl) \n", wl->dev->hard_header_len));
-#ifdef WLCXO
-		PKTFREE(wl->osh, skb, FALSE);
-		return;
-#endif
 	}
 
 	/* send it up */
@@ -4093,7 +4020,15 @@ sendup_next:
 #ifdef NAPI_POLL
 	netif_receive_skb(skb);
 #else /* NAPI_POLL */
+#if defined(USE_CFG80211)
+	if (in_interrupt()) {
+		netif_rx(skb);
+	}
+	else
+		netif_rx_ni(skb);
+#else
 	netif_rx(skb);
+#endif /* defined(USE_CFG80211) */
 #endif /* NAPI_POLL */
 
 #ifdef HNDCTF
@@ -4213,6 +4148,40 @@ wl_dump_ver(wl_info_t *wl, struct bcmstrbuf *b)
 		__DATE__, __TIME__, EPI_VERSION_STR);
 }
 
+#if defined(BCMDBG)
+static int
+wl_dump(wl_info_t *wl, struct bcmstrbuf *b)
+{
+	wl_if_t *p;
+	int i;
+
+	wl_dump_ver(wl, b);
+
+	bcm_bprintf(b, "name %s dev %p tbusy %d callbacks %d malloced %d\n",
+		wl->dev->name, wl->dev, (uint)netif_queue_stopped(wl->dev),
+		atomic_read(&wl->callbacks), MALLOCED(wl->osh));
+
+	/* list all interfaces, skipping the primary one since it is printed above */
+	p = wl->if_list;
+	if (p)
+		p = p->next;
+	for (i = 0; p != NULL; p = p->next, i++) {
+		if ((i % 4) == 0) {
+			if (i != 0)
+				bcm_bprintf(b, "\n");
+			bcm_bprintf(b, "Interfaces:");
+		}
+		bcm_bprintf(b, " name %s dev %p", p->dev->name, p->dev);
+	}
+	if (i)
+		bcm_bprintf(b, "\n");
+
+#ifdef BCMDBG_CTRACE
+	PKT_CTRACE_DUMP(wl->osh, b);
+#endif
+	return 0;
+}
+#endif /* BCMDBG */
 
 static void
 wl_link_up(wl_info_t *wl, char *ifname)
@@ -4377,40 +4346,6 @@ wl_txq_xmit(wl_info_t *wl, struct sk_buff *skb)
 	return BCME_OK;
 }
 
-#ifdef WLCXO_SIM
-static int32 BCMFASTPATH
-wl_cxo_txhpktq_xmit(wl_info_t *wl, struct sk_buff *skb)
-{
-	if ((wl_txhpktq_thresh > 0) && (g_txhpktq_cnt >= wl_txhpktq_thresh)) {
-		PKTFRMNATIVE(wl->osh, skb);
-		PKTCFREE(wl->osh, skb, TRUE);
-		return BCME_OK;
-	}
-
-	/* Assume CTF forwarded packets are directly recevied from the
-	 * h/w ethernet switch interface, equivalent to transmitting frames
-	 * via real offload path. Use headroom to store pktinfo.
-	 */
-	TXQ_LOCK(wl);
-	PKTFRMNATIVE(wl->osh, skb);
-
-	/* Add it to the txhpkt queue and schedule work item */
-	skb->prev = NULL;
-	if (g_txhpktq_head == NULL)
-		g_txhpktq_head = skb;
-	else
-		g_txhpktq_tail->prev = skb;
-	g_txhpktq_tail = skb;
-	g_txhpktq_cnt += (PKTISCHAINED(skb) ? PKTCCNT(skb) : 1);
-
-	TXQ_UNLOCK(wl);
-
-	wl_cxo_new_msg_intr(wl);
-
-	return BCME_OK;
-}
-#endif /* WLCXO_SIM */
-
 /**
  * Transmit pkt. In PASSIVE mode, enqueue pkt to local queue,schedule task to
  * run, return this context. In non passive mode, directly call wl_start_int()
@@ -4427,14 +4362,6 @@ wl_start(struct sk_buff *skb, struct net_device *dev)
 
 	wlif = WL_DEV_IF(dev);
 	wl = WL_INFO_GET(dev);
-
-#ifdef WLCXO_SIM
-	/* If the frame is offloadable then add it to a different queue */
-	if (WLCXO_ENAB(wl->pub) && (PKTISCXODATA(skb) || (PKTISCTF(wl->osh, skb) &&
-	    wlc_cxo_ctrl_txframe_offloadable(wl->wlc, skb, wlif->wlcif)))) {
-		return wl_cxo_txhpktq_xmit(wl, skb);
-	}
-#endif
 
 	/* Call in the same context when we are UP and non-passive is enabled */
 	if (WL_ALL_PASSIVE_ENAB(wl) || (WL_RTR() && WL_CONFIG_SMP())) {
@@ -4456,6 +4383,11 @@ wl_start_txqwork(wl_task_t *task)
 
 	WL_TRACE(("wl%d: %s txq_cnt %d\n", wl->pub->unit, __FUNCTION__, wl->txq_cnt));
 
+#ifdef BCMDBG
+	if (wl->txq_cnt >= 500)
+		WL_ERROR(("wl%d: WARNING dispatching over 500 packets in txqwork(%d)\n",
+			wl->pub->unit, wl->txq_cnt));
+#endif
 
 	TXQ_LOCK(wl);
 	while (wl->txq_head) {
@@ -4506,30 +4438,6 @@ wl_txq_free(wl_info_t *wl)
 
 	wl->txq_tail = NULL;
 }
-
-#ifdef WLCXO_SIM
-void
-wl_txhpktq_free(wl_info_t *wl)
-{
-	struct sk_buff *skb, *txhpkt;
-
-	if (g_txhpktq_head == NULL) {
-		ASSERT(g_txhpktq_tail == NULL);
-		return;
-	}
-
-	txhpkt = g_txhpktq_head;
-	while (txhpkt != NULL) {
-		skb = txhpkt;
-		txhpkt = txhpkt->prev;
-		skb->prev = NULL;
-		g_txhpktq_cnt--;
-		PKTCFREE(wl->osh, skb, TRUE);
-	}
-
-	g_txhpktq_head = g_txhpktq_tail = NULL;
-}
-#endif /* WLCXO_SIM */
 
 #ifdef WL_ALL_PASSIVE
 static void
@@ -4601,6 +4509,10 @@ _wl_timer(wl_timer_t *t)
 			t->set = FALSE;
 
 		t->fn(t->arg);
+#ifdef BCMDBG
+		wlc_update_perf_stats(wl->wlc, WLC_PERF_STATS_TMR_DPC);
+		t->ticks++;
+#endif
 
 	}
 
@@ -4631,6 +4543,10 @@ wl_init_timer(wl_info_t *wl, void (*fn)(void *arg), void *arg, const char *tname
 	t->next = wl->timers;
 	wl->timers = t;
 
+#ifdef BCMDBG
+	if ((t->name = MALLOCZ(wl->osh, strlen(tname) + 1)))
+		strncpy(t->name, tname, strlen(tname) + 1);
+#endif
 
 	return t;
 }
@@ -4641,6 +4557,12 @@ wl_init_timer(wl_info_t *wl, void (*fn)(void *arg), void *arg, const char *tname
 void
 wl_add_timer(wl_info_t *wl, wl_timer_t *t, uint ms, int periodic)
 {
+#ifdef BCMDBG
+	if (t->set) {
+		WL_ERROR(("%s: Already set. Name: %s, per %d\n",
+			__FUNCTION__, t->name, periodic));
+	}
+#endif
 	/* ASSERT(!t->set); */
 
 	/* Delay can't be zero for a periodic timer */
@@ -4687,6 +4609,9 @@ wl_del_timer(wl_info_t *wl, wl_timer_t *t)
 	if (t->set) {
 		t->set = FALSE;
 		if (!del_timer(&t->timer)) {
+#ifdef BCMDBG
+			WL_INFORM(("wl%d: Deleted inactive timer %s.\n", wl->unit, t->name));
+#endif
 #ifdef WL_ALL_PASSIVE
 			/*
 			 * The timer was inactive - this is normal in passive mode when we
@@ -4714,6 +4639,10 @@ wl_free_timer(wl_info_t *wl, wl_timer_t *t)
 
 	if (wl->timers == t) {
 		wl->timers = wl->timers->next;
+#ifdef BCMDBG
+		if (t->name)
+			MFREE(wl->osh, t->name, strlen(t->name) + 1);
+#endif
 		MFREE(wl->osh, t, sizeof(wl_timer_t));
 		return;
 
@@ -4723,6 +4652,10 @@ wl_free_timer(wl_info_t *wl, wl_timer_t *t)
 	while (tmp) {
 		if (tmp->next == t) {
 			tmp->next = t->next;
+#ifdef BCMDBG
+			if (t->name)
+				MFREE(wl->osh, t->name, strlen(t->name) + 1);
+#endif
 			MFREE(wl->osh, t, sizeof(wl_timer_t));
 			return;
 		}
@@ -5302,6 +5235,19 @@ wl_cs_config(dev_link_t *link)
 	link->dev = &dev->node; /* link->dev also indicates net_device registered */
 	link->state &= ~DEV_CONFIG_PENDING;
 
+#ifdef BCMDBG
+	/* Finally, report what we've done */
+	printk(KERN_DEBUG "wl%d: index 0x%02x: Vcc %d.%d",
+		wl->pub->unit, link->conf.ConfigIndex,
+		link->conf.Vcc / 10, link->conf.Vcc % 10);
+	if (link->conf.Vpp1)
+		printk(", Vpp %d.%d", link->conf.Vpp1 / 10, link->conf.Vpp1 % 10);
+	if (link->conf.Attributes & CONF_ENABLE_IRQ)
+		printk(", irq %d", link->irq.AssignedIRQ);
+	if (link->win)
+		printk(", mem 0x%lx-0x%lx", req.Base, req.Base + req.Size);
+	printk("\n");
+#endif /* BCMDBG */
 
 	return;
 
@@ -5391,7 +5337,7 @@ wl_cs_event(event_t event, int priority, event_callback_args_t *args)
 
 
 
-#ifdef PLATFORM_INTEGRATED_WIFI
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
 static int
 wl_plat_drv_probe(struct platform_device *pdev)
 {
@@ -5399,16 +5345,14 @@ wl_plat_drv_probe(struct platform_device *pdev)
 	struct resource *r;
 	int error = 0;
 	wl_info_t	*wl;
-#ifdef BCMNVRAMR
-	char *base = NULL, *nvp = NULL;
-	int nvlen = 0;
-#endif /* BCMNVRAMR */
 
 	plat = devm_kzalloc(&pdev->dev, sizeof(*plat), GFP_KERNEL);
 	if (!plat) {
 		return -ENOMEM;
 	}
 	bzero(plat, sizeof(struct wl_platform_info));
+
+	plat->pdev = pdev;
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	plat->regs = devm_ioremap_resource(&pdev->dev, r);
@@ -5421,33 +5365,30 @@ wl_plat_drv_probe(struct platform_device *pdev)
 		return plat->irq;
 	}
 
-#ifdef BCMNVRAMR
-	base = nvp = MALLOC(NULL, MAXSZ_NVRAM_VARS);
-	if (base == NULL)
-		return BCME_NOMEM;
+#ifdef STB_SOC_WIFI
+	error = wl_stbsoc_init(plat);
+	if (error != BCME_OK)
+		return error;
 
-	/* Init nvram from nvram file if they exist */
-	if (initvars_file(NULL, NULL, &nvp, (int*)&nvlen) == 0)
-		plat->deviceid = (uint16)getintvar(base, "devid");
+	plat->deviceid = wl_stbsoc_get_devid();
+#else
+	{
+		const char *var = getvar(NULL, "devid");
+		if (var)
+			plat->deviceid = bcm_strtoul(var, NULL, 0);
+	}
+#endif /* STB_SOC_WIFI */
 
-	if (plat->deviceid == 0)
-		WL_ERROR(("Cannot get devid from nvram file.\n"));
-
-	MFREE(NULL, base, MAXSZ_NVRAM_VARS);
-#endif /* BCMNVRAMR */
-
-	/*	devid = BCM7271_D11AC_ID, BCM7271_D11AC2G_ID, BCM7271_D11AC5G_ID, */
-	wl = wl_attach(VENDOR_BROADCOM, plat->deviceid, SI_ENUM_BASE /* regs */,
+	wl = wl_attach(VENDOR_BROADCOM, plat->deviceid, SI_ENUM_BASE_DEFAULT /* regs */,
 		SI_BUS /* bus type */, &pdev->dev /* btparam or dev */, plat->irq,
 		NULL /* BAR1_ADDR */, 0 /* BAR1_SIZE */, NULL /* BAR2_ADDR */,
-		0 /* BAR2_SIZE */,NULL /* private data */);
+		0 /* BAR2_SIZE */, plat /* private data */);
 
 	if (!wl) {
 		error = -ENODEV;
 	} else {
 		wl->plat_info = plat;
 		platform_set_drvdata(pdev, wl);
-		printf("BCM7271 devid:0x%x Platform Driver\n", plat->deviceid);
 	}
 
 	return error;
@@ -5463,6 +5404,14 @@ wl_plat_drv_remove(struct platform_device *pdev)
 	WL_LOCK((wl_info_t *)wl);
 	wl_down((wl_info_t *)wl);
 	WL_UNLOCK((wl_info_t *)wl);
+
+#ifdef STB_SOC_WIFI
+	wl_stbsoc_deinit(wl->plat_info);
+#endif /* STB_SOC_WIFI */
+
+	if (wl->plat_info)
+		devm_kfree(&pdev->dev, (wl_info_t *)wl->plat_info);
+
 	wl_free((wl_info_t *)wl);
 
 	return 0;
@@ -5471,7 +5420,19 @@ wl_plat_drv_remove(struct platform_device *pdev)
 static void
 wl_plat_drv_shutdown(struct platform_device *pdev)
 {
-	BCM_REFERENCE(pdev);
+	wl_info_t	*wl;
+
+	wl = (wl_info_t *)platform_get_drvdata(pdev);
+
+#ifdef STB_SOC_WIFI
+	wl_stbsoc_deinit(wl->plat_info);
+#endif /* STB_SOC_WIFI */
+
+	if (wl->plat_info)
+		devm_kfree(&pdev->dev, (wl_info_t *)wl->plat_info);
+
+	wl_free((wl_info_t *)wl);
+
 	return;
 }
 
@@ -5489,86 +5450,143 @@ wl_plat_drv_resume(struct platform_device *pdev)
 	BCM_REFERENCE(pdev);
 	return 0;
 }
-#endif /* PLATFORM_INTEGRATED_WIFI */
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
+
+#if defined(STBSOC_CHAR_DRV)
+static int
+wl_char_drv_open(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+static int
+wl_char_drv_release(struct inode *inode, struct file  *file)
+{
+	return 0;
+}
+
+static long
+wl_char_drv_ioctl(struct file  *filp, unsigned int  cmd, unsigned long uMsg)
+{
+	return 0;
+}
+
+static int
+wl_char_drv_init(void)
+{
+	int error = 0;
+	wl_info_t	*wl;
+	struct wl_platform_info *plat;
+
+	gpDev = kmalloc(sizeof(wl_char_drv_dev_t), GFP_KERNEL);
+	if (gpDev == NULL)
+	{
+		WL_ERROR(("couldn't allocatd wl_char_drv\n"));
+		return BCME_ERROR;
+	}
+	memset(gpDev, 0, sizeof(wl_char_drv_dev_t));
+
+	/* request dynamic allocation device major number */
+	if (MAJOR(gpDev->devno) == 0)
+		error = alloc_chrdev_region(&gpDev->devno, 0, 1, WL_CHAR_DRV_DEV_NAME);
+
+	if (error)
+	{
+		WL_ERROR(("Failed to alloc major devno\n"));
+		kfree(gpDev);
+		return error;
+	}
+
+	gpDev->cdev = cdev_alloc();
+	if (gpDev->cdev == NULL)
+	{
+		WL_ERROR(("Failed to allocated cdev"));
+		unregister_chrdev_region(gpDev->devno, 1);
+		kfree(gpDev);
+		return BCME_ERROR;
+	}
+
+	/* connect file operations to cdev */
+	cdev_init(gpDev->cdev, &wl_char_drv_ops);
+	gpDev->cdev->owner = THIS_MODULE;
+	error = cdev_add(gpDev->cdev, gpDev->devno+0 /* minor */, 1);
+	if (error)
+	{
+		WL_ERROR(("Failed add cdev\n"));
+		cdev_del(gpDev->cdev);
+		unregister_chrdev_region(gpDev->devno, 1);
+		kfree(gpDev);
+		return error;
+	}
+
+	/* Set to NULL since device_create is GPL */
+	gpDev->dev_device = NULL;
+
+	plat = kmalloc(sizeof(struct wl_platform_info), GFP_KERNEL);
+	if (!plat)
+		return -ENOMEM;
+	bzero(plat, sizeof(struct wl_platform_info));
 
 #ifdef STB_SOC_WIFI
-static void
-wl_soc_wifi_enable_intrs(wl_info_t *wl)
-{
-#ifdef PLATFORM_INTEGRATED_WIFI
-	struct wl_platform_info *plat = wl->plat_info;
-	volatile uint32 *pReg = plat->regs;
-	uint32	offset;
+	plat->irq = WLAN_D2H_CPU_INTR;
+	plat->regs = ioremap_nocache(WLAN_INTF_START, WLAN_INTF_SIZE);
 
-	/* clear wlan interface mask to enable interrupt */
-	offset = ((BCHP_WLAN_INTF_D2H_INTR2_CPU_MASK_CLEAR & 0x1ff)>>2);
-	pReg = pReg + offset;
-	*pReg = 0xFFFFF;
-#else /* PLATFORM_INTEGRATED_WIFI */
-	BCM_REFERENCE(wl);
-#endif /* PLATFORM_INTEGRATED_WIFI */
-	return;
-}
+	error = wl_stbsoc_init(plat);
+	if (error != BCME_OK)
+		return error;
 
-static void
-wl_soc_wifi_disable_intrs(wl_info_t *wl)
-{
-#ifdef PLATFORM_INTEGRATED_WIFI
-	struct wl_platform_info *plat = wl->plat_info;
-	volatile uint32 *pReg = plat->regs;
-	uint32	offset;
-
-	/* clear wlan interface mask to disable interrupt */
-	offset = ((BCHP_WLAN_INTF_D2H_INTR2_CPU_MASK_SET & 0x1ff)>>2);
-	pReg = pReg + offset;
-	*pReg = 0xFFFFF;
-#else /* PLATFORM_INTEGRATED_WIFI */
-	BCM_REFERENCE(wl);
-#endif /* PLATFORM_INTEGRATED_WIFI */
-	return;
-}
-
-/* Device to host interrupt handler */
-static void
-wl_soc_wifi_d2h_isr(wl_info_t *wl)
-{
-#ifdef PLATFORM_INTEGRATED_WIFI
-	struct wl_platform_info *plat = wl->plat_info;
-	volatile uint32 *pReg = plat->regs;
-	volatile uint32 *reg;
-	uint32 offset;
-	uint32 d2hintstatus;
-
-	offset = ((BCHP_WLAN_INTF_D2H_INTR2_CPU_STATUS & 0x1ff)>>2);
-	reg = pReg + offset;
-
-	d2hintstatus = *((volatile uint32*)(reg));
-#else /* PLATFORM_INTEGRATED_WIFI */
-	BCM_REFERENCE(wl);
-#endif /* PLATFORM_INTEGRATED_WIFI */
-
-	/* TODO. nothing for now. */
-	return;
-}
-
-static void
-wl_soc_wifi_d2h_intstatus(wl_info_t *wl)
-{
-#ifdef PLATFORM_INTEGRATED_WIFI
-	struct wl_platform_info *plat = wl->plat_info;
-	volatile uint32 *pReg = plat->regs;
-	volatile uint32 *reg;
-	uint32 offset;
-
-	offset = ((BCHP_WLAN_INTF_D2H_INTR2_CPU_CLEAR & 0x1ff)>>2);
-	reg = pReg + offset;
-	*((volatile uint32*)(reg)) = 0xFFFFF;
-#else /* PLATFORM_INTEGRATED_WIFI */
-	BCM_REFERENCE(wl);
-#endif /* PLATFORM_INTEGRATED_WIFI */
-	return;
-}
+	plat->deviceid = stb_devid;
+#else
+	{
+		const char *var = getvar(NULL, "devid");
+		if (var)
+			plat->deviceid = bcm_strtoul(var, NULL, 0);
+	}
 #endif /* STB_SOC_WIFI */
+
+	wl = wl_attach(VENDOR_BROADCOM, plat->deviceid, SI_ENUM_BASE_DEFAULT /* regs */,
+		SI_BUS /* bus type */, gpDev->dev_device /* btparam or dev */, plat->irq,
+		NULL /* BAR1_ADDR */, 0 /* BAR1_SIZE */, NULL /* BAR2_ADDR */,
+		0 /* BAR2_SIZE */, plat /* private data */);
+
+	if (!wl) {
+		error = -ENODEV;
+	} else {
+		wl->plat_info = plat;
+		wl_stbsoc_set_drvdata(gpDev, wl);
+	}
+
+	return error;
+}
+
+static void
+wl_char_drv_deinit(void)
+{
+	wl_info_t	*wl;
+
+	wl = (wl_info_t *)wl_stbsoc_get_drvdata(gpDev);
+
+	WL_LOCK((wl_info_t *)wl);
+	wl_down((wl_info_t *)wl);
+	WL_UNLOCK((wl_info_t *)wl);
+
+#ifdef STB_SOC_WIFI
+	wl_stbsoc_deinit(wl->plat_info);
+#endif /* STB_SOC_WIFI */
+
+	wl_free((wl_info_t *)wl);
+
+	if (gpDev->cdev) {
+	    cdev_del(gpDev->cdev);
+	    gpDev->cdev = NULL;
+	}
+	if (gpDev->dev_class) {
+	    gpDev->dev_class = NULL;
+	}
+	unregister_chrdev_region(gpDev->devno, 1);
+	kfree(gpDev);
+}
+#endif /* STBSOC_CHAR_DRV */
 
 struct net_device *
 wl_netdev_get(wl_info_t *wl)
@@ -5824,10 +5842,7 @@ wl_tkip_printstats(wl_info_t *wl, bool group_key)
 
 #endif /* LINUX_CRYPTO */
 
-#ifdef BCM7271
-#else /* !BCM7271 */
 
-#endif /* BCM7271 */
 
 #if defined(WL_CONFIG_RFKILL)   /* Rfkill support */
 
@@ -5861,11 +5876,18 @@ static int
 wl_init_rfkill(wl_info_t *wl)
 {
 	int status;
+	struct device *dev;
+
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
+	dev = &wl->plat_info->pdev->dev;
+#else /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
+	dev = &wl->dev->dev;
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
 
 	(void)snprintf(wl->wl_rfkill.rfkill_name, sizeof(wl->wl_rfkill.rfkill_name),
 	"brcmwl-%d", wl->pub->unit);
 
-	wl->wl_rfkill.rfkill = rfkill_alloc(wl->wl_rfkill.rfkill_name, &wl->dev->dev,
+	wl->wl_rfkill.rfkill = rfkill_alloc(wl->wl_rfkill.rfkill_name, dev,
 	RFKILL_TYPE_WLAN, &bcmwl_rfkill_ops, wl);
 
 	if (!wl->wl_rfkill.rfkill) {
@@ -5992,7 +6014,7 @@ wl_linux_watchdog(void *ctx)
 #endif /* CTFPOOL */
 } /* wl_linux_watchdog */
 
-#if defined(VASIP_HW_SUPPORT)
+#if defined(WLVASIP)
 uint32 wl_pcie_bar1(struct wl_info *wl, uchar** addr)
 {
 	*addr = wl->bar1_addr;
@@ -6004,7 +6026,7 @@ uint32 wl_pcie_bar2(struct wl_info *wl, uchar** addr)
 	*addr = wl->bar2_addr;
 	return (wl->bar2_size);
 }
-#endif
+#endif /* WLVASIP */
 
 #ifdef DPSTA
 #if defined(STA) && defined(DWDS)
@@ -6117,11 +6139,3 @@ int wl_fatal_error(void * wl, int rc)
 {
 	return FALSE;
 }
-
-#ifdef WLCXO_FULL
-void*
-wl_get_wl_cxo(wl_info_t *wl)
-{
-	return wl->wl_cxo;
-}
-#endif /* WLCXO_FULL */

@@ -36,5 +36,6 @@ extern void si_lhl_setup(si_t *sih, osl_t *osh);
 extern void si_lhl_enable(si_t *sih, osl_t *osh, bool enable);
 extern void si_lhl_ilp_config(si_t *sih, osl_t *osh, uint32 ilp_period);
 extern void si_lhl_enable_sdio_wakeup(si_t *sih, osl_t *osh);
-extern int si_lhl_set_lpoclk(si_t *sih, osl_t *osh);
+extern void si_lhl_disable_sdio_wakeup(si_t *sih);
+extern int si_lhl_set_lpoclk(si_t *sih, osl_t *osh, uint32 lpo_force);
 #endif /* _hndlhl_h_ */

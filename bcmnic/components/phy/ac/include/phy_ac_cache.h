@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_cache.h 595511 2015-10-27 23:12:01Z svjoshi $
+ * $Id: phy_ac_cache.h 656063 2016-08-25 03:56:25Z $
  */
 
 #ifndef _phy_ac_cache_h_
@@ -22,9 +22,6 @@
 #include <phy_ac.h>
 #include <phy_cache.h>
 
-#include <bcmutils.h>
-#include <wlc_phy_int.h> /* *** !!! To be removed !!! *** */
-
 /* forward declaration */
 typedef struct phy_ac_cache_info phy_ac_cache_info_t;
 
@@ -33,6 +30,11 @@ phy_ac_cache_info_t *phy_ac_cache_register_impl(phy_info_t *pi,
 	phy_ac_info_t *aci, phy_cache_info_t *cmn_info);
 void phy_ac_cache_unregister_impl(phy_ac_cache_info_t *ac_info);
 
+#if defined(PHYCAL_CACHING)
+#ifdef BCMDBG
+void wlc_phy_cal_cache_dbg_acphy(wlc_phy_t *pih, ch_calcache_t *ctx);
+#endif /* BCMDBG */
+#endif /* PHYCAL_CACHING */
 
 /* ************************************************************************* */
 /* ************************************************************************* */

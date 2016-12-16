@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_dump.c 630436 2016-04-08 23:03:14Z $
+ * $Id: wlc_dump.c 658301 2016-09-07 11:19:12Z $
  */
 
 #include <wlc_cfg.h>
@@ -30,17 +30,19 @@
 #include <wlc_dump_reg.h>
 #include <wlc_dump.h>
 
-#if defined(BCMDBG_PHYDUMP) || defined(TDLS_TESTBED) || defined(BCMDBG_AMPDU) || \
-	defined(MCHAN_MINIDUMP) || defined(BCM_DNGDMP) || defined(DNG_DBGDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP) || \
+	defined(TDLS_TESTBED) || defined(BCMDBG_AMPDU) || defined(MCHAN_MINIDUMP) || \
+	defined(BCM_DNGDMP) || defined(DNG_DBGDUMP) || defined(ULP_DUMP) || \
+	defined(BCMDBG_RSDB)
 #define WLC_DUMP_FULL_SUPPORT
 #endif
 
-/* registry compacity */
+/* registry capacity */
 #ifndef WLC_DUMP_NUM_REGS
 #ifdef WLC_DUMP_FULL_SUPPORT
 #define WLC_DUMP_NUM_REGS 88
 #else
-#define WLC_DUMP_NUM_REGS 0
+#define WLC_DUMP_NUM_REGS 4
 #endif
 #endif /* WLC_DUMP_NUM_REGS */
 
@@ -62,6 +64,15 @@ struct wlc_dump_info {
 	wlc_info_t *wlc;
 	wlc_dump_reg_info_t *reg;
 };
+
+static int wlc_dump_clr(wlc_dump_info_t *, char *, uint, char *, uint);
+static int wlc_dump(wlc_dump_info_t *, char *, uint, char *, uint);
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 /** Invoke the given named dump callback */
 static int
@@ -171,6 +182,9 @@ wlc_dump(wlc_dump_info_t *dumpi, char *in_buf, uint in_len, char *out_buf, uint 
 	/* do default action if no dump name is present... */
 	if (wlc_dump_next_name(name, sizeof(name), &in_buf, &in_len, &err) == 0) {
 		WL_PRINT(("doing default dump...\n"));
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+		err = wlc_dump_op(dumpi, "default", &b);
+#endif 
 		goto exit;
 	}
 
@@ -276,7 +290,79 @@ wlc_dump_clr(wlc_dump_info_t *dumpi, char *in_buf, uint in_len, char *out_buf, u
 }
 
 /* 'wl dump [default]' command */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static char *const def_dump_list[] = {
+	"wlc",
+	"phystate",
+	"bsscfg",
+	"bssinfo",
+	"ratestuff",
+	"stats",
+	"pio",
+	"dma",
+	"wme",
+	"ampdu",
+	"wet",
+	"toe",
+	"led",
+	"amsdu",
+	"cac",
+	"trfmgmt_stats",
+	"trfmgmt_shaping"
+};
 
+/** Format a general info dump */
+static int
+wlc_dump_default(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_dump_info_t *dumpi = ctx;
+	uint i;
+	int err;
+
+	for (i = 0; i < ARRAYSIZE(def_dump_list); i ++) {
+		bcm_bprintf(b, "\n%s:------\n", def_dump_list[i]);
+		err = wlc_dump_op(dumpi, def_dump_list[i], b);
+		if (err != BCME_OK) {
+			bcm_bprintf(b, "\n%s: err %d\n", def_dump_list[i], err);
+		}
+	}
+
+	return BCME_OK;
+}
+
+/* dump the dump registry internals */
+static int
+wlc_dump_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_dump_info_t *dumpi = ctx;
+	wlc_info_t *wlc = dumpi->wlc;
+
+	if (dumpi->reg != NULL) {
+		wlc_dump_reg_dump(dumpi->reg, b);
+	}
+	wlc_bmac_dump_dump(wlc->hw, b);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/** This function lists all dump names */
+static int
+wlc_dump_list(void *arg, struct bcmstrbuf *b)
+{
+	wlc_dump_info_t *dumpi = arg;
+	wlc_info_t *wlc = dumpi->wlc;
+
+	bcm_bprintf(b, "\nRegistered dumps:\n");
+	if (dumpi->reg != NULL) {
+		wlc_dump_reg_list(dumpi->reg, b);
+	}
+	wlc_bmac_dump_list(wlc->hw, b);
+
+	return BCME_OK;
+}
+#endif 
 
 /** Register dump name and handlers. Calling function must keep 'dump function' */
 int
@@ -371,6 +457,13 @@ BCMATTACHFN(wlc_dump_attach)(wlc_dump_info_t *dumpi)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "default", wlc_dump_default, dumpi);
+	wlc_dump_register(wlc->pub, "dump", wlc_dump_dump, dumpi);
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "list", wlc_dump_list, dumpi);
+#endif
 
 	return BCME_OK;
 

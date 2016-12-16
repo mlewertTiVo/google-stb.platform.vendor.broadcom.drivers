@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_iovt.c 598405 2015-11-09 13:44:18Z sahud $
+ * $Id: phy_ht_iovt.c 598405 2015-11-09 13:44:18Z $
  */
 
 #include <typedefs.h>

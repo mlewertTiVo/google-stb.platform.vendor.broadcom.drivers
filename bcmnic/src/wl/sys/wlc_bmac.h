@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_bmac.h 653755 2016-08-09 22:40:17Z $
+ * $Id: wlc_bmac.h 659962 2016-09-16 18:46:17Z $
  */
 
 
@@ -68,7 +68,6 @@ typedef struct wlc_bmac_revinfo {
 
 	uint		boardrev;	/**< version # of particular board */
 	uint		corerev;	/**< core revision */
-	uint		corerev_minor;	/* core minor revision */
 	uint		sromrev;	/**< srom revision */
 	uint		chiprev;	/**< chip revision */
 	uint		chip;		/**< chip number */
@@ -103,8 +102,9 @@ typedef struct wlc_bmac_revinfo {
 	uint		ampdu_mpdu;
 	bool        is_ss; /**< bus support for super speed */
 
-    uint32      wowl_gpio;
-    uint32      wowl_gpiopol;
+	uint32      wowl_gpio;
+	uint32      wowl_gpiopol;
+	uint		corerev_minor;	/**< core minor revision */
 } wlc_bmac_revinfo_t;
 
 /** dup state between BMAC(wlc_hw_info_t) and HIGH(wlc_info_t) driver */
@@ -180,6 +180,10 @@ extern int wlc_bmac_attach(wlc_info_t *wlc, uint16 vendor, uint16 device, uint u
 	bool piomode, osl_t *osh, volatile void *regsva, uint bustype, void *btparam, uint macunit);
 extern int wlc_bmac_detach(wlc_info_t *wlc);
 
+wlc_hw_info_t *wlc_bmac_phase1_attach(uint16 device, osl_t *osh, volatile void *
+				regsva, uint bustype, void *btparam, uint *perr);
+int wlc_bmac_phase1_detach(wlc_hw_info_t *wlc_hw);
+
 extern si_t * wlc_bmac_si_attach(uint device, osl_t *osh, volatile void *regs, uint bustype,
 	void *btparam, char **vars, uint *varsz);
 extern void wlc_bmac_si_detach(osl_t *osh, si_t *sih);
@@ -187,7 +191,6 @@ extern void wlc_bmac_si_detach(osl_t *osh, si_t *sih);
 extern void wlc_bmac_watchdog(void *arg);
 extern void wlc_bmac_rpc_agg_watchdog(void *arg);
 extern void wlc_bmac_info_init(wlc_hw_info_t *wlc_hw);
-
 /* up/down, reset, clk */
 extern void wlc_bmac_xtal(wlc_hw_info_t* wlc_hw, bool want);
 
@@ -248,7 +251,7 @@ extern void wlc_mctrl_reset(wlc_hw_info_t *wlc_hw);
 /* chanspec, ucode interface */
 extern int wlc_bmac_bandtype(wlc_hw_info_t *wlc_hw);
 extern void wlc_bmac_set_chanspec(wlc_hw_info_t *wlc_hw, chanspec_t chanspec, bool mute,
-	ppr_t *txpwr);
+	ppr_t *txpwr, wl_txpwrcap_tbl_t *txpwrcap_tbl, int* cellstatus);
 
 extern void wlc_bmac_txfifo(wlc_hw_info_t *wlc_hw, uint fifo, void *p, bool commit, uint16 frameid,
 	uint8 txpktpend);
@@ -488,8 +491,8 @@ extern void wlc_bmac_dngldown(wlc_hw_info_t *wlc_hw);
 extern void wlc_bmac_wowl_config_4331_5GePA(wlc_hw_info_t *wlc_hw, bool is_5G, bool is_4331_12x9);
 #endif /* WOWL */
 
-extern int wlc_bmac_process_ucode_sr(uint16 device, osl_t *osh, volatile void *regsva,
-	uint bustype, void *btparam);
+extern int wlc_bmac_process_ucode_sr(wlc_hw_info_t *wlc_hw, uint16 device, osl_t *osh,
+	volatile void *regsva, uint bustype, void *btparam);
 
 extern bool wlc_bmac_recv(wlc_hw_info_t *wlc_hw, uint fifo, bool bound, wlc_dpc_info_t *dpc);
 
@@ -556,7 +559,6 @@ extern void wlc_bmac_enable_rx_hostmem_access(wlc_hw_info_t *wlc_hw, bool hostme
 #ifdef BCMPCIEDEV
 extern void wlc_bmac_enable_tx_hostmem_access(wlc_hw_info_t *wlc_hw, bool hostmem_access);
 #endif /* BCMPCIEDEV */
-extern void wlc_bmac_clear_band_pwr_offset(ppr_t *txpwr_offsets, wlc_hw_info_t *wlc_hw);
 
 /* 4349a0 phymode war for common registers that should have been path registers */
 extern void wlc_bmac_exclusive_reg_access_core0(wlc_hw_info_t *wlc_hw, bool set);
@@ -578,16 +580,6 @@ extern void wlc_bmac_print_muted(wlc_info_t *wlc, struct bcmstrbuf *b);
 #endif /* BCMDBG_TXSTUCK */
 
 extern bool wlc_bmac_pio_enab_check(wlc_hw_info_t *wlc_hw);
-
-#ifdef WLCXO_CTRL
-extern int32 wlc_cxo_ctrl_bmac_recv_process(wlc_info_t *wlc, void *host_p, uint32 tsf_l,
-	uint16 npkts);
-extern void *wlc_cxo_ctrl_bmac_add_rx_host_pkt(wlc_hw_info_t *wlc_hw, int fifo);
-#endif /* WLCXO_CTRL */
-
-#ifdef BCMPKTPOOL
-extern int wlc_rx_pktpool_fill(wlc_info_t *wlc, pktpool_t *pool, int fifo);
-#endif
 
 /* get slice specific OTP/SROM parameters */
 int getintvar_slicespecific(wlc_hw_info_t *wlc_hw, char *vars, const char *name);
@@ -640,6 +632,10 @@ int wlc_bmac_rx_dma_stall_force(wlc_hw_info_t *wlc_hw, uint32 testword);
 #ifdef WLRSDB
 extern void wlc_bmac_switch_pmu_seq(wlc_hw_info_t *wlc_hw, uint mode);
 #endif /* WLRSDB */
+#ifdef GPIO_TXINHIBIT
+extern void wlc_bmac_gpio_set_tx_inhibit_tout(wlc_hw_info_t *wlc_hw);
+extern void wlc_bmac_notify_gpio_tx_inhibit(wlc_info_t *wlc);
+#endif
 
 extern void ai_force_clocks(si_t *sih, uint clock_state);
 
@@ -654,6 +650,11 @@ extern void wlc_bmac_ctdma_update(wlc_hw_info_t *wlc_hw, bool enabled);
 
 void wlc_bmac_update_rxpost_rxfill(wlc_hw_info_t *wlc_hw, uint8 fifo_no, uint8 nrxpost);
 
+#ifdef BCMULP
+extern int wlc_bmac_ulp_preattach(void);
+extern int wlc_bmac_p2_retrieve_cb(void *handle, osl_t *osh, uint8 *p2_cache_data);
+#endif /* BCMULP */
+
 #ifdef BCMFRWDPOOLREORG
 void wlc_register_dma_rxfill_cb(wlc_info_t *wlc, bool reg);
 #endif
@@ -661,8 +662,15 @@ void wlc_register_dma_rxfill_cb(wlc_info_t *wlc, bool reg);
 #ifdef WL_MU_RX
 extern void wlc_bmac_upd_murate(wlc_info_t *wlc, d11rxhdr_t *rxhdr, uchar *plcp);
 #endif	/* WL_MU_RX */
+extern void wlc_bmac_set_myaddr(wlc_hw_info_t *wlc_hw, struct ether_addr *mac_addr);
 extern void wlc_bmac_handle_device_halt(wlc_hw_info_t *wlc_hw, bool TX, bool CORE, bool RX);
 
 uint wlc_bmac_rxfifosz_get(wlc_hw_info_t *wlc_hw);
+extern void *wlc_bmac_dmatx_peeknexttxp(wlc_info_t *wlc, int fifo);
+
+#ifdef BCMDBG_SR
+extern int wlc_bmac_sr_verify(wlc_hw_info_t *wlc_hw, struct bcmstrbuf *b);
+extern int wlc_bmac_sr_testmode(wlc_hw_info_t *wlc_hw, int mode);
+#endif
 
 #endif /* _WLC_BMAC_H_ */

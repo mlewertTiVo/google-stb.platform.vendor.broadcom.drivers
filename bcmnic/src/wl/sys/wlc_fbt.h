@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_fbt.h 644026 2016-06-16 23:39:34Z $
+ * $Id: wlc_fbt.h 646318 2016-06-29 06:09:49Z $
  */
 
 
@@ -71,7 +71,6 @@ extern bool wlc_fbt_akm_match(wlc_fbt_info_t *fbt_info, const wlc_bsscfg_t *cfg,
 extern void wlc_fbt_set_akm(wlc_fbt_info_t *fbt_info, const wlc_bsscfg_t *cfg, wlc_bss_info_t *bi);
 extern int wlc_fbt_set_pmk(wlc_fbt_info_t *fbt_info, struct wlc_bsscfg *cfg,
 	wsec_pmk_t *pmk, bool assoc);
-extern void wlc_fbt_upd_authie(wlc_fbt_info_t *fbt_info, wlc_bsscfg_t *cfg);
 extern void wlc_fbt_get_kck_kek(wlc_fbt_info_t *fbt_info, struct wlc_bsscfg *cfg, uint8 *key);
 extern bool wlc_fbt_enabled(wlc_fbt_info_t *fbt_info, wlc_bsscfg_t *cfg);
 #ifdef AP

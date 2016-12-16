@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_event_utils.h 617509 2016-02-05 15:01:32Z $
+ * $Id: wlc_event_utils.h 663980 2016-10-07 19:14:26Z $
  */
 
 #ifndef _wlc_event_utils_h_
@@ -20,6 +20,8 @@
 
 #include <typedefs.h>
 #include <wlc_types.h>
+#include <proto/bcmevent.h>
+#include <hndd11.h>
 
 extern void wlc_event_if(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_event_t *e,
 	const struct ether_addr *addr);

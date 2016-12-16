@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_fcbs.h 616484 2016-02-01 17:32:27Z guangjie $
+ * $Id: phy_type_fcbs.h 659153 2016-09-13 00:42:37Z $
  */
 
 #ifndef _phy_type_fcbs_h_
@@ -40,6 +40,11 @@ typedef bool (*phy_type_fcbs_postfcbs_fn_t)(phy_type_fcbs_ctx_t *ctx, int chanid
 typedef void (*phy_type_fcbs_readtbl_fn_t) (phy_type_fcbs_ctx_t *ctx, uint32 id,
 	uint32 len, uint32 offset, uint32 width, void *data);
 typedef uint16 (*phy_type_fcbs_channelindicator_obtain_fn_t)(phy_type_fcbs_ctx_t *ctx);
+typedef int (*phy_type_fcbs_iov_set_t)(phy_type_fcbs_ctx_t *ctx, bool val);
+typedef int (*phy_type_fcbs_iov_get_t)(phy_type_fcbs_ctx_t *ctx, int32 *fcbs);
+typedef int (*phy_type_fcbs_iov_arm_get_t)(phy_type_fcbs_ctx_t *ctx, chanspec_t chanspec,
+	int chanidx);
+typedef int (*phy_type_fcbs_iov_exit_t)(phy_type_fcbs_ctx_t *ctx);
 typedef struct {
 	phy_type_fcbs_init_fn_t	fcbsinit;
 	phy_type_fcbs_preinit_fn_t	prefcbsinit;
@@ -49,6 +54,10 @@ typedef struct {
 	phy_type_fcbs_postfcbs_fn_t	postfcbs;
 	phy_type_fcbs_readtbl_fn_t	fcbsreadtbl;
 	phy_type_fcbs_channelindicator_obtain_fn_t channelindicator_obtain;
+	phy_type_fcbs_iov_set_t iov_set;
+	phy_type_fcbs_iov_get_t iov_get;
+	phy_type_fcbs_iov_arm_get_t iov_arm_get;
+	phy_type_fcbs_iov_exit_t iov_exit;
 	phy_type_fcbs_ctx_t *ctx;
 } phy_type_fcbs_fns_t;
 

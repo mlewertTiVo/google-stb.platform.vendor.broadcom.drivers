@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_ioctl.c 619609 2016-02-17 13:46:00Z $
+ * $Id: km_ioctl.c 660347 2016-09-20 07:21:58Z $
  */
 
 #include "km_pvt.h"
@@ -28,6 +28,14 @@ static const wlc_ioctl_cmd_t km_ioctls[] = {
 	{WLC_SET_KEY_PRIMARY, KM_IOCTL_IOCF_FLAGS, sizeof(int)},
 	{WLC_SET_WSEC_TEST, KM_IOCTL_IOCF_FLAGS, sizeof(int)}
 };
+
+static int km_ioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif);
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 static int
 km_ioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif)
@@ -61,7 +69,7 @@ km_ioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif)
 			NULL, 0, arg, len, 0, wlcif);
 		break;
 
-#if defined(WLMOTOROLALJ)
+#if defined(BCMDBG) || defined(WLMOTOROLALJ)
 	case WLC_GET_KEY: {
 		wl_wsec_key_t wl_key;
 
@@ -80,8 +88,57 @@ km_ioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif)
 		memcpy(arg, &wl_key, sizeof(wl_key));
 		break;
 	}
-#endif 
+#endif /* BCMDBG || WLMOTOROLALJ */
 
+#ifdef BCMDBG
+	case WLC_SET_WSEC_TEST: {
+		wl_wsec_key_t wl_key;
+		wlc_key_t *key;
+		wlc_key_info_t key_info;
+		wlc_key_flags_t key_flags;
+
+		if (!wlc->pub->up)  {
+			err = BCME_NOTUP;
+			break;
+		}
+
+		memcpy(&wl_key, ((uchar*)arg)+sizeof(val), sizeof(wl_key));
+
+		key = wlc_keymgmt_get_key_by_addr(wlc->keymgmt, bsscfg, &wl_key.ea,
+			wl_key.flags & WL_IBSS_PEER_GROUP_KEY, &key_info);
+
+		key_flags = key_info.flags;
+		switch (val) {
+		case WSEC_GEN_MIC_ERROR:
+			key_flags |= WLC_KEY_FLAG_GEN_MIC_ERR;
+			break;
+		case WSEC_GEN_REPLAY:
+			key_flags |= WLC_KEY_FLAG_GEN_REPLAY;
+			break;
+		case WSEC_GEN_ICV_ERROR:
+			key_flags |= WLC_KEY_FLAG_GEN_ICV_ERR;
+			break;
+		case WSEC_GEN_MFP_ACT_ERROR:
+			key_flags |= WLC_KEY_FLAG_GEN_MFP_ACT_ERR;
+			break;
+		case WSEC_GEN_MFP_DISASSOC_ERROR:
+			key_flags |= WLC_KEY_FLAG_GEN_MFP_DISASSOC_ERR;
+			break;
+		case WSEC_GEN_MFP_DEAUTH_ERROR:
+			key_flags |= WLC_KEY_FLAG_GEN_MFP_DEAUTH_ERR;
+			break;
+		default:
+			err = BCME_RANGE;
+			break;
+		}
+
+		if (err != BCME_OK)
+			break;
+
+		err = wlc_key_set_flags(key, key_flags);
+		break;
+	}
+#endif /* BCMDBG */
 	case WLC_GET_KEY_SEQ:
 		err = km_doiovar_wrapper(km, IOV_GVAL(IOV_WSEC_KEY_SEQ), &val, sizeof(val),
 			arg, len, 0, wlcif);
@@ -106,6 +163,9 @@ km_ioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif)
 		}
 
 		err = wlc_keymgmt_set_bss_tx_key_id(wlc->keymgmt, bsscfg, (wlc_key_id_t)val, FALSE);
+		break;
+	default:
+		err = BCME_UNSUPPORTED;
 		break;
 	}
 

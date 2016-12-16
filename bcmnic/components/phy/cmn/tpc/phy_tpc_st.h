@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_tpc_st.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_tpc_st.h 583048 2015-08-31 16:43:34Z $
  */
 
 #ifndef _phy_tpc_st_

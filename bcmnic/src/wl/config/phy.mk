@@ -26,12 +26,19 @@
 
 PHY_TOP_DIR = components/phy
 
+ifeq ($(STB_SOC_WIFI),1)
 NPHY ?= 0
+else
+NPHY ?= 1
+endif
 ifneq ($(MINIAP),1)
-	LCNPHY ?= 0	
-	LCN40PHY ?= 0   
-	LCN20PHY ?=0    
-	HTPHY ?= 0      
+ifeq ($(STB_SOC_WIFI),1)
+	LCN20PHY ?=0
+	HTPHY ?= 0
+else
+	LCN20PHY ?=1
+	HTPHY ?= 1
+endif
 	ACPHY ?= 1
 endif
 
@@ -52,6 +59,7 @@ PHY_SRC += $(PHY_TOP_DIR)/cmn/utils/phy_utils_status.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/utils/phy_utils_math.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/utils/phy_utils_channel.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/utils/phy_utils_radio.c
+PHY_SRC += $(PHY_TOP_DIR)/cmn/utils/phy_utils_pmu.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/init/phy_init.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/hirssi/phy_hirssi.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/tbl/phy_tbl.c
@@ -87,9 +95,13 @@ PHY_SRC += $(PHY_TOP_DIR)/cmn/mu/phy_mu.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/dccal/phy_dccal.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/ocl/phy_ocl.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/hecap/phy_hecap.c
+PHY_SRC += $(PHY_TOP_DIR)/cmn/hc/phy_hc.c
+PHY_SRC += $(PHY_TOP_DIR)/cmn/stf/phy_stf.c
 ifeq ($(WL_PROXDETECT),1)
 PHY_SRC += $(PHY_TOP_DIR)/cmn/tof/phy_tof.c
 endif
+PHY_SRC += $(PHY_TOP_DIR)/cmn/prephy/phy_prephy.c
+PHY_SRC += $(PHY_TOP_DIR)/cmn/vasip/phy_vasip.c
 
 # CMN IOVARS
 PHY_SRC += $(PHY_TOP_DIR)/cmn/core/phy_high.c
@@ -98,6 +110,7 @@ PHY_SRC += $(PHY_TOP_DIR)/cmn/core/phy_iovt.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/core/phy_ioct.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/btcx/phy_btcx_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/chanmgr/phy_chanmgr_iov.c
+PHY_SRC += $(PHY_TOP_DIR)/cmn/calmgr/phy_calmgr_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/hirssi/phy_hirssi_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/tbl/phy_tbl_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/temp/phy_temp_iov.c
@@ -115,6 +128,8 @@ PHY_SRC += $(PHY_TOP_DIR)/cmn/vcocal/phy_vcocal_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/tssical/phy_tssical_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/fcbs/phy_fcbs_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/cmn/txiqlocal/phy_txiqlocal_iov.c
+PHY_SRC += $(PHY_TOP_DIR)/cmn/noise/phy_noise_iov.c
+PHY_SRC += $(PHY_TOP_DIR)/cmn/hc/phy_hc_iov.c
 
 # NPHY
 ifeq ($(NPHY),1)
@@ -140,7 +155,10 @@ PHY_SRC += $(PHY_TOP_DIR)/n/samp/phy_n_samp.c
 PHY_SRC += $(PHY_TOP_DIR)/n/cache/phy_n_cache.c
 PHY_SRC += $(PHY_TOP_DIR)/n/misc/phy_n_misc.c
 PHY_SRC += $(PHY_TOP_DIR)/n/rxgcrs/phy_n_rxgcrs.c
+PHY_SRC += $(PHY_TOP_DIR)/n/rxspur/phy_n_rxspur.c
 PHY_SRC += $(PHY_TOP_DIR)/n/lpc/phy_n_lpc.c
+PHY_SRC += $(PHY_TOP_DIR)/n/dbg/phy_n_dbg.c
+PHY_SRC += $(PHY_TOP_DIR)/n/stf/phy_n_stf.c
 
 # NPHY IOVARS
 PHY_SRC += $(PHY_TOP_DIR)/n/core/phy_n_iovt_high.c
@@ -148,35 +166,6 @@ PHY_SRC += $(PHY_TOP_DIR)/n/core/phy_n_ioct_high.c
 PHY_SRC += $(PHY_TOP_DIR)/n/core/phy_n_iovt.c
 PHY_SRC += $(PHY_TOP_DIR)/n/core/phy_n_ioct.c
 PHY_SRC += $(PHY_TOP_DIR)/n/tbl/phy_n_tbl_iov.c
-endif
-
-# LCN40PHY
-ifeq ($(LCN40PHY),1)
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/core/phy_lcn40.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/btcx/phy_lcn40_btcx.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/misc/phy_lcn40_rstr.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/tbl/phy_lcn40_tbl.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/rssi/phy_lcn40_rssi.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/noise/phy_lcn40_noise.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/tpc/phy_lcn40_tpc.c
-PHY_SRC += $(PHY_TOP_DIR)/cmn/tpc/phy_tpc_shared.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/antdiv/phy_lcn40_antdiv.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/ana/phy_lcn40_ana.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/chanmgr/phy_lcn40_chanmgr.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/radio/phy_lcn40_radio.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/samp/phy_lcn40_samp.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/misc/phy_lcn40_misc.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/rxgcrs/phy_lcn40_rxgcrs.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/temp/phy_lcn40_temp.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/txiqlocal/phy_lcn40_txiqlocal.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/lpc/phy_lcn40_lpc.c
-
-# LCN40OHY IOVARS
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/core/phy_lcn40_iovt_high.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/core/phy_lcn40_ioct_high.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/core/phy_lcn40_iovt.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/core/phy_lcn40_ioct.c
-PHY_SRC += $(PHY_TOP_DIR)/lcn40/tbl/phy_lcn40_tbl_iov.c
 endif
 
 # LCN20PHY
@@ -200,6 +189,7 @@ PHY_SRC += $(PHY_TOP_DIR)/lcn20/misc/phy_lcn20_misc.c
 PHY_SRC += $(PHY_TOP_DIR)/lcn20/rxspur/phy_lcn20_rxspur.c
 PHY_SRC += $(PHY_TOP_DIR)/lcn20/txiqlocal/phy_lcn20_txiqlocal.c
 PHY_SRC += $(PHY_TOP_DIR)/lcn20/lpc/phy_lcn20_lpc.c
+PHY_SRC += $(PHY_TOP_DIR)/lcn20/tssical/phy_lcn20_tssical.c
 endif
 
 # HTPHY
@@ -226,6 +216,7 @@ PHY_SRC += $(PHY_TOP_DIR)/ht/dbg/phy_ht_dbg.c
 PHY_SRC += $(PHY_TOP_DIR)/ht/cache/phy_ht_cache.c
 PHY_SRC += $(PHY_TOP_DIR)/ht/misc/phy_ht_misc.c
 PHY_SRC += $(PHY_TOP_DIR)/ht/rxgcrs/phy_ht_rxgcrs.c
+PHY_SRC += $(PHY_TOP_DIR)/ht/stf/phy_ht_stf.c
 
 
 # HTPHY IOVARS
@@ -267,6 +258,7 @@ PHY_SRC += $(PHY_TOP_DIR)/ac/fcbs/phy_ac_fcbs.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/lpc/phy_ac_lpc.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/misc/phy_ac_misc.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/rxgcrs/phy_ac_rxgcrs.c
+PHY_SRC += $(PHY_TOP_DIR)/ac/rxgcrs/phy_ac_rxgcrs_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/rxspur/phy_ac_rxspur.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/tssical/phy_ac_tssical.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/samp/phy_ac_samp.c
@@ -275,9 +267,14 @@ PHY_SRC += $(PHY_TOP_DIR)/ac/dbg/phy_ac_dbg.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/dccal/phy_ac_dccal.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/ocl/phy_ac_ocl.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/hecap/phy_ac_hecap.c
+PHY_SRC += $(PHY_TOP_DIR)/ac/samp/phy_ac_samp_data.c
+PHY_SRC += $(PHY_TOP_DIR)/ac/stf/phy_ac_stf.c
 ifeq ($(WL_PROXDETECT),1)
 PHY_SRC += $(PHY_TOP_DIR)/ac/tof/phy_ac_tof.c
 endif
+PHY_SRC += $(PHY_TOP_DIR)/ac/prephy/phy_ac_prephy.c
+PHY_SRC += $(PHY_TOP_DIR)/ac/hc/phy_ac_hc.c
+PHY_SRC += $(PHY_TOP_DIR)/ac/vasip/phy_ac_vasip.c
 
 # ACPHY IOVARS
 PHY_SRC += $(PHY_TOP_DIR)/ac/core/phy_ac_iovt_high.c
@@ -288,6 +285,7 @@ PHY_SRC += $(PHY_TOP_DIR)/ac/chanmgr/phy_ac_chanmgr_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/misc/phy_ac_misc_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/radio/phy_ac_radio_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/rssi/phy_ac_rssi_iov.c
+PHY_SRC += $(PHY_TOP_DIR)/ac/rxgcrs/phy_ac_rxgcrs_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/tbl/phy_ac_tbl_iov.c
 PHY_SRC += $(PHY_TOP_DIR)/ac/tpc/phy_ac_tpc_iov.c
 endif
@@ -295,7 +293,7 @@ endif
 # ---------------------------------------------------------------------------------------------- #
 # Phy Features
 #
-ifeq ($(PHY_OCL),1)
+ifeq ($(WLOCL),1)
 	EXTRA_DFLAGS += -DOCL
 	PHY_SRC += $(PHY_TOP_DIR)/ac/ocl/phy_ac_ocl.c
 	PHY_SRC += $(PHY_TOP_DIR)/cmn/ocl/phy_ocl.c
@@ -367,12 +365,12 @@ endif
 
 PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_iovar.c
 PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_ioctl.c
-
-PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_cmn.c
-#PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_n.c
-#PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_radio_n.c
-#PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_extended_n.c
-#PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_n.c
+ifneq ($(STB_SOC_WIFI),1)
+PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_n.c
+PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_radio_n.c
+PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_extended_n.c
+PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_n.c
+endif
 
 ifneq ($(MINIAP),1)
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_ac.c
@@ -381,12 +379,10 @@ ifneq ($(MINIAP),1)
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_20694.c
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_20695.c
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_ac_gains.c
-	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_ac_gains.c
+ifneq ($(STB_SOC_WIFI),1)
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_ht.c
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_ht.c
-	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_lcn40.c
-	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_lcn40.c
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phy_lcn20.c
 	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_lcn20.c
-	PHY_SRC += $(PHY_TOP_DIR)/old/wlc_phytbl_lcn.c
+endif
 endif

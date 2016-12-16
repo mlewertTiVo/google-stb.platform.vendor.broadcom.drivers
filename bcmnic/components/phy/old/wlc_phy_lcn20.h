@@ -14,7 +14,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  * -----------------------------------------------------------------------------
  *
- * $Id: wlc_phy_lcn20.h 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: wlc_phy_lcn20.h 661662 2016-09-27 00:14:43Z $
  */
 
 #ifndef _wlc_phy_lcn20_h_
@@ -37,6 +37,7 @@
 #include "phy_lcn20_txiqlocal.h"
 #include "phy_lcn20_lpc.h"
 #include "phy_lcn20_rxspur.h"
+#include "phy_lcn20_tssical.h"
 /* ********************************************************* */
 
 #define LCN20_PAPD_ENABLE
@@ -59,6 +60,9 @@
 #define LCN20PHY_I_WL_MASK    4 /* ant(1 bit) ovr_en(1 bit) tdm(1 bit) mask(8 bits) */
 
 #define LCN20PHY_MAX_SUPPORTED_2G_CHANNELS 14
+#define LCN20PHY_NUM_RATE_OFFSETS         20
+
+#define TEMPER_VBAT_TRIGGER_NEW_MEAS 1
 
 typedef enum {
 	LCN20PHY_TSSI_PRE_PA = 0,
@@ -320,6 +324,18 @@ typedef struct _lcn20phy_rssi_gain_params {
 	uint8 dvga1_val;
 } lcn20phy_rssi_gain_params_t;
 
+#ifdef WL_PROXDETECT
+typedef struct proxd_loopback_gain {
+	uint8 slna_byp;
+	uint8 slna_rout;
+	uint8 slna_gain;
+	uint8 lna2_gain;
+	uint8 tia;
+	uint8 dvga1_gain;
+	uint8 dvga2_gain;
+} proxd_loopback_gain_t;
+#endif /* WL_PROXDETECT */
+
 struct phy_info_lcn20phy {
 /* ********************************************************* */
 	phy_info_t *pi;
@@ -336,6 +352,7 @@ struct phy_info_lcn20phy {
 	phy_lcn20_txiqlocal_info_t *txiqlocali;
 	phy_lcn20_lpc_info_t *lpci;
 	phy_lcn20_rxspur_info_t *rxspuri;
+	phy_lcn20_tssical_info_t	*tssicali;
 /* ********************************************************* */
 	bool	calbuffer_inuse;
 	uint8	*calbuffer;
@@ -460,11 +477,62 @@ struct phy_info_lcn20phy {
 	uint16 elna_on_val;
 	uint16 elna_bypsss_val;
 	int8  gainadj;
+	uint8 noise_iqest_en;
+	uint8 noise_log_nsamps;
+	int8 noise_iqest_gain_adj_2g;
 #ifdef WL11ULB
 	uint8 ulb_mode;
 #endif /* WL11ULB */
 	bool logain_NBcal;
+	uint8 papdcalidxoffset;
+	int8 papdidx_offset_chan12;
+	int8 papdidx_offset_chan13;
+#ifdef WL_PROXDETECT
+	proxd_loopback_gain_t proxd_rx_gain_override;
+#endif /* WL_PROXDETECT */
+	int8 rssi_rate_offset[LCN20PHY_NUM_RATE_OFFSETS];
 };
+
+/* TXIQLOcal tbl offsets */
+#define LCN20PHY_TXIQLOCAL_IQCOEFF_OFFSET	64
+#define LCN20PHY_TXIQLOCAL_DLOCOEFF_OFFSET	67
+#define LCN20PHY_TXIQLOCAL_IQCOMP_OFFSET	96
+#define LCN20PHY_TXIQLOCAL_DLOCOMP_OFFSET	98
+#define LCN20PHY_TXIQLOCAL_BPHY_IQCOMP_OFFSET	112
+#define LCN20PHY_TXIQLOCAL_BPHY_DLOCOMP_OFFSET	114
+#define LCN20PHY_TXIQLOCAL_IQBESTCOEFF_OFFSET	128
+#define LCN20PHY_TXIQLOCAL_DLOBESTCOEFF_OFFSET	131
+#define LCN20PHY_TXIQLOCAL_RIPPLE_BIN_OFFSET	156
+#define LCN20PHY_TXIQLOCAL_CORR_I_OFFSET		157
+#define LCN20PHY_TXIQLOCAL_CORR_Q_OFFSET		158
+
+/* Tx Pwr Ctrl table offsets */
+#define LCN20PHY_TX_PWR_CTRL_GAIN_OFFSET	192
+#define LCN20PHY_TX_PWR_CTRL_IQ_OFFSET		320
+#define LCN20PHY_TX_PWR_CTRL_LO_OFFSET		448
+#define LCN20PHY_TX_PWR_CTRL_PWR_OFFSET		576
+#define LCN20PHY_TX_PWR_CTRL_EST_PWR_OFFSET	704
+#define LCN20PHY_TX_GAIN_TABLE_SZ			128
+#define LCN20PHY_TX_PWR_CTRL_ESTPWRLUT_SZ	128
+#define LCN20PHY_TX_PAPD_LUT_SELECT_OFFSET	1024
+#define LCN20PHY_INIT_ANCRPOINT	(LCN20PHY_TX_PWR_CTRL_ESTPWRLUT_SZ - 4)
+#define LCN20PHY_FRAC_SHIFT	3
+#define LCN20PHY_PWR_THRESHOLD	68
+#define LCN20PHY_TX_PWR_CTRL_START_NPT		1
+#define LCN20PHY_TX_PWR_CTRL_START_INDEX_2G	50
+#define txpwrctrl_off(pi) (0x7 != ((phy_utils_read_phyreg(pi, \
+	LCN20PHY_TxPwrCtrlCmd) & 0xE000) >> 13))
+
+/* Rx gain table size */
+#define LCN20PHY_RXGAINVAL_TBL_SZ			26
+#define LCN20PHY_RXGAIN_TBL_SZ				96
+#define LCN20PHY_RXGAINIDX_TBL_SZ			76
+void *wlc_lcn20_malloc(phy_info_lcn20phy_t *pi_lcn20phy, uint16 size, uint32 line);
+void wlc_lcn20_mfree(phy_info_lcn20phy_t *pi_lcn20phy, uint32 line);
+
+/* Functions for fresh buffer access in wlc_phy_lcn20.c file */
+#define LCN20PHY_MALLOC(pi, size) wlc_lcn20_malloc((pi)->u.pi_lcn20phy, size, __LINE__)
+#define LCN20PHY_MFREE(pi, addr, size) wlc_lcn20_mfree((pi)->u.pi_lcn20phy, __LINE__)
 
 #ifdef WL11ULB
 extern bool wlc_phy_lcn20_ulb_10_capable(phy_info_t *pi);
@@ -498,28 +566,17 @@ wlc_lcn20phy_tssi2dbm(int32 tssi, int32 a1, int32 b0, int32 b1);
 extern int8
 wlc_phy_estpwrlut_intpol_lcn20phy(phy_info_t *pi, uint8 channel,
        wl_txcal_power_tssi_t *pwr_tssi_lut_ch1, wl_txcal_power_tssi_t *pwr_tssi_lut_ch2);
-extern void
-wlc_phy_set_lo_gain_nbcal_lcn20phy(phy_info_t *pi, bool lo_gain);
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-extern int16
-wlc_phy_test_tssi_lcn20phy(phy_info_t *pi, int8 ctrl_type, int8 pwr_offs);
-extern int16
-wlc_phy_test_idletssi_lcn20phy(phy_info_t *pi, int8 ctrl_type);
-#endif /* BCMINTERNAL || WLTEST */
 
 extern int16
 wlc_lcn20phy_rxpath_rssicorr(phy_info_t *pi, int16 rssi,
-	lcn20phy_rssi_gain_params_t *rssi_gain_param);
+	lcn20phy_rssi_gain_params_t *rssi_gain_param, int frm_type, int rate);
 
 extern int16 wlc_lcn20phy_rssi_tempcorr(phy_info_t *pi, bool mode);
 
 extern int16
 wlc_lcn20phy_tempsense(phy_info_t *pi, bool mode);
 
-#if defined(WLTEST)
-extern void wlc_lcn20phy_force_spurmode(phy_info_t *pi, int16 int_val);
-#endif /* WLTEST */
 void wlc_phy_init_lcn20phy(phy_info_t *pi);
 void wlc_lcn20phy_anacore(phy_info_t *pi, bool on);
 void wlc_lcn20phy_switch_radio(phy_info_t *pi, bool on);

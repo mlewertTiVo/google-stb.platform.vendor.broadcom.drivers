@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_btcx.h 625742 2016-03-17 12:47:32Z $
+ * $Id: wlc_btcx.h 665208 2016-10-16 23:44:23Z $
  */
 
 
@@ -26,11 +26,15 @@
 #define BTC_RXGAIN_FORCE_5G_MASK        0x2
 #define BTC_RXGAIN_FORCE_5G_ON          0x2
 
-/* GCI chip ctrl prisel/Txconf mask */
+/* 4364 - GCI chip ctrl prisel/Txconf mask */
 #define GCI_CHIP_CTRL_PRISEL_MASK		(1 << 15 | 1 << 16)
 #define GCI_CHIP_CTRL_PRISEL_MASK_CORE0		(1 << 15)	/* 4364: 3x3 core */
 #define GCI_CHIP_CTRL_PRISEL_MASK_CORE1		(1 << 16)	/* 4364: 1x1 core */
 
+/* 4347 - GCI chip ctrl prisel/Txconf mask */
+#define GCI_CHIP_CTRL_PRISEL_MASK_4347       (1 << 27 | 1 << 28)
+#define GCI_CHIP_CTRL_PRISEL_MASK_CORE0_4347     (1 << 27)   /* 4347: core 0 */
+#define GCI_CHIP_CTRL_PRISEL_MASK_CORE1_4347     (1 << 28)   /* 4347: core 1 */
 
 #ifdef WLRSDB
 /* COEX IO_MASK block */
@@ -52,7 +56,6 @@ extern void wlc_btc_mode_sync(wlc_info_t *wlc);
 extern uint8 wlc_btc_save_host_requested_pm(wlc_info_t *wlc, uint8 val);
 extern bool wlc_btc_get_bth_active(wlc_info_t *wlc);
 extern uint16 wlc_btc_get_bth_period(wlc_info_t *wlc);
-extern void wlc_btc_4313_gpioctrl_init(wlc_info_t *wlc);
 extern void wlc_btcx_read_btc_params(wlc_info_t *wlc);
 extern int wlc_btc_params_set(wlc_info_t *wlc, int int_val, int int_val2);
 extern int wlc_btc_params_get(wlc_info_t *wlc, int int_val);

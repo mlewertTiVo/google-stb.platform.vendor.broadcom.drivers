@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_hirssi.h 633216 2016-04-21 20:17:37Z vyass $
+ * $Id: phy_ac_hirssi.h 655464 2016-08-19 23:20:17Z $
  */
 
 #ifndef _phy_ac_hirssi_h_
@@ -29,8 +29,8 @@ typedef struct phy_ac_hirssi_info phy_ac_hirssi_info_t;
 phy_ac_hirssi_info_t *phy_ac_hirssi_register_impl(phy_info_t *pi,
 	phy_ac_info_t *aci, phy_hirssi_info_t *hirssii);
 void phy_ac_hirssi_unregister_impl(phy_ac_hirssi_info_t *info);
-bool wlc_phy_hirssi_elnabypass_shmem_read_clear_acphy(phy_info_t *pi);
-void wlc_phy_hirssi_elnabypass_set_ucode_params_acphy(phy_info_t *pi);
+bool phy_ac_hirssi_shmem_read_clear(phy_info_t *pi);
+void phy_ac_hirssi_set_ucode_params(phy_info_t *pi);
 void phy_ac_hirssi_set_timer(phy_info_t *pi);
 bool phy_ac_hirssi_set(phy_info_t *pi);
 bool phy_ac_hirssi_get(phy_info_t *pi);

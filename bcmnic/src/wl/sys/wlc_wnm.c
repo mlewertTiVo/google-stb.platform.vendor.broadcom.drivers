@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_wnm.c 657103 2016-08-31 03:29:39Z $
+ * $Id: wlc_wnm.c 663073 2016-10-04 01:33:08Z $
  */
 
 
@@ -81,7 +81,6 @@
 #include <wlc_pcb.h>
 #include <bcm_l2_filter.h>
 #include <wlc_ie_helper.h>
-#include <wlc_ulb.h>
 #include <wlc_hw.h>
 #include <wlc_event_utils.h>
 #include <wlc_pm.h>
@@ -352,7 +351,7 @@ static void wlc_wnm_print_nbrlist(wlc_wnm_info_t *wnm, wlc_bsscfg_t *cfg);
 
 #ifdef STA
 #if defined(WNM_BSSTRANS_EXT)
-#if defined(DNG_DBGDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(DNG_DBGDUMP)
 static int wlc_wbtext_dump(wlc_info_t *wlc, struct bcmstrbuf *b);
 #endif 
 #endif /* WNM_BSSTRANS_EXT */
@@ -594,50 +593,40 @@ static wnm_bss_select_factor_t cu_table[] =
 #endif /* STA */
 
 /* iovar table */
-enum {
-	IOV_WNM, /* enable/dsiable WNM */
-	IOV_WNM_MAXIDLE, /* 802.11v-2011 11.22.12 BSS Max Idle Period */
-#ifdef WLWNM_AP
-	IOV_WNM_TIMBC_OFFSET, /* 802.11v-2011 11.2.1.15 TIM broadcast */
-	IOV_WNM_BSSTRANS_URL, /* config session information URL */
-	IOV_WNM_BSSTRANS_REQ,
-	IOV_WNM_TFS_TCLASTYPE, /* config tclas support type of tfs service */
-	IOV_WNM_PARP_DISCARD,
-	IOV_WNM_PARP_ALLNODE,
-#endif /* WLWNM_AP */
-#ifdef STA
-	IOV_WNM_TIMBC_SET, /* 802.11v-2011 11.2.1.15 TIM broadcast */
-	IOV_WNM_TIMBC_STATUS, /* 802.11v-2011 11.2.1.15 TIM broadcast */
-	IOV_WNM_DMS_SET,
-	IOV_WNM_DMS_TERM,
-	IOV_WNM_SERVICE_TERM,
-	IOV_WNM_SLEEP_INTV, /* 802.11v-2011 11.2.1.16 WNM-Sleep Mode Interval */
-	IOV_WNM_SLEEP_MODE, /* send WNM-Sleep request frame to enter/exit sleep mode */
-	IOV_WNM_BSSTRANS_QUERY, /* send bss transition management query frame */
-	IOV_WNM_BSSTRANS_RESP, /* Set behavior when receiving BSS Trans Req */
-#endif /* STA */
-	IOV_WNM_TCLAS_ADD, /* add one tclas element */
-	IOV_WNM_TCLAS_DEL, /* delete one tclas element */
-	IOV_WNM_TCLAS_LIST, /* list all added tclas element */
-	IOV_WNM_DMS_STATUS, /* list all accepted dms descriptors */
-#ifdef STA
-#ifdef KEEP_ALIVE
-	IOV_WNM_KEEPALIVES_MAX_IDLE,
-#endif /* KEEP_ALIVE */
-	IOV_WNM_PM_IGNORE_BCMC,
-	IOV_WNM_DMS_DEPENDENCY, /* Conditions which must be true for sending DMS */
-	IOV_WNM_BSSTRANS_RSSI_RATE_MAP, /* rssi to rate map for AP scoring */
-	IOV_WNM_BSSTRANS_ROAMTHROTTLE,
-	IOV_WNM_SCOREDELTA,
-	IOV_WNM_BTM_RSSI_THRESH,
-	IOV_WNM_TFS_SET, /* add one tfs request element */
-	IOV_WNM_TFS_TERM,
-#ifdef WNM_BSSTRANS_EXT
-	IOV_WNM_BSS_SELECT_TABLE,
-	IOV_WNM_BSS_SELECT_WEIGHT,
-#endif /* WNM_BSSTRANS_EXT */
-#endif /* STA */
-	IOV_WNM_TFS_STATUS,
+enum wlc_wnm_iov {
+	IOV_WNM = 1,			/* enable/dsiable WNM */
+	IOV_WNM_MAXIDLE = 2,		/* 802.11v-2011 11.22.12 BSS Max Idle Period */
+	IOV_WNM_TIMBC_OFFSET = 3,	/* 802.11v-2011 11.2.1.15 TIM broadcast */
+	IOV_WNM_BSSTRANS_URL = 4,	/* config session information URL */
+	IOV_WNM_BSSTRANS_REQ = 5,
+	IOV_WNM_TFS_TCLASTYPE = 6,	/* config tclas support type of tfs service */
+	IOV_WNM_PARP_DISCARD = 7,
+	IOV_WNM_PARP_ALLNODE = 8,
+	IOV_WNM_TIMBC_SET = 9,		/* 802.11v-2011 11.2.1.15 TIM broadcast */
+	IOV_WNM_TIMBC_STATUS = 10,	/* 802.11v-2011 11.2.1.15 TIM broadcast */
+	IOV_WNM_DMS_SET = 11,
+	IOV_WNM_DMS_TERM = 12,
+	IOV_WNM_SERVICE_TERM = 13,
+	IOV_WNM_SLEEP_INTV = 14,	/* 802.11v-2011 11.2.1.16 WNM-Sleep Mode Interval */
+	IOV_WNM_SLEEP_MODE = 15,	/* send WNM-Sleep request frame to enter/exit sleep mode */
+	IOV_WNM_BSSTRANS_QUERY = 16,	/* send bss transition management query frame */
+	IOV_WNM_BSSTRANS_RESP = 17,	/* Set behavior when receiving BSS Trans Req */
+	IOV_WNM_TCLAS_ADD = 18,		/* add one tclas element */
+	IOV_WNM_TCLAS_DEL = 19,		/* delete one tclas element */
+	IOV_WNM_TCLAS_LIST = 20,	/* list all added tclas element */
+	IOV_WNM_DMS_STATUS = 21,	/* list all accepted dms descriptors */
+	IOV_WNM_KEEPALIVES_MAX_IDLE = 22,
+	IOV_WNM_PM_IGNORE_BCMC = 23,
+	IOV_WNM_DMS_DEPENDENCY = 24,	/* Conditions which must be true for sending DMS */
+	IOV_WNM_BSSTRANS_RSSI_RATE_MAP = 25,	/* rssi to rate map for AP scoring */
+	IOV_WNM_BSSTRANS_ROAMTHROTTLE = 26,
+	IOV_WNM_SCOREDELTA = 27,
+	IOV_WNM_BTM_RSSI_THRESH = 28,
+	IOV_WNM_TFS_SET = 29,		/* add one tfs request element */
+	IOV_WNM_TFS_TERM = 30,
+	IOV_WNM_BSS_SELECT_TABLE = 31,
+	IOV_WNM_BSS_SELECT_WEIGHT = 32,
+	IOV_WNM_TFS_STATUS = 33,
 	IOV_LAST
 };
 
@@ -713,11 +702,21 @@ static int wlc_wnm_wlc_up(void *ctx);
 static int wlc_wnm_wlc_down(void *ctx);
 static int wlc_wnm_tfs_status(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg,
 	wl_tfs_status_t *list, int list_len);
+#ifdef BCMDBG
+static void wlc_wnm_bsscfg_dump(void *context, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#endif /* BCMDBG */
 static int wlc_wnm_scb_init(void *context, struct scb *scb);
 static void wlc_wnm_scb_deinit(void *context, struct scb *scb);
+#ifdef BCMDBG
+static void wlc_wnm_scb_dump(void *context, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_wnm_scb_dump	NULL
+#endif /* BCMDBG */
 static void wlc_wnm_dms_free(wlc_bsscfg_t *bsscfg);
 static int wlc_wnm_dms_scb_cleanup(wlc_info_t *wlc, struct scb *scb);
+#ifdef BCMDBG
+static int wlc_wnm_tclas_delete(wlc_info_t *, wnm_tclas_t **, uint32, uint32);
+#endif
 static int wlc_wnm_tclas_ie_prep(wnm_tclas_t *tclas_head, uint8 *buf);
 static bool wlc_wnm_tclas_match(wnm_tclas_t *tclas, frame_proto_t *fp, bool allmatch);
 #ifdef WLWNM_AP
@@ -793,7 +792,8 @@ static int wlc_wnm_sleep_add_tfs_filter(wlc_bsscfg_t *cfg);
 static int wlc_wnm_sleep_remove_tfs_filter(wlc_bsscfg_t *cfg);
 
 #ifdef KEEP_ALIVE
-static int wlc_wnm_set_keepalive_max_idle(wlc_info_t *wlc, wnm_bsscfg_cubby_t *wnm_cfg);
+static int wlc_wnm_set_keepalive_max_idle(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
+	wnm_bsscfg_cubby_t *wnm_cfg);
 static int wlc_wnm_bss_max_idle_ie_process(void *ctx, wlc_iem_parse_data_t *data);
 #endif /* KEEP_ALIVE */
 static void wlc_wnm_pm_ignore_bcmc_upd(wlc_bsscfg_t *bsscfg, wnm_bsscfg_cubby_t *wnm_cfg);
@@ -843,7 +843,6 @@ static void wlc_wnm_deinit_l2_arp_table(osl_t* osh, arp_table_t* ptable);
  * enabled). It must be included after the prototypes and declarations above (since the generated
  * source file may reference private constants, types, variables, and functions).
  */
-#include <wlc_patch.h>
 
 /* TODO REPLACE BY TCLAS_DEL(xx, yy, 0, -1U) */
 static void wnm_tclas_free(wlc_info_t *wlc, wnm_tclas_t *curr)
@@ -927,8 +926,10 @@ wlc_wnm_bss_set(void *ctx, wlc_bsscfg_t *cfg, const uint8 *data, int len)
 		 * cfgidx is fixed even during bsscfg move
 		 * but wnm ptr should be from current wlc
 		 */
-		wnm_cfg->bsstrans_stainfo->tmr_cb->wnm =
-			cfg->wlc->wnm_info;
+		if (wnm_cfg->bsstrans_stainfo->tmr_cb) {
+			wnm_cfg->bsstrans_stainfo->tmr_cb->wnm =
+				cfg->wlc->wnm_info;
+		 }
 
 		if (WNM_BSSCFG_STA(cfg)) {
 			for (i = 0; i < MAXBANDS; i++) {
@@ -985,6 +986,9 @@ BCMATTACHFN(wlc_wnm_attach)(wlc_info_t *wlc)
 	cubby_params.context = wnm;
 	cubby_params.fn_init = wlc_wnm_bsscfg_init;
 	cubby_params.fn_deinit = wlc_wnm_bsscfg_deinit;
+#if defined(BCMDBG)
+	cubby_params.fn_dump = wlc_wnm_bsscfg_dump;
+#endif
 	cubby_params.fn_get = wlc_wnm_bss_get;
 	cubby_params.fn_set = wlc_wnm_bss_set;
 	cubby_params.config_size = WNM_COPY_SIZE;
@@ -1066,12 +1070,14 @@ BCMATTACHFN(wlc_wnm_attach)(wlc_info_t *wlc)
 
 #ifdef STA
 #ifdef KEEP_ALIVE
-	/* parse */
-	if (wlc_iem_add_parse_fn_mft(wlc->iemi, arsfstbmp, DOT11_MNG_BSS_MAX_IDLE_PERIOD_ID,
-		wlc_wnm_bss_max_idle_ie_process, wlc) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: wlc_iem_add_parse_fn failed, maxidle ie in assocresp\n",
-			wlc->pub->unit, __FUNCTION__));
-		goto fail;
+	if (KEEP_ALIVE_ENAB(wlc->pub)) {
+		/* parse */
+		if (wlc_iem_add_parse_fn_mft(wlc->iemi, arsfstbmp, DOT11_MNG_BSS_MAX_IDLE_PERIOD_ID,
+			wlc_wnm_bss_max_idle_ie_process, wlc) != BCME_OK) {
+			WL_ERROR(("wl%d: %s: wlc_iem_add_parse_fn failed\n",
+				wlc->pub->unit, __FUNCTION__));
+			goto fail;
+		}
 	}
 #endif /* KEEP_ALIVE */
 
@@ -1090,7 +1096,7 @@ BCMATTACHFN(wlc_wnm_attach)(wlc_info_t *wlc)
 	wlc->pub->_bsstrans_ext_active = FALSE;
 #endif /* !WNM_BSSTRANS_EXT_DISABLED */
 
-#if defined(DNG_DBGDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(DNG_DBGDUMP)
 	wlc_dump_register(wlc->pub, "wbtext", (dump_fn_t)wlc_wbtext_dump, (void*)wlc);
 #endif 
 #endif /* WNM_BSSTRANS_EXT */
@@ -1382,8 +1388,7 @@ bsstrans_req_get_pref_ap(wlc_bsscfg_t *cfg, uint8 *body, int *body_len,
 			/* Set 20Mhz chan for calling wlc_reassoc(), to avoid
 			 * STA with 20Mhz bw_cap only from scanning whole band
 			 */
-			reassoc->chanspec_list[0] = BSSCFG_MINBW_CHSPEC(cfg->wlc, cfg,
-				ngb->channel);
+			reassoc->chanspec_list[0] = CH20MHZ_CHSPEC(ngb->channel);
 			WL_WNM(("pref chanspec:0x%x rclass:0x%x chan:0x%x\n",
 				reassoc->chanspec_list[0], ngb->reg, ngb->channel));
 		}
@@ -1468,8 +1473,7 @@ wlc_wnm_neighbor_get_chanlist(wlc_wnm_info_t *wnm, wlc_bsscfg_t *cfg,
 		updated = FALSE;
 		if (nbr_rep->nbr_elt.channel != 0 && idx < maxsize) {
 			for (i = 0; i < idx; i++) {
-				if (list[i] == BSSCFG_MINBW_CHSPEC(cfg->wlc, cfg,
-						nbr_rep->nbr_elt.channel)) {
+				if (list[i] == CH20MHZ_CHSPEC(nbr_rep->nbr_elt.channel)) {
 					updated = TRUE;
 					break;
 				}
@@ -1479,8 +1483,7 @@ wlc_wnm_neighbor_get_chanlist(wlc_wnm_info_t *wnm, wlc_bsscfg_t *cfg,
 				/* Set 20Mhz chan for calling wlc_reassoc(), to avoid
 				 * STA with 20Mhz bw_cap only from scanning whole band
 				 */
-				list[idx++] = BSSCFG_MINBW_CHSPEC(cfg->wlc, cfg,
-						nbr_rep->nbr_elt.channel);
+				list[idx++] = CH20MHZ_CHSPEC(nbr_rep->nbr_elt.channel);
 			}
 		}
 
@@ -1720,7 +1723,7 @@ bsstrans_req_get_chanlist(wlc_bsscfg_t *cfg, uint8 *body, int *body_len, chanspe
 			/* Set 20Mhz chan for calling wlc_reassoc(), to avoid
 			 * STA with 20Mhz bw_cap only from scanning whole band
 			 */
-			list[*channum] = BSSCFG_MINBW_CHSPEC(cfg->wlc, cfg, ngb->channel);
+			list[*channum] = CH20MHZ_CHSPEC(ngb->channel);
 			*channum += 1;
 		}
 
@@ -1873,6 +1876,7 @@ wlc_wnm_bsstrans_resp_timeout(void *context)
 	if (bsscfg) {
 		wnm_cfg = WNM_BSSCFG_CUBBY(wnm, bsscfg);
 		bsi = wnm_cfg->bsstrans_stainfo;
+		ASSERT(bsi->join_cfg);
 		wlc_join_attempt_select(bsi->join_cfg);
 		wlc_wnm_bsstrans_reset_pending_join(wnm->wlc, bsscfg);
 	}
@@ -1986,17 +1990,13 @@ wlc_wnm_bsstrans_req_process_product(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, 
 	if (throttle->period && (throttle->scans_done == throttle->scans_allowed)) {
 		WL_WNM_BSSTRANS_LOG("BTM req throttled allowed %d done %d\n",
 		throttle->scans_allowed, throttle->scans_done, 0, 0);
-		if (unicast_req) {
-			retval = bsstrans_send_resp(wnm->wlc, bsscfg,
-				DOT11_BSSTRANS_RESP_STATUS_REJECT, NULL, req->token, scb);
-		}
-		return retval;
+		goto reject;
 	}
 
 	if (WBTEXT_ENAB(wnm->wlc->pub)) {
 	if (bsi->resp_pending == TRUE) {
 		WL_ERROR(("%s: bss transition request pending\n", __FUNCTION__));
-		return BCME_ERROR;
+		goto reject;
 	}
 
 	/* If abridged bit is set but pref list is not given or
@@ -2005,14 +2005,15 @@ wlc_wnm_bsstrans_req_process_product(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, 
 	if (((req->reqmode & DOT11_BSSTRANS_REQMODE_ABRIDGED) &&
 		!(req->reqmode & DOT11_BSSTRANS_REQMODE_PREF_LIST_INCL)) ||
 		P2P_CLIENT(wnm->wlc, bsscfg)) {
-	WL_ERROR(("%s: discarding. invalid BTM request.\n", __FUNCTION__));
-		return retval;
+		WL_ERROR(("%s: discarding. invalid BTM request.\n", __FUNCTION__));
+		goto reject;
+
 	}
 
 	if (bsscfg->roam->scan_block) {
 		/* return if roamscan in progress */
 		WL_ERROR(("%s: discarding. roamscan inprogress.\n", __FUNCTION__));
-		return retval;
+		goto reject;
 	}
 
 	/* delete all neighbors */
@@ -2033,7 +2034,7 @@ wlc_wnm_bsstrans_req_process_product(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, 
 		retval = wlc_wnm_bsstrans_update_nbrlist(wnm, bsscfg, body, &body_len);
 			if (retval != BCME_OK) {
 				WL_ERROR(("%s: failed to updated neighbor list\n", __FUNCTION__));
-				return retval;
+				goto reject;
 			}
 
 			memset(list, 0, sizeof(list));
@@ -2041,7 +2042,7 @@ wlc_wnm_bsstrans_req_process_product(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, 
 			retval = wlc_wnm_neighbor_get_chanlist(wnm, bsscfg, list, ARRAYSIZE(list));
 			if (retval != BCME_OK) {
 				WL_ERROR(("%s: failed to get channel list\n", __FUNCTION__));
-				return retval;
+				goto reject;
 			}
 
 #ifdef WLRCC
@@ -2157,8 +2158,11 @@ wlc_wnm_bsstrans_req_process_product(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, 
 	} else if (req->reqmode & DOT11_BSSTRANS_REQMODE_ABRIDGED) {
 		/* If abridged bit is set a partial scan is enough */
 		retval = bsstrans_req_get_chanlist(bsscfg, body, &body_len, list, &channum);
-		if (retval != BCME_OK)
-			return retval;
+		if (retval != BCME_OK) {
+			WL_ERROR(("%s: discarding. invalid ap recommendation.\n",
+				__FUNCTION__));
+			goto reject;
+		}
 	}
 	/* Send BSS transition reply after roam-scan completion. Record everything needed
 	 * for sending response
@@ -2182,7 +2186,15 @@ wlc_wnm_bsstrans_req_process_product(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, 
 	}
 
 	bsi->throttle->scans_done++;
-	return BCME_OK;
+	return retval;
+
+reject:
+	if (unicast_req) {
+		/* all error and unhandled case shall send general reject response */
+		retval = bsstrans_send_resp(wnm->wlc, bsscfg, DOT11_BSSTRANS_RESP_STATUS_REJECT,
+		NULL, req->token, scb);
+	}
+	return retval;
 }
 
 static int
@@ -3208,6 +3220,8 @@ wlc_wnm_set_bss_select_table(wnm_bss_select_factor_cfg_t *btcfg,
 
 #endif /* STA && WNM_BSSTRANS_EXT */
 
+#include <wlc_patch.h>
+
 static int
 wlc_wnm_doiovar(void *hdl, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif)
@@ -3229,9 +3243,7 @@ wlc_wnm_doiovar(void *hdl, uint32 actionid,
 
 	/* update bsscfg w/provided interface context */
 	bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
-
-	if (bsscfg == NULL)
-		return BCME_BADARG;
+	ASSERT(bsscfg != NULL);
 
 	wnm_cfg = WNM_BSSCFG_CUBBY(wnm, bsscfg);
 #ifdef STA
@@ -3640,13 +3652,15 @@ wlc_wnm_doiovar(void *hdl, uint32 actionid,
 	case IOV_SVAL(IOV_WNM_KEEPALIVES_MAX_IDLE): {
 		keepalives_max_idle_t *ka = (keepalives_max_idle_t *)arg;
 		int status;
-		if (!WNM_MAXIDLE_ENABLED(wnm_cfg->cap))
+		if (!KEEP_ALIVE_ENAB(wlc->pub) ||
+				!WNM_MAXIDLE_ENABLED(wnm_cfg->cap)) {
 			return BCME_UNSUPPORTED;
+		}
 		wnm_cfg->keepalive_count = ka->keepalive_count;
 		wnm_cfg->mkeepalive_index = ka->mkeepalive_index;
 		wnm_cfg->ka_max_interval = ka->max_interval;
 
-		status = wlc_wnm_set_keepalive_max_idle(wlc, wnm_cfg);
+		status = wlc_wnm_set_keepalive_max_idle(wlc, bsscfg, wnm_cfg);
 
 		if (BCME_OK != status)
 			return status;
@@ -3654,6 +3668,9 @@ wlc_wnm_doiovar(void *hdl, uint32 actionid,
 	}
 	case IOV_GVAL(IOV_WNM_KEEPALIVES_MAX_IDLE): {
 		keepalives_max_idle_t *ka = (keepalives_max_idle_t *)arg;
+		if (!KEEP_ALIVE_ENAB(wlc->pub)) {
+			return BCME_UNSUPPORTED;
+		}
 		if (p_len < (int)(sizeof(keepalives_max_idle_t)))
 			return BCME_BUFTOOSHORT;
 
@@ -3712,6 +3729,56 @@ wlc_wnm_doiovar(void *hdl, uint32 actionid,
 		wnm->tclas_cnt++;
 		break;
 	}
+#ifdef BCMDBG
+	case IOV_SVAL(IOV_WNM_TCLAS_DEL): {
+		uint8 *ptr = (uint8 *)arg;
+		uint32 idx, cnt;
+		if (len < 1)
+			return BCME_BADLEN;
+
+		idx = (ptr[0] >= 1) ? ptr[1] : 0;
+		cnt = (ptr[0] >= 2) ? ptr[2] : wnm->tclas_cnt - idx;
+
+		if (wnm->tclas_cnt <= idx || wnm->tclas_cnt < idx + cnt)
+			return BCME_RANGE;
+
+		wnm->tclas_cnt -= cnt;
+		return wlc_wnm_tclas_delete(wlc, &wnm->tclas_head, idx, cnt);
+	}
+	case IOV_GVAL(IOV_WNM_TCLAS_LIST): {
+		wl_tclas_list_t *tclas_list = (wl_tclas_list_t *)arg;
+		wl_tclas_t *wl_tclas;
+		uint8 *ptr;
+		wnm_tclas_t *tclas;
+		int totlen;
+
+		if (tclas_list->num == 0)
+			break;
+
+		/* Check the total length to be returned */
+		totlen = sizeof(tclas_list->num);
+		for (tclas = wnm->tclas_head; tclas; tclas = tclas->next)
+			totlen += WL_TCLAS_FIXED_SIZE + tclas->fc_len;
+
+		if (totlen > (int)len)
+			return BCME_BUFTOOSHORT;
+
+		tclas_list->num = wnm->tclas_cnt;
+
+		ptr = (uint8 *)&tclas_list->tclas[0];
+
+		for (tclas = wnm->tclas_head; tclas; tclas = tclas->next) {
+			wl_tclas = (wl_tclas_t *)ptr;
+
+			wl_tclas->user_priority = tclas->user_priority;
+			wl_tclas->fc_len = tclas->fc_len;
+			memcpy(&wl_tclas->fc, &tclas->fc, tclas->fc_len);
+
+			ptr += WL_TCLAS_FIXED_SIZE + tclas->fc_len;
+		}
+		break;
+	}
+#endif /* BCMDBG */
 	case IOV_GVAL(IOV_WNM_DMS_STATUS):
 		err = wlc_wnm_dms_status(wnm_cfg, (wl_dms_status_t *)arg, len);
 		break;
@@ -3886,12 +3953,6 @@ wnm_wbtext_bsscfg_bsi_deinit(wlc_bsscfg_t *cfg)
 		wl_del_timer(wlc_tmr->wl, bsi->disassoc_imnt_timer);
 		bsi->disassoc_imnttmr_active = FALSE;
 	 }
-	 if (bsi->resp_timer) {
-		 wl_free_timer(wlc_tmr->wl, bsi->resp_timer);
-	 }
-	 if (bsi->tmr_cb) {
-		 MFREE(wlc->osh, bsi->tmr_cb,	 sizeof(timer_cb_ctx_t));
-	 }
 	 if (wnm_cfg->bss_select_table[0]) {
 		if (wnm_cfg->bss_select_table[0]->rssi_table) {
 			MFREE(wlc->osh, wnm_cfg->bss_select_table[0]->rssi_table,
@@ -4030,16 +4091,31 @@ wnm_bsstrans_sta_info_mem_t **bsi_ptr)
 static void
 wnm_bsscfg_bsi_deinit(wlc_bsscfg_t *cfg)
 {
-	wlc_info_t *wlc = cfg->wlc;
+	wlc_info_t *wlc = cfg->wlc, *wlc_tmr;
 	wnm_bsscfg_cubby_t *wnm_cfg;
 	wnm_bsstrans_sta_info_t *bsi;
 	wnm_bsstrans_sta_info_mem_t *bsi_mem;
 
 	wnm_cfg = WNM_BSSCFG_CUBBY(cfg->wlc->wnm_info, cfg);
 	bsi = wnm_cfg->bsstrans_stainfo;
+	wlc_tmr = wlc;
 
-#ifdef STA
+#ifdef WLRSDB
+		if (RSDB_ENAB(wlc->pub)) {
+			wlc_tmr = WLC_RSDB_GET_PRIMARY_WLC(wlc);
+		}
+#endif /* WLRSDB */
+
 	if (bsi) {
+		if (bsi->resp_timer) {
+			wl_del_timer(wlc_tmr->wl, bsi->resp_timer);
+			wl_free_timer(wlc_tmr->wl, bsi->resp_timer);
+		}
+
+		if (bsi->tmr_cb) {
+			MFREE(wlc->osh, bsi->tmr_cb, sizeof(timer_cb_ctx_t));
+		}
+
 		if (WBTEXT_ENAB(wlc->pub) && WNM_BSSCFG_STA(cfg)) {
 			wnm_wbtext_bsscfg_bsi_deinit(cfg);
 		}
@@ -4048,10 +4124,8 @@ wnm_bsscfg_bsi_deinit(wlc_bsscfg_t *cfg)
 		bsi_mem = (wnm_bsstrans_sta_info_mem_t *)bsi;
 		wlc_wnm_bsscfg_bsi_dealloc(wlc->wnm_info, bsi_mem);
 	}
-#endif /* STA */
 }
 
-/* This function will do STA related initialization on cfg */
 static int
 BCMRAMFN(wnm_bsscfg_bsi_init)(wlc_bsscfg_t *cfg)
 {
@@ -4135,7 +4209,11 @@ wlc_wnm_bsscfg_init(void *context, wlc_bsscfg_t *cfg)
 	 */
 
 	cap |= WL_WNM_BSSTRANS;
-
+#ifdef KEEP_ALIVE
+	if (KEEP_ALIVE_ENAB(wlc->pub)) {
+		cap |= WL_WNM_MAXIDLE;
+	}
+#endif /* KEEP_ALIVE */
 #ifdef WLWNM_BRCM
 	if (WLWNM_BRCM_ENAB(wlc->pub)) {
 		cap = BRCM_WNM_FEATURE_SET;
@@ -4465,6 +4543,13 @@ wlc_wnm_set_scbcap(wlc_info_t *wlc, struct scb *scb, uint32 cap)
 	return BCME_OK;
 }
 
+#ifdef BCMDBG
+static void
+wlc_wnm_bsscfg_dump(void *context, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	/* TODO */
+}
+#endif
 
 static int
 wlc_wnm_scb_init(void *context, struct scb *scb)
@@ -4486,6 +4571,35 @@ wlc_wnm_scb_deinit(void *context, struct scb *scb)
 
 }
 
+#ifdef BCMDBG
+static const bcm_bit_desc_t scb_capstr[] =
+{
+	{WL_WNM_BSSTRANS,	"WNM_BSSTRANS"},
+	{WL_WNM_PROXYARP,	"WNM_PROXY_ARP"},
+	{WL_WNM_MAXIDLE,	"WNM_MAXIDLE"},
+	{WL_WNM_TIMBC,		"WNM_TIMBC"},
+	{WL_WNM_TFS,		"WNM_TFS"},
+	{WL_WNM_SLEEP,		"WNM_SLEEP_MODE"},
+	{WL_WNM_DMS,		"WNM_DMS"},
+	{WL_WNM_FMS,		"WNM_FMS"},
+	{WL_WNM_NOTIF,		"WNM_NOTIFICATION"},
+	{0, NULL}
+};
+
+static void
+wlc_wnm_scb_dump(void *context, struct scb *scb, struct bcmstrbuf *b)
+{
+	char capbuf[256];
+	wlc_wnm_info_t *wnm = (wlc_wnm_info_t *)context;
+
+	bcm_format_flags(scb_capstr, wlc_wnm_get_scbcap(wnm->wlc, scb), capbuf, 256);
+
+	bcm_bprintf(b, "     WNM cap: 0x%x", wlc_wnm_get_scbcap(wnm->wlc, scb));
+	if (capbuf[0] != '\0')
+		bcm_bprintf(b, " [%s]", capbuf);
+	bcm_bprintf(b, "\n");
+}
+#endif /* BCMDBG */
 
 uint16
 wlc_wnm_maxidle(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
@@ -5107,6 +5221,13 @@ wlc_wnm_bss_idle_timer(void *context)
 
 		if (BSSCFG_AP(cfg) && SCB_ASSOCIATED(scb) && bss_max_idle_prd &&
 			(wnm->timestamp - wnm_scb->rx_tstamp) > bss_max_idle_prd) {
+#ifdef BCMDBG
+			char eabuf[ETHER_ADDR_STR_LEN];
+			WL_ASSOC(("wl%d: BSS Max Idle Period timeout(%d)(%d - %d)."
+				" Disassoc(%s)\n", wlc->pub->unit, bss_max_idle_prd,
+				wnm_scb->rx_tstamp, wnm->timestamp,
+				bcm_ether_ntoa(&scb->ea, eabuf)));
+#endif /* BCMDBG */
 			wlc_senddisassoc(wlc, cfg, scb, &scb->ea, &cfg->BSSID, &cfg->cur_etheraddr,
 				DOT11_RC_INACTIVITY);
 			wlc_scb_resetstate(wlc, scb);
@@ -6744,6 +6865,31 @@ wlc_wnm_dms_scb_cleanup(wlc_info_t *wlc, struct scb *scb)
 	return BCME_OK;
 }
 
+#ifdef BCMDBG
+static int
+wlc_wnm_tclas_delete(wlc_info_t *wlc, wnm_tclas_t **head, uint32 idx, uint32 cnt)
+{
+	/* Trick to simplify processing, as 'next' is the first member of the struct */
+	wnm_tclas_t *prev = (wnm_tclas_t *)head;
+
+	while (idx--) {
+		prev = prev->next;
+		if (prev == NULL)
+			return BCME_RANGE;
+	}
+
+	while (cnt--) {
+		wnm_tclas_t *curr = prev->next;
+		if (curr == NULL)
+			return BCME_RANGE;
+
+		prev->next = curr->next;
+		MFREE(wlc->osh, curr, TCLAS_ELEM_FIXED_SIZE + curr->fc_len);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG */
 
 static int
 wlc_wnm_tclas_ie_prep(wnm_tclas_t *tclas, uint8 *p)
@@ -7148,6 +7294,9 @@ wlc_wnm_send_bsstrans_request(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, struct 
 			bcopy(bsstrans->bsstrans_list, pdata, bsstrans->bsstrans_list_len);
 	}
 
+#ifdef BCMDBG
+	prhex("Raw BSS Trans Req body", (uchar *)pbody, maxlen);
+#endif /* BCMDBG */
 
 	wlc_sendmgmt(wlc, p, bsscfg->wlcif->qi, scb);
 }
@@ -7159,9 +7308,9 @@ wlc_wnm_parse_bsstrans_resp(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, struct sc
 	dot11_bsstrans_resp_t *bsstrans_resp = (dot11_bsstrans_resp_t *)body;
 	wnm_bsscfg_cubby_t *wnm_cfg;
 	wnm_bsstrans_req_info_t *bsstrans;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 	wnm_scb_cubby_t *wnm_scb = SCB_WNM_CUBBY(wnm, scb);
 
 	wnm_cfg = WNM_BSSCFG_CUBBY(wnm, bsscfg);
@@ -7172,11 +7321,11 @@ wlc_wnm_parse_bsstrans_resp(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg, struct sc
 		/* This resp frame is in response for the BSS transition req frame
 		 * from AP for BSS termination. Update the status and termination delay.
 		 */
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 		WL_WNM(("wl%d: %s: bss transition resp token 0x%02x, status 0x%02x from %s\n",
 			wnm->wlc->pub->unit, __FUNCTION__, bsstrans_resp->token,
 			bsstrans_resp->status, bcm_ether_ntoa(&scb->ea, eabuf)));
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 		/* Collect the status and termination delay from STAs */
 		if (bsstrans_resp->status <= DOT11_BSSTRANS_RESP_STATUS_REJ_LEAVING_ESS)
@@ -7215,10 +7364,18 @@ wnm_proxyarp_arp_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp
 	struct bcmarp *arp = (struct bcmarp *)fp->l3;
 	parp_entry_t *entry;
 	uint16 op = ntoh16(arp->oper);
+#ifdef BCMDBG
+	char ipbuf[64], eabuf[32];
+#endif /* BCMDBG */
 
 	/* basic ether addr check */
 	if (ETHER_ISNULLADDR(arp->src_eth) || ETHER_ISBCAST(arp->src_eth) ||
 	    ETHER_ISMULTI(arp->src_eth)) {
+#ifdef BCMDBG
+		WL_ERROR(("wl%d.%d: Invalid Ether addr(%s)\n", wlc->pub->unit,
+			WLC_BSSCFG_IDX(bsscfg),
+			bcm_ether_ntoa((struct ether_addr *)arp->src_eth, eabuf)));
+#endif /* BCMDBG */
 		return FRAME_NOP;
 	}
 
@@ -7233,6 +7390,12 @@ wnm_proxyarp_arp_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp
 		entry = bcm_l2_filter_parp_findentry(wnm_cfg->phnd_arp_table,
 			arp->src_ip, IP_VER_4, TRUE, wlc->pub->now);
 		if (entry == NULL) {
+#ifdef BCMDBG
+			WL_ERROR(("wl%d.%d: Add parp_entry by ARP %s %s\n",
+				wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+				bcm_ether_ntoa((struct ether_addr *)arp->src_eth, eabuf),
+				bcm_ip_ntoa((struct ipv4_addr *)arp->src_ip, ipbuf)));
+#endif /* BCMDBG */
 			bcm_l2_filter_parp_addentry(wlc->osh, wnm_cfg->phnd_arp_table,
 				(struct ether_addr *)arp->src_eth, arp->src_ip, IP_VER_4,
 				TRUE, wlc->pub->now);
@@ -7249,6 +7412,13 @@ wnm_proxyarp_arp_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp
 
 			/* no such entry exist */
 			if (entry == NULL) {
+#ifdef BCMDBG
+				WL_ERROR(("wl%d.%d: create candidate parp_entry by ARP "
+					"%s %s\n", wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+					bcm_ether_ntoa((struct ether_addr *)arp->src_eth,
+					eabuf), bcm_ip_ntoa((struct ipv4_addr *)arp->dst_ip,
+					ipbuf)));
+#endif /* BCMDBG */
 				bcm_l2_filter_parp_addentry(wlc->osh, wnm_cfg->phnd_arp_table,
 					(struct ether_addr *)arp->src_eth, arp->dst_ip,
 					IP_VER_4, FALSE, wlc->pub->now);
@@ -7263,6 +7433,12 @@ wnm_proxyarp_arp_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp
 		if (entry) {
 			struct ether_addr ea;
 			bcopy(&entry->ea, &ea, ETHER_ADDR_LEN);
+#ifdef BCMDBG
+			WL_ERROR(("wl%d.%d: withdraw candidate parp_entry IPv4 %s %s\n",
+				wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+				bcm_ether_ntoa(&ea, eabuf),
+				bcm_ip_ntoa((struct ipv4_addr *)arp->src_ip, ipbuf)));
+#endif /* BCMDBG */
 			bcm_l2_filter_parp_delentry(wlc->osh, wnm_cfg->phnd_arp_table,
 				&ea, arp->src_ip, IP_VER_4, FALSE);
 		}
@@ -7359,6 +7535,9 @@ wnm_proxyarp_dhcp4_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *
 	arp_table_t* ptable;
 	uint8 smac_addr[ETHER_ADDR_LEN];
 	uint8 cmac_addr[ETHER_ADDR_LEN];
+#ifdef BCMDBG
+	char ipbuf[64], eabuf[32];
+#endif /* BCMDBG */
 
 	dhcp = (uint8 *)(fp->l4 + UDP_HDR_LEN);
 
@@ -7382,6 +7561,14 @@ wnm_proxyarp_dhcp4_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *
 
 		/* compared to DHCP Req client mac */
 		if (bcmp((void*)cmac_addr, &dhcp[DHCP_CHADDR_OFFSET], ETHER_ADDR_LEN)) {
+#ifdef BCMDBG
+			WL_ERROR(("wl%d.%d: Unmatch DHCP Req Client MAC (%s)",
+				wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+				bcm_ether_ntoa((struct ether_addr *)cmac_addr, eabuf)));
+			WL_ERROR(("to DHCP Ack Client MAC(%s)\n",
+				bcm_ether_ntoa((struct ether_addr *)&dhcp[DHCP_CHADDR_OFFSET],
+				eabuf)));
+#endif /* BCMDBG */
 			return FRAME_NOP;
 		}
 
@@ -7396,6 +7583,13 @@ wnm_proxyarp_dhcp4_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *
 				&dhcp[DHCP_YIADDR_OFFSET], IP_VER_4, TRUE, wlc->pub->now);
 
 			if (entry == NULL) {
+#ifdef BCMDBG
+				WL_ERROR(("wl%d.%d: Add parp_entry by DHCP4 %s %s\n",
+					wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+					bcm_ether_ntoa(&scb->ea, eabuf),
+					bcm_ip_ntoa((struct ipv4_addr *)
+						&dhcp[DHCP_YIADDR_OFFSET], ipbuf)));
+#endif /* BCMDBG */
 				bcm_l2_filter_parp_addentry(wlc->osh, ptable, &scb->ea,
 					&dhcp[DHCP_YIADDR_OFFSET], IP_VER_4, TRUE, wlc->pub->now);
 			}
@@ -7417,6 +7611,14 @@ wnm_proxyarp_dhcp4_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *
 		    ETHER_ISNULLADDR(eh->ether_shost) ||
 		    ETHER_ISBCAST(eh->ether_shost) ||
 		    ETHER_ISMULTI(eh->ether_shost)) {
+#ifdef BCMDBG
+			WL_WNM(("wl%d.%d: Invalid Ether addr(%s)",
+				wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+				bcm_ether_ntoa((struct ether_addr *)eh->ether_shost, eabuf)));
+			WL_WNM(("(%s) of DHCP Req pkt\n",
+				bcm_ether_ntoa((struct ether_addr *)&dhcp[DHCP_CHADDR_OFFSET],
+				eabuf)));
+#endif /* BCMDBG */
 			return FRAME_NOP;
 		}
 		/*
@@ -7447,6 +7649,9 @@ proxyarp_icmp6_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp, 
 	uint8 link_type = 0;
 	bcm_tlv_t *link_addr = NULL;
 	uint16 ip6_icmp6_len = sizeof(struct ipv6_hdr) + sizeof(struct bcm_nd_msg);
+#ifdef BCMDBG
+	char ipbuf[64], eabuf[32];
+#endif /* BCMDBG */
 
 	/* basic check */
 	if ((fp->l3_len < ip6_icmp6_len) ||
@@ -7490,6 +7695,11 @@ proxyarp_icmp6_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp, 
 	/* basic ether addr check */
 	if (ETHER_ISNULLADDR(eh->ether_shost) || ETHER_ISBCAST(eh->ether_shost) ||
 	    ETHER_ISMULTI(eh->ether_shost)) {
+#ifdef BCMDBG
+		WL_ERROR(("wl%d.%d: Invalid Ether addr(%s) of icmp6 pkt\n", wlc->pub->unit,
+			WLC_BSSCFG_IDX(bsscfg),
+			bcm_ether_ntoa((struct ether_addr *)eh->ether_shost, eabuf)));
+#endif /* BCMDBG */
 		return FRAME_NOP;
 	}
 
@@ -7499,6 +7709,12 @@ proxyarp_icmp6_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp, 
 		entry = bcm_l2_filter_parp_findentry(wnm_cfg->phnd_arp_table,
 			entry_ip, IP_VER_6, TRUE, wlc->pub->now);
 		if (entry == NULL) {
+#ifdef BCMDBG
+			WL_ERROR(("wl%d.%d: Add new parp_entry by ICMP6 %s %s\n",
+				wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+				bcm_ether_ntoa(entry_ea, eabuf),
+				bcm_ipv6_ntoa((void *)entry_ip, ipbuf)));
+#endif /* BCMDBG */
 			bcm_l2_filter_parp_addentry(wlc->osh, wnm_cfg->phnd_arp_table,
 				entry_ea, entry_ip, IP_VER_6, TRUE, wlc->pub->now);
 		}
@@ -7514,6 +7730,13 @@ proxyarp_icmp6_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp, 
 
 			/* no such entry exist, add candidate */
 			if (entry == NULL) {
+#ifdef BCMDBG
+				WL_ERROR(("wl%d.%d: create candidate parp_entry "
+					"by ICMP6 %s %s\n",
+					wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+					bcm_ether_ntoa((struct ether_addr *)entry_ea,
+					eabuf), bcm_ipv6_ntoa((void *)entry_ip, ipbuf)));
+#endif /* BCMDBG */
 				bcm_l2_filter_parp_addentry(wlc->osh, wnm_cfg->phnd_arp_table,
 					entry_ea, entry_ip, IP_VER_6, FALSE, wlc->pub->now);
 			}
@@ -7527,6 +7750,12 @@ proxyarp_icmp6_handle(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, frame_proto_t *fp, 
 		if (entry) {
 			struct ether_addr ea;
 			bcopy(&entry->ea, &ea, ETHER_ADDR_LEN);
+#ifdef BCMDBG
+			WL_ERROR(("wl%d.%d: withdraw candidate parp_entry IPv6 %s %s\n",
+				wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+				bcm_ether_ntoa(&ea, eabuf),
+				bcm_ipv6_ntoa((void *)entry_ip, ipbuf)));
+#endif /* BCMDBG */
 			bcm_l2_filter_parp_delentry(wlc->osh, wnm_cfg->phnd_arp_table, &ea,
 				entry_ip, IP_VER_6, FALSE);
 		}
@@ -8267,6 +8496,9 @@ wlc_wnm_dms_req_frame_send(wlc_bsscfg_t *bsscfg, uint type, uint user_id)
 
 	body += wlc_wnm_dms_desc_prep(dms_info, body, type, wnm->req_token, user_id);
 
+#ifdef BCMDBG
+	prhex("DMS-req descr list", body - dms_desc_list_len, dms_desc_list_len);
+#endif /* BCMDBG */
 
 	wlc_sendmgmt(wlc, p, wlc->cfg->wlcif->qi, NULL);
 
@@ -9035,7 +9267,7 @@ wlc_wnm_set_bss_max_idle_prd(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint16 new_prd,
 
 		if (!WNM_MAXIDLE_ENABLED(wnm_cfg->cap))
 			return;
-		wlc_wnm_set_keepalive_max_idle(wlc, wnm_cfg);
+		wlc_wnm_set_keepalive_max_idle(wlc, cfg, wnm_cfg);
 	}
 }
 
@@ -9060,7 +9292,7 @@ wlc_wnm_bss_max_idle_ie_process(void *ctx, wlc_iem_parse_data_t *data)
 	return BCME_OK;
 }
 static int
-wlc_wnm_set_keepalive_max_idle(wlc_info_t *wlc, wnm_bsscfg_cubby_t *wnm_cfg)
+wlc_wnm_set_keepalive_max_idle(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wnm_bsscfg_cubby_t *wnm_cfg)
 {
 	uint32 override_period_msec;
 	uint32 max_interval_ms = wnm_cfg->ka_max_interval * 1000;
@@ -9079,8 +9311,8 @@ wlc_wnm_set_keepalive_max_idle(wlc_info_t *wlc, wnm_bsscfg_cubby_t *wnm_cfg)
 	if (max_interval_ms)
 		override_period_msec = (override_period_msec > max_interval_ms) ?
 			max_interval_ms: override_period_msec;
-	return wl_keep_alive_upd_override_period(wlc, wnm_cfg->mkeepalive_index,
-		override_period_msec);
+	return wl_keep_alive_upd_override_period(wlc, cfg, override_period_msec,
+		wnm_cfg->mkeepalive_index);
 }
 #endif /* KEEP_ALIVE */
 
@@ -9432,6 +9664,14 @@ wlc_wnm_bsstrans_get_rssi_score(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg,
 	wnm_cfg = WNM_BSSCFG_CUBBY(wnm, bsscfg);
 	bss_select_table = wnm_cfg->bss_select_table[band - 1];
 
+#ifdef BCMDBG
+	for (idx = 0; idx < bss_select_table->rssi_table_size; idx++) {
+		WL_WBTEXT(("rssi[%d]-> %d:%d:%d\n", idx,
+			bss_select_table->rssi_table[idx].low,
+			bss_select_table->rssi_table[idx].high,
+			bss_select_table->rssi_table[idx].factor));
+	}
+#endif /* BCMDBG */
 
 	for (idx = 0; idx < bss_select_table->rssi_table_size; idx++) {
 		if ((bcn_rssi > bss_select_table->rssi_table[idx].low) &&
@@ -9460,6 +9700,14 @@ wlc_wnm_bsstrans_get_cu_score(wlc_wnm_info_t *wnm, wlc_bsscfg_t *bsscfg,
 	wnm_cfg = WNM_BSSCFG_CUBBY(wnm, bsscfg);
 	bss_select_table = (wnm_bss_select_table_t *)wnm_cfg->bss_select_table[band - 1];
 
+#ifdef BCMDBG
+	for (idx = 0; idx < bss_select_table->cu_table_size; idx++) {
+		WL_WBTEXT(("cu[%d]-> %d:%d:%d\n", idx,
+			bss_select_table->cu_table[idx].low,
+			bss_select_table->cu_table[idx].high,
+			bss_select_table->cu_table[idx].factor));
+	}
+#endif /* BCMDBG */
 
 	for (idx = 0; idx < bss_select_table->cu_table_size; idx++) {
 		if ((qbss_cu >= bss_select_table->cu_table[idx].low) &&
@@ -9744,19 +9992,19 @@ wlc_wnm_bsstrans_get_cu(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, wnm_bss_cu_t *bss
 
 void
 wlc_wnm_bsstrans_print_score(wlc_wnm_info_t *wnm, wlc_bsscfg_t *cfg,
-	wlc_bss_info_t *bi, uint32 score)
+	wlc_bss_info_t *bi, int16 rssi, uint32 score)
 {
 	wnm_bss_cu_t bss_cu;
 
 	wlc_wnm_bsstrans_get_cu(cfg, bi, &bss_cu);
 	wlc_wnm_bsstrans_validnbr_ap(cfg->wlc->wnm_info, cfg, bi);
 
-	WBTEXT_INFO(("WBTEXT DBG: %s: bssid:%02x:%02x:%02x:%02x:%02x:%02x, "
-		"chan:%04x, rssi:%d, cu:%d(%d:%d)%%, score:%d, rec:%d\n",
+	WBTEXT_INFO(("WBTEXT DBG: %s: bssid:%02x:%02x:%02x:%02x, "
+		"chan:%04x, rssi:%d(%d:%d), cu:%d(%d:%d)%%, score:%d, rec:%d\n",
 		(bi == cfg->current_bss) ? "associated" : "candidate",
-		bi->BSSID.octet[0], bi->BSSID.octet[1], bi->BSSID.octet[2],
-		bi->BSSID.octet[3], bi->BSSID.octet[4], bi->BSSID.octet[5],
-		bi->chanspec, bi->RSSI,
+		bi->BSSID.octet[2], bi->BSSID.octet[3],
+		bi->BSSID.octet[4], bi->BSSID.octet[5],
+		bi->chanspec, rssi, bi->RSSI, bi->RSSI - rssi,
 		bss_cu.cu, bss_cu.cu_ap, bss_cu.cu_self, score,
 		wlc_wnm_bsstrans_validnbr_ap(cfg->wlc->wnm_info, cfg, bi)));
 }
@@ -10277,7 +10525,7 @@ fail:
 
 #ifdef STA
 #if defined(WNM_BSSTRANS_EXT)
-#if defined(DNG_DBGDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(DNG_DBGDUMP)
 /** This function lists dump option */
 static int
 wlc_wbtext_dump(wlc_info_t *wlc, struct bcmstrbuf *b)

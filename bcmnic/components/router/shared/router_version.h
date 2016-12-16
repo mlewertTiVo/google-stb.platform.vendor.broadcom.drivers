@@ -23,23 +23,23 @@
 #ifndef _version_h_
 #define _version_h_
 
-#define	ROUTER_MAJOR_VERSION		1
+#define	ROUTER_MAJOR_VERSION		15
 
-#define	ROUTER_MINOR_VERSION		1
+#define	ROUTER_MINOR_VERSION		10
 
-#define	ROUTER_RC_NUMBER		16
+#define	ROUTER_RC_NUMBER		25
 
 #define	ROUTER_INCREMENTAL_NUMBER	0
 
 #define	ROUTER_BUILD_NUMBER		0
 
-#define	ROUTER_VERSION			1, 1, 16, 0
+#define	ROUTER_VERSION			15, 10, 25, 0
 
-#define	ROUTER_VERSION_NUM		0x01011000
+#define	ROUTER_VERSION_NUM		0x0f0a1900
 
 /* Version String, ASCII, 32 chars max */
-#define	ROUTER_VERSION_STR		"1.1.16.0"
+#define	ROUTER_VERSION_STR		"15.10.25.0"
 
-#define ROUTER_PACKAGE_VERSION 		1.1.16.0
+#define ROUTER_PACKAGE_VERSION 		15.10.25.0
 
 #endif /* _version_h_ */

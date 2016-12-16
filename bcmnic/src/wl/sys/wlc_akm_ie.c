@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_akm_ie.c 639113 2016-05-20 08:09:52Z $
+ * $Id: wlc_akm_ie.c 663406 2016-10-05 07:22:04Z $
  */
 
 #include <wlc_cfg.h>
@@ -57,6 +57,8 @@
 #ifdef WLTDLS
 #include <wlc_tdls.h>
 #endif
+
+#define CALC_LEN_BUF	257
 
 /*
  * iovars
@@ -136,9 +138,9 @@ static const uint8 OSEN_info_element[] = {
 #endif /* WLOSEN */
 
 static int wlc_wpa_cap(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *cap, int len);
+static uint8 *wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen);
 #ifdef AP
 static uint8 *wlc_write_wpa_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen);
-static uint8 *wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen);
 static int wlc_wpa_set_cap(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *cap, int len);
 #endif /* AP */
 
@@ -414,6 +416,7 @@ wlc_write_wpa_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen
 
 	return (buf);
 }
+#endif /* AP */
 
 static uint8 *
 wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen)
@@ -421,6 +424,7 @@ wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen
 	/* Infrastructure WPA info element */
 	uint WPA_len = 0;	/* tag length */
 	bcm_tlv_t *wpa2ie = (bcm_tlv_t *)buf;
+	uint8 *data;
 	wpa_suite_mcast_t *mcast;
 	wpa_suite_ucast_t *ucast;
 	wpa_suite_auth_key_mgmt_t *auth;
@@ -431,6 +435,7 @@ wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen
 	uint32 WPA_auth = cfg->WPA_auth;
 	uint wsec = cfg->wsec;
 	uint8 akm_type;
+	BCM_REFERENCE(wsec);
 
 	if (!bcmwpa_includes_wpa2_auth(WPA_auth) || ! WSEC_ENABLED(wsec))
 		return buf;
@@ -446,8 +451,9 @@ wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen
 
 	/* fixed portion */
 	wpa2ie->id = DOT11_MNG_RSN_ID;
-	wpa2ie->data[0] = (uint8)WPA2_VERSION;
-	wpa2ie->data[1] = (uint8)(WPA2_VERSION>>8);
+	data = &wpa2ie->data[0];
+	data[0] = (uint8)WPA2_VERSION;
+	data[1] = (uint8)(WPA2_VERSION>>8);
 	WPA_len = WPA2_VERSION_LEN;
 
 	/* multicast suite */
@@ -581,21 +587,29 @@ wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen
 #ifdef MFP
 	if (WLC_MFP_ENAB(wlc->pub) && BSSCFG_IS_MFP_CAPABLE(cfg)) {
 		wpa_suite_t bip;
-		/* PMKID: PMKID count = 0 for AP */
-		BUFLEN_CHECK_AND_RETURN(WPA2_PMKID_COUNT_LEN, buflen, orig_buf);
-		memset(cap + RSN_CAP_LEN, 0, WPA2_PMKID_COUNT_LEN);
-		WPA_len += WPA2_PMKID_COUNT_LEN;
-		buflen -= WPA2_PMKID_COUNT_LEN;
-
-		/* BIP */
-		BUFLEN_CHECK_AND_RETURN(WPA_SUITE_LEN, buflen, orig_buf);
-		/* Advertise only correct cipher suite for group management frames */
 		if (mfp_get_bip(wlc, cfg, &bip)) {
+			/* PMKID: PMKID count = 0 for AP */
+			BUFLEN_CHECK_AND_RETURN(WPA2_PMKID_COUNT_LEN, buflen, orig_buf);
+			memset(cap + RSN_CAP_LEN, 0, WPA2_PMKID_COUNT_LEN);
+			WPA_len += WPA2_PMKID_COUNT_LEN;
+			buflen -= WPA2_PMKID_COUNT_LEN;
+
+			/* BIP */
+			BUFLEN_CHECK_AND_RETURN(WPA_SUITE_LEN, buflen, orig_buf);
+			/* Advertise only correct cipher suite for group management frames */
 			memcpy(cap + RSN_CAP_LEN + WPA2_PMKID_COUNT_LEN, (uint8 *)&bip,
 				WPA_SUITE_LEN);
 			WPA_len += WPA_SUITE_LEN;
 			buflen -= WPA_SUITE_LEN;
 		}
+	} else {
+			/* If BIP is not plumbed by host, skip inclusion
+			 * of pmkid field too (to be in sync with ext
+			 * supplciant generated RSNIE. Otherwise it will lead
+			 * to EAPOL 3/4 RSN IE mismatch.
+			 */
+			WL_WSEC(("wl%d: No BIP present. Skip BIP inclusion.\n",
+				wlc->pub->unit));
 	}
 #endif /* MFP */
 
@@ -608,6 +622,7 @@ wlc_write_rsn_ie_safe(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint8 *buf, int buflen
 	return (buf);
 }
 
+#ifdef AP
 /* RSN IE in bcn/prbrsp */
 static uint
 wlc_akm_bcn_calc_rsn_ie_len(void *ctx, wlc_iem_calc_data_t *data)
@@ -615,11 +630,10 @@ wlc_akm_bcn_calc_rsn_ie_len(void *ctx, wlc_iem_calc_data_t *data)
 	wlc_akm_info_t *akmi = (wlc_akm_info_t *)ctx;
 	wlc_info_t *wlc = akmi->wlc;
 	wlc_bsscfg_t *cfg = data->cfg;
-	uint8 buf[257];
 
 	/* TODO: need to do better to calculate the IE length... */
 
-	return (uint)(wlc_write_rsn_ie_safe(wlc, cfg, buf, sizeof(buf)) - buf);
+	return wlc_akm_calc_rsn_ie_len(wlc, cfg);
 }
 
 static int
@@ -665,6 +679,14 @@ wlc_akm_bcn_write_osen_rsn_ie(void *ctx, wlc_iem_build_data_t *data)
 }
 #endif	/* WLOSEN */
 #endif /* AP */
+
+/* API to calculate RSN ie len */
+uint
+wlc_akm_calc_rsn_ie_len(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
+{
+	uint8 buf[CALC_LEN_BUF];
+	return (uint)(wlc_write_rsn_ie_safe(wlc, cfg, buf, CALC_LEN_BUF) - buf);
+}
 
 #ifdef STA
 #ifdef IBSS_PEER_DISCOVERY_EVENT
@@ -1337,6 +1359,9 @@ wlc_check_wpa2ie(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, bcm_tlv_t *wpa2ie, struc
 	    (ltoh16_ua(wpa2ie->data) != WPA2_VERSION)) {
 		WL_ERROR(("wl%d: unsupported WPA2 version %d\n", wlc->pub->unit,
 			ltoh16_ua(wpa2ie->data)));
+#ifdef BCMDBG
+		WL_ERROR(("wl%d: RSN IE len %d\n", wlc->pub->unit, len));
+#endif /* BCMDBG */
 		return DOT11_SC_ASSOC_FAIL;
 	}
 	len -= WPA2_VERSION_LEN;
@@ -1504,6 +1529,9 @@ wlc_check_osenie(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, bcm_tlv_t *osenie,
 	/* Check min length */
 	if (len < WFA_OUI_LEN + 1) {
 		WL_ERROR(("wl%d: invalid OSEN IE len %d\n", wlc->pub->unit, len));
+#ifdef BCMDBG
+		WL_ERROR(("wl%d: OSEN IE len %d\n", wlc->pub->unit, len));
+#endif /* BCMDBG */
 		return DOT11_SC_ASSOC_FAIL;
 	}
 	len -= WFA_OUI_LEN + 1;
@@ -1671,6 +1699,9 @@ wlc_akm_arq_parse_wpa_ie(void *ctx, wlc_iem_parse_data_t *data)
 			return BCME_OK;
 
 		if (wlc_check_wpaie(wlc, cfg, (uint8 *)wpaie, &scb->WPA_auth, &scb->wsec)) {
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+			char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 			WL_ERROR(("wl%d: %s: unsupported request in WPA IE from %s\n",
 			          wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(&scb->ea, eabuf)));
 			ftpparm->assocreq.status = DOT11_SC_ASSOC_FAIL;
@@ -1720,6 +1751,9 @@ wlc_akm_arq_parse_osen_ie(void *ctx, wlc_iem_parse_data_t *data)
 
 		if ((ftpparm->assocreq.status =
 		     wlc_check_osenie(wlc, cfg, ie, scb)) != DOT11_SC_SUCCESS) {
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+			char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 			WL_ERROR(("wl%d: %s: unsupported request in OSEN IE from %s\n",
 			          wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(&scb->ea, eabuf)));
 			return BCME_ERROR;
@@ -1899,8 +1933,16 @@ wlc_akm_arq_parse_rsn_ie(void *ctx, wlc_iem_parse_data_t *data)
 
 		if ((ftpparm->assocreq.status =
 		     wlc_check_wpa2ie(wlc, cfg, wpaie, scb)) != DOT11_SC_SUCCESS) {
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+			char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 			WL_ERROR(("wl%d: %s: unsupported request in WPA2 IE from %s\n",
 			          wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(&scb->ea, eabuf)));
+#ifdef BCMDBG
+			WL_ERROR(("wl%d: %s: tlvs_len=%d\n",
+			          wlc->pub->unit, __FUNCTION__, data->ie_len));
+			prhex("All TLVs IE data", data->ie, data->ie_len);
+#endif /* BCMDBG */
 			return BCME_ERROR;
 		}
 
@@ -2214,6 +2256,9 @@ wlc_akm_doiovar(void *ctx, uint32 actionid,
 
 		/* looking for the assoc request wpaie of an associated STA  */
 		if (!(scb = wlc_scbfind(wlc, bsscfg, ea))) {
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+			char ea_str[ETHER_ADDR_STR_LEN];
+#endif
 			WL_ERROR(("could not find scb %s\n", bcm_ether_ntoa(ea, ea_str)));
 			err = BCME_NOTFOUND;
 			break;
@@ -2300,7 +2345,18 @@ wlc_akm_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 {
 }
 
+#ifdef BCMDBG
+static void
+wlc_akm_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_akm_info_t *akm = (wlc_akm_info_t *)ctx;
+	bss_akm_info_t *bai = BSS_AKM_INFO(akm, cfg);
+
+	bcm_bprintf(b, "\twpa2_preauth %d\n", bai->wpa2_preauth);
+}
+#else
 #define wlc_akm_bsscfg_dump NULL
+#endif
 
 static const char BCMATTACHDATA(rstr_akm)[] = "akm";
 wlc_akm_info_t *

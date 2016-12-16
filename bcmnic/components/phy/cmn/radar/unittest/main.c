@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:.*>>
  *
- * $Id: main.c 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: main.c 606042 2015-12-14 06:21:23Z $
  */
 
 

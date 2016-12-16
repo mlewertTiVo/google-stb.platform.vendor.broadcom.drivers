@@ -40,7 +40,6 @@
 #include <wlc_scb.h>
 #include <wl_export.h>
 #include <wl_dbg.h>
-
 #include <wlc_olpc_engine.h>
 #include <wlc_channel.h>
 #include <wlc_stf.h>
@@ -48,12 +47,12 @@
 #include <wlc_rm.h>
 #include <wlc_pcb.h>
 #include <wlc_tx.h>
-#include <wlc_phy_hal.h>
 #include <wlc_rspec.h>
 #include <wlc_assoc.h>
 #include <phy_tpc_api.h>
 #include <phy_tssical_api.h>
 #if (defined(PHYCAL_CACHING) || defined(WLMCHAN))
+#include <phy_chanmgr_api.h>
 #include <phy_cache_api.h>
 #endif /* (defined(PHYCAL_CACHING) || defined(WLMCHAN)) */
 #include <wlc_dump.h>
@@ -61,9 +60,21 @@
 #define WLC_OLPC_DEF_NPKTS 16
 #define WL_OLPC_PKT_LEN (sizeof(struct dot11_header)+1)
 
+#if defined(BCMDBG)
+#define OLPC_MSG_LVL_IMPORTANT 1
+#define OLPC_MSG_LVL_CHATTY 2
+#define OLPC_MSG_LVL_ENTRY 4
+#define WL_OLPC(olpc, args) if (olpc && (olpc->msglevel & \
+	OLPC_MSG_LVL_IMPORTANT) != 0) WL_PRINT(args)
+#define WL_OLPC_DBG(olpc, args) if (olpc && (olpc->msglevel & \
+	OLPC_MSG_LVL_CHATTY) != 0) WL_PRINT(args)
+#define WL_OLPC_ENTRY(olpc, args) if (olpc && (olpc->msglevel & \
+		OLPC_MSG_LVL_ENTRY) != 0) WL_PRINT(args)
+#else
 #define WL_OLPC(olpc, args)
 #define WL_OLPC_DBG(olpc, args)
 #define WL_OLPC_ENTRY(olpc, args)
+#endif 
 /* max num of cores supported */
 #define WL_OLPC_MAX_NUM_CORES 3
 /* max valueof core mask with one core is 0x4 */
@@ -77,7 +88,13 @@
 #define WLC_TO_CHANSPEC(wlc) (wlc->chanspec)
 #define WLC_OLPC_INVALID_TXCHAIN 0xff
 
+#ifndef WL_OLPC_IOVARS_ENAB
+#if defined(BCMDBG)
+#define WL_OLPC_IOVARS_ENAB 1
+#else
 #define WL_OLPC_IOVARS_ENAB 0
+#endif 
+#endif /* WL_OLPC_IOVARS_ENAB */
 
 #if WL_OLPC_IOVARS_ENAB
 enum {
@@ -209,6 +226,10 @@ static void wlc_olpc_bsscfg_updn(void *ctx, bsscfg_up_down_event_data_t *evt);
 static void
 wlc_olpc_bsscfg_assoc_state_notif(void *arg, bss_assoc_state_data_t *notif_data);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_olpc_dump_channels(wlc_olpc_eng_info_t *olpc_info, struct bcmstrbuf *b);
+static int wlc_dump_olpc(wlc_info_t *wlc, struct bcmstrbuf *b);
+#endif 
 
 static int wlc_olpc_get_min_2ss3ss_sdm_pwr(wlc_olpc_eng_info_t *olpc_info,
 	ppr_t *txpwr, chanspec_t channel);
@@ -930,6 +951,10 @@ wlc_olpc_eng_pkt_complete(wlc_info_t *wlc, void *pkt, uint txs)
 
 	BCM_REFERENCE(txs);
 
+	if ((WLPKTTAG(pkt)->flags & WLF_TXHDR) == 0) {
+		WL_ERROR(("%s: pkt header not fully formed.\n", __FUNCTION__));
+		return;
+	}
 	wlc_get_txh_info(wlc, pkt, &tx_info);
 
 	/* one calibration packet was finished */
@@ -994,18 +1019,18 @@ wlc_olpc_eng_pkt_complete(wlc_info_t *wlc, void *pkt, uint txs)
 		WL_OLPC(wlc->olpc_info, ("%s: no more cores w/ cal active!\n", __FUNCTION__));
 		/* cache calibration results so following ops don't mess it up */
 #if (defined(PHYCAL_CACHING) || defined(WLMCHAN))
-		/* wlc_phy_create_chanctx() returns if context already exists */
-		wlc_phy_create_chanctx(pi, wlc->chanspec);
-		wlc_phy_cal_cache(pi);
+		/* phy_chanmgr_create_ctx() returns if context already exists */
+		phy_chanmgr_create_ctx((phy_info_t *) pi, wlc->chanspec);
+		phy_cache_cal((phy_info_t *) pi);
 #endif /* PHYCAL_CACHING || WLMCHAN */
 		wlc->olpc_info->olpc_override = 0;
 		wlc->olpc_info->olpc_cal_done = 0;
 #if defined WLTXPWR_CACHE && defined(WL11N)
-		wlc_phy_txpwr_cache_invalidate(wlc_phy_get_txpwr_cache(WLC_PI(wlc)));
+		wlc_phy_txpwr_cache_invalidate(phy_tpc_get_txpwr_cache(WLC_PI(wlc)));
 #endif	/* WLTXPWR_CACHE */
 #if (defined(PHYCAL_CACHING) || defined(WLMCHAN))
-		if ((err = wlc_phy_cal_cache_return(pi)) != BCME_OK) {
-			WL_ERROR(("wl%d:%s: error from wlc_phy_cal_cache_restore=%d\n",
+		if ((err = phy_cache_restore_cal((phy_info_t *) pi)) != BCME_OK) {
+			WL_ERROR(("wl%d:%s: error from phy_cache_restore_cal=%d\n",
 				wlc->pub->unit, __FUNCTION__, err));
 			/* mark as not calibrated - calibration values hosed */
 			olpc_chan->cores_cal = 0;
@@ -1352,6 +1377,43 @@ finish_iovar:
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_olpc_dump_channels(wlc_olpc_eng_info_t *olpc, struct bcmstrbuf *b)
+{
+	wlc_olpc_eng_chan_t* cur_chan = olpc->chan_list;
+
+	while (cur_chan) {
+		bcm_bprintf(b, "ptr=%p chan=%x pkts[%d,%d,%d]\n"
+		"core_cal=%x core_cal_active=%x core_cal_need_cmplt=%x cal_pkts_outst=%d\n",
+			OSL_OBFUSCATE_BUF(cur_chan), cur_chan->cspec, cur_chan->pkts_sent[0],
+			cur_chan->pkts_sent[1], cur_chan->pkts_sent[2], cur_chan->cores_cal,
+			cur_chan->cores_cal_active, cur_chan->cores_cal_to_cmplt,
+			cur_chan->cal_pkts_outstanding);
+		cur_chan = cur_chan->next;
+	}
+}
+
+static int
+wlc_dump_olpc(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	wlc_olpc_eng_info_t *olpc = wlc->olpc_info;
+	if (!olpc) {
+		bcm_bprintf(b, "olpc NULL (not attached)!\n");
+		return 0;
+	}
+	bcm_bprintf(b, "up=%d npkts=%d", olpc->up, olpc->npkts);
+	bcm_bprintf(b, "\nnum_hw_cores=%d restr_txcr=%d saved_txcr=%x", olpc->num_hw_cores,
+		olpc->restore_perrate_stf_state, olpc->stf_saved_perrate);
+	bcm_bprintf(b, "\nPPR: last_txchain_chk=%x last_chan_chk=%x last_chan_olpc_state=%d\n"
+		"cur_chan=%p\n",
+		olpc->last_txchain_chk, olpc->last_chan_chk, olpc->last_chan_olpc_state,
+		OSL_OBFUSCATE_BUF(olpc->cur_chan));
+
+	wlc_olpc_dump_channels(olpc, b);
+	return 0;
+}
+#endif 
 
 /* module attach */
 wlc_olpc_eng_info_t*
@@ -1409,6 +1471,9 @@ BCMATTACHFN(wlc_olpc_eng_attach)(wlc_info_t *wlc)
 	}
 	olpc_info->assoc_notif_reg = TRUE;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "olpc", (dump_fn_t)wlc_dump_olpc, (void *)wlc);
+#endif 
 	err = wlc_pcb_fn_set(wlc->pcb, 0, WLF2_PCB1_OLPC, wlc_olpc_eng_pkt_complete);
 	if (err != BCME_OK) {
 		WL_ERROR(("%s: wlc_pcb_fn_set err=%d\n", __FUNCTION__, err));

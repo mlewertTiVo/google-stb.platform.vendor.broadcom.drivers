@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_radio.c 601801 2015-11-24 06:58:29Z chihap $
+ * $Id: phy_n_radio.c 662291 2016-09-29 02:58:11Z $
  */
 
 #include <typedefs.h>
@@ -25,6 +25,7 @@
 #include <phy_n.h>
 #include <phy_n_radio.h>
 #include "phy_utils_reg.h"
+#include <phy_radio_api.h>
 
 #include <wlc_phy_radio.h>
 
@@ -41,8 +42,7 @@ static void phy_n_radio_on(phy_type_radio_ctx_t *ctx);
 static void phy_n_radio_off_bandx(phy_type_radio_ctx_t *ctx);
 static void phy_n_radio_off_init(phy_type_radio_ctx_t *ctx);
 static uint32 _phy_n_radio_query_idcode(phy_type_radio_ctx_t *ctx);
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 static int phy_n_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b);
 #else
 #define phy_n_radio_dump NULL
@@ -148,8 +148,16 @@ _phy_n_radio_query_idcode(phy_type_radio_ctx_t *ctx)
 {
 	phy_n_radio_info_t *info = (phy_n_radio_info_t *)ctx;
 	phy_info_t *pi = info->pi;
+	uint32 idcode;
 
-	return phy_n_radio_query_idcode(pi);
+	idcode = phy_n_radio_query_idcode(pi);
+#ifdef BCMRADIOREV
+	if (ISSIM_ENAB(pi->sh->sih)) {
+		idcode = (idcode & ~IDCODE_REV_MASK) | (BCMRADIOREV << IDCODE_REV_SHIFT);
+	}
+#endif	/* BCMRADIOREV */
+
+	return idcode;
 }
 
 uint32
@@ -211,60 +219,19 @@ phy_n_radio_query_idcode(phy_info_t *pi)
 }
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 static int
 phy_n_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b)
 {
 	phy_n_radio_info_t *gi = (phy_n_radio_info_t *)ctx;
 	phy_info_t *pi = gi->pi;
 	const char *name = NULL;
-	int i, core_cnt, jtag_core;
+	int i;
 	uint16 addr = 0;
-	radio_regs_t *radioregs = NULL;
-	radio_regs_t *radioregs_tx = NULL;
-	radio_regs_t *radioregs_rx = NULL;
 	radio_20xx_regs_t *radio20xxregs = NULL;
 	radio_20671_regs_t *radio20671regs = NULL;
 
-	if (RADIOID(pi->pubpi->radioid) == BCM2055_ID) {
-		radioregs = regs_2055;
-		name = "2055";
-	} else if (RADIOID(pi->pubpi->radioid) == BCM2056_ID) {
-		switch (RADIOREV(pi->pubpi->radiorev)) {
-		case 5:
-			radioregs = regs_SYN_2056_rev5;
-			radioregs_tx = regs_TX_2056_rev5;
-			radioregs_rx = regs_RX_2056_rev5;
-			break;
-
-		case 6:
-			radioregs = regs_SYN_2056_rev6;
-			radioregs_tx = regs_TX_2056_rev6;
-			radioregs_rx = regs_RX_2056_rev6;
-			break;
-
-		case 7:
-		case 9: /* Radio id rev7 and rev9 have the same register settings */
-			radioregs = regs_SYN_2056_rev7;
-			radioregs_tx = regs_TX_2056_rev7;
-			radioregs_rx = regs_RX_2056_rev7;
-			break;
-
-		case 8:
-		case 11:
-			radioregs = regs_SYN_2056_rev8;
-			radioregs_tx = regs_TX_2056_rev8;
-			radioregs_rx = regs_RX_2056_rev8;
-			break;
-
-		default:
-			PHY_ERROR(("Unsupported radio rev %d\n",
-				RADIOREV(pi->pubpi->radiorev)));
-			ASSERT(0);
-			break;
-		}
-		name = "2056";
-	} else if (RADIOID(pi->pubpi->radioid) == BCM2057_ID) {
+	if (RADIOID(pi->pubpi->radioid) == BCM2057_ID) {
 		switch (RADIOREV(pi->pubpi->radiorev)) {
 		case 3:
 			radio20xxregs = regs_2057_rev4;
@@ -330,7 +297,6 @@ phy_n_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b)
 			ASSERT(0);
 			break;
 		}
-		BCM_REFERENCE(radio20671regs);
 		name = "20671";
 	}
 
@@ -342,9 +308,8 @@ phy_n_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b)
 
 	i = 0;
 	while (TRUE) {
-		if (radioregs) {
-			/* omit spare and radio ID */
-			addr = radioregs[i].address;
+		if (radio20671regs) {
+			addr = radio20671regs[i].address;
 		} else if (radio20xxregs) {
 			addr = radio20xxregs[i].address;
 		} else {
@@ -354,76 +319,11 @@ phy_n_radio_dump(phy_type_radio_ctx_t *ctx, struct bcmstrbuf *b)
 		if (addr == 0xffff)
 			break;
 
-		if (RADIOID(pi->pubpi->radioid) == BCM2056_ID) {
-			jtag_core = RADIO_2056_SYN;
-			name = "2056 SYN";
-		} else {
-			jtag_core = 0;
-		}
-
-		bcm_bprintf(b, "%03x %04x\n", addr, phy_utils_read_radioreg(pi, addr | jtag_core));
+		bcm_bprintf(b, "%03x %04x\n", addr, phy_utils_read_radioreg(pi, addr));
 		i++;
-	}
-
-	if (RADIOID(pi->pubpi->radioid) == BCM2056_ID) {
-		for (core_cnt = 0; core_cnt <= 1; core_cnt++) {
-			if (core_cnt == 0) {
-				jtag_core = RADIO_2056_TX0;
-				name = "2056 TX0";
-			} else {
-				jtag_core = RADIO_2056_TX1;
-				name = "2056 TX1";
-			}
-
-			i = 0;
-			while (TRUE) {
-				if (radioregs_tx) {
-					/* omit spare and radio ID */
-					addr = radioregs_tx[i].address;
-				} else {
-					addr = 0xffff;
-				}
-
-				if (addr == 0xffff)
-					break;
-
-				bcm_bprintf(b, "%03x %04x\n", addr,
-				            phy_utils_read_radioreg(pi, addr | jtag_core));
-				i++;
-			}
-		}
-	}
-
-	if (RADIOID(pi->pubpi->radioid) == BCM2056_ID) {
-		for (core_cnt = 0; core_cnt <= 1; core_cnt++) {
-			if (core_cnt == 0) {
-				jtag_core = RADIO_2056_RX0;
-				name = "2056 RX0";
-			} else {
-				jtag_core = RADIO_2056_RX1;
-				name = "2056 RX1";
-			}
-
-			i = 0;
-			while (TRUE) {
-				if (radioregs_rx) {
-					/* omit spare and radio ID */
-					addr = radioregs_rx[i].address;
-				} else {
-					addr = 0xffff;
-				}
-
-				if (addr == 0xffff)
-					break;
-
-				bcm_bprintf(b, "%03x %04x\n", addr,
-				            phy_utils_read_radioreg(pi, addr | jtag_core));
-				i++;
-			}
-		}
 	}
 
 	return BCME_OK;
 }
-#endif /* BCMINTERNAL || DBG_PHY_IOV */
+#endif 
 #endif /* BCMDBG || BCMDBG_DUMP */

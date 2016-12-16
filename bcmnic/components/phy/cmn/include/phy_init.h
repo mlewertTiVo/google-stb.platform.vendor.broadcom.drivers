@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_init.h 633216 2016-04-21 20:17:37Z vyass $
+ * $Id: phy_init.h 633216 2016-04-21 20:17:37Z $
  */
 
 #ifndef _phy_init_h_

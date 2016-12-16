@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: sbpcmcia.h 635813 2016-05-05 12:24:53Z $
+ * $Id: sbpcmcia.h 647676 2016-07-07 02:59:05Z $
  */
 
 #ifndef	_SBPCMCIA_H
@@ -111,8 +111,6 @@
 #define SROM_SIZE_512	1
 #define SROM_SIZE_128	0
 #define SROM_SIZE_SHFT_MASK  1
-#define SROM_CLKDIV2_SHFT_MASK 2
-#define SROM_CLKDIV2_RESET_MASK 7
 
 #if !defined(LINUX_POSTMOGRIFY_REMOVAL)
 /* CIS stuff */

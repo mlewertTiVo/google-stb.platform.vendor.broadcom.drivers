@@ -50,12 +50,19 @@ si_lhl_setup(si_t *sih, osl_t *osh)
 	if (CHIPID(sih->chip) == BCM43012_CHIP_ID) {
 		/* Enable PMU sleep mode0 */
 		LHL_REG(sih, lhl_top_pwrseq_ctl_adr, LHL_PWRSEQ_CTL, PMU_43012_SLEEP_MODE_2);
+		/* Modify as per the
+		BCM43012/LHL#LHL-RecommendedsettingforvariousPMUSleepModes:
+		*/
+		LHL_REG(sih, lhl_top_pwrup_ctl_adr, LHL_PWRUP_CTL_MASK, LHL_PWRUP_CTL);
+		LHL_REG(sih, lhl_top_pwrup2_ctl_adr, LHL_PWRUP2_CTL_MASK, LHL_PWRUP2_CTL);
+		LHL_REG(sih, lhl_top_pwrdn_ctl_adr, LHL_PWRDN_CTL_MASK, LHL_PWRDN_SLEEP_CNT);
+		LHL_REG(sih, lhl_top_pwrdn2_ctl_adr, LHL_PWRDN2_CTL_MASK, LHL_PWRDN2_CTL);
 	}
 }
 
 /* To skip this function, specify a invalid "lpo_select" value in nvram */
 int
-si_lhl_set_lpoclk(si_t *sih, osl_t *osh)
+si_lhl_set_lpoclk(si_t *sih, osl_t *osh, uint32 lpo_force)
 {
 	gciregs_t *gciregs;
 	uint clk_det_cnt, status;
@@ -67,8 +74,10 @@ si_lhl_set_lpoclk(si_t *sih, osl_t *osh)
 	ASSERT(gciregs != NULL);
 
 	/* Apply nvram override to lpo */
-	if ((lpo = (uint32)getintvar(NULL, "lpo_select")) == 0) {
+	if ((lpo_force == LHL_LPO_AUTO) && ((lpo = (uint32)getintvar(NULL, "lpo_select")) == 0)) {
 		lpo = LHL_OSC_32k_ENAB;
+	} else {
+		lpo = lpo_force;
 	}
 
 	/* Power up the desired LPO */
@@ -215,7 +224,7 @@ si_lhl_timer_config(si_t *sih, osl_t *osh, int timer_type)
 		/* Programs bits for MACPHY_CLK_AVAIL and all its dependent bits in
 		 * MacResourceReqMask0.
 		 */
-		PMU_REG(sih, mac_res_req_mask, ~0, si_pmu_rsrc_macphy_clk_deps(sih, osh));
+		PMU_REG(sih, mac_res_req_mask, ~0, si_pmu_rsrc_macphy_clk_deps(sih, osh, 0));
 
 		/* One time init of mac_res_req_timer to enable interrupt and clock request */
 		HND_PMU_SYNC_WR(sih, pmu, pmu, osh,
@@ -268,6 +277,16 @@ si_lhl_ilp_config(si_t *sih, osl_t *osh, uint32 ilp_period)
 }
 
 #ifdef BCMULP
+void
+si_lhl_disable_sdio_wakeup(si_t *sih)
+{
+	/* Disable the interrupt */
+	LHL_REG(sih, gpio_int_en_port_adr[0], (1 << ULP_SDIO_CMD_PIN), 0);
+
+	/* Clear the pending interrupt status */
+	LHL_REG(sih, gpio_int_st_port_adr[0], (1 << ULP_SDIO_CMD_PIN), (1 << ULP_SDIO_CMD_PIN));
+}
+
 void
 si_lhl_enable_sdio_wakeup(si_t *sih, osl_t *osh)
 {

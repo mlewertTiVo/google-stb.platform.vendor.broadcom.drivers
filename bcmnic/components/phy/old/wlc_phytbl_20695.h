@@ -12,14 +12,14 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phytbl_20695.h 623015 2016-03-04 12:33:37Z nahegde $
+ * $Id: wlc_phytbl_20695.h 650058 2016-07-20 09:50:45Z $
  */
 
 #ifndef _wlc_phytbl_20695_h_
 #define _wlc_phytbl_20695_h_
 #include "phy_ac_rxgcrs.h"
 
-#define NUM_ROWS_CHAN_TUNING_20695 (78)
+#define NROWS_CHAN_TUNE_20695 (78)
 
 typedef struct _chan_info_radio20695_rffe {
 	uint8 channel;
@@ -31,14 +31,30 @@ typedef struct _chan_info_radio20695_rffe {
 	uint8 tx_pad;
 } chan_info_radio20695_rffe_t;
 
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
+extern const radio_20xx_dumpregs_t dumpregs_20695_rev39[];
+#endif 
+
 extern radio_20xx_prefregs_t prefregs_20695_rev32[];
 extern radio_20xx_prefregs_t prefregs_20695_rev33[];
+extern radio_20xx_prefregs_t prefregs_20695_rev37[];
 extern radio_20xx_prefregs_t prefregs_20695_rev38[];
-extern chan_info_radio20695_rffe_t chan_tune_20695_rev32_fcbga[NUM_ROWS_CHAN_TUNING_20695];
-extern chan_info_radio20695_rffe_t chan_tune_20695_rev32_wlbga[NUM_ROWS_CHAN_TUNING_20695];
-extern chan_info_radio20695_rffe_t chan_tune_20695_rev33[NUM_ROWS_CHAN_TUNING_20695];
-extern chan_info_radio20695_rffe_t chan_tune_20695_rev38_fcbga[NUM_ROWS_CHAN_TUNING_20695];
-extern chan_info_radio20695_rffe_t chan_tune_20695_rev38_wlbga[NUM_ROWS_CHAN_TUNING_20695];
+extern radio_20xx_prefregs_t prefregs_20695_rev39[];
+extern radio_20xx_prefregs_t prefregs_20695_rev40[];
+extern radio_20xx_prefregs_t prefregs_20695_rev41[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev32_fcbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev32_wlbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev33)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev37)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev38_fcbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev38_wlbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev39_fcbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev39_wlbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev40_fcbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev40_wlbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev41_fcbga)[];
+extern chan_info_radio20695_rffe_t BCMATTACHDATA(chan_tune_20695_rev41_wlbga)[];
 
 extern int8 BCMATTACHDATA(lna12_gain_tbl_2g_maj36)[2][N_LNA12_GAINS];
 extern int8 BCMATTACHDATA(lna12_gain_tbl_5g_maj36)[2][N_LNA12_GAINS];

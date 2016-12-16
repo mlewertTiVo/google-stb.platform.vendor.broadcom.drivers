@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wl_pfn.h 621015 2016-02-24 20:38:33Z $
+ * $Id: wl_pfn.h 651027 2016-07-25 06:03:44Z $
  */
 
 
@@ -39,6 +39,7 @@ extern void wl_pfn_inform_mac_availability(wlc_info_t *wlc);
 #ifdef GSCAN
 int wlc_send_pfn_full_scan_result(wlc_info_t *wlc, wlc_bss_info_t *BSS, wlc_bsscfg_t *cfg,
    struct dot11_management_header *hdr);
+uint32 wl_pfn_get_cur_ch_buckets(wl_pfn_info_t *pfn_info);
 #endif /* GSCAN */
 #endif /* WLPFN */
 

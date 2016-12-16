@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_stf.c 655322 2016-08-19 00:34:25Z $
+ * $Id: wlc_stf.c 671939 2016-11-23 15:28:20Z $
  */
 
 #include <wlc_cfg.h>
@@ -67,9 +67,13 @@
 #include <wlc_iocv.h>
 #include <phy_nap_api.h>
 #include <phy_tpc_api.h>
+#include <phy_ocl_api.h>
 #ifdef WL_MU_TX
 #include <wlc_mutx.h>
 #endif
+#include <wlc_lq.h>
+#include <phy_stf_api.h>
+
 /* this macro define all PHYs REV that can NOT receive STBC with one RX core active */
 #define WLC_STF_NO_STBC_RX_1_CORE(wlc) (WLCISNPHY(wlc->band) && NREV_IS(wlc->band->phyrev, 17))
 
@@ -95,6 +99,10 @@
 #endif /* WLC_RSDB_PER_CORE_RXCHAIN */
 #endif /* WLRSDB */
 
+/* NAP disable request ids */
+#define WLC_NAP_REQ_HOST		0
+#define WLC_NAP_REQ_RSSI		1
+
 #ifdef WL11N
 static int wlc_stf_doiovar(void *hdl, uint32 actionid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
@@ -114,6 +122,10 @@ static uint wlc_stf_get_ppr_offset(wlc_info_t *wlc, wl_txppr_t *ppr_buf);
 static int wlc_stf_spatial_mode_upd(wlc_info_t *wlc, int8 *mode);
 static void wlc_stf_init_txcore_default(wlc_info_t *wlc);
 static void wlc_stf_spatial_mode_set(wlc_info_t *wlc, chanspec_t chanspec);
+#ifdef BCMDBG
+static int wlc_stf_pproff_shmem_get(wlc_info_t *wlc, int *retval);
+static void wlc_stf_pproff_shmem_set(wlc_info_t *wlc, uint8 rate, uint8 val);
+#endif /* BCMDBG */
 #endif /* WL11N */
 #if defined(WL11N)
 static void wlc_stf_txchain_reset(wlc_info_t *wlc, uint16 id);
@@ -124,6 +136,12 @@ static uint8 wlc_stf_get_target_core(wlc_info_t *wlc);
 #endif /* WL11N */
 #ifdef WL11AC
 static void wlc_stf_update_160mode_txcore(wlc_stf_t *stf, chanspec_t chanspec);
+#endif
+#ifdef OCL
+static void wlc_stf_ocl_assoc_state_cb(void *ctx, bss_assoc_state_data_t *notif_data);
+#endif
+#if defined(OCL) || defined(WL_MIMOPS_CFG)
+static void wlc_stf_rx_bcn_notif(void *ctx, bss_rx_bcn_notif_data_t *notif_data);
 #endif
 
 static void _wlc_stf_phy_txant_upd(wlc_info_t *wlc);
@@ -195,54 +213,52 @@ static const uint8 ofdm_pwr_idx_table[19] = {
 };
 
 /* iovar table */
-enum {
-	IOV_STF_SS,		/**< MIMO STS coding for single stream mcs or legacy ofdm rates */
-	IOV_STF_SS_AUTO,	/**< auto selection of channel-based */
+enum wlc_stf_iov {
+	IOV_STF_SS = 1,		/**< MIMO STS coding for single stream mcs or legacy ofdm rates */
+	IOV_STF_SS_AUTO = 2,	/**< auto selection of channel-based */
 				/* MIMO STS coding for single stream mcs */
 				/* OR LEGACY ofdm rates */
-	IOV_STF_STBC_RX,	/**< MIMO, STBC RX */
-	IOV_STF_STBC_TX,	/**< MIMO, STBC TX */
-	IOV_STF_TXSTREAMS,	/**< MIMO, tx stream */
-	IOV_STF_TXCHAIN,	/**< MIMO, tx chain */
-	IOV_STF_SISO_TX,	/**< MIMO, SISO TX */
-	IOV_STF_HW_TXCHAIN,	/**< MIMO, HW tx chain */
-	IOV_STF_RXSTREAMS,	/**< MIMO, rx stream */
-	IOV_STF_RXCHAIN,	/**< MIMO, rx chain */
-	IOV_STF_HW_RXCHAIN,	/**< MIMO, HW rx chain */
-	IOV_STF_TXCORE,		/**< MIMO, tx core enable and selected */
-	IOV_STF_TXCORE_OVRD,
-	IOV_STF_SPATIAL_MODE,	/**< spatial policy to use */
-	IOV_STF_TEMPS_DISABLE,
-	IOV_STF_TXCHAIN_PWR_OFFSET,
-	IOV_STF_RSSI_PWRDN,
-	IOV_STF_PPR_OFFSET,
-	IOV_STF_PWR_THROTTLE_TEST, /**< testing */
-	IOV_STF_PWR_THROTTLE_MASK, /**< core to enable/disable when thromal throttling kicks in */
-	IOV_STF_PWR_THROTTLE,
-	IOV_STF_PWR_THROTTLE_STATE,
-	IOV_STF_RATETBL_PPR,
-	IOV_STF_ONECHAIN, 	/**< MIMO, reduce 1 TX or 1 RX chain */
-	IOV_STF_DUTY_CYCLE_CCK,	/**< maximum allowed duty cycle for CCK */
-	IOV_STF_DUTY_CYCLE_OFDM,	/**< maximum allowed duty cycle for OFDM */
-	IOV_STF_DUTY_CYCLE_PWR,	/**< maximum allowed duty cycle for power throttle feature */
-	IOV_STF_DUTY_CYCLE_THERMAL,	/**< max allowed duty cycle for thermal throttle feature */
-	IOV_STF_NSS_TX,
-#ifdef WL11AC
-	IOV_STF_OPER_MODE,  /**< operating mode change */
-#endif /* WL11AC */
-	IOV_NAP_ENABLE,
-	IOV_NAP_STATUS,
-	IOV_NAP_RSSI_THRESHOLD,
-	IOV_STF_REQ_DUMP,
-	IOV_MRC_RSSI_THRESHOLD,
-	IOV_MIMO_PS_CFG_CHANGE_WAIT_TIME,
-	IOV_MIMO_PS_CFG,
-	IOV_MIMO_PS_STATUS,
-	IOV_MIMO_PS_LEARNING_CONFIG,
-	IOV_OCL_ENABLE,
-	IOV_OCL_STATUS,
-	IOV_OCL_RSSI_THRESHOLD,
-	IOV_OCL_COREMASK,
+	IOV_STF_STBC_RX = 3,	/**< MIMO, STBC RX */
+	IOV_STF_STBC_TX = 4,	/**< MIMO, STBC TX */
+	IOV_STF_TXSTREAMS = 5,	/**< MIMO, tx stream */
+	IOV_STF_TXCHAIN = 6,	/**< MIMO, tx chain */
+	IOV_STF_SISO_TX = 7,	/**< MIMO, SISO TX */
+	IOV_STF_HW_TXCHAIN = 8,	/**< MIMO, HW tx chain */
+	IOV_STF_RXSTREAMS = 9,	/**< MIMO, rx stream */
+	IOV_STF_RXCHAIN = 10,	/**< MIMO, rx chain */
+	IOV_STF_HW_RXCHAIN = 11,	/**< MIMO, HW rx chain */
+	IOV_STF_TXCORE = 12,		/**< MIMO, tx core enable and selected */
+	IOV_STF_TXCORE_OVRD = 13,
+	IOV_STF_SPATIAL_MODE = 14,	/**< spatial policy to use */
+	IOV_STF_TEMPS_DISABLE = 15,
+	IOV_STF_TXCHAIN_PWR_OFFSET = 16,
+	IOV_STF_RSSI_PWRDN = 17,
+	IOV_STF_PPR_OFFSET = 18,
+	IOV_STF_PWR_THROTTLE_TEST = 19, /**< testing */
+	IOV_STF_PWR_THROTTLE_MASK = 20, /**< core to enable/disable thermal throttling */
+	IOV_STF_PWR_THROTTLE = 21,
+	IOV_STF_PWR_THROTTLE_STATE = 22,
+	IOV_STF_RATETBL_PPR = 23,
+	IOV_STF_ONECHAIN = 24,		/**< MIMO, reduce 1 TX or 1 RX chain */
+	IOV_STF_DUTY_CYCLE_CCK = 25,	/**< maximum allowed duty cycle for CCK */
+	IOV_STF_DUTY_CYCLE_OFDM = 26,	/**< maximum allowed duty cycle for OFDM */
+	IOV_STF_DUTY_CYCLE_PWR = 27,	/**< max allowed duty cycle for power throttle feature */
+	IOV_STF_DUTY_CYCLE_THERMAL = 28, /**< max allowed duty cycle for thermal throttle feature */
+	IOV_STF_NSS_TX = 29,
+	IOV_STF_OPER_MODE = 30,		/**< operating mode change */
+	IOV_STF_NAP_ENABLE = 31,
+	IOV_STF_NAP_STATUS = 32,
+	IOV_STF_NAP_RSSI_THRESHOLD = 33,
+	IOV_STF_REQ_DUMP = 34,
+	IOV_STF_MRC_RSSI_THRESHOLD = 35,
+	IOV_STF_MIMO_PS_CFG_CHANGE_WAIT_TIME = 36,
+	IOV_STF_MIMO_PS_CFG = 37,
+	IOV_STF_MIMO_PS_STATUS = 38,
+	IOV_STF_MIMO_PS_LEARNING_CONFIG = 39,
+	IOV_STF_OCL_ENABLE = 40,
+	IOV_STF_OCL_STATUS = 41,
+	IOV_STF_OCL_RSSI_THRESHOLD = 42,
+	IOV_STF_OCL_COREMASK = 43,
 	IOV_STF_LAST
 };
 
@@ -337,43 +353,43 @@ static const bcm_iovar_t stf_iovars[] = {
 #ifdef WL11AC
 	{"oper_mode", IOV_STF_OPER_MODE, 0, 0, IOVT_UINT16, 0},
 #endif /* WL11AC */
-	{"nap_enable", IOV_NAP_ENABLE,
+	{"nap_enable", IOV_STF_NAP_ENABLE,
 	(0), 0, IOVT_UINT8, 0
 	},
-	{"nap_status", IOV_NAP_STATUS,
+	{"nap_status", IOV_STF_NAP_STATUS,
 	(0), 0, IOVT_UINT32, 0
 	},
-	{"nap_rssi_threshold", IOV_NAP_RSSI_THRESHOLD,
+	{"nap_rssi_threshold", IOV_STF_NAP_RSSI_THRESHOLD,
 	(0), 0, IOVT_INT8, 0
 	},
 	{"stfreqdump", IOV_STF_REQ_DUMP,
 	(0), 0, IOVT_INT8, 0
 	},
-	{"mrc_rssi_threshold", IOV_MRC_RSSI_THRESHOLD,
+	{"mrc_rssi_threshold", IOV_STF_MRC_RSSI_THRESHOLD,
 	(0), 0, IOVT_INT8, 0
 	},
-	{"mimo_ps_cfg_change_wait_time", IOV_MIMO_PS_CFG_CHANGE_WAIT_TIME,
+	{"mimo_ps_cfg_change_wait_time", IOV_STF_MIMO_PS_CFG_CHANGE_WAIT_TIME,
 	(0), 0, IOVT_UINT32, 0
 	},
-	{"mimo_ps_cfg", IOV_MIMO_PS_CFG,
+	{"mimo_ps_cfg", IOV_STF_MIMO_PS_CFG,
 	(0), 0, IOVT_BUFFER, sizeof(wl_mimops_cfg_t)
 	},
-	{"mimo_ps_status", IOV_MIMO_PS_STATUS,
+	{"mimo_ps_status", IOV_STF_MIMO_PS_STATUS,
 	(0), 0, IOVT_BUFFER, sizeof(wl_mimo_ps_status_t)
 	},
-	{"mimo_ps_learning_config", IOV_MIMO_PS_LEARNING_CONFIG,
+	{"mimo_ps_learning_config", IOV_STF_MIMO_PS_LEARNING_CONFIG,
 	(0), 0, IOVT_BUFFER, sizeof(wl_mimops_learning_cfg_t)
 	},
-	{"ocl_enable", IOV_OCL_ENABLE,
+	{"ocl_enable", IOV_STF_OCL_ENABLE,
 	(0), 0, IOVT_UINT8, 0
 	},
-	{"ocl_status", IOV_OCL_STATUS,
+	{"ocl_status", IOV_STF_OCL_STATUS,
 	(0), 0, IOVT_BUFFER, sizeof(ocl_status_info_t)
 	},
-	{"ocl_rssi_threshold", IOV_OCL_RSSI_THRESHOLD,
+	{"ocl_rssi_threshold", IOV_STF_OCL_RSSI_THRESHOLD,
 	(0), 0, IOVT_INT8, 0
 	},
-	{"ocl_coremask", IOV_OCL_COREMASK,
+	{"ocl_coremask", IOV_STF_OCL_COREMASK,
 	(IOVF_SET_UP | IOVF_GET_UP), 0, IOVT_UINT8, 0
 	},
 	{NULL, 0, 0, 0, 0, 0}
@@ -964,6 +980,28 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 				(bool_val ? MHF5_HTPHY_RSSI_PWRDN : 0), WLC_BAND_ALL);
 			break;
 
+#ifdef BCMDBG
+		case IOV_GVAL(IOV_STF_RATETBL_PPR):
+		{
+			int *ptr = (int *)a;
+			if (alen < (int)(sizeof(int) * 12))
+				return BCME_BUFTOOSHORT;
+
+			bzero(ptr, (sizeof(int) * 12));
+			err = wlc_stf_pproff_shmem_get(wlc, ptr);
+			break;
+		}
+
+		case IOV_SVAL(IOV_STF_RATETBL_PPR):
+		{
+			uint8 rate, val;
+			int *ptr = (int *)a;
+			rate = (ptr[0] & 0xff);
+			val = (ptr[1] & 0xff);
+			wlc_stf_pproff_shmem_set(wlc, rate, val);
+			break;
+		}
+#endif /* BCMDBG */
 		case IOV_SVAL(IOV_STF_DUTY_CYCLE_CCK):
 			err = wlc_stf_duty_cycle_set(wlc, int_val, FALSE, wlc->pub->up);
 			if (!err)
@@ -1039,7 +1077,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 
 
 #ifdef WL_NAP
-		case IOV_SVAL(IOV_NAP_ENABLE):
+		case IOV_SVAL(IOV_STF_NAP_ENABLE):
 		{
 			uint16 disable_reqs;
 			bool nap_en = FALSE;
@@ -1059,7 +1097,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_GVAL(IOV_NAP_ENABLE):
+		case IOV_GVAL(IOV_STF_NAP_ENABLE):
 		{
 			if (NAP_ENAB(wlc->pub)) {
 				uint16 disable_reqs;
@@ -1075,7 +1113,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_GVAL(IOV_NAP_STATUS):
+		case IOV_GVAL(IOV_STF_NAP_STATUS):
 		{
 			uint16 disable_reqs;
 			uint32 ret_status = 0;
@@ -1098,7 +1136,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_GVAL(IOV_NAP_RSSI_THRESHOLD):
+		case IOV_GVAL(IOV_STF_NAP_RSSI_THRESHOLD):
 		{
 			if (NAP_ENAB(wlc->pub)) {
 				*ret_int_ptr = (int8)(wlc->stf->nap_rssi_threshold);
@@ -1108,7 +1146,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_SVAL(IOV_NAP_RSSI_THRESHOLD):
+		case IOV_SVAL(IOV_STF_NAP_RSSI_THRESHOLD):
 		{
 			if (NAP_ENAB(wlc->pub)) {
 				if (int_val > -1) {
@@ -1133,7 +1171,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 		}
 #endif /* WL_STF_ARBITRATOR */
 #ifdef WL_MIMOPS_CFG
-		case IOV_GVAL(IOV_MRC_RSSI_THRESHOLD):
+		case IOV_GVAL(IOV_STF_MRC_RSSI_THRESHOLD):
 			if (WLC_MIMOPS_ENAB(wlc->pub)) {
 				wlc_mimo_ps_cfg_t *bsscfg_mimo_ps_cfg =
 				                   wlc_stf_mimo_ps_cfg_get(bsscfg);
@@ -1143,7 +1181,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 				err = BCME_UNSUPPORTED;
 			break;
 
-		case IOV_SVAL(IOV_MRC_RSSI_THRESHOLD):
+		case IOV_SVAL(IOV_STF_MRC_RSSI_THRESHOLD):
 			if (WLC_MIMOPS_ENAB(wlc->pub)) {
 				wlc_mimo_ps_cfg_t *bsscfg_mimo_ps_cfg =
 				                   wlc_stf_mimo_ps_cfg_get(bsscfg);
@@ -1153,7 +1191,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 				err = BCME_UNSUPPORTED;
 			break;
 
-		case IOV_GVAL(IOV_MIMO_PS_CFG_CHANGE_WAIT_TIME):
+		case IOV_GVAL(IOV_STF_MIMO_PS_CFG_CHANGE_WAIT_TIME):
 			if (WLC_MIMOPS_ENAB(wlc->pub)) {
 				wlc_mimo_ps_cfg_t *bsscfg_mimo_ps_cfg =
 				                   wlc_stf_mimo_ps_cfg_get(bsscfg);
@@ -1163,7 +1201,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 				err = BCME_UNSUPPORTED;
 			break;
 
-		case IOV_SVAL(IOV_MIMO_PS_CFG_CHANGE_WAIT_TIME):
+		case IOV_SVAL(IOV_STF_MIMO_PS_CFG_CHANGE_WAIT_TIME):
 			if (WLC_MIMOPS_ENAB(wlc->pub)) {
 				wlc_mimo_ps_cfg_t *bsscfg_mimo_ps_cfg =
 				                   wlc_stf_mimo_ps_cfg_get(bsscfg);
@@ -1176,7 +1214,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 				err = BCME_UNSUPPORTED;
 			break;
 
-		case IOV_GVAL(IOV_MIMO_PS_LEARNING_CONFIG):
+		case IOV_GVAL(IOV_STF_MIMO_PS_LEARNING_CONFIG):
 		{
 			if (WLC_MIMOPS_ENAB(wlc->pub)) {
 				wl_mimops_learning_cfg_t* cfg_ptr =
@@ -1206,7 +1244,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_SVAL(IOV_MIMO_PS_LEARNING_CONFIG):
+		case IOV_SVAL(IOV_STF_MIMO_PS_LEARNING_CONFIG):
 		{
 			if (!WLC_MIMOPS_ENAB(wlc->pub)) {
 				err = BCME_UNSUPPORTED;
@@ -1220,7 +1258,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_GVAL(IOV_MIMO_PS_CFG):
+		case IOV_GVAL(IOV_STF_MIMO_PS_CFG):
 		{
 			if (!WLC_MIMOPS_ENAB(wlc->pub)) {
 				err = BCME_UNSUPPORTED;
@@ -1234,7 +1272,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_SVAL(IOV_MIMO_PS_CFG):
+		case IOV_SVAL(IOV_STF_MIMO_PS_CFG):
 		{
 			if (!WLC_MIMOPS_ENAB(wlc->pub)) {
 				err = BCME_UNSUPPORTED;
@@ -1253,7 +1291,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		case IOV_GVAL(IOV_MIMO_PS_STATUS):
+		case IOV_GVAL(IOV_STF_MIMO_PS_STATUS):
 		{
 			if (!WLC_MIMOPS_ENAB(wlc->pub)) {
 				err = BCME_UNSUPPORTED;
@@ -1272,27 +1310,34 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 		}
 #endif /* WL_MIMOPS_CFG */
 #ifdef OCL
-		case IOV_SVAL(IOV_OCL_ENABLE):
+		case IOV_SVAL(IOV_STF_OCL_ENABLE):
 		{
+			uint16 disable_reqs;
 			if (OCL_ENAB(wlc->pub)) {
+				phy_ocl_status_get(WLC_PI(wlc), &disable_reqs, NULL, NULL);
+				wlc->stf->ocl_en = !(disable_reqs & OCL_DISABLED_HOST);
 				if (wlc->stf->ocl_en != bool_val) {
 					wlc->stf->ocl_en = bool_val;
-					wlc_phy_ocl_disable_req_set(WLC_PI(wlc), OCL_DISABLED_HOST,
+					phy_ocl_disable_req_set(WLC_PI(wlc), OCL_DISABLED_HOST,
 					                            !bool_val, WLC_OCL_REQ_HOST);
 				}
 			} else
 				err = BCME_UNSUPPORTED;
 			break;
 		}
-		case IOV_GVAL(IOV_OCL_ENABLE):
+		case IOV_GVAL(IOV_STF_OCL_ENABLE):
 		{
-			if (OCL_ENAB(wlc->pub))
+			uint16 disable_reqs;
+			if (OCL_ENAB(wlc->pub)) {
+				phy_ocl_status_get(WLC_PI(wlc), &disable_reqs, NULL, NULL);
+				wlc->stf->ocl_en = !(disable_reqs & OCL_DISABLED_HOST);
 				*ret_int_ptr = wlc->stf->ocl_en;
+			}
 			else
 				err = BCME_UNSUPPORTED;
 			break;
 		}
-		case IOV_GVAL(IOV_OCL_STATUS):
+		case IOV_GVAL(IOV_STF_OCL_STATUS):
 		{
 			ocl_status_info_t *status_ptr = (ocl_status_info_t *)a;
 			uint16 disable_reqs;
@@ -1308,7 +1353,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 			status_ptr->version = WL_OCL_STATUS_VERSION;
 			status_ptr->len = (uint8) sizeof(*status_ptr);
 
-			wlc_phy_ocl_status_get(WLC_PI(wlc), &disable_reqs, &coremask, &ocl_en);
+			phy_ocl_status_get(WLC_PI(wlc), &disable_reqs, &coremask, &ocl_en);
 			status_ptr->fw_status = disable_reqs;
 
 			if (ocl_en)
@@ -1322,7 +1367,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 
 			break;
 		}
-		case IOV_GVAL(IOV_OCL_RSSI_THRESHOLD):
+		case IOV_GVAL(IOV_STF_OCL_RSSI_THRESHOLD):
 		{
 			if (OCL_ENAB(wlc->pub))
 				*ret_int_ptr = (int8)(wlc->stf->ocl_rssi_threshold);
@@ -1330,7 +1375,7 @@ wlc_stf_doiovar(void *hdl, uint32 actionid,
 				err = BCME_UNSUPPORTED;
 			break;
 		}
-		case IOV_SVAL(IOV_OCL_RSSI_THRESHOLD):
+		case IOV_SVAL(IOV_STF_OCL_RSSI_THRESHOLD):
 		{
 			if (OCL_ENAB(wlc->pub)) {
 				if (int_val > -1)
@@ -1372,6 +1417,950 @@ wlc_stf_stbc_rx_ht_update(wlc_info_t *wlc, int val)
 	}
 }
 
+#if defined(BCMDBG_DUMP)
+static int
+wlc_dump_stf(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	uint i;
+	wlc_stf_t *stf = wlc->stf;
+
+	bcm_bprintf(b, "STF dump:\n");
+
+	bcm_bprintf(b, "hw_txchain 0X%x hw_rxchain 0x%x\n",
+		wlc->stf->hw_txchain, wlc->stf->hw_rxchain);
+	bcm_bprintf(b, "txchain 0x%x txstreams %d \nrxchain 0x%x rxstreams %d\n",
+		wlc->stf->txchain, wlc->stf->txstreams, wlc->stf->rxchain, wlc->stf->rxstreams);
+	bcm_bprintf(b, "txchain subvals:\n");
+	for (i = 0; i < WLC_TXCHAIN_ID_COUNT; i++)
+		bcm_bprintf(b, "\tid:%d 0x%x\n", i, stf->txchain_subval[i]);
+
+	bcm_bprintf(b, "txant %d ant_rx_ovr %d phytxant 0x%x\n",
+		wlc->stf->txant, wlc->stf->ant_rx_ovr, wlc->stf->phytxant);
+	bcm_bprintf(b, "txcore CCK %d, OFDM %d, MCS Nsts[4..1] %d %d %d %d\n",
+		wlc->stf->txcore[CCK_IDX][1], wlc->stf->txcore[OFDM_IDX][1],
+		wlc->stf->txcore[NSTS4_IDX][1], wlc->stf->txcore[NSTS3_IDX][1],
+		wlc->stf->txcore[NSTS2_IDX][1], wlc->stf->txcore[NSTS1_IDX][1]);
+	bcm_bprintf(b, "stf_ss_auto: %d ss_opmode %d ss_algo_channel 0x%x no_cddstbc %d\n",
+		wlc->stf->ss_algosel_auto, wlc->stf->ss_opmode, wlc->stf->ss_algo_channel,
+		wlc->stf->no_cddstbc);
+	bcm_bprintf(b, "op_stf_ss: %s", wlc->band->band_stf_stbc_tx == AUTO ? "STBC" :
+		(wlc->stf->ss_opmode == PHY_TXC1_MODE_SISO ? "SISO" : "CDD"));
+
+	for (i = 0; i < NBANDS(wlc); i++) {
+		bcm_bprintf(b, "\tband%d stf_ss: %s ", i,
+			wlc->bandstate[i]->band_stf_stbc_tx == AUTO ? "STBC" :
+			(wlc->bandstate[i]->band_stf_ss_mode == PHY_TXC1_MODE_SISO ?
+			"SISO" : "CDD"));
+	}
+
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "ipaon %d\n", wlc->stf->ipaon);
+
+	bcm_bprintf(b, "pwr_throttle %d throttle_state 0x%x\n",
+		wlc->stf->pwr_throttle, wlc->stf->throttle_state);
+	bcm_bprintf(b, "pwr_throttle_mask 0x%x pwr_throttle_test 0x%x\n",
+		wlc->stf->pwr_throttle_mask, wlc->stf->pwr_throttle_test);
+	bcm_bprintf(b, "pwr_throttle_gpio 0x%x pwr_throttle_config 0x%x\n",
+		wlc->stf->pwrthrottle_pin, wlc->stf->pwrthrottle_config);
+
+	bcm_bprintf(b, "tx_duty_cycle_pwr %d tx_duty_cycle_cck %d tx_duty_cycle_ofdm %d\n",
+		wlc->stf->tx_duty_cycle_pwr, wlc->stf->tx_duty_cycle_cck,
+		wlc->stf->tx_duty_cycle_ofdm);
+
+	bcm_bprintf(b, "\n");
+
+	return BCME_OK;
+}
+
+
+#define BPRINT_PPR_RATE_LOOP(buf, idx, len, rates)	\
+			for (idx = 0; idx < len; idx++) { \
+				if (rates[idx] == WL_RATE_DISABLED) \
+					bcm_bprintf(buf, "  -");			\
+				else \
+					bcm_bprintf(buf, " %2d", rates[idx]); \
+			}
+
+static int
+wlc_dump_ppr(wlc_info_t *wlc, struct bcmstrbuf *b) /* C_CHECK */
+{
+	uint i, j;
+	uint n = (WLC_BITSCNT(wlc->stf->hw_txchain) > 3) ? WL_NUM_4x4_ELEMENTS :
+			(PHYTYPE_HT_CAP(wlc->band) ? WL_NUM_3x3_ELEMENTS : WL_NUM_2x2_ELEMENTS);
+	uint offset = PHYTYPE_HT_CAP(wlc->band) ? WL_NUM_3x3_ELEMENTS : 0;
+	int8 *ptr;
+	ppr_t *txpwr_ctl = wlc->stf->txpwr_ctl;
+	const char *str = "";
+	ppr_vht_mcs_rateset_t mcs_pwrs;
+	ppr_dsss_rateset_t dsss_pwrs;
+	ppr_ofdm_rateset_t ofdm_pwrs;
+	bool bprint  = FALSE;
+	int ret = BCME_OK;
+	char chanbuf[CHANSPEC_STR_LEN];
+
+#ifdef WL_SARLIMIT
+	txpwr_ctl = wlc->stf->txpwr_ctl_qdbm;
+	bcm_bprintf(b, "Power/Rate Dump (in 1/4dB): chanspec %s\n",
+		wf_chspec_ntoa_ex(wlc->chanspec, chanbuf));
+#else
+	bcm_bprintf(b, "Power/Rate Dump (in 1/2dB): chanspec %s\n",
+		wf_chspec_ntoa_ex(wlc->chanspec, chanbuf));
+#endif /* WL_SARLIMIT */
+	bcm_bprintf(b, "20MHz:");
+
+	if (txpwr_ctl == NULL) {
+		bcm_bprintf(b, "PPR dump fail.\n");
+		return ret;
+	}
+
+	if (CHSPEC_IS2G(wlc->home_chanspec)) {
+		ppr_get_dsss(txpwr_ctl, WL_TX_BW_20, WL_TX_CHAINS_1, &dsss_pwrs);
+		bcm_bprintf(b, "\nCCK         ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr_ctl, WL_TX_BW_20, WL_TX_CHAINS_2, &dsss_pwrs);
+			bcm_bprintf(b, "\nCCK CDD 1x2 ");
+			BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr_ctl, WL_TX_BW_20, WL_TX_CHAINS_3, &dsss_pwrs);
+				bcm_bprintf(b, "\nCCK CDD 1x3 ");
+				BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr_ctl, WL_TX_BW_20, WL_TX_CHAINS_4,
+						&dsss_pwrs);
+					bcm_bprintf(b, "\nCCK CDD 1x4 ");
+					BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS,
+						dsss_pwrs.pwr);
+				}
+			}
+		}
+	}
+	ppr_get_ofdm(txpwr_ctl, WL_TX_BW_20, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_pwrs);
+		bcm_bprintf(b, "\nOFDM        ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+		ppr_get_ofdm(txpwr_ctl, WL_TX_BW_20, WL_TX_MODE_CDD, WL_TX_CHAINS_2, &ofdm_pwrs);
+		bcm_bprintf(b, "\nOFDM-CDD    ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	}
+	ptr = mcs_pwrs.pwr;
+	for (i = 0; i < n; i++) {
+		switch (i + offset) {
+			case 0:
+				str = "MCS-SISO    ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 1:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS-CDD     ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 2:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS STBC    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 3:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS 8~15    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 4:
+			case 5:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+			case 6:
+				str = "1 Nsts 1 Tx ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 7:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "1 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 8:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "1 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 9:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "1 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 10:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "2 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 11:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "2 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 12:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "2 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 13:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "3 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 14:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "3 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 15:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "4 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			default:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+		}
+		if (bprint) {
+			bcm_bprintf(b, "\n%s", str);
+#ifdef WL11AC
+			BPRINT_PPR_RATE_LOOP(b, j, sizeof(mcs_pwrs), ptr);
+#else
+			BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_HT_MCS, ptr);
+#endif
+			bprint = FALSE;
+		}
+	}
+
+	bcm_bprintf(b, "\n\n40MHz:\n");
+	ppr_get_ofdm(txpwr_ctl, WL_TX_BW_40, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_pwrs);
+	bcm_bprintf(b, "OFDM        ");
+	BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+		ppr_get_ofdm(txpwr_ctl, WL_TX_BW_40, WL_TX_MODE_CDD, WL_TX_CHAINS_2, &ofdm_pwrs);
+		bcm_bprintf(b, "\nOFDM-CDD    ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	}
+	ptr = mcs_pwrs.pwr;
+	for (i = 0; i < n; i++) {
+		switch (i + offset) {
+			case 0:
+				str = "MCS-SISO    ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 1:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS-CDD     ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 2:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS STBC    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 3:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS 8~15    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 4:
+			case 5:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+			case 6:
+				str = "1 Nsts 1 Tx ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 7:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "1 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 8:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "1 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 9:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "1 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 10:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "2 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 11:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "2 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 12:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "2 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 13:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "3 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 14:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "3 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 15:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "4 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			default:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+		}
+		if (bprint) {
+			bcm_bprintf(b, "\n%s", str);
+#ifdef WL11AC
+			BPRINT_PPR_RATE_LOOP(b, j, sizeof(mcs_pwrs), ptr);
+#else
+			BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_HT_MCS, ptr);
+#endif
+			bprint = FALSE;
+		}
+	}
+
+
+	bcm_bprintf(b, "\n\n20 in 40MHz:");
+	if (CHSPEC_IS2G(wlc->home_chanspec)) {
+		ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_CHAINS_1, &dsss_pwrs);
+		bcm_bprintf(b, "\nCCK         ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_CHAINS_2, &dsss_pwrs);
+			bcm_bprintf(b, "\nCCK CDD 1x2 ");
+			BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_CHAINS_3,
+					&dsss_pwrs);
+				bcm_bprintf(b, "\nCCK CDD 1x3 ");
+				BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_CHAINS_4,
+						&dsss_pwrs);
+					bcm_bprintf(b, "\nCCK CDD 1x4 ");
+					BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS,
+						dsss_pwrs.pwr);
+				}
+			}
+		}
+	}
+	ppr_get_ofdm(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+		&ofdm_pwrs);
+	bcm_bprintf(b, "\nOFDM        ");
+	BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+		ppr_get_ofdm(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+			&ofdm_pwrs);
+		bcm_bprintf(b, "\nOFDM-CDD    ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	}
+	for (i = 0; i < n; i++) {
+		switch (i) {
+			case 0:
+				str = "1 Nsts 1 Tx ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 1:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "1 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 2:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "1 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 3:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "1 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 4:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "2 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 5:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "2 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 6:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "2 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 7:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "3 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 8:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "3 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 9:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "4 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN40, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			default:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+		}
+		if (bprint) {
+			bcm_bprintf(b, "\n%s", str);
+#ifdef WL11AC
+			BPRINT_PPR_RATE_LOOP(b, j, sizeof(mcs_pwrs), ptr);
+#else
+			BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_HT_MCS, ptr);
+#endif
+			bprint = FALSE;
+		}
+	}
+
+#ifdef WL11AC
+	bcm_bprintf(b, "\n\n80MHz:\n");
+	ppr_get_ofdm(txpwr_ctl, WL_TX_BW_80, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_pwrs);
+	bcm_bprintf(b, "OFDM        ");
+	BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+		ppr_get_ofdm(txpwr_ctl, WL_TX_BW_40, WL_TX_MODE_CDD, WL_TX_CHAINS_2, &ofdm_pwrs);
+		bcm_bprintf(b, "\nOFDM-CDD    ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	}
+	ptr = mcs_pwrs.pwr;
+	for (i = 0; i < n; i++) {
+		switch (i + offset) {
+			case 0:
+				str = "MCS-SISO    ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 1:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS-CDD     ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 2:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS STBC    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 3:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS 8~15    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 4:
+			case 5:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+			case 6:
+				str = "1 Nsts 1 Tx ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 7:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "1 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 8:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "1 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 9:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "1 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 10:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "2 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 11:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "2 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 12:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "2 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 13:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "3 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 14:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "3 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 15:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "4 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_80, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			default:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+		}
+		if (bprint) {
+			bcm_bprintf(b, "\n%s", str);
+			BPRINT_PPR_RATE_LOOP(b, j, sizeof(mcs_pwrs), ptr);
+			bprint = FALSE;
+		}
+	}
+
+	bcm_bprintf(b, "\n\n20 in 80MHz:");
+	if (CHSPEC_IS2G(wlc->home_chanspec)) {
+		ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_CHAINS_1, &dsss_pwrs);
+		bcm_bprintf(b, "\nCCK         ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_CHAINS_2, &dsss_pwrs);
+			bcm_bprintf(b, "\nCCK CDD 1x2 ");
+			BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_CHAINS_3,
+					&dsss_pwrs);
+				bcm_bprintf(b, "\nCCK CDD 1x3 ");
+				BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS, dsss_pwrs.pwr);
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_CHAINS_4,
+						&dsss_pwrs);
+					bcm_bprintf(b, "\nCCK CDD 1x4 ");
+					BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_DSSS,
+						dsss_pwrs.pwr);
+				}
+			}
+		}
+	}
+	ppr_get_ofdm(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+		&ofdm_pwrs);
+	bcm_bprintf(b, "\nOFDM        ");
+	BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+		ppr_get_ofdm(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+			&ofdm_pwrs);
+		bcm_bprintf(b, "\nOFDM-CDD    ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	}
+	ptr = mcs_pwrs.pwr;
+	for (i = 0; i < n; i++) {
+		switch (i) {
+			case 0:
+				str = "1 Nsts 1 Tx ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 1:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "1 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 2:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "1 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 3:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "1 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 4:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "2 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 5:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "2 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 6:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "2 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 7:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "3 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 8:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "3 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 9:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "4 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_20IN80, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			default:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+		}
+		if (bprint) {
+			bcm_bprintf(b, "\n%s", str);
+			BPRINT_PPR_RATE_LOOP(b, j, sizeof(mcs_pwrs), ptr);
+			bprint = FALSE;
+		}
+	}
+
+	bcm_bprintf(b, "\n\n40 in 80MHz:\n");
+	ppr_get_ofdm(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+		&ofdm_pwrs);
+	bcm_bprintf(b, "OFDM        ");
+	BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+		ppr_get_ofdm(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+			&ofdm_pwrs);
+		bcm_bprintf(b, "\nOFDM-CDD    ");
+		BPRINT_PPR_RATE_LOOP(b, j, WL_RATESET_SZ_OFDM, ofdm_pwrs.pwr);
+	}
+	ptr = mcs_pwrs.pwr;
+	for (i = 0; i < n; i++) {
+		switch (i + offset) {
+			case 0:
+				str = "MCS-SISO    ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 1:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS-CDD     ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 2:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS STBC    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 3:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "MCS 8~15    ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 4:
+			case 5:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+			case 6:
+				str = "1 Nsts 1 Tx ";
+				ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_1,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs_pwrs);
+				bprint = TRUE;
+				break;
+			case 7:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "1 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 8:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "1 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 9:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "1 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 10:
+				if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+					str = "2 Nsts 2 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_2, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 11:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "2 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 12:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "2 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 13:
+				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+					str = "3 Nsts 3 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 14:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "3 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			case 15:
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					str = "4 Nsts 4 Tx ";
+					ppr_get_vht_mcs(txpwr_ctl, WL_TX_BW_40IN80, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_pwrs);
+					bprint = TRUE;
+				}
+				break;
+			default:
+				ptr = NULL;
+				ASSERT(ptr);
+				break;
+		}
+		if (bprint) {
+			bcm_bprintf(b, "\n%s", str);
+			BPRINT_PPR_RATE_LOOP(b, j, sizeof(mcs_pwrs), ptr);
+			bprint = FALSE;
+		}
+	}
+
+#endif /* WL11AC */
+	bcm_bprintf(b, "\n\n");
+
+	return ret;
+}
+
+#endif 
 
 static uint
 wlc_stf_get_ppr_offset(wlc_info_t *wlc, wl_txppr_t *pbuf)
@@ -1542,7 +2531,8 @@ wlc_stf_tempsense_upd(wlc_info_t *wlc)
 		return;
 	}
 
-	if (CHIPID(wlc->pub->sih->chip) == BCM4364_CHIP_ID) {
+	if ((CHIPID(wlc->pub->sih->chip) == BCM4364_CHIP_ID) ||
+		(CHIPID(wlc->pub->sih->chip) == BCM4373_CHIP_ID)) {
 		return;
 	}
 
@@ -1552,7 +2542,7 @@ wlc_stf_tempsense_upd(wlc_info_t *wlc)
 	wlc->stf->tempsense_lasttime = wlc->pub->now;
 
 
-	duty_cycle_active_chains = wlc_phy_stf_duty_cycle_chain_active_get(pi);
+	duty_cycle_active_chains = phy_stf_duty_cycle_chain_active_get(pi);
 	txchain = duty_cycle_active_chains & 0xf;
 	if (wlc->stf->tx_duty_cycle_thermal != ((duty_cycle_active_chains >> 8) & 0xFF)) {
 		wlc->stf->tx_duty_cycle_thermal = (duty_cycle_active_chains >> 8) & 0xFF;
@@ -1566,8 +2556,11 @@ wlc_stf_tempsense_upd(wlc_info_t *wlc)
 	temp_throttle_req = (WLC_BITSCNT(txchain) < WLC_BITSCNT(wlc->stf->hw_txchain)) ?
 		WLC_TEMPTHROTTLE_ON : WLC_THROTTLE_OFF;
 
-	if ((wlc->stf->throttle_state & WLC_TEMPTHROTTLE_ON) == temp_throttle_req)
-		return;
+	if ((wlc->stf->throttle_state & WLC_TEMPTHROTTLE_ON) == temp_throttle_req) {
+		if (CHIPID(wlc->pub->sih->chip) != BCM7271_CHIP_ID) {
+			return;
+		}
+	}
 
 	wlc->stf->throttle_state &= ~WLC_TEMPTHROTTLE_ON;
 	if (temp_throttle_req)
@@ -1580,8 +2573,11 @@ wlc_stf_tempsense_upd(wlc_info_t *wlc)
 
 		/* update the tempsense txchain setting */
 	if (wlc->stf->throttle_state & WLC_TEMPTHROTTLE_ON) {
-		if (WLCISHTPHY(wlc->band) || WLCISACPHY(wlc->band))
-			txchain = wlc_stf_get_target_core(wlc);
+		if (WLCISHTPHY(wlc->band) || WLCISACPHY(wlc->band)) {
+			if (CHIPID(wlc->pub->sih->chip) != BCM7271_CHIP_ID) {
+				txchain = wlc_stf_get_target_core(wlc);
+			}
+		}
 #ifdef WL_STF_ARBITRATOR
 		if (WLC_STF_ARB_ENAB(wlc->pub)) {
 			wlc_stf_nss_request_update(wlc, wlc->stf->arb->tmpsense_req,
@@ -2758,7 +3754,7 @@ wlc_stf_txchain_set_complete(wlc_info_t *wlc)
 	if (WLC_TXC_ENAB(wlc) && wlc->txc != NULL)
 		wlc_txc_inv_all(wlc->txc);
 
-	wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+	phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 
 #if defined(WL_BEAMFORMING)
 	if (TXBF_ENAB(wlc->pub)) {
@@ -2871,7 +3867,7 @@ wlc_stf_reinit_chains(wlc_info_t* wlc)
 	new_rxchain_cnt = (uint8)WLC_BITSCNT(wlc->stf->rxchain);
 	mimops_mode = (new_rxchain_cnt == 1) ? HT_CAP_MIMO_PS_ON : HT_CAP_MIMO_PS_OFF;
 
-	wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+	phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 
 	wlc_ht_mimops_handle_rxchain_update(wlc->hti, mimops_mode);
 }
@@ -2937,13 +3933,13 @@ wlc_stf_rxchain_set(wlc_info_t* wlc, int32 int_val, bool update)
 				wlc_txbf_rxchain_upd(wlc->txbf);
 			}
 #endif /* WL_BEAMFORMING */
-			wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+			phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 			return BCME_OK;
 		}
 
 		/* for MIMOPS OFF, change chain first */
 		if (old_rxchain_cnt == 1) {
-			wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, rxchain);
+			phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, rxchain);
 		}
 
 		/* Init action state */
@@ -2987,13 +3983,15 @@ wlc_stf_rxchain_set(wlc_info_t* wlc, int32 int_val, bool update)
 #endif /* WL_BEAMFORMING */
 
 	/* if changing to/from 1 rxstream, update MIMOPS mode */
+	if (wlc->pub->hw_up)
+		wlc_suspend_mac_and_wait(wlc);
 	if (rxchain_cnt != old_rxchain_cnt &&
 	    (rxchain_cnt == 1 || old_rxchain_cnt == 1)) {
 		mimops_mode = (rxchain_cnt == 1) ? HT_CAP_MIMO_PS_ON : HT_CAP_MIMO_PS_OFF;
 		wlc_ht_mimops_handle_rxchain_update(wlc->hti, mimops_mode);
 	}
 	else if (old_rxchain != rxchain)
-		wlc_phy_stf_chain_set(pi, wlc->stf->txchain, wlc->stf->rxchain);
+		phy_stf_chain_set(pi, wlc->stf->txchain, wlc->stf->rxchain);
 
 #ifdef WLPM_BCNRX
 	/* Do at end after phy */
@@ -3004,7 +4002,8 @@ wlc_stf_rxchain_set(wlc_info_t* wlc, int32 int_val, bool update)
 			wlc_pm_bcnrx_set(wlc, TRUE); /* Enable */
 	}
 #endif
-
+	if (wlc->pub->hw_up)
+		wlc_enable_mac(wlc);
 	return BCME_OK;
 }
 #endif /* WL11N */
@@ -3221,6 +4220,10 @@ BCMATTACHFN(wlc_stf_attach)(wlc_info_t* wlc)
 	} else {
 		wlc->stf->shm_rt_txpwroff_pos = M_REV40_RT_TXPWROFF_POS(wlc);
 	}
+#if defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "stf", (dump_fn_t)wlc_dump_stf, (void *)wlc);
+	wlc_dump_register(wlc->pub, "ppr", (dump_fn_t)wlc_dump_ppr, (void *)wlc);
+#endif
 	wlc->bandstate[BAND_2G_INDEX]->band_stf_ss_mode = PHY_TXC1_MODE_SISO;
 	wlc->bandstate[BAND_5G_INDEX]->band_stf_ss_mode = PHY_TXC1_MODE_CDD;
 
@@ -3276,9 +4279,13 @@ BCMATTACHFN(wlc_stf_attach)(wlc_info_t* wlc)
 
 	wlc->stf->tempsense_period = WLC_TEMPSENSE_PERIOD;
 	temp = getintvar(wlc->pub->vars, rstr_temps_period);
-	/* valid range is 1-14. ignore 0 and 0xf to work with old srom/nvram */
-	if ((temp != 0) && (temp < 0xf))
-		wlc->stf->tempsense_period = temp;
+	/* valid range is 1-63 */
+	if ((temp != 0) && (temp < 0x3f)) {
+		/* for 4365, valid range is 2-14 (otherwise, it is WLC_TEMPSENSE_PERIOD=10s) */
+		if (!((ACREV_IS(wlc->band->phyrev, 32) || ACREV_IS(wlc->band->phyrev, 33)) &&
+			(temp == 1)))
+			wlc->stf->tempsense_period = temp;
+	}
 
 	/* enable tx diversity for cck rates */
 	temp = getintvar(wlc->pub->vars, rstr_cck_onecore_tx);
@@ -3306,7 +4313,24 @@ BCMATTACHFN(wlc_stf_attach)(wlc_info_t* wlc)
 #ifdef OCL
 	wlc->stf->ocl_rssi_threshold = WLC_RSSI_MINVAL_INT8;
 	wlc->stf->ocl_rssi_delta = OCL_RSSI_DELTA;
-#endif
+	/* register assoc state change notification callback */
+	if (wlc_bss_assoc_state_register(wlc, (bss_assoc_state_fn_t)wlc_stf_ocl_assoc_state_cb,
+	                                 NULL) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bss_assoc_state_register failed\n",
+		         WLCWLUNIT(wlc), __FUNCTION__));
+		return -1;
+	}
+#endif /* OCL */
+
+#if defined(OCL) || defined(WL_MIMOPS_CFG)
+	/* register bcn notify */
+	if (wlc_bss_rx_bcn_register(wlc, (bss_rx_bcn_notif_fn_t)wlc_stf_rx_bcn_notif,
+	                            wlc) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_rx_bcn_notif_register() failed\n",
+		         WLCWLUNIT(wlc), __FUNCTION__));
+		return -1;
+	}
+#endif /* OCL || WL_MIMOPS_CFG */
 
 #ifdef WL_STF_ARBITRATOR
 	if (WLC_STF_ARB_ENAB(wlc->pub)) {
@@ -3326,6 +4350,11 @@ BCMATTACHFN(wlc_stf_attach)(wlc_info_t* wlc)
 	}
 #endif /* WL_MIMOPS_CFG */
 
+#ifdef WL_NAP
+	wlc->stf->nap_rssi_threshold = NAP_DISABLE_RSSI;
+	wlc->stf->nap_rssi_delta = NAP_RSSI_DELTA;
+#endif /* WL_NAP */
+
 	return 0;
 }
 
@@ -3334,10 +4363,13 @@ BCMATTACHFN(wlc_stf_detach)(wlc_info_t* wlc)
 {
 #ifdef WL11N
 	if (wlc->stf->txpwr_ctl != NULL) {
+		ppr_set_ch_bw(wlc->stf->txpwr_ctl, ppr_get_max_bw()); /* Restore the correct BW */
 		ppr_delete(wlc->osh, wlc->stf->txpwr_ctl);
 	}
 #ifdef WL_SARLIMIT
 	if (wlc->stf->txpwr_ctl_qdbm != NULL) {
+		/* Restore the correct BW */
+		ppr_set_ch_bw(wlc->stf->txpwr_ctl_qdbm, ppr_get_max_bw());
 		ppr_delete(wlc->osh, wlc->stf->txpwr_ctl_qdbm);
 	}
 #endif /* WL_SARLIMIT */
@@ -3352,6 +4384,16 @@ BCMATTACHFN(wlc_stf_detach)(wlc_info_t* wlc)
 		wlc_stf_arb_mimops_info_detach(wlc);
 	}
 #endif /* WL_STF_ARBITRATOR */
+#ifdef OCL
+	/* unregister assoc state change notification callback */
+	(void)wlc_bss_assoc_state_unregister(wlc,
+	                                     (bss_assoc_state_fn_t)wlc_stf_ocl_assoc_state_cb, wlc);
+#endif /* OCL */
+
+#if defined(OCL) || defined(WL_MIMOPS_CFG)
+	/* unregister bcn notify */
+	wlc_bss_rx_bcn_unregister(wlc, (bss_rx_bcn_notif_fn_t)wlc_stf_rx_bcn_notif, wlc);
+#endif /* OCL || WL_MIMOPS_CFG */
 
 	wlc_module_unregister(wlc->pub, rstr_stf, wlc);
 #endif /* WL11N */
@@ -3423,13 +4465,9 @@ _wlc_stf_phy_txant_upd(wlc_info_t *wlc)
 		} else if (txant == ANT_TX_FORCE_1) {
 			wlc->stf->phytxant = PHY_TXC_ANT_1;
 		} else {
-			if (WLCISLCNPHY(wlc->band))
-				wlc->stf->phytxant = PHY_TXC_LPPHY_ANT_LAST;
-			else {
-				/* keep this assert to catch out of sync wlc->stf->txcore */
-				ASSERT(wlc->stf->txchain > 0);
-				wlc->stf->phytxant = wlc->stf->txchain << PHY_TXC_ANT_SHIFT;
-			}
+			/* keep this assert to catch out of sync wlc->stf->txcore */
+			ASSERT(wlc->stf->txchain > 0);
+			wlc->stf->phytxant = wlc->stf->txchain << PHY_TXC_ANT_SHIFT;
 		}
 	} else {
 		if (txant == ANT_TX_FORCE_0)
@@ -3661,7 +4699,11 @@ wlc_stf_spatial_expansion_get(wlc_info_t *wlc, ratespec_t rspec)
 	return spatial_map;
 }
 
+#ifdef BCMDBG
+#define WLC_PPR_STR(a, b) a = b
+#else
 #define WLC_PPR_STR(a, b)
+#endif
 uint8 /* C_CHECK */
 wlc_stf_get_pwrperrate(wlc_info_t *wlc, ratespec_t rspec, uint16 spatial_map)
 {
@@ -3671,6 +4713,9 @@ wlc_stf_get_pwrperrate(wlc_info_t *wlc, ratespec_t rspec, uint16 spatial_map)
 	bool is40MHz = RSPEC_IS40MHZ(rspec);
 #ifdef WL11AC
 	bool is80MHz = RSPEC_IS80MHZ(rspec);
+#endif
+#ifdef BCMDBG
+	const char *str = "";
 #endif
 	ppr_dsss_rateset_t dsss_pwrs;
 	ppr_ofdm_rateset_t ofdm_pwrs;
@@ -4083,6 +5128,12 @@ wlc_stf_get_pwrperrate(wlc_info_t *wlc, ratespec_t rspec, uint16 spatial_map)
 		ASSERT(0);
 		return 0;
 	}
+#ifdef BCMDBG
+#define DIV_QUO(num, div) ((num)/div)  /* Return the quotient of division to avoid floats */
+#define DIV_REM(num, div) (((num%div) * 100)/div) /* Return the remainder of division */
+	WL_NONE(("wl%d: %s: %s[%d] %2d.%-2d\n", wlc->pub->unit, __FUNCTION__,
+		str, rate, DIV_QUO(offset[rate], 2), DIV_REM(offset[rate], 2)));
+#endif
 	/* return the ppr offset in 0.5dB */
 	if (offset[rate] == (uint8)(WL_RATE_DISABLED))
 		return wlc->stf->max_offset;
@@ -4110,18 +5161,6 @@ wlc_stf_get_204080_pwrs(wlc_info_t *wlc, ratespec_t rspec, txpwr204080_t* pwrs,
 	if (wlc->stf->txpwr_ctl == NULL) {
 		return BCME_ERROR;
 	}
-
-#ifdef WL11ULB
-	if (ULB_ENAB(wlc->pub)) {
-		if (CHSPEC_IS2P5(wlc->chanspec)) {
-			min_bw = WL_TX_BW_2P5;
-		} else if (CHSPEC_IS5(wlc->chanspec)) {
-			min_bw = WL_TX_BW_5;
-		} else if (CHSPEC_IS10(wlc->chanspec)) {
-			min_bw = WL_TX_BW_10;
-		}
-	}
-#endif /* WL11ULB */
 
 	memset(pwrs, WL_RATE_DISABLED, sizeof(*pwrs));
 	mode = WL_TX_MODE_NONE;
@@ -4237,6 +5276,52 @@ wlc_stf_get_204080_pwrs(wlc_info_t *wlc, ratespec_t rspec, txpwr204080_t* pwrs,
 	return BCME_OK;
 }
 
+#ifdef BCMDBG
+static int
+wlc_stf_pproff_shmem_get(wlc_info_t *wlc, int *retval)
+{
+	uint16 entry_ptr;
+	uint8 rate, idx;
+	const wlc_rateset_t *rs_dflt;
+	wlc_rateset_t rs;
+
+	if (!wlc->clk) {
+		WL_ERROR(("wl%d: %s: No clock\n", wlc->pub->unit, __FUNCTION__));
+		return BCME_NOCLK;
+	}
+
+	rs_dflt = &cck_ofdm_rates;
+	wlc_rateset_copy(rs_dflt, &rs);
+
+	if (rs.count > 12) {
+		WL_ERROR(("wl%d: %s: rate count %d\n", wlc->pub->unit, __FUNCTION__, rs.count));
+		return BCME_BADARG;
+	}
+
+	for (idx = 0; idx < rs.count; idx++) {
+		rate = rs.rates[idx] & RATE_MASK;
+		entry_ptr = wlc_rate_shm_offset(wlc, rate);
+		retval[idx] = (int)wlc_read_shm(wlc, (entry_ptr + wlc->stf->shm_rt_txpwroff_pos));
+		if (RATE_ISOFDM(rate))
+			retval[idx] |= 0x80;
+	}
+	return BCME_OK;
+}
+
+static void
+wlc_stf_pproff_shmem_set(wlc_info_t *wlc, uint8 rate, uint8 val)
+{
+	uint16 entry_ptr;
+
+	if (!wlc->clk) {
+		WL_ERROR(("wl%d: %s: No clock\n", wlc->pub->unit, __FUNCTION__));
+		return;
+	}
+
+	entry_ptr = wlc_rate_shm_offset(wlc, rate);
+	wlc_write_shm(wlc, (entry_ptr + wlc->stf->shm_rt_txpwroff_pos), val);
+}
+#endif /* BCMDBG */
 
 static void
 wlc_stf_pproff_shmem_write(wlc_info_t *wlc) /* C_CHECK */
@@ -4406,6 +5491,8 @@ wlc_stf_ppr_format_convert(wlc_info_t *wlc, ppr_t *txpwr, int min_txpwr_limit, i
 
 #endif /* WL11N */
 
+#define CC_CODE_LEN_BYTES (3)
+#define NUM_LOG_ENTRIES (8)
 
 void
 wlc_update_txppr_offset(wlc_info_t *wlc, ppr_t *txpwr)
@@ -4422,38 +5509,37 @@ wlc_update_txppr_offset(wlc_info_t *wlc, ppr_t *txpwr)
 
 	wlc_iovar_getint(wlc, "min_txpower", &min_txpwr_limit);
 	min_txpwr_limit = min_txpwr_limit * WLC_TXPWR_DB_FACTOR;	/* make qdbm */
-	ASSERT(min_txpwr_limit >= 0);
-	max_txpwr_limit = (int)wlc_phy_txpower_get_target_max(pi);
-	ASSERT(max_txpwr_limit > 0);
+	max_txpwr_limit = (int)phy_tpc_get_target_max(pi);
+
+		if (max_txpwr_limit < wlc_phy_maxtxpwr_lowlimit(WLC_PI(wlc))) {
+			/* WL_ERROR(("FATAL ERROR: min_txpwr=%d, max_txpwr=%d\n",
+			 *	min_txpwr_limit, max_txpwr_limit));
+			 * wlc->hw->need_reinit = WL_REINIT_RC_STF_TXPWRLIM;
+			 * WLC_FATAL_ERROR(wlc);
+			 */
+			int8 length, i;
+			wlc->maxpwrlimit_fail++;
+			length = (strlen(wlc_channel_ccode(wlc->cmi)) + 1);
+			for (i = NUM_LOG_ENTRIES-2; i >= 0; i--) {
+				strncpy(wlc->ccode + length*(i+1), wlc->ccode + length*i,
+						CC_CODE_LEN_BYTES);
+				wlc->chanspec_array[i+1] = wlc->chanspec_array[i];
+			}
+			strncpy(wlc->ccode, wlc_channel_ccode(wlc->cmi), length);
+			wlc->chanspec_array[0] = wlc->chanspec;
+		}
+
 #ifdef WL_BEAMFORMING
 		wlc_txbf_txpower_target_max_upd(wlc->txbf, (int8)max_txpwr_limit);
 #endif
-	if ((stf->txpwr_ctl != NULL) && (ppr_get_ch_bw(stf->txpwr_ctl) !=
-		PPR_CHSPEC_BW(wlc->chanspec))) {
-		ppr_delete(wlc->osh, stf->txpwr_ctl);
-		stf->txpwr_ctl = NULL;
+
+	ASSERT(stf->txpwr_ctl);
+	/* txpwr_ctrl was allocated on PPR_MAX_BW. init it with correct bandwidth here */
+	ppr_set_ch_bw(stf->txpwr_ctl, PPR_CHSPEC_BW(wlc->chanspec));
 #ifdef WL_SARLIMIT
-		if (stf->txpwr_ctl_qdbm) {
-			ppr_delete(wlc->osh, stf->txpwr_ctl_qdbm);
-			stf->txpwr_ctl_qdbm = NULL;
-		}
-#endif /* WL_SARLIMIT */
-	}
-	if (stf->txpwr_ctl == NULL) {
-		if ((stf->txpwr_ctl = ppr_create(wlc->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
-			return;
-		}
-#ifdef WL_SARLIMIT
-		ASSERT(stf->txpwr_ctl_qdbm == NULL);
-		if ((stf->txpwr_ctl_qdbm =
-			ppr_create(wlc->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
-			if (stf->txpwr_ctl)
-				ppr_delete(wlc->osh, stf->txpwr_ctl);
-			stf->txpwr_ctl = NULL;
-			return;
-		}
-#endif /* WL_SARLIMIT */
-	}
+	ASSERT(stf->txpwr_ctl_qdbm);
+	ppr_set_ch_bw(stf->txpwr_ctl_qdbm, PPR_CHSPEC_BW(wlc->chanspec));
+#endif
 
 	/* need to convert from 0.25 dB to 0.5 dB for use in phy ctl word */
 	wlc_stf_ppr_format_convert(wlc, txpwr, min_txpwr_limit, max_txpwr_limit);
@@ -4461,7 +5547,7 @@ wlc_update_txppr_offset(wlc_info_t *wlc, ppr_t *txpwr)
 	/* If the minimum tx power target with the per-chain offset applied
 	 * is below the min tx power target limit, disable the core for tx.
 	 */
-	min_target = (int)wlc_phy_txpower_get_target_min(pi);
+	min_target = (int)phy_tpc_get_target_min(pi);
 
 	/* if the txchain offset brings the chain below the lower limit
 	 * disable the chain
@@ -4586,6 +5672,13 @@ wlc_stf_pwrthrottle_upd(wlc_info_t *wlc)
 		else
 			chain = wlc_stf_get_target_core(wlc);
 
+#ifdef BCMDBG
+		/* For experimentations, use specific chain else board default */
+		if (wlc->stf->pwr_throttle_test &&
+		    (wlc->stf->pwr_throttle_test < wlc->stf->hw_txchain)) {
+			chain = wlc->stf->pwr_throttle_test;
+		}
+#endif /* BCMDBG */
 
 		isj28 = (wlc->pub->sih->boardvendor == VENDOR_APPLE &&
 		         ((wlc->pub->sih->boardtype == BCM94360J28_D11AC2G) ||
@@ -4879,16 +5972,14 @@ void
 wlc_stf_chain_init(wlc_info_t *wlc)
 {
 	if (wlc->stf->channel_bonding_cores) {
-		wlc_phy_stf_chain_init(WLC_PI(wlc),
+		phy_stf_chain_init(WLC_PI(wlc),
 			wlc->stf->channel_bonding_cores,
 			wlc->stf->channel_bonding_cores);
-
-		wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->channel_bonding_cores,
+		phy_stf_chain_set(WLC_PI(wlc), wlc->stf->channel_bonding_cores,
 			wlc->stf->channel_bonding_cores);
-
 	} else {
-		wlc_phy_stf_chain_init(WLC_PI(wlc), wlc->stf->hw_txchain, wlc->stf->hw_rxchain);
-		wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+		phy_stf_chain_init(WLC_PI(wlc), wlc->stf->hw_txchain, wlc->stf->hw_rxchain);
+		phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 	}
 }
 
@@ -4952,34 +6043,112 @@ wlc_stf_ocl_rssi_thresh_handling(wlc_bsscfg_t *bsscfg)
 {
 	wlc_info_t* wlc = bsscfg->wlc;
 	wlc_phy_t   *pih = WLC_PI(wlc);
-	int8 rssi = bsscfg->link->rssi;
+	int8 rssi_ant[WL_RSSI_ANT_MAX], rssi = 0;
+	uint8 curr_coremask;
 	uint16 bits;
 	bool disable;
 	bool reconfig = FALSE;
 
-	wlc_phy_ocl_status_get(pih, &bits, NULL, NULL);
-	disable = !!(bits & OCL_DISABLED_RSSI);
+	phy_ocl_status_get(pih, &bits, &curr_coremask, NULL);
+	wlc_lq_rssi_ant_get_api(wlc, bsscfg, rssi_ant);
+	rssi = rssi_ant[curr_coremask >> 1];
+	if (rssi != WLC_RSSI_INVALID) {
+		disable = !!(bits & OCL_DISABLED_RSSI);
 
-	if (disable) {
-		if (rssi >= (wlc->stf->ocl_rssi_threshold +
-				wlc->stf->ocl_rssi_delta)) {
+		if (disable) {
+			if (rssi >= (wlc->stf->ocl_rssi_threshold +
+					wlc->stf->ocl_rssi_delta)) {
+				reconfig = TRUE;
+				WL_INFORM((" WLC STF OCL : OCL is enabled, RSSI %d OCL"
+					" threshold %d\n", rssi, wlc->stf->ocl_rssi_threshold));
+			}
+		} else if (rssi < wlc->stf->ocl_rssi_threshold) {
 			reconfig = TRUE;
-			WL_INFORM((" WLC STF OCL : OCL is enabled, RSSI %d OCL threshold %d",
+			WL_INFORM(("WLC STF OCL : OCL is disabled, RSSI %d OCL threshold %d\n",
 				rssi, wlc->stf->ocl_rssi_threshold));
 		}
-	} else if (rssi < wlc->stf->ocl_rssi_threshold) {
-		reconfig = TRUE;
-		WL_INFORM((" WLC STF OCL : OCL is disabled, RSSI %d OCL threshold %d",
-			rssi, wlc->stf->ocl_rssi_threshold));
-	}
 
-	/* if changing state then get stats snapshot */
-	if (reconfig) {
-		wlc_phy_ocl_disable_req_set(pih, OCL_DISABLED_RSSI,
-		                            !disable, WLC_OCL_REQ_RSSI);
+		/* if changing state then get stats snapshot */
+		if (reconfig) {
+			phy_ocl_disable_req_set(pih, OCL_DISABLED_RSSI,
+			                            !disable, WLC_OCL_REQ_RSSI);
+		}
+	}
+}
+void
+wlc_stf_ocl_update_assoc_pend(wlc_info_t* wlc, bool disable)
+{
+	wlc_phy_t   *pih = WLC_PI(wlc);
+	bool bit_present;
+	uint16 bits;
+
+	phy_ocl_status_get(pih, &bits, NULL, NULL);
+	bit_present = !!(OCL_DISABLED_ASPEND & bits);
+
+	if ((disable && !bit_present) || (!disable && bit_present)) {
+		phy_ocl_disable_req_set(pih, OCL_DISABLED_ASPEND,
+			disable, WLC_OCL_REQ_ASPEND);
+	}
+}
+
+static void
+wlc_stf_ocl_assoc_state_cb(void *ctx, bss_assoc_state_data_t *notif_data)
+{
+	wlc_bsscfg_t *cfg;
+	wlc_info_t *wlc;
+
+	ASSERT(notif_data);
+	cfg = notif_data->cfg;
+	ASSERT(cfg);
+	wlc = cfg->wlc;
+	ASSERT(wlc);
+
+	if (!((OCL_ENAB(wlc->pub)) && (BSSCFG_INFRA_STA(cfg)) && (cfg == wlc->cfg)))
+		return;
+
+	switch (notif_data->state) {
+		case AS_IDLE:
+			/* upon entering idle sate (success or fail),
+			 * clear disable reason for ASPEND
+			 */
+			wlc_stf_ocl_update_assoc_pend(wlc, FALSE);
+			break;
+		default:
+			/* switching to any other state should disable ocl  */
+			wlc_stf_ocl_update_assoc_pend(wlc, TRUE);
+			break;
 	}
 }
 #endif /* OCL */
+
+#if defined(OCL) || defined(WL_MIMOPS_CFG)
+static void
+wlc_stf_rx_bcn_notif(void *ctx, bss_rx_bcn_notif_data_t *notif_data)
+{
+
+	wlc_info_t *wlc = (wlc_info_t *)ctx;
+	wlc_bsscfg_t *cfg;
+
+	ASSERT(notif_data && wlc);
+	cfg = notif_data->cfg;
+	ASSERT(cfg);
+
+	if (!(BSSCFG_INFRA_STA(cfg) && wlc->stas_associated && cfg == wlc->cfg))
+		return;
+
+#ifdef OCL
+	if (OCL_ENAB(wlc->pub)) {
+		wlc_stf_ocl_rssi_thresh_handling(cfg);
+	}
+#endif
+#ifdef WL_MIMOPS_CFG
+	if (WLC_MIMOPS_ENAB(wlc->pub)) {
+		wlc_stf_mrc_thresh_handling(cfg);
+	}
+#endif
+}
+#endif /* OCL || WL_MIMOPS_CFG */
+
 
 #ifdef WL_STF_ARBITRATOR
 void wlc_stf_set_arbitrated_chains_complete(wlc_info_t *wlc)
@@ -4993,7 +6162,7 @@ void wlc_stf_set_arbitrated_chains_complete(wlc_info_t *wlc)
 	if (WLC_TXC_ENAB(wlc) && wlc->txc != NULL)
 		wlc_txc_inv_all(wlc->txc);
 
-	wlc_phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
+	phy_stf_chain_set(WLC_PI(wlc), wlc->stf->txchain, wlc->stf->rxchain);
 
 #if defined(WL_BEAMFORMING)
 	if (TXBF_ENAB(wlc->pub)) {

@@ -26,7 +26,7 @@
  *
  *   <<Broadcom-WL-IPTag/Proprietary:>>
  *
- *   $Id: wl_keep_alive.h 528347 2015-01-22 02:32:52Z $
+ *   $Id: wl_keep_alive.h 656972 2016-08-30 14:16:10Z $
  */
 
 
@@ -103,8 +103,8 @@ extern int wl_keep_alive_up(wl_keep_alive_info_t *info);
 */
 extern unsigned int wl_keep_alive_down(wl_keep_alive_info_t *info);
 
-extern int wl_keep_alive_upd_override_period(wlc_info_t *wlc, uint8 mkeepalive_index,
-	uint32 override_period);
+extern int wl_keep_alive_upd_override_period(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
+	uint32 override_period, uint8 mkeepalive_index);
 #else	/* stubs */
 
 #define wl_keep_alive_attach(a)		(wl_keep_alive_info_t *)0x0dadbeef

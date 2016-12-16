@@ -148,6 +148,13 @@ main(int argc, char *argv[])
 		return 0;
 	}
 	else {
+#ifdef BCMDBG
+		/* verbose - 0:no | others:yes */
+		/* for workspace */
+		char debug[8];
+		if (nas_safe_get_conf(debug, sizeof(debug), "nas_dbg") == 0)
+			debug_nwksp = (int)atoi(debug);
+#endif
 	}
 
 	/* establish a handler to handle SIGTERM. */

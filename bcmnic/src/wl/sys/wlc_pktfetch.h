@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_pktfetch.h 635778 2016-05-05 08:00:42Z $
+ * $Id: wlc_pktfetch.h 663452 2016-10-05 12:14:40Z $
  */
 
 #ifndef _wlc_pktfetch_h_
@@ -85,6 +85,7 @@ typedef struct wlc_eapol_pktfetch_ctx {
 	body_len >= (((uint8 *)lsh - (uint8 *)pbody) + ICMP6_MIN_BODYLEN) && \
 	*((uint8 *)lsh + ICMP6_NEXTHDR_OFFSET) == ICMPV6_HEADER_TYPE && \
 	(*((uint8 *)lsh + ICMP6_TYPE_OFFSET) == ICMPV6_PKT_TYPE_NS || \
+	*((uint8 *)lsh + ICMP6_TYPE_OFFSET) == ICMPV6_PKT_TYPE_NA || \
 	*((uint8 *)lsh + ICMP6_TYPE_OFFSET) == ICMPV6_PKT_TYPE_RA) && \
 	NDOE_ENAB(wlc->pub))
 #define NDOE_PKTFETCH_REQUIRED_SPLIT_MODE4(wlc, pOffset, pbody, body_len) \
@@ -107,10 +108,15 @@ typedef struct wlc_eapol_pktfetch_ctx {
 #endif /* BDO */
 
 #ifdef TKO
-#define TKO_PKTFETCH_REQUIRED(wlc, lsh) \
-	(TKO_ENAB(wlc->pub) && wl_tko_is_running(wl_get_tko(wlc->wl, 0)) && \
+#define TKO_PKTFETCH_REQUIRED(wlc, lsh, bsscfg) \
+	(TKO_ENAB(wlc->pub) && wl_tko_is_running(wl_get_tko(wlc->wl, 0), bsscfg) && \
 	(lsh->type == hton16(ETHER_TYPE_IP) || lsh->type == hton16(ETHER_TYPE_IPV6)))
 #endif /* TKO */
+#ifdef ICMP
+#define ICMP_PKTFETCH_REQUIRED(wlc, lsh) \
+	(ICMP_ENAB(wlc->pub) && wl_icmp_is_running(wl_get_icmp(wlc->wl, 0)) && \
+	(lsh->type == hton16(ETHER_TYPE_IP) || lsh->type == hton16(ETHER_TYPE_IPV6)))
+#endif /* ICMP */
 
 #ifdef WL_TBOW
 #define WLTBOW_PKTFETCH_REQUIRED(wlc, bsscfg, eth_type) \
@@ -118,7 +124,6 @@ typedef struct wlc_eapol_pktfetch_ctx {
 	WLC_TBOW_ETHER_TYPE_MATCH(eth_type) && \
 	BSSCFG_IS_TBOW_ACTIVE(bsscfg))
 #endif
-
 
 extern int wlc_recvdata_schedule_pktfetch(wlc_info_t *wlc, struct scb *scb,
         wlc_frminfo_t *f, bool promisc_frame, bool ordered, bool amsdu_sub_msdus);

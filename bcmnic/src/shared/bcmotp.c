@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmotp.c 645916 2016-06-27 22:17:30Z $
+ * $Id: bcmotp.c 665717 2016-10-18 23:29:25Z $
  */
 
 #include <bcm_cfg.h>
@@ -67,10 +67,33 @@
 #define OTP_DBG_VAL	0x0004
 uint32 otp_msg_level = OTP_ERR_VAL;
 
-#define OTP_ERR(args)
+#if defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG)
 
+#if defined(ERR_USE_EVENT_LOG_RA)
+#define	OTP_ERR(args)		do { \
+				if (otp_msg_level & OTP_ERR_VAL) { \
+				EVENT_LOG_RA(EVENT_LOG_TAG_OTP_ERROR, args); }\
+				} while (0);
+#else
+#define	OTP_ERR(args)		do { \
+				if (otp_msg_level & OTP_ERR_VAL) { \
+				EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_OTP_ERROR, args); }\
+				} while (0);
+#endif /* ERR_USE_EVENT_LOG_RA */
+
+#elif defined(BCMDBG) || defined(BCMDBG_ERR)
+#define OTP_ERR(args)	do {if (otp_msg_level & OTP_ERR_VAL) printf args;} while (0)
+#else
+#define OTP_ERR(args)
+#endif /* defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG) */
+
+#ifdef BCMDBG
+#define OTP_MSG(args)	do {if (otp_msg_level & OTP_MSG_VAL) printf args;} while (0)
+#define OTP_DBG(args)	do {if (otp_msg_level & OTP_DBG_VAL) printf args;} while (0)
+#else
 #define OTP_MSG(args)
 #define OTP_DBG(args)
+#endif
 
 #define OTPP_TRIES		10000000	/* # of tries for OTPP */
 #define OTP_FUSES_PER_BIT	2
@@ -110,6 +133,7 @@ typedef int (*otp_write_bits_t)(void *oh, int bn, int bits, uint8* data);
 typedef bool	(*otp_isunified_t)(void *oh);
 typedef uint16	(*otp_avsbitslen_t)(void *oh);
 typedef int (*otp_ecc_write_t)(void *oh, uint wn, uint32 data, uint32 ecc_type);
+typedef int	(*otp_read_t)(void *oh, void *arg, char *buf, uint size);
 
 /* OTP function struct */
 typedef struct otp_fn_s {
@@ -133,6 +157,7 @@ typedef struct otp_fn_s {
 #endif /* !BCMDONGLEHOST */
 	otp_isunified_t		isunified;
 	otp_avsbitslen_t	avsbitslen;
+	otp_read_t		read;
 } otp_fn_t;
 
 typedef struct {
@@ -317,14 +342,8 @@ otp_initregs(si_t *sih, volatile void *coreregs, otpregs_t *otpregs)
 #define OTP_SZ_FU_1044		((ROUNDUP(1044, 16))/8)  /* 1044 bits */
 
 /* OTP BT shared region (pre-allocated) */
-#define	OTP_BT_BASE_4330	(1760/OTPWSIZE)
-#define OTP_BT_END_4330		(1888/OTPWSIZE)
 #define OTP_BT_BASE_4324	(2384/OTPWSIZE)
 #define	OTP_BT_END_4324		(2640/OTPWSIZE)
-#define OTP_BT_BASE_4334	(2512/OTPWSIZE)
-#define	OTP_BT_END_4334		(2768/OTPWSIZE)
-#define OTP_BT_BASE_4314	(4192/OTPWSIZE)
-#define	OTP_BT_END_4314		(4960/OTPWSIZE)
 #define OTP_BT_BASE_4350	(4384/OTPWSIZE)
 #define OTP_BT_END_4350		(5408/OTPWSIZE)
 #define OTP_BT_BASE_4335	(4528/OTPWSIZE)
@@ -366,11 +385,14 @@ otp_initregs(si_t *sih, volatile void *coreregs, otpregs_t *otpregs)
 /* This is used to make HW/SW boundary fixed for 43012 Chip */
 #define OTP_HWREGION_SZ_43012	(192/OTPWSIZE)
 
+/* OTP PCIE HW Header Size */
+#define OTP_PCIE_HWHDR_SZ_CONV		128
+#define OTP_PCIE_HWHDR_SZ_COREREV19	208
+
 /* OTP unification */
 #if defined(USBSDIOUNIFIEDOTP)
 /** Offset in OTP from upper GUR to HNBU_UMANFID tuple value in (16-bit) words */
 #define USB_MANIFID_OFFSET_4319		42
-#define USB_MANIFID_OFFSET_43143	45 /* See Confluence 43143 SW notebook #1 */
 #endif /* USBSDIOUNIFIEDOTP */
 
 #if !defined(BCMDONGLEHOST)
@@ -574,26 +596,11 @@ BCMSROMATTACHFN(ipxotp_bt_region_get)(otpinfo_t *oi, uint16 *start, uint16 *end)
 {
 	*start = *end = 0;
 	switch (CHIPID(oi->sih->chip)) {
-	case BCM4330_CHIP_ID:
-		*start = OTP_BT_BASE_4330;
-		*end = OTP_BT_END_4330;
-		break;
 	case BCM4324_CHIP_ID:
 	case BCM43242_CHIP_ID:
 	case BCM43243_CHIP_ID:
 		*start = OTP_BT_BASE_4324;
 		*end = OTP_BT_END_4324;
-		break;
-	case BCM4334_CHIP_ID:
-	case BCM43340_CHIP_ID:
-	case BCM43341_CHIP_ID:
-		*start = OTP_BT_BASE_4334;
-		*end = OTP_BT_END_4334;
-		break;
-	case BCM4314_CHIP_ID:
-	case BCM43142_CHIP_ID:
-		*start = OTP_BT_BASE_4314;
-		*end = OTP_BT_END_4314;
 		break;
 	case BCM4349_CHIP_GRPID:
 		*start = OTP_BT_BASE_4349;
@@ -603,11 +610,9 @@ BCMSROMATTACHFN(ipxotp_bt_region_get)(otpinfo_t *oi, uint16 *start, uint16 *end)
 		break;
 	case BCM4365_CHIP_ID:
 	case BCM4366_CHIP_ID:
+	case BCM7271_CHIP_ID:
 	case BCM43664_CHIP_ID:
 	case BCM43666_CHIP_ID:
-#ifdef BCM7271
-	case BCM7271_CHIP_ID:
-#endif /* BCM7271 */
 		break; /* these (router) chips do not use the BT coex interface */
 	case BCM4345_CHIP_ID:
 		*start = OTP_BT_BASE_4345;
@@ -635,6 +640,7 @@ BCMSROMATTACHFN(ipxotp_bt_region_get)(otpinfo_t *oi, uint16 *start, uint16 *end)
 		*end = OTP_BT_END_43012;
 		break;
 	case BCM4364_CHIP_ID:
+	case BCM4373_CHIP_ID:
 		*start = OTP_BT_BASE_4364;
 		*end = OTP_BT_END_4364;
 		break;
@@ -685,31 +691,13 @@ BCMSROMATTACHFN(ipxotp_max_rgnsz)(otpinfo_t *oi)
 	case BCM43239_CHIP_ID:
 		oi->fusebits = OTP_SZ_FU_288;
 		break;
-	case BCM43224_CHIP_ID:	case BCM43225_CHIP_ID:	case BCM43421_CHIP_ID:
+	case BCM43225_CHIP_ID:	case BCM43421_CHIP_ID:
 		oi->fusebits = OTP_SZ_FU_72;
 		break;
 	case BCM43236_CHIP_ID:	case BCM43235_CHIP_ID:	case BCM43238_CHIP_ID:
 	case BCM43237_CHIP_ID:
 	case BCM43234_CHIP_ID:
 		oi->fusebits = OTP_SZ_FU_324;
-		break;
-	case BCM5356_CHIP_ID:
-		oi->fusebits = OTP_SZ_FU_216;
-		break;
-	case BCM4336_CHIP_ID:
-	case BCM43362_CHIP_ID:
-		oi->fusebits = OTP_SZ_FU_144;
-		break;
-	case BCM4313_CHIP_ID:
-		oi->fusebits = OTP_SZ_FU_72;
-		break;
-	case BCM4330_CHIP_ID:
-	case BCM4334_CHIP_ID:
-	case BCM43340_CHIP_ID:
-	case BCM43341_CHIP_ID:
-	case BCM4314_CHIP_ID:
-	case BCM43142_CHIP_ID:
-		oi->fusebits = OTP_SZ_FU_144;
 		break;
 	case BCM4331_CHIP_ID:
 	case BCM43431_CHIP_ID:
@@ -736,9 +724,7 @@ BCMSROMATTACHFN(ipxotp_max_rgnsz)(otpinfo_t *oi)
 		break;
 	case BCM4365_CHIP_ID:
 	case BCM4366_CHIP_ID:
-#ifdef BCM7271
 	case BCM7271_CHIP_ID:
-#endif /* BCM7271 */
 	case BCM43664_CHIP_ID:
 	case BCM43666_CHIP_ID:
 		if (CHIPREV(sih->chiprev) >= 4) {
@@ -769,6 +755,7 @@ BCMSROMATTACHFN(ipxotp_max_rgnsz)(otpinfo_t *oi)
 		oi->fusebits = OTP_SZ_FU_1044;
 		break;
 	case BCM4364_CHIP_ID:
+	case BCM4373_CHIP_ID:
 		oi->fusebits = OTP_SZ_FU_1044;
 		break;
 	default:
@@ -923,14 +910,6 @@ BCMSROMATTACHFN(_ipxotp_init)(otpinfo_t *oi, otpregs_t *otpregs)
 		>> OTPL_WRAP_TYPE_SHIFT;
 	BCM_REFERENCE(otpwt);
 
-#if defined(BCM7271)
-	if (otpwt == OTPL_WRAP_TYPE_28NM) {
-		OTP_ERR(("%s(%d)*****HACKHACK***** need to add support for 28NM OTP\n",
-			__FUNCTION__, __LINE__));
-		OTP_ERR(("%s(%d)*****HACKHACK***** ignore checking for OTPP_START_BUSY\n",
-			__FUNCTION__, __LINE__));
-	} else
-#endif /* BCM7271 */
 	if ((OTPWRTYPE(otpwt) != OTPL_WRAP_TYPE_40NM) &&
 		(OTPWRTYPE(otpwt) != OTPL_WRAP_TYPE_28NM)) {
 		/* First issue an init command so the status is up to date */
@@ -952,8 +931,7 @@ BCMSROMATTACHFN(_ipxotp_init)(otpinfo_t *oi, otpregs_t *otpregs)
 	/* Read OTP lock bits and subregion programmed indication bits */
 	oi->status = R_REG(oi->osh, otpregs->otpstatus);
 
-	if ((CHIPID(oi->sih->chip) == BCM43224_CHIP_ID) ||
-		(CHIPID(oi->sih->chip) == BCM43225_CHIP_ID) ||
+	if ((CHIPID(oi->sih->chip) == BCM43225_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM43421_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM43236_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM43235_CHIP_ID) ||
@@ -964,7 +942,6 @@ BCMSROMATTACHFN(_ipxotp_init)(otpinfo_t *oi, otpregs_t *otpregs)
 		(CHIPID(oi->sih->chip) == BCM4324_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM43242_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM43243_CHIP_ID) ||
-		(CHIPID(oi->sih->chip) == BCM43143_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM4331_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM43431_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM4360_CHIP_ID) ||
@@ -975,10 +952,7 @@ BCMSROMATTACHFN(_ipxotp_init)(otpinfo_t *oi, otpregs_t *otpregs)
 		(CHIPID(oi->sih->chip) == BCM43018_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM43602_CHIP_ID) ||
 		(CHIPID(oi->sih->chip) == BCM4365_CHIP_ID) ||
-#ifdef BCM7271
 		(CHIPID(oi->sih->chip) == BCM7271_CHIP_ID) ||
-#endif /* BCM7271 */
-
 		(CHIPID(oi->sih->chip) == BCM4366_CHIP_ID) ||
 		BCM43602_CHIP(oi->sih->chip) ||
 		BCM4365_CHIP(oi->sih->chip) ||
@@ -998,14 +972,11 @@ BCMSROMATTACHFN(_ipxotp_init)(otpinfo_t *oi, otpregs_t *otpregs)
 	if ((oi->status & (OTPS_GUP_HW | OTPS_GUP_SW)) == (OTPS_GUP_HW | OTPS_GUP_SW)) {
 		switch (CHIPID(oi->sih->chip)) {
 			/* Add cases for supporting chips */
-			case BCM43143_CHIP_ID:
 			case BCM4335_CHIP_ID:
 			case BCM4345_CHIP_ID:
 			case BCM4365_CHIP_ID:
 			case BCM4366_CHIP_ID:
-#ifdef BCM7271
 			case BCM7271_CHIP_ID:
-#endif /* BCM7271 */
 			case BCM43664_CHIP_ID:
 			case BCM43666_CHIP_ID:
 			case BCM43430_CHIP_ID:
@@ -1024,6 +995,7 @@ BCMSROMATTACHFN(_ipxotp_init)(otpinfo_t *oi, otpregs_t *otpregs)
 	switch (CHIPID(oi->sih->chip)) {
 		case BCM4349_CHIP_GRPID:
 		case BCM4364_CHIP_ID:
+		case BCM4373_CHIP_ID:
 			oi->avsbitslen = AVS_BITS_LEN;
 			break;
 		case BCM43012_CHIP_ID:
@@ -1382,7 +1354,8 @@ static otp_fn_t BCMNMIATTACHDATA(ipxotp_fn) = {
 	(otp_ecc_write_t)NULL,
 #endif /* !BCMDONGLEHOST */
 	(otp_isunified_t)ipxotp_isunified,
-	(otp_avsbitslen_t)ipxotp_avsbitslen
+	(otp_avsbitslen_t)ipxotp_avsbitslen,
+	(otp_read_t)NULL			/* Assigned in otp_init */
 };
 
 /*
@@ -1416,8 +1389,7 @@ BCMRAMFN(get_ipxotp_fn)(void)
  *	hndotp_isunified()
  *
  *   HND internal functions:
- * 	hndotp_otpr()
- * 	hndotp_otproff()
+ *	hndotp_otpr()
  *	hndotp_write_bit()
  *	hndotp_write_word()
  *	hndotp_valid_rce()
@@ -1538,26 +1510,6 @@ BCMNMIATTACHFN(hndotp_otpr)(void *oh, chipcregs_t *cc, uint wn)
 }
 #endif 
 
-#if !defined(BCMDONGLEHOST)
-static uint16
-BCMNMIATTACHFN(hndotp_otproff)(void *oh, chipcregs_t *cc, int woff)
-{
-	otpinfo_t *oi = (otpinfo_t *)oh;
-	osl_t *osh;
-	volatile uint16 *ptr;
-
-	ASSERT(woff >= (-((int)oi->size / 2)));
-	ASSERT(woff < OTP_LIM_OFF);
-	ASSERT(cc != NULL);
-
-	osh = si_osh(oi->sih);
-
-	ptr = (volatile uint16 *)((volatile char *)cc + CC_SROM_OTP);
-
-	return (R_REG(osh, &ptr[(oi->size / 2) + woff]));
-}
-#endif /* !defined(BCMDONGLEHOST) */
-
 static uint16
 BCMNMIATTACHFN(hndotp_read_bit)(void *oh, chipcregs_t *cc, uint idx)
 {
@@ -1602,7 +1554,6 @@ BCMNMIATTACHFN(hndotp_init)(si_t *sih)
 	uint idx;
 	chipcregs_t *cc;
 	otpinfo_t *oi;
-	uint32 cap = 0, clkdiv, otpdiv = 0;
 	void *ret = NULL;
 	osl_t *osh;
 
@@ -1615,60 +1566,14 @@ BCMNMIATTACHFN(hndotp_init)(si_t *sih)
 
 	/* Check for otp */
 	if ((cc = si_setcoreidx(sih, SI_CC_IDX)) != NULL) {
-		cap = R_REG(osh, &cc->capabilities);
+		uint32 cap = R_REG(osh, &cc->capabilities);
+
 		if ((cap & CC_CAP_OTPSIZE) == 0) {
 			/* Nothing there */
 			goto out;
 		}
 
-		/* As of right now, support only 4320a2, 4311a1 and 4312 */
-		ASSERT((CCREV(oi->ccrev) == 12) || (CCREV(oi->ccrev) == 17) ||
-			(CCREV(oi->ccrev) == 22));
-		if (!((CCREV(oi->ccrev) == 12) || (CCREV(oi->ccrev) == 17) ||
-			(CCREV(oi->ccrev) == 22))) {
-			return NULL;
-		}
-
-		/* Read the OTP byte size. chipcommon rev >= 18 has RCE so the size is
-		 * 8 row (64 bytes) smaller
-		 */
-		oi->size = 1 << (((cap & CC_CAP_OTPSIZE) >> CC_CAP_OTPSIZE_SHIFT)
-			+ CC_CAP_OTPSIZE_BASE);
-		if (CCREV(oi->ccrev) >= 18) {
-			oi->size -= ((OTP_RC0_OFF - OTP_BOUNDARY_OFF) * 2);
-		} else {
-			OTP_ERR(("Negative otp size, shouldn't happen for programmed chip."));
-			oi->size = 0;
-		}
-
-		oi->hwprot = (int)(R_REG(osh, &cc->otpstatus) & OTPS_PROTECT);
-		oi->boundary = -1;
-
-		/* Check the region signature */
-		if (hndotp_otproff(oi, cc, OTP_HWSIGN_OFF) == OTP_SIGNATURE) {
-			oi->signvalid |= OTP_HW_REGION;
-			oi->boundary = hndotp_otproff(oi, cc, OTP_BOUNDARY_OFF);
-		}
-
-		if (hndotp_otproff(oi, cc, OTP_SWSIGN_OFF) == OTP_SIGNATURE)
-			oi->signvalid |= OTP_SW_REGION;
-
-		if (hndotp_otproff(oi, cc, OTP_CIDSIGN_OFF) == OTP_SIGNATURE)
-			oi->signvalid |= OTP_CID_REGION;
-
-		/* Set OTP clkdiv for stability */
-		if (CCREV(oi->ccrev) == 22)
-			otpdiv = 12;
-
-		if (otpdiv) {
-			clkdiv = R_REG(osh, &cc->clkdiv);
-			clkdiv = (clkdiv & ~CLKD_OTP) | (otpdiv << CLKD_OTP_SHIFT);
-			W_REG(osh, &cc->clkdiv, clkdiv);
-			OTP_MSG(("%s: set clkdiv to %x\n", __FUNCTION__, clkdiv));
-		}
-		OSL_DELAY(10);
-
-		ret = (void *)oi;
+		return NULL;
 	}
 
 	OTP_MSG(("%s: ccrev %d\tsize %d bytes\thwprot %x\tsignvalid %x\tboundary %x\n",
@@ -1900,7 +1805,8 @@ static otp_fn_t hndotp_fn = {
 	(otp_ecc_write_t)NULL,
 #endif /* !BCMDONGLEHOST */
 	(otp_isunified_t)hndotp_isunified,
-	(otp_avsbitslen_t)hndotp_avsbitslen
+	(otp_avsbitslen_t)hndotp_avsbitslen,
+	(otp_read_t)NULL
 };
 
 #endif /* BCMHNDOTP */
@@ -2018,6 +1924,17 @@ BCMSROMATTACHFN(otp_init)(si_t *sih)
 #endif
 
 	return ret;
+}
+
+int
+BCMNMIATTACHFN(otp_pcie_hwhdr_sz)(si_t *sih)
+{
+	if ((BUSCORETYPE(sih->buscoretype) == PCIE2_CORE_ID) &&
+		(PCIECOREREV(sih->buscorerev) >= 19)) {
+		return OTP_PCIE_HWHDR_SZ_COREREV19;
+	} else {
+		return OTP_PCIE_HWHDR_SZ_CONV;
+	}
 }
 
 #if !defined(BCMDONGLEHOST)

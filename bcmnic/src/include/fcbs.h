@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: fcbs.h 619302 2016-02-16 06:49:16Z $
+ * $Id: fcbs.h 648177 2016-07-11 09:09:32Z $
  */
 
 #ifndef	_ULP_FCBS_H_
@@ -23,6 +23,7 @@
 #include <siutils.h>
 
 #define	FCBS_ROM_SEQ_DISABLE	0xABCDABCD
+#define	FCBS_DYN_SEQ_SKIP		0xDEADDEAD
 
 typedef struct fcbs_info fcbs_info_t;
 typedef struct fcbs_info * fcbs_info_t_p;
@@ -52,11 +53,11 @@ enum {
 	FCBS_DS1_PHY_RADIO_BLOCK,	/* 1 */
 	FCBS_DS1_RADIO_PD_BLOCK,	/* 2 */
 	FCBS_DS1_EXIT_BLOCK,		/* 3 */
-	FCBS_DS0_RADIO_PU_BLOCK,	/* 4 */
-	FCBS_DS0_RADIO_PD_BLOCK,	/* 5 */
+	FCBS_DS0_RADIO_PD_BLOCK,	/* 4 */
+	FCBS_DS0_RADIO_PU_BLOCK,	/* 5 */
 #else
-	FCBS_DS0_RADIO_PU_BLOCK,	/* 0 */
-	FCBS_DS0_RADIO_PD_BLOCK,	/* 1 */
+	FCBS_DS0_RADIO_PD_BLOCK,	/* 0 */
+	FCBS_DS0_RADIO_PU_BLOCK,	/* 1 */
 #endif /* BCMULP */
 };
 
@@ -66,6 +67,20 @@ enum {
 #define M_FCBS_DS1_EXIT_BLOCK_SZ	4
 #define M_FCBS_DS0_RADIO_PU_BLOCK_SZ	2
 #define M_FCBS_DS0_RADIO_PD_BLOCK_SZ	2
+
+#define SHM_ENTRY_MASK			0xFFFF
+#define SHM_ENTRY_SIZE			2
+
+#define FCBS_SHM_SEQ_SZ			(6 * 2)		/* each shm = 2 bytes */
+
+enum {
+	SHM_FCBS_SEQ_CMD_PTR_INX,	/* 0 */
+	SHM_FCBS_SEQ_DAT_PTR_INX,	/* 1 */
+	SHM_FCBS_SEQ_CTL_WRD_INX,	/* 2 */
+	SHM_FCBS_SEQ_WT_TIME_INX,	/* 3 */
+	SHM_FCBS_SEQ_CTRL_ST_INX,	/* 4 */
+	SHM_FCBS_SEQ_ACT_TM_INX,	/* 5 */
+};
 
 /* sequence id's used by FCBS Blocks */
 enum {
@@ -106,11 +121,13 @@ enum {
 	/* Exec seq */
 	DS1_EXEC_MINIPMU_PU	= 9,
 	DS1_EXEC_PLL_PU		= 10,
+	DS1_EXEC_CHAN_TUNE	= 11,
 	EXEC_NAPPING		= 4,
 
 	/* DS0 exec seq */
 	DS0_EXEC_MINIPMU_PU	= 0,
 	DS0_EXEC_PLL_PU		= 1,
+	DS0_EXEC_CHAN_TUNE	= 2,
 	DS0_EXEC_RADIO_PD	= 0
 };
 
@@ -169,6 +186,6 @@ extern fcbs_info_t_p BCMATTACHFN(fcbs_attach)(osl_t *osh, si_t *sih, d11regs_t *
  * 2. num of sequences for that stage
  */
 extern fcbs_out_t fcbs_populate(fcbs_input_data_t *input, int num_tuples, int ds_inx);
-extern int fcbs_reset_cmd_dat_ptrs(int ds_inx);
+extern int fcbs_reset_cmd_dat_ptrs(int ds_inx, uint32 cmd_ptr, uint32 data_ptr);
 
 #endif	/* _ULP_FCBS_H_ */

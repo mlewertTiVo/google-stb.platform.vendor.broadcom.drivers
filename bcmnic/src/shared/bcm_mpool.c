@@ -27,7 +27,19 @@
 #include <event_log.h>
 #endif
 
+#if defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG)
+
+#if defined(ERR_USE_EVENT_LOG_RA)
+#define	MPOOL_ERROR(args)	EVENT_LOG_RA(EVENT_LOG_TAG_MPOOL_ERROR, args)
+#else
+#define	MPOOL_ERROR(args)	EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_MPOOL_ERROR, args)
+#endif /* ERR_USE_EVENT_LOG_RA */
+
+#elif defined(BCMDBG_ERR) || defined(BCMDBG)
+#define MPOOL_ERROR(args)	printf args
+#else
 #define MPOOL_ERROR(args)
+#endif /* defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG) */
 
 
 static int create_pool(bcm_mpm_mgr_h mgr,
@@ -499,6 +511,29 @@ int bcm_mpm_stats(bcm_mpm_mgr_h mgr, bcm_mp_stats_t *stats, int *nentries)
  */
 int bcm_mpm_dump(bcm_mpm_mgr_h mgr, struct bcmstrbuf *b)
 {
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	bcm_mp_pool_t  *pool;
+	uint16         i;
+
+	/* Check parameters */
+	ASSERT(mgr != NULL);
+	ASSERT(b != NULL);
+
+	/* Iterate list of pools, and dump. */
+	bcm_bprintf(b, "\nDump pools (%d):\n", mgr->npools);
+	bcm_bprintf(b, "%-8s %10s %5s %5s %5s %5s %6s %5s  %5s %10s %10s\n", "Name",
+	            "Hdl", "SZ", "Curr", "HiWtr", "Fail", "Flags", "P_SZ", "Max",
+	            "Freep", "Malloc");
+
+	for (i = 0; i < mgr->max_pools; i++) {
+		pool = &mgr->pool_objs[i];
+		if (BCM_MP_IS_IN_USE(pool)) {
+			bcm_mp_dump(pool, b);
+		}
+	}
+
+
+#endif   /* BCMDBG || BCMDBG_DUMP */
 	return (BCME_OK);
 }
 
@@ -693,6 +728,25 @@ void bcm_mp_stats(bcm_mp_pool_h pool, bcm_mp_stats_t *stats)
  */
 int bcm_mp_dump(bcm_mp_pool_h pool, struct bcmstrbuf *b)
 {
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* Check parameters */
+	ASSERT(pool != NULL);
+	ASSERT(b != NULL);
+
+	bcm_bprintf(b, "%-8s 0x%08p %5d %5d %5d %5d 0x%04d", pool->name,
+		OSL_OBFUSCATE_BUF(pool), pool->objsz, pool->num_alloc,
+		pool->high_water, pool->failed_alloc, pool->flags);
+
+	if (BCM_MP_GET_POOL_TYPE(pool) == BCM_MP_TYPE_PREALLOC) {
+		bcm_mp_prealloc_pool_t *prealloc = &pool->u.p;
+
+		bcm_bprintf(b, " %5d %5d 0x%08p 0x%08p", prealloc->padded_objsz,
+		            prealloc->nobj, OSL_OBFUSCATE_BUF(prealloc->free_objp),
+				OSL_OBFUSCATE_BUF(prealloc->malloc_memstart));
+	}
+	bcm_bprintf(b, "\n");
+
+#endif   /* BCMDBG || BCMDBG_DUMP */
 
 	return (BCME_OK);
 }

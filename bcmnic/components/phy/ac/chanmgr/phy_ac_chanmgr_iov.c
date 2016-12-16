@@ -12,22 +12,31 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_chanmgr_iov.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_ac_chanmgr_iov.c 663404 2016-10-05 07:00:28Z $
  */
 
 #include <phy_ac_chanmgr_iov.h>
 #include <phy_ac_chanmgr.h>
 #include <wlc_iocv_reg.h>
+#include <phy_ac_info.h>
 
 /* iovar ids */
 enum {
 	IOV_PHY_CLBPRIO_2G = 1,
-	IOV_PHY_CLBPRIO_5G = 2
+	IOV_PHY_CLBPRIO_5G = 2,
+	IOV_PHYMODE = 3,
+	IOV_SC_CHAN = 4,
+	IOV_PHY_VCORE = 5
 };
 
 static const bcm_iovar_t phy_ac_chanmgr_iovars[] = {
 	{"phy_clbprio2g", IOV_PHY_CLBPRIO_2G, 0, 0, IOVT_INT32, 0},
 	{"phy_clbprio5g", IOV_PHY_CLBPRIO_5G, 0, 0, IOVT_INT32, 0},
+#if defined(BCMDBG)
+	{"phymode", IOV_PHYMODE, 0, 0, IOVT_UINT16, 0},
+	{"sc_chan", IOV_SC_CHAN, 0, 0, IOVT_UINT16, 0},
+#endif 
+	{"phy_vcore", IOV_PHY_VCORE, 0, 0, IOVT_UINT16, 0},
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -41,6 +50,8 @@ phy_ac_chanmgr_doiovar(void *ctx, uint32 aid,
 	int32 int_val = 0;
 	int err = BCME_OK;
 	int32 *ret_int_ptr = (int32 *)a;
+	phy_ac_chanmgr_info_t *chanmgri = pi->u.pi_acphy->chanmgri;
+	BCM_REFERENCE(chanmgri);
 
 	if (plen >= (uint)sizeof(int_val))
 		bcopy(p, &int_val, sizeof(int_val));
@@ -58,6 +69,30 @@ phy_ac_chanmgr_doiovar(void *ctx, uint32 aid,
 		case IOV_SVAL(IOV_PHY_CLBPRIO_5G):
 			*ret_int_ptr = wlc_phy_femctrl_clb_prio_5g_acphy(pi, TRUE, int_val);
 			break;
+#if defined(BCMDBG)
+#if ACCONF || ACCONF2
+		case IOV_GVAL(IOV_PHYMODE): {
+			err = phy_ac_chanmgr_get_val_phymode(chanmgri, ret_int_ptr);
+			break;
+		}
+		case IOV_SVAL(IOV_PHYMODE): {
+			err = phy_ac_chanmgr_set_val_phymode(chanmgri, int_val);
+			break;
+		}
+		case IOV_GVAL(IOV_SC_CHAN): {
+			err = phy_ac_chanmgr_get_val_sc_chspec(chanmgri, ret_int_ptr);
+			break;
+		}
+		case IOV_SVAL(IOV_SC_CHAN): {
+			err = phy_ac_chanmgr_set_val_sc_chspec(chanmgri, int_val);
+			break;
+		}
+		case IOV_GVAL(IOV_PHY_VCORE): {
+			err = phy_ac_chanmgr_get_val_phy_vcore(chanmgri, ret_int_ptr);
+			break;
+		}
+#endif /* ACCONF || ACCONF2 */
+#endif 
 
 		default:
 			err = BCME_UNSUPPORTED;

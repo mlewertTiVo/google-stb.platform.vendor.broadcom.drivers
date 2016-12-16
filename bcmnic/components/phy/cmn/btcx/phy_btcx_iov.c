@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_btcx_iov.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_btcx_iov.c 642720 2016-06-09 18:56:12Z $
  */
 
 #include <phy_btcx_iov.h>
@@ -30,12 +30,6 @@ enum {
 
 static const bcm_iovar_t phy_btcx_iovars[] = {
 	{"phy_btc_restage_rxgain", IOV_PHY_BTC_RESTAGE_RXGAIN, IOVF_SET_UP, 0, IOVT_UINT32, 0},
-#if (!defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX) && defined(BCMINTERNAL))
-	{"phy_ltecx_mode", IOV_PHY_LTECX_MODE, IOVF_SET_UP, 0, IOVT_INT32, 0},
-#endif /* !defined (WLC_DISABLE_ACI) && defined (BCMLTECOEX) && defined (BCMINTERNAL) */
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	{"phy_btc_preempt_status", IOV_PHY_BTC_PREEMPT_STATUS, 0, 0, IOVT_INT8, 0},
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 #if !defined(WLC_DISABLE_ACI) && defined(BCMDBG)
 	{"phy_btcoex_desense", IOV_PHY_BTCOEX_DESENSE, IOVF_SET_UP, 0, IOVT_INT32, 0},
 #endif /* !defined(WLC_DISABLE_ACI) && defined(BCMDBG) */
@@ -66,16 +60,6 @@ phy_btcx_doiovar(void *ctx, uint32 aid,
 	case IOV_SVAL(IOV_PHY_BTC_RESTAGE_RXGAIN):
 		err = wlc_phy_iovar_set_btc_restage_rxgain(pi->btcxi, int_val);
 		break;
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	case IOV_GVAL(IOV_PHY_BTC_PREEMPT_STATUS):
-		err = phy_btcx_get_preemptstatus(pi, ret_int_ptr);
-		break;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-#if (!defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX) && defined(BCMINTERNAL))
-	case IOV_SVAL(IOV_PHY_LTECX_MODE):
-		err = phy_btcx_desense_ltecx(pi, int_val);
-		break;
-#endif /* !defined (WLC_DISABLE_ACI) && defined (BCMLTECOEX) && defined (BCMINTERNAL) */
 #if !defined(WLC_DISABLE_ACI) && defined(BCMDBG)
 	case IOV_SVAL(IOV_PHY_BTCOEX_DESENSE):
 	{

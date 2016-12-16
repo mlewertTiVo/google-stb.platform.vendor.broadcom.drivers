@@ -21,9 +21,10 @@
 #include <bcmiov.h>
 #include <proto/mbo.h>
 
+/* from bcmiov.h: non-batched command version = major|minor w/ major <= 127 */
 #define WL_MBO_IOV_MAJOR_VER 1
 #define WL_MBO_IOV_MINOR_VER 1
-#define WL_MBO_IOV_MAJOR_VER_SHIFT 12
+#define WL_MBO_IOV_MAJOR_VER_SHIFT 8
 #define WL_MBO_IOV_VERSION \
 	((WL_MBO_IOV_MAJOR_VER << WL_MBO_IOV_MAJOR_VER_SHIFT)| WL_MBO_IOV_MINOR_VER)
 
@@ -55,6 +56,8 @@ static subcmd_handler_t wl_mbo_sub_cmd_list_chan_pref;
 static subcmd_handler_t wl_mbo_sub_cmd_cell_data_cap;
 static subcmd_handler_t wl_mbo_sub_cmd_dump_counters;
 static subcmd_handler_t wl_mbo_sub_cmd_clear_counters;
+static subcmd_handler_t wl_mbo_sub_cmd_force_assoc;
+static subcmd_handler_t wl_mbo_sub_cmd_bsstrans_reject;
 
 /* help handlers */
 static help_handler_t wl_mbo_add_chan_pref_help_fn;
@@ -63,6 +66,8 @@ static help_handler_t wl_mbo_list_chan_pref_help_fn;
 static help_handler_t wl_mbo_cell_data_cap_help_fn;
 static help_handler_t wl_mbo_counters_help_fn;
 static help_handler_t wl_mbo_clear_counters_help_fn;
+static help_handler_t wl_mbo_force_assoc_help_fn;
+static help_handler_t wl_mbo_bsstrans_reject_help_fn;
 
 #define WL_MBO_CMD_ALL 0
 static const wl_mbo_sub_cmd_t mbo_subcmd_lists[] = {
@@ -90,6 +95,16 @@ static const wl_mbo_sub_cmd_t mbo_subcmd_lists[] = {
 	IOVT_BUFFER, wl_mbo_sub_cmd_clear_counters,
 	wl_mbo_clear_counters_help_fn
 	},
+#ifdef WL_MBO_WFA_CERT
+	{ "force_assoc", 0x1, WL_MBO_CMD_FORCE_ASSOC,
+	IOVT_BUFFER, wl_mbo_sub_cmd_force_assoc,
+	wl_mbo_force_assoc_help_fn
+	},
+	{ "bsstrans_reject", 0x1, WL_MBO_CMD_BSSTRANS_REJECT,
+	IOVT_BUFFER, wl_mbo_sub_cmd_bsstrans_reject,
+	wl_mbo_bsstrans_reject_help_fn
+	},
+#endif /* WL_MBO_WFA_CERT */
 	{ NULL, 0, 0, 0, NULL, NULL }
 };
 
@@ -104,7 +119,7 @@ wl_mbo_usage(int cmd_id)
 {
 	const wl_mbo_sub_cmd_t *subcmd = &mbo_subcmd_lists[0];
 
-	if (cmd_id > WL_MBO_CMD_LAST) {
+	if (cmd_id > (WL_MBO_CMD_LAST - 1)) {
 		return;
 	}
 	while (subcmd->name) {
@@ -644,3 +659,217 @@ wl_mbo_clear_counters_help_fn(void)
 {
 	printf("wl mbo clear_counters\n");
 }
+
+#ifdef WL_MBO_WFA_CERT
+static int
+wl_mbo_force_assoc_cbfn(void *ctx, const uint8 *data, uint16 type, uint16 len)
+{
+	UNUSED_PARAMETER(ctx);
+	UNUSED_PARAMETER(len);
+	if (data == NULL) {
+		printf("%s: Bad argument !!\n", __FUNCTION__);
+		return BCME_BADARG;
+	}
+	switch (type) {
+		case WL_MBO_XTLV_ENABLE:
+			printf("Force association: %s\n", (*data == 0) ? "disabled" : "enabled");
+			break;
+		default:
+			printf("%s: Unknown tlv %u\n", __FUNCTION__, type);
+	}
+	return BCME_OK;
+}
+
+static int
+wl_mbo_sub_cmd_force_assoc(void *wl, const wl_mbo_sub_cmd_t *cmd, char **argv)
+{
+	int ret = BCME_OK;
+	bcm_iov_buf_t *iov_buf = NULL;
+	uint8 *pxtlv = NULL;
+	uint16 buflen = 0, buflen_start = 0;
+	char *param = NULL, *val_p = NULL;
+	uint16 iovlen = 0;
+
+	/* get */
+	if (*argv == NULL) {
+		ret = wl_mbo_get_iov_resp(wl, cmd, wl_mbo_force_assoc_cbfn);
+	} else {
+		iov_buf = (bcm_iov_buf_t *)calloc(1, WLC_IOCTL_MEDLEN);
+		if (iov_buf == NULL) {
+			ret = BCME_NOMEM;
+			goto fail;
+		}
+		/* fill header */
+		iov_buf->version = WL_MBO_IOV_VERSION;
+		iov_buf->id = cmd->cmd_id;
+
+		pxtlv = (uint8 *)&iov_buf->data[0];
+		param = *argv++;
+		if (strcmp(param, "-e") == 0) {
+			val_p = *argv;
+			if (val_p == NULL || *val_p == '-') {
+				wl_mbo_usage(WL_MBO_CMD_FORCE_ASSOC);
+				ret = BCME_USAGE_ERROR;
+				goto fail;
+			}
+			uint8 force = strtoul(val_p, NULL, 0);
+			if ((force != 0) && (force != 1)) {
+				fprintf(stderr, "wrong value %u\n", force);
+				ret = BCME_BADARG;
+				goto fail;
+			}
+			buflen = buflen_start = WLC_IOCTL_MEDLEN - sizeof(bcm_iov_buf_t);
+			ret = bcm_pack_xtlv_entry(&pxtlv, &buflen, WL_MBO_XTLV_ENABLE,
+				sizeof(force), &force, BCM_XTLV_OPTION_ALIGN32);
+			if (ret != BCME_OK) {
+				goto fail;
+			}
+		} else {
+			fprintf(stderr, "wrong parameter %s\n", param);
+			wl_mbo_usage(WL_MBO_CMD_FORCE_ASSOC);
+			ret = BCME_USAGE_ERROR;
+			goto fail;
+		}
+		iov_buf->len = buflen_start - buflen;
+		iovlen = sizeof(bcm_iov_buf_t) + iov_buf->len;
+		ret = wlu_var_setbuf(wl, "mbo", (void *)iov_buf, iovlen);
+	}
+fail:
+	if (iov_buf) {
+		free(iov_buf);
+	}
+	return ret;
+}
+
+static void
+wl_mbo_force_assoc_help_fn(void)
+{
+	printf("wl mbo force_assoc -e <value>\n");
+	printf("\tvalue: Enable/disable assoc attempt even if "
+		"association disallowed by AP <1/0>\n");
+	printf("\t\t 1 = Enable force association attempt when "
+		"AP is not accepting new connection\n");
+	printf("\t\t 0 = disable force association attempt\n");
+}
+
+static int
+wl_mbo_bsstrans_reject_cbfn(void *ctx, const uint8 *data, uint16 type, uint16 len)
+{
+	UNUSED_PARAMETER(ctx);
+	UNUSED_PARAMETER(len);
+	if (data == NULL) {
+		printf("%s: Bad argument !!\n", __FUNCTION__);
+		return BCME_BADARG;
+	}
+	switch (type) {
+		case WL_MBO_XTLV_ENABLE:
+			printf("Bss Transition Reject: %s\n",
+				(*data == 0) ? "disabled" : "enabled");
+			break;
+		case WL_MBO_XTLV_REASON_CODE:
+			printf("Reason Code: %u\n", *data);
+			break;
+		default:
+			printf("%s: Unknown tlv %u\n", __FUNCTION__, type);
+	}
+	return BCME_OK;
+}
+
+static int
+wl_mbo_sub_cmd_bsstrans_reject(void *wl, const wl_mbo_sub_cmd_t *cmd, char **argv)
+{
+	int ret = BCME_OK;
+	bcm_iov_buf_t *iov_buf = NULL;
+	uint8 *pxtlv = NULL;
+	uint16 buflen = 0, buflen_start = 0;
+	char *param = NULL, *val_p = NULL;
+	uint16 iovlen = 0;
+	bool reason_set = FALSE;
+	uint8 enable = 0;
+
+	/* get */
+	if (*argv == NULL) {
+		ret = wl_mbo_get_iov_resp(wl, cmd, wl_mbo_bsstrans_reject_cbfn);
+	} else {
+		iov_buf = (bcm_iov_buf_t *)calloc(1, WLC_IOCTL_MEDLEN);
+		if (iov_buf == NULL) {
+			return BCME_NOMEM;
+		}
+		/* fill header */
+		iov_buf->version = WL_MBO_IOV_VERSION;
+		iov_buf->id = cmd->cmd_id;
+
+		pxtlv = (uint8 *)&iov_buf->data[0];
+		buflen = buflen_start = WLC_IOCTL_MEDLEN - sizeof(bcm_iov_buf_t);
+
+		/* parse and pack config parameters */
+		while ((param = *argv++)) {
+			val_p = *argv++;
+			if (!val_p || *val_p == '-') {
+				fprintf(stderr, "%s: wrong usage %s\n", __FUNCTION__, param);
+				wl_mbo_usage(WL_MBO_CMD_BSSTRANS_REJECT);
+				ret = BCME_USAGE_ERROR;
+				goto fail;
+			}
+			if (strcmp(param, "-e") == 0) {
+				enable = strtoul(val_p, NULL, 0);
+				if ((enable != 0) && (enable != 1)) {
+					fprintf(stderr, "wrong value %u\n", enable);
+					ret = BCME_BADARG;
+					goto fail;
+				}
+				ret = bcm_pack_xtlv_entry(&pxtlv, &buflen, WL_MBO_XTLV_ENABLE,
+						sizeof(enable), &enable, BCM_XTLV_OPTION_ALIGN32);
+				if (ret != BCME_OK) {
+					goto fail;
+				}
+			} else if (strcmp(param, "-r") == 0) {
+				uint8 reason = strtoul(val_p, NULL, 0);
+				if (reason > MBO_TRANS_REJ_REASON_SERVICE_UNAVAIL) {
+					fprintf(stderr, "wrong reason value %u\n", reason);
+					ret = BCME_BADARG;
+					goto fail;
+				}
+				reason_set = TRUE;
+				ret = bcm_pack_xtlv_entry(&pxtlv, &buflen, WL_MBO_XTLV_REASON_CODE,
+						sizeof(reason), &reason, BCM_XTLV_OPTION_ALIGN32);
+				if (ret != BCME_OK) {
+					goto fail;
+				}
+			} else {
+				fprintf(stderr, "Unknown param %s\n", param);
+			}
+		}
+		if ((enable && reason_set) || (!enable)) {
+			iov_buf->len = buflen_start - buflen;
+			iovlen = sizeof(bcm_iov_buf_t) + iov_buf->len;
+			ret = wlu_var_setbuf(wl, "mbo", (void *)iov_buf, iovlen);
+		} else {
+			wl_mbo_usage(WL_MBO_CMD_BSSTRANS_REJECT);
+			ret = BCME_USAGE_ERROR;
+		}
+	}
+fail:
+	if (iov_buf) {
+		free(iov_buf);
+	}
+	return ret;
+}
+
+static void
+wl_mbo_bsstrans_reject_help_fn(void)
+{
+	printf("wl mbo bsstrans_reject -e <value> -r <reason>\n");
+	printf("\tvalue: Enable/Disable bsstrans rejection <1/0>\n");
+	printf("\t\t 1 = Enable bsstrans rejection\n");
+	printf("\t\t 0 = Disable bsstrans rejection\n");
+	printf("\treason: reason code for rejection <0-6>\n");
+	printf("\t\t 0 = Unspecified reason\n");
+	printf("\t\t 1 = Excessive frame loss expected on transition\n");
+	printf("\t\t 2 = Excessive delay for current traffic stream on transition\n");
+	printf("\t\t 3 = Insufficient QoS capacity expected on transition\n");
+	printf("\t\t 4 = Low RSSI observed on suggested BSS\n");
+	printf("\t\t 5 = High interference observed on suggested BSS\n");
+	printf("\t\t 6 = Service unavailability on suggested BSS\n");
+}
+#endif /* WL_MBO_WFA_CERT */

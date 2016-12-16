@@ -192,6 +192,9 @@ extern int bcm_rpc_tp_recv_rtn(rpc_tp_info_t *rpcb);
 extern int bcm_rpc_tp_get_device_speed(rpc_tp_info_t *rpc_th);
 extern void bcm_rpc_tp_get_vidpid(rpc_tp_info_t *rpc_th, uint16 *dnglvid, uint16 *dnglpid);
 extern void* bcm_rpc_tp_get_devinfo(rpc_tp_info_t *rpc_th);
+#ifdef BCMDBG
+extern int bcm_rpc_tp_dump(rpc_tp_info_t *rpcb, struct bcmstrbuf *b);
+#endif
 #endif	/* WLC_HIGH */
 #if defined(WLC_HIGH) || defined(BCM_FD_AGGR)
 extern int bcm_rpc_tp_set_config(rpc_tp_info_t *rpc_th, void *config);

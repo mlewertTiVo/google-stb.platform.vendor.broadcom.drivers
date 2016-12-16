@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_shim.h 633968 2016-04-26 09:01:47Z $
+ * $Id: wlc_phy_shim.h 664238 2016-10-11 18:43:00Z $
  */
 
 #ifndef _wlc_phy_shim_h_
@@ -42,6 +42,9 @@
 #define ANT_RX_DIV_DEF		ANT_RX_DIV_START_0	/**< default antdiv setting */
 #define DUALMAC_MAIN	1
 #define DUALMAC_AUX	2
+
+#define TOF_CLASSIFIER_BPHY_OFF_OFDM_ON 6
+#define TOF_CLASSIFIER_BPHY_ON_OFDM_ON 7
 
 /* Forward declarations */
 struct wlc_hw_info;
@@ -72,10 +75,20 @@ extern void wlapi_intrsrestore(wlc_phy_shim_info_t *physhim, uint32 macintmask);
 
 extern void wlapi_bmac_write_shm(wlc_phy_shim_info_t *physhim, uint offset, uint16 v);
 extern uint16 wlapi_bmac_read_shm(wlc_phy_shim_info_t *physhim, uint offset);
+extern void wlapi_btc_hflg(wlc_phy_shim_info_t *physhim, bool set, uint16 val);
+
+#if defined(WL_PSMX)
+extern uint16 wlapi_bmac_read_shmx(wlc_phy_shim_info_t *physhim, uint offset);
+extern void wlapi_bmac_write_shmx(wlc_phy_shim_info_t *physhim, uint offset, uint16 v);
+#endif /* WL_PSMX */
 extern void wlapi_bmac_mhf(wlc_phy_shim_info_t *physhim, uint8 idx, uint16 mask, uint16 val,
 	int bands);
+extern uint16 wlapi_bmac_mhf_get(wlc_phy_shim_info_t *physhim, uint8 idx, int bands);
 extern void wlapi_bmac_corereset(wlc_phy_shim_info_t *physhim, uint32 flags);
 extern void wlapi_suspend_mac_and_wait(wlc_phy_shim_info_t *physhim);
+#ifdef STA
+extern void wlapi_mimops_pmbcnrx(wlc_phy_shim_info_t *physhim);
+#endif /* STA */
 extern void wlapi_switch_macfreq(wlc_phy_shim_info_t *physhim, uint8 spurmode);
 #ifdef WLSRVSDB
 extern void wlapi_tsf_adjust(wlc_phy_shim_info_t * physhim, uint32 delta);
@@ -108,6 +121,11 @@ extern int wlapi_bmac_btc_mode_get(wlc_phy_shim_info_t *physhim);
 extern void wlapi_bmac_btc_period_get(wlc_phy_shim_info_t *physhim, uint16 *btperiod,
 	bool *btactive);
 extern void wlapi_high_update_txppr_offset(wlc_phy_shim_info_t *physhim, ppr_t *txpwr);
+
+#ifdef WL_MUPKTENG
+extern uint8 wlapi_is_mutx_pkteng_on(wlc_phy_shim_info_t *physhim);
+#endif
+
 extern void wlapi_update_bt_chanspec(wlc_phy_shim_info_t *physhim,
 	chanspec_t chanspec, bool scan_in_progress,
 	bool roam_in_progress);
@@ -137,11 +155,12 @@ extern uint wlapi_si_coreunit(wlc_phy_shim_info_t *physhim);
 extern void wlapi_exclusive_reg_access_core0(wlc_phy_shim_info_t *physhim, bool set);
 extern void wlapi_exclusive_reg_access_core1(wlc_phy_shim_info_t *physhim, bool set);
 
-#ifdef WL_PROXDETECT
+/* #ifdef WL_PROXDETECT */
 void wlapi_fft(wlc_phy_shim_info_t *physhim, int n, void *inBuf, void *outBuf, int oversamp);
 int wlapi_tof_pdp_ts(int log2n, void* pIn, int FsMHz, int rx, void* pparams,
-	int32* p_ts_thresh, int32* p_thresh_adj);
-#endif
+	int32* p_ts_thresh, int32* p_thresh_adj, wl_proxd_phy_error_t* tof_phy_error);
+extern void wlapi_tof_retrieve_thresh(void* pparams, uint16* bitflip_thresh, uint16* snr_thresh);
+/* #endif */
 
 void wlapi_11n_proprietary_rates_enable(wlc_phy_shim_info_t *physhim, bool enable);
 bool wlapi_txbf_enab(wlc_phy_shim_info_t *physhim);
@@ -167,5 +186,8 @@ extern uint8 wlapi_swdiv_get_default_ant(wlc_phy_shim_info_t *physhim, int corei
 extern int32 wlapi_swdiv_ant_plcy_override(wlc_phy_shim_info_t *physhim,
 	uint core, uint8 rxovr, uint8 txovr, uint8 cellon_ovr, uint8 celloff_ovr);
 #endif
+
+extern int wlapi_wlc_ioctl(wlc_phy_shim_info_t *physhim, int cmd, void *arg, int size,
+	struct wlc_if *wlcif);
 
 #endif	/* _wlc_phy_shim_h_ */

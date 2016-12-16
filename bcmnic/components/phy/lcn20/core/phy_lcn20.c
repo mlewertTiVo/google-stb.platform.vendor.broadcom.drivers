@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_lcn20.c 662291 2016-09-29 02:58:11Z $
  */
 
 #include <typedefs.h>
@@ -52,18 +52,17 @@
 /* TODO: all these are going away... > */
 #endif
 
-#define PHY_TXPWR_MIN_lcn20PHY	9	/* for lcn20phy devices */
+#include <phy_lcn20_tssical.h>
 
 /* local functions */
 static int phy_lcn20_attach_ext(phy_info_t *pi, int bandtype);
 static int phy_lcn20_register_impl(phy_info_t *pi, phy_type_info_t *ti, int bandtype);
 static void phy_lcn20_unregister_impl(phy_info_t *pi, phy_type_info_t *ti);
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 static int phy_lcn20_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b);
 #else
 #define	phy_lcn20_dump_phyregs	NULL
-#endif /* (BCMINTERNAL || DBG_PHY_IOV) && (BCMDBG || BCMDBG_DUMP) */
+#endif 
 
 /* attach/detach */
 phy_type_info_t *
@@ -132,13 +131,9 @@ BCMATTACHFN(phy_lcn20_attach_ext)(phy_info_t *pi, int bandtype)
 {
 	PHY_TRACE(("%s: band %d\n", __FUNCTION__, bandtype));
 
-	pi->min_txpower = PHY_TXPWR_MIN_lcn20PHY;
-
-	if (CHIPID(pi->sh->chip) != BCM43143_CHIP_ID)
-		pi->tx_pwr_backoff = (int8)PHY_GETINTVAR_DEFAULT(pi, rstr_txpwrbckof, 4);
-
-	pi->rssi_corr_boardatten =
-		(int8)PHY_GETINTVAR_DEFAULT(pi, rstr_rssicorratten, 0);
+	pi->min_txpower = LCN20PHY_TXPWR_MIN;
+	pi->tx_pwr_backoff = (int8)PHY_GETINTVAR_DEFAULT(pi, rstr_txpwrbckof, 4);
+	pi->rssi_corr_boardatten = (int8)PHY_GETINTVAR_DEFAULT(pi, rstr_rssicorratten, 0);
 
 	if (CHIPREV(pi->sh->chiprev) == 0)
 			pi->ldpc_en = (uint8)PHY_GETINTVAR_DEFAULT(pi, rstr_ldpc, 0);
@@ -227,14 +222,16 @@ BCMATTACHFN(phy_lcn20_register_impl)(phy_info_t *pi, phy_type_info_t *ti, int ba
 
 	/* Register with Channel Manager module */
 	if (pi->chanmgri != NULL &&
-		(lcn20i->chanmgri = phy_lcn20_chanmgr_register_impl(pi, lcn20i, pi->chanmgri)) == NULL) {
+		(lcn20i->chanmgri = phy_lcn20_chanmgr_register_impl(pi, lcn20i, pi->chanmgri)) ==
+		NULL) {
 		PHY_ERROR(("%s: phy_lcn20_chanmgr_register_impl failed\n", __FUNCTION__));
 		goto fail;
 	}
 
 	/* Register with TXIQLO CAL module */
 	if (pi->txiqlocali != NULL &&
-		(lcn20i->txiqlocali = phy_lcn20_txiqlocal_register_impl(pi, lcn20i, pi->txiqlocali)) == NULL) {
+		(lcn20i->txiqlocali = phy_lcn20_txiqlocal_register_impl(pi, lcn20i,
+		pi->txiqlocali)) ==	NULL) {
 		PHY_ERROR(("%s: phy_lcn20_txiqlocal_register_impl failed\n", __FUNCTION__));
 		goto fail;
 	}
@@ -250,6 +247,14 @@ BCMATTACHFN(phy_lcn20_register_impl)(phy_info_t *pi, phy_type_info_t *ti, int ba
 	if (pi->rxspuri != NULL &&
 	    (lcn20i->rxspuri = phy_lcn20_rxspur_register_impl(pi, lcn20i, pi->rxspuri)) == NULL) {
 		PHY_ERROR(("%s: phy_lcn20_rxspur_register_impl failed\n", __FUNCTION__));
+		goto fail;
+	}
+
+	/* Register the tssi cal module. */
+	if (pi->tssicali != NULL &&
+			(lcn20i->tssicali = phy_lcn20_tssical_register_impl(pi, lcn20i,
+			pi->tssicali)) == NULL) {
+		PHY_ERROR(("%s: phy_lcn20_tssical_register_impl failed\n", __FUNCTION__));
 		goto fail;
 	}
 
@@ -270,6 +275,10 @@ BCMATTACHFN(phy_lcn20_unregister_impl)(phy_info_t *pi, phy_type_info_t *ti)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	/* ...Add your module registration here... */
+
+	/* Unregister from tssical module */
+	if (lcn20i->tssicali != NULL)
+		phy_lcn20_tssical_unregister_impl(lcn20i->tssicali);
 
 	/* Unregister from Rx Spur canceller module */
 	if (lcn20i->rxspuri != NULL)
@@ -328,7 +337,7 @@ BCMATTACHFN(phy_lcn20_unregister_impl)(phy_info_t *pi, phy_type_info_t *ti)
 }
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 static phy_regs_t lcn20phy3_regs[] = {
 	{ 0x000,	0x002 },	/* 0x000 - 0x001 */
 	{ 0x004,	0x002 },	/* 0x004 - 0x005 */
@@ -436,5 +445,5 @@ phy_lcn20_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b)
 
 	return BCME_OK;
 }
-#endif /* BCMINTERNAL || DBG_PHY_IOV */
+#endif 
 #endif /* BCMDBG || BCMDBG_DUMP */

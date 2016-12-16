@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_hw.c 636173 2016-05-06 16:52:06Z $
+ * $Id: wlc_hw.c 664202 2016-10-11 06:13:22Z $
  */
 
 #include <wlc_cfg.h>
@@ -36,6 +36,9 @@
 #include <wlc_dump.h>
 
 /* local functions */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_hw_dump(void *ctx, struct bcmstrbuf *b);
+#endif /* BCMDBG_DUMP */
 
 wlc_hw_info_t *
 BCMATTACHFN(wlc_hw_attach)(wlc_info_t *wlc, osl_t *osh, uint unit, uint *err, uint macunit)
@@ -93,7 +96,7 @@ BCMATTACHFN(wlc_hw_attach)(wlc_info_t *wlc, osl_t *osh, uint unit, uint *err, ui
 	}
 
 #ifdef PKTENG_TXREQ_CACHE
-	if ((wlc_hw->pkteng_cache = MALLOCZ_PERSIST(osh,
+	if ((wlc_hw->pkteng_cache = MALLOCZ(osh,
 		sizeof(struct wl_pkteng_cache))) == NULL) {
 		*err = 1014;
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes for pub\n",
@@ -102,6 +105,14 @@ BCMATTACHFN(wlc_hw_attach)(wlc_info_t *wlc, osl_t *osh, uint unit, uint *err, ui
 	}
 #endif /* PKTENG_TXREQ_CACHE */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	if (wlc_dump_register(wlc->pub, "hw", wlc_hw_dump, wlc_hw) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+		          unit, __FUNCTION__));
+		*err = 1014;
+		goto fail;
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	if ((wlc_hw->txavail = MALLOCZ(osh, (NFIFO_EXT*sizeof(*wlc_hw->txavail)))) == NULL) {
 		*err = 1015;
@@ -255,6 +266,14 @@ wlc_skip_adjtsf(wlc_info_t *wlc, bool skip, wlc_bsscfg_t *cfg, uint32 user, int 
 	else
 		clrbit(&wlc_hw->skip_adjtsf, b);
 
+#ifdef BCMDBG
+	if (cfg != NULL)
+		WL_NONE(("wl%d.%d: wlc->skip_adjtsf 0x%x (skip %d)\n",
+		         wlc->pub->unit, WLC_BSSCFG_IDX(cfg), wlc_hw->skip_adjtsf, skip));
+	else
+		WL_NONE(("wl%d: wlc->skip_adjtsf 0x%x (user %d skip %d)\n",
+		         wlc->pub->unit, wlc_hw->skip_adjtsf, user, skip));
+#endif
 
 	wlc_bmac_mhf(wlc_hw, MHF2, MHF2_SKIP_ADJTSF,
 	        wlc_hw->skip_adjtsf ? MHF2_SKIP_ADJTSF : 0, bands);
@@ -320,3 +339,22 @@ wlc_ap_mute(wlc_info_t *wlc, bool mute, wlc_bsscfg_t *cfg, uint32 user)
 	wlc_bmac_mctrl(wlc_hw, MCTL_AP, ap ? MCTL_AP : 0);
 }
 #endif /* AP */
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_hw_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_hw_info_t *wlc_hw = (wlc_hw_info_t *)ctx;
+
+	bcm_bprintf(b, "defmacintmask 0x%08x macintmask 0x%08x\n",
+	            wlc_hw->defmacintmask, wlc_hw->macintmask);
+	bcm_bprintf(b, "forcefastclk %d wake_override 0x%x\n",
+	            wlc_hw->forcefastclk, wlc_hw->wake_override);
+	bcm_bprintf(b, "fastpwrup_dly %d\n", wlc_hw->fastpwrup_dly);
+
+	bcm_bprintf(b, "skipadjtsf 0x%08x muteap 0x%08x\n", wlc_hw->skip_adjtsf, wlc_hw->mute_ap);
+	bcm_bprintf(b, "p2p: %d\n", wlc_hw->_p2p);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */

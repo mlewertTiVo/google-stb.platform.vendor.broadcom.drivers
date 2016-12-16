@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linuxver.h 611524 2016-01-11 12:08:32Z $
+ * $Id: linuxver.h 646730 2016-06-30 13:01:49Z $
  */
 
 #ifndef _linuxver_h_
@@ -642,8 +642,6 @@ static inline bool binary_sema_up(tsk_ctl_t *tsk)
 	(tsk_ctl)->p_task  = kthread_run(thread_func, tsk_ctl, (char*)name); \
 	if (IS_ERR((tsk_ctl)->p_task)) { \
 		(tsk_ctl)->thr_pid = -1; \
-		(tsk_ctl)->terminated = TRUE; \
-		(tsk_ctl)->p_task = NULL; \
 		DBG_THR(("%s(): thread:%s create failed\n", __FUNCTION__, \
 			(tsk_ctl)->proc_name)); \
 	} else { \

@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_frmutil.h 536545 2015-02-23 16:19:03Z $
+ * $Id: wlc_frmutil.h 646393 2016-06-29 11:14:10Z $
 */
 #ifndef _WLC_FRMUTIL_H_
 #define _WLC_FRMUTIL_H_
@@ -52,6 +52,7 @@ struct wlc_frminfo {
 	uint16 seq;			/* sequence number in host endian */
 	wlc_d11rxhdr_t *wrxh;		/* pointer to rxhdr */
 	struct dot11_meshctrl_hdr *meshhdr;
+	uint8 phyrx_ft;			/* Frame type derived from PHY RXS */
 };
 
 #endif /* _WLC_FRMUTIL_H_ */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_btcx.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_btcx.c 665085 2016-10-14 21:48:42Z $
  */
 
 #include <phy_cfg.h>
@@ -31,6 +31,7 @@
 struct phy_btcx_priv_info {
 	phy_info_t *pi;
 	phy_type_btcx_fns_t	*fns; /* PHY specific function ptrs */
+	uint16	mhf1_cache;
 };
 
 /* module private states memory layout */
@@ -46,6 +47,8 @@ typedef struct {
 static bool phy_btcx_wd(phy_wd_ctx_t *ctx);
 static bool wlc_phy_btc_adjust(phy_wd_ctx_t *ctx);
 static int phy_btcx_init(phy_init_ctx_t *ctx);
+
+#define BTCX_WAIT_MAX_US 5000
 
 /* attach/detach */
 phy_btcx_info_t *
@@ -168,37 +171,7 @@ phy_btcx_is_btactive(phy_btcx_info_t *cmn_info)
 	return cmn_info->data->bt_active;
 }
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-int
-phy_btcx_get_preemptstatus(phy_info_t *pi, int32* ret_ptr)
-{
-	phy_type_btcx_fns_t *fns = pi->btcxi->priv->fns;
 
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->get_preemptstatus != NULL) {
-		return (fns->get_preemptstatus)(fns->ctx, ret_ptr);
-	} else {
-		return BCME_UNSUPPORTED;
-	}
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-
-#if (!defined(WLC_DISABLE_ACI) && defined(BCMLTECOEX) && defined(BCMINTERNAL))
-int
-phy_btcx_desense_ltecx(phy_info_t *pi, int32 mode)
-{
-	phy_type_btcx_fns_t *fns = pi->btcxi->priv->fns;
-
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->desense_ltecx != NULL) {
-		return (fns->desense_ltecx)(fns->ctx, mode);
-	} else {
-		return BCME_UNSUPPORTED;
-	}
-}
-#endif /* !defined (WLC_DISABLE_ACI) && defined (BCMLTECOEX) && defined (BCMINTERNAL) */
 
 #if !defined(WLC_DISABLE_ACI)
 int
@@ -244,6 +217,54 @@ wlc_phy_btc_adjust(phy_wd_ctx_t *ctx)
 	bi->data->bt_period = btperiod;
 	bi->data->bt_active = btactive;
 	return TRUE;
+}
+
+void
+phy_btcx_disable_arbiter(phy_btcx_info_t *bi)
+{
+	phy_info_t* pi = bi->priv->pi;
+
+	PHY_TRACE(("%s\n", __FUNCTION__));
+	ASSERT(!(R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC));
+	/* Enable manual BTCX mode */
+	OR_REG(pi->sh->osh, &pi->regs->PHYREF_BTCX_CTRL,
+		BTCX_CTRL_EN | BTCX_CTRL_SW);
+	/* Reenable WLAN priority, and then wait for BT to finish */
+	OR_REG(pi->sh->osh, &pi->regs->PHYREF_BTCX_TRANS_CTRL, BTCX_TRANS_TXCONF);
+	/* While RF_ACTIVE is asserted... */
+	SPINWAIT(R_REG(pi->sh->osh, &pi->regs->PHYREF_BTCX_STAT) & BTCX_STAT_RA,
+		BTCX_WAIT_MAX_US);
+
+	if (R_REG(pi->sh->osh, &pi->regs->PHYREF_BTCX_STAT) & BTCX_STAT_RA) {
+		PHY_INFORM(("wl%d: %s: BT still active ... overriding prisel\n",
+				pi->sh->unit, __FUNCTION__));
+	}
+	OR_REG(pi->sh->osh, &pi->regs->PHYREF_BTCX_TRANS_CTRL,
+		BTCX_TRANS_TXCONF | BTCX_TRANS_ANTSEL);
+
+	/* Cache the MHF state and disable BT coex */
+	bi->priv->mhf1_cache = wlapi_bmac_mhf_get(pi->sh->physhim, MHF1,
+		WLC_BAND_2G) & (MHF1_WLAN_CRITICAL | MHF1_BTCOEXIST);
+	wlapi_bmac_mhf(pi->sh->physhim, MHF1, MHF1_WLAN_CRITICAL | MHF1_BTCOEXIST,
+		MHF1_WLAN_CRITICAL, WLC_BAND_2G);
+}
+
+void
+phy_btcx_enable_arbiter(phy_btcx_info_t *bi)
+{
+	phy_info_t* pi = bi->priv->pi;
+
+	PHY_TRACE(("%s\n", __FUNCTION__));
+	ASSERT(!(R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC));
+	/* Enable manual BTCX mode */
+	OR_REG(pi->sh->osh, &pi->regs->PHYREF_BTCX_CTRL,
+		BTCX_CTRL_EN | BTCX_CTRL_SW);
+	/* Force BT priority */
+	AND_REG(pi->sh->osh, &pi->regs->PHYREF_BTCX_TRANS_CTRL,
+		~(BTCX_TRANS_TXCONF | BTCX_TRANS_ANTSEL));
+	/* Enable BT coex */
+	wlapi_bmac_mhf(pi->sh->physhim, MHF1, MHF1_WLAN_CRITICAL | MHF1_BTCOEXIST,
+		bi->priv->mhf1_cache, WLC_BAND_2G);
 }
 
 static void phy_btcx_override_enable_legacy(phy_info_t *pi)
@@ -383,6 +404,21 @@ wlc_phy_iovar_get_btc_restage_rxgain(phy_btcx_info_t *btcxi, int32 *ret_val)
 
 	if (fns->get_restage_rxgain != NULL) {
 		return (fns->get_restage_rxgain)(fns->ctx, ret_val);
+	} else {
+		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
+		return BCME_UNSUPPORTED;
+	}
+}
+
+int
+phy_btcx_set_mode(wlc_phy_t *ppi, int btc_mode)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_btcx_fns_t *fns = pi->btcxi->priv->fns;
+	PHY_TRACE(("%s\n", __FUNCTION__));
+
+	if (fns->mode_set != NULL) {
+		return (fns->mode_set)(fns->ctx, btc_mode);
 	} else {
 		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
 		return BCME_UNSUPPORTED;

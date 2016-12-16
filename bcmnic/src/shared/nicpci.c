@@ -65,7 +65,13 @@ typedef struct {
 } pcicore_info_t;
 
 /* debug/trace */
+#ifdef BCMDBG_ERR
+#if !defined(PCI_ERROR) /* allow over-riding */
+#define	PCI_ERROR(args)	printf args
+#endif
+#else
 #define	PCI_ERROR(args)
+#endif	/* BCMDBG_ERR */
 
 /* routines to access mdio slave device registers */
 static bool pcie_mdiosetblock(pcicore_info_t *pi,  uint blk);
@@ -621,13 +627,6 @@ pcie_ltrenable(void *pch, uint32 mask, uint32 val)
 		return 0;
 }
 
-/* JIRA:SWWLAN-28745
-    val and return value:
-	0  Disabled
-	1  Enable using Message signaling[Var A]
-	2  Enable using Message signaling[Var B]
-	3  Enable using WAKE# signaling
-*/
 uint8
 pcie_obffenable(void *pch, uint32 mask, uint32 val)
 {
@@ -1471,7 +1470,6 @@ pcie_set_L1substate(void *pch, uint32 substate)
 	/* PML1_sub_control1 can only be accessed by OSL_PCI_xxxx_CONFIG */
 	data = OSL_PCI_READ_CONFIG(pi->osh, PCIECFGREG_PML1_SUB_CTRL1, sizeof(uint32)) & 0xfffffff0;
 
-	/* JIRA:SWWLAN-28455 */
 	if (substate & 1)
 		data |= PCI_PM_L1_2_ENA_MASK | ASPM_L1_2_ENA_MASK;
 
@@ -1493,7 +1491,6 @@ pcie_get_L1substate(void *pch)
 
 	data = OSL_PCI_READ_CONFIG(pi->osh, PCIECFGREG_PML1_SUB_CTRL1, sizeof(uint32));
 
-	/* JIRA:SWWLAN-28455 */
 	if (data & (PCI_PM_L1_2_ENA_MASK | ASPM_L1_2_ENA_MASK))
 		substate |= 1;
 
@@ -1870,6 +1867,16 @@ pcie_lcreg(void *pch, uint32 mask, uint32 val)
 	return OSL_PCI_READ_CONFIG(pi->osh, offset, sizeof(uint32));
 }
 
+#ifdef BCMDBG
+void
+pcicore_dump(void *pch, struct bcmstrbuf *b)
+{
+	pcicore_info_t *pi = (pcicore_info_t *)pch;
+
+	bcm_bprintf(b, "FORCEHT %d pcie_polarity 0x%x pcie_aspm_ovr 0x%x\n",
+	            pi->sih->pci_pr32414, pi->pcie_polarity, pi->pcie_war_aspm_ovr);
+}
+#endif /* BCMDBG */
 
 uint32
 pcicore_pciereg(void *pch, uint32 offset, uint32 mask, uint32 val, uint type)
@@ -2010,3 +2017,198 @@ pcie_survive_perst(void* pch, uint32 mask, uint32 val)
 	return 0;
 #endif /* SURVIVE_PERST_ENAB */
 }
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+const struct fielddesc pcie_cmn_regdesc[] = {
+	{ "control   0x%04x ",		PCIE_CORE_REG_CONTROL,		4},
+	{ "iotatuts  0x%04x ",		PCIE_CORE_REG_IOSTATUS,		4},
+	{ "bitstatus 0x%04x ",		PCIE_CORE_REG_BITSTATUS,	4},
+	{ "goiosel   0x%04x \n",	PCIE_CORE_REG_GPIO_SEL,		4},
+	{ "gpioout   0x%04x ",		PCIE_CORE_REG_GPIO_OUT_EN,	4},
+	{ "intstatus 0x%04x ",		PCIE_CORE_REG_INT_STATUS,	4},
+	{ "intmask   0x%04x ",		PCIE_CORE_REG_INT_MASK,		4},
+	{ "sbpciemb  0x%04x \n",	PCIE_CORE_REG_SB_PCIE_MB,	4},
+	{ "errlog    0x%04x ",		PCIE_CORE_REG_ERRLOG,		4},
+	{ "erraddr   0x%04x ",		PCIE_CORE_REG_ERR_ADDR,		4},
+	{ "mb_intr   0x%04x ",		PCIE_CORE_REG_MB_INTR,		4},
+	{ "sbpcie0   0x%04x \n",	PCIE_CORE_REG_SB_PCIE_0,	4},
+	{ "sbpcie1   0x%04x ",		PCIE_CORE_REG_SB_PCIE_1,	4},
+	{ "sbpcie2   0x%04x \n",	PCIE_CORE_REG_SB_PCIE_2,	4},
+	{ NULL, 0, 0}
+};
+
+const struct fielddesc pcie_cmn_cfg_regdesc[] = {
+	{ "dev_ctrl:0x%04x, ",		PCIE_CFG_DEVICE_CONTROL,	4},
+	{ "device_status_control_2:0x%04x, ",	PCIE_CFG_DEV_STS_CTRL_2, 4},
+	{ "adv_err_cap:0x%04x, ",	PCIE_CFG_ADV_ERR_CAP,		4},
+	{ "uc_err_status:0x%04x, ",	PCIE_CFG_UC_ERR_STS,		4},
+	{ "ucorr_err_mask:0x%04x \n",	PCIE_CFG_UC_ERR_MASK,		4},
+	{ "ucorr_err_sevr:0x%04x, ",	PCIE_CFG_UNCOR_ERR_SERV,	4},
+	{ "corr_err_status:0x%04x, ",	PCIE_CFG_CORR_ERR_STS,		4},
+	{ "corr_err_mask:0x%04x, ",	PCIE_CFG_CORR_ERR_MASK,		4},
+	{ "adv_err_cap_control:0x%04x\n",	PCIE_CFG_ADV_ERR_CTRL,	4},
+	{ "header_log1:0x%04x, ",	PCIE_CFG_HDR_LOG1,		4},
+	{ "header_log2:0x%04x, ",	PCIE_CFG_HDR_LOG2,		4},
+	{ "header_log3:0x%04x, ",	PCIE_CFG_HDR_LOG3,		4},
+	{ "header_log4:0x%04x \n",	PCIE_CFG_HDR_LOG4,		4},
+	{ "PML1sub_capID:0x%04x, ",	PCIE_CFG_PML1_SUB_CAP_ID,	4},
+	{ "PML1_sub_Cap_reg:0x%04x, ",	PCIE_CFG_PML1_SUB_CAP_REG,	4},
+	{ "PML1_sub_control1:0x%04x, ",	PCIE_CFG_PML1_SUB_CTRL1,	4},
+	{ "PML1_sub_control2:0x%04x \n",	PCIE_CFG_PML1_SUB_CTRL3, 4},
+	{ "tl_control_5:0x%04x \n",	PCIE_CFG_TL_CTRL_5,		4},
+	{ NULL, 0, 0}
+};
+
+const struct fielddesc pcie_gen2_cfg_regdesc[] = {
+	{ "phy_err_attn_vec:0x%04x ",	PCIE_CFG_PHY_ERR_ATT_VEC,	4},
+	{ "phy_err_attn_mask:0x%04x \n", PCIE_CFG_PHY_ERR_ATT_MASK,	4},
+	{ NULL, 0, 0}
+};
+
+#endif 
+
+#if defined(BCMDBG_DUMP)
+const struct fielddesc pcie_plp_regdesc[] = {
+	{ "Mode 0x%04x ",		PCIE_PLP_MODEREG,		4},
+	{ "Status 0x%04x ",		PCIE_PLP_STATUSREG,		4},
+	{ "LTSSMControl 0x%04x ",	PCIE_PLP_LTSSMCTRLREG,		4},
+	{ "LinkNumber 0x%04x ",		PCIE_PLP_LTLINKNUMREG,		4},
+	{ "LaneNumber 0x%04x ",		PCIE_PLP_LTLANENUMREG,		4},
+	{ "N_FTS 0x%04x ",		PCIE_PLP_LTNFTSREG,		4},
+	{ "Attention 0x%04x ",		PCIE_PLP_ATTNREG,		4},
+	{ "AttentionMask 0x%04x ",	PCIE_PLP_ATTNMASKREG,		4},
+	{ "RxErrCnt 0x%04x ",		PCIE_PLP_RXERRCTR,		4},
+	{ "RxFramingErrCnt 0x%04x ",	PCIE_PLP_RXFRMERRCTR,		4},
+	{ "TestCtrl 0x%04x ",		PCIE_PLP_TESTCTRLREG,		4},
+	{ "SERDESCtrlOvrd 0x%04x ",	PCIE_PLP_SERDESCTRLOVRDREG,	4},
+	{ "TimingparamOvrd 0x%04x ",	PCIE_PLP_TIMINGOVRDREG,		4},
+	{ "RXTXSMdbgReg 0x%04x ",	PCIE_PLP_RXTXSMDIAGREG,		4},
+	{ "LTSSMdbgReg 0x%04x\n",	PCIE_PLP_LTSSMDIAGREG,		4},
+	{ NULL, 0, 0}
+};
+
+const struct fielddesc pcie_dllp_regdesc[] =  {
+	{"LinkControl 0x%04x ",		PCIE_DLLP_LCREG,		4},
+	{"LinkStatus 0x%04x ",		PCIE_DLLP_LSREG,		4},
+	{"LinkAttention 0x%04x ",	PCIE_DLLP_LAREG,		4},
+	{"LinkAttentionMask 0x%04x ",	PCIE_DLLP_LAMASKREG,		4},
+	{"NextTxSeqNum 0x%04x ",	PCIE_DLLP_NEXTTXSEQNUMREG,	4},
+	{"AckedTxSeqNum 0x%04x ",	PCIE_DLLP_ACKEDTXSEQNUMREG,	4},
+	{"PurgedTxSeqNum 0x%04x ",	PCIE_DLLP_PURGEDTXSEQNUMREG,	4},
+	{"RxSeqNum 0x%04x ",		PCIE_DLLP_RXSEQNUMREG,		4},
+	{"LinkReplay 0x%04x ",		PCIE_DLLP_LRREG,		4},
+	{"LinkAckTimeout 0x%04x ",	PCIE_DLLP_LACKTOREG,		4},
+	{"PowerManagementThreshold 0x%04x ", PCIE_DLLP_PMTHRESHREG,	4},
+	{"RetryBufferwrptr 0x%04x ",	PCIE_DLLP_RTRYWPREG,		4},
+	{"RetryBufferrdptr 0x%04x ",	PCIE_DLLP_RTRYRPREG,		4},
+	{"RetryBufferpuptr 0x%04x ",	PCIE_DLLP_RTRYPPREG,		4},
+	{"RetryBufferRd/Wr 0x%04x ",	PCIE_DLLP_RTRRWREG,		4},
+	{"ErrorCountthreshold 0x%04x ",	PCIE_DLLP_ECTHRESHREG,		4},
+	{"TLPErrorcounter 0x%04x ",	PCIE_DLLP_TLPERRCTRREG,		4},
+	{"Errorcounter 0x%04x ",	PCIE_DLLP_ERRCTRREG,		4},
+	{"NAKRecdcounter 0x%04x ",	PCIE_DLLP_NAKRXCTRREG,		4},
+	{"Test 0x%04x\n",		PCIE_DLLP_TESTREG,		4},
+	{ NULL, 0, 0}
+};
+
+const struct fielddesc pcie_tlp_regdesc[] = {
+	{"Config 0x%04x ",		PCIE_TLP_CONFIGREG,		4},
+	{"Workarounds 0x%04x ",		PCIE_TLP_WORKAROUNDSREG,	4},
+	{"WR-DMA-UA 0x%04x ",		PCIE_TLP_WRDMAUPPER,		4},
+	{"WR-DMA-LA 0x%04x ",		PCIE_TLP_WRDMALOWER,		4},
+	{"WR-DMA Len/BE 0x%04x ",	PCIE_TLP_WRDMAREQ_LBEREG,	4},
+	{"RD-DMA-UA 0x%04x ",		PCIE_TLP_RDDMAUPPER,		4},
+	{"RD-DMA-LA 0x%04x ",		PCIE_TLP_RDDMALOWER,		4},
+	{"RD-DMA Len 0x%04x ",		PCIE_TLP_RDDMALENREG,		4},
+	{"MSI-DMA-UA 0x%04x ",		PCIE_TLP_MSIDMAUPPER,		4},
+	{"MSI-DMA-LA 0x%04x ",		PCIE_TLP_MSIDMALOWER,		4},
+	{"MSI-DMALen 0x%04x ",		PCIE_TLP_MSIDMALENREG,		4},
+	{"SlaveReqLen 0x%04x ",		PCIE_TLP_SLVREQLENREG,		4},
+	{"FlowControlInput 0x%04x ",	PCIE_TLP_FCINPUTSREQ,		4},
+	{"TxStateMachine 0x%04x ",	PCIE_TLP_TXSMGRSREQ,		4},
+	{"AddressAckXferCnt 0x%04x ",	PCIE_TLP_ADRACKCNTARBLEN,	4},
+	{"DMACompletion HDR0 0x%04x ",	PCIE_TLP_DMACPLHDR0,		4},
+	{"DMACompletion HDR1 0x%04x ",	PCIE_TLP_DMACPLHDR1,		4},
+	{"DMACompletion HDR2 0x%04x ",	PCIE_TLP_DMACPLHDR2,		4},
+	{"DMACompletionMISC0 0x%04x ",	PCIE_TLP_DMACPLMISC0,		4},
+	{"DMACompletionMISC1 0x%04x ",	PCIE_TLP_DMACPLMISC1,		4},
+	{"DMACompletionMISC2 0x%04x ",	PCIE_TLP_DMACPLMISC2,		4},
+	{"SplitControllerReqLen 0x%04x ", PCIE_TLP_SPTCTRLLEN,		4},
+	{"SplitControllerMISC0 0x%04x ", PCIE_TLP_SPTCTRLMSIC0,		4},
+	{"SplitControllerMISC1 0x%04x ", PCIE_TLP_SPTCTRLMSIC1,		4},
+	{"bus/dev/func 0x%04x ",	PCIE_TLP_BUSDEVFUNC,		4},
+	{"ResetCounter 0x%04x ",	PCIE_TLP_RESETCTR,		4},
+	{"RetryBufferValue 0x%04x ",	PCIE_TLP_RTRYBUF,		4},
+	{"TargetDebug1 0x%04x ",	PCIE_TLP_TGTDEBUG1,		4},
+	{"TargetDebug2 0x%04x ",	PCIE_TLP_TGTDEBUG2,		4},
+	{"TargetDebug3 0x%04x\n",	PCIE_TLP_TGTDEBUG3,		4},
+	{ NULL, 0, 0}
+};
+
+#endif 
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* Dump PCIE Info */
+int
+pcicore_dump_pcieinfo(void *pch, struct bcmstrbuf *b)
+{
+	pcicore_info_t *pi = (pcicore_info_t *)pch;
+
+	if (!PCIE_GEN1(pi->sih) && !PCIE_GEN2(pi->sih))
+		return BCME_ERROR;
+
+	bcm_bprintf(b, "PCIE link speed: %d\n", pcie_get_link_speed(pch));
+	return 0;
+}
+#endif
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* size that can take bitfielddump */
+#define BITFIELD_DUMP_SIZE  2048
+
+/** Dump PCIE PLP/DLLP/TLP  diagnostic registers */
+int
+pcicore_dump_pcieregs(void *pch, struct bcmstrbuf *b)
+{
+	pcicore_info_t *pi = (pcicore_info_t *)pch;
+	char *bitfield_dump_buf;
+	int i;
+
+	if ((!PCIE_GEN1(pi->sih)) && (!PCIE_GEN2(pi->sih))) {
+		return BCME_ERROR;
+	}
+
+	if (!(bitfield_dump_buf = MALLOC(pi->osh, BITFIELD_DUMP_SIZE))) {
+		PCI_ERROR(("bitfield dump allocation failed\n"));
+		return BCME_NOMEM;
+	}
+
+	bcm_bprintf(b, "\nPCI_CFG_REG \n");
+	bcmdumpfields(si_pcie_readreg, (void *)(uintptr)pi->sih, PCIE_CONFIGREGS,
+		(struct fielddesc *)(uintptr)pcie_cmn_cfg_regdesc,
+		bitfield_dump_buf, b->size);
+	bcm_bprintf(b, "%s", bitfield_dump_buf);
+
+	if (PCIE_GEN2(pi->sih)) {
+		bcmdumpfields(si_pcie_readreg, (void *)(uintptr)pi->sih, PCIE_CONFIGREGS,
+			(struct fielddesc *)(uintptr)pcie_gen2_cfg_regdesc,
+			bitfield_dump_buf, b->size);
+		bcm_bprintf(b, "%s", bitfield_dump_buf);
+	}
+
+	for (i = 0; i < 156; i += 4) {
+		bcm_bprintf(b, "pci_cfg_%02x: 0x%08x\n", i,
+			si_pcie_readreg((void *)(uintptr)pi->sih, PCIE_CONFIGREGS, i));
+	}
+
+	bcm_bprintf(b, "\n\nPCI_CORE_REG \n");
+	bcmdumpfields(si_pcie_readreg, (void *)(uintptr)pi->sih, PCIE_PCIEREGS,
+		(struct fielddesc *)(uintptr)pcie_cmn_regdesc,
+		bitfield_dump_buf, b->size);
+	bcm_bprintf(b, "%s", bitfield_dump_buf);
+
+	MFREE(pi->osh, bitfield_dump_buf, BITFIELD_DUMP_SIZE);
+	return 0;
+}
+
+#endif	/* defined(WL_TEST) || defined(BCMDBG) || defined(BCMDBG_DUMP) */

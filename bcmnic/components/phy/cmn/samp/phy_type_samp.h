@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_samp.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_type_samp.h 655756 2016-08-23 12:40:40Z $
  */
 
 #ifndef _phy_type_samp_h_
@@ -36,10 +36,13 @@ typedef int (*phy_type_samp_collect_fn_t)(phy_type_samp_ctx_t *ctx,
 	wl_samplecollect_args_t *collect, void *b);
 typedef int (*phy_type_samp_data_fn_t)(phy_type_samp_ctx_t *ctx,
 	wl_sampledata_t *sample_data, void *b);
+typedef void (*phy_type_samp_play_fn_t)(phy_type_samp_ctx_t *ctx);
+
 typedef struct {
 	phy_type_samp_collect_fn_t	samp_collect;
 	phy_type_samp_data_fn_t		samp_data;
 	phy_type_samp_ctx_t		*ctx;
+	phy_type_samp_play_fn_t	samp_play;
 } phy_type_samp_fns_t;
 
 /*

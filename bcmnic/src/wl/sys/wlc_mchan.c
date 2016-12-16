@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mchan.c 661976 2016-09-28 00:55:57Z $
+ * $Id: wlc_mchan.c 667150 2016-10-26 05:37:26Z $
  */
 
 
@@ -55,10 +55,9 @@
 #include <wlc_rsdb.h>
 #include <wlc_ie_misc_hndlrs.h>
 #include <wlc_bsscfg_psq.h>
-
+#include <phy_cache_api.h>
 #include <wlc_hrt.h>
 #ifdef PROP_TXSTATUS
-#include <wlfc_proto.h>
 #include <wlc_ampdu.h>
 #include <wlc_apps.h>
 #include <wlc_wlfc.h>
@@ -71,7 +70,6 @@
 #include <wlc_tx.h>
 #include <wlc_ie_mgmt.h>
 #include <wlc_lq.h>
-#include <wlc_ulb.h>
 #ifdef WLAMSDU
 #include <wlc_amsdu.h>
 #endif
@@ -199,8 +197,7 @@ typedef enum {
 
 #define MCHAN_ABS_TIME_ADJUST		(500)
 #define MCHAN_MAX_TBTT_GAP_DRIFT_US	(1000)
-#define MCHAN_MAX_ONCHAN_GAP_DRIFT_US	(3000)
-#define MCHAN_MAX_INTERVAL_DRIFT_US	(4000)
+#define MCHAN_MAX_ONCHAN_GAP_DRIFT_US	(2000)
 #define MCHAN_MIN_DUR_US		(5000)
 
 #define MCHAN_TIME_UNIT_1024US		10
@@ -216,7 +213,7 @@ typedef enum {
 #define MCHAN_BCN_INVALID 0
 #define MCHAN_BCN_OVERLAP 1
 #define MCHAN_BCN_NONOVERLAP 2
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 #define MCHAN_BLOCKING_CNT 5		/* Value to be changed for enhancement  */
 #else
 #define MCHAN_BLOCKING_CNT 3		/* Value to be changed for enhancement  */
@@ -386,8 +383,6 @@ struct mchan_info {
 	uint32 bcn_position;
 	uint8 trigg_algo;         /* trigger algo's only if there is a change in parameters */
 	bool alternate_switching;
-	uint8 time_lost;
-	uint8 time_drifted;
 	uint32 si_algo_last_switch_time;
 	bool bcnovlpopt;		/* Variable to store ioctl value  */
 	bool overlap_algo_switch;	/* whether overlap beacon caused a switch to SI algo. */
@@ -403,12 +398,8 @@ struct mchan_info {
 	bool adjusted_for_nchan; /* param to inform N Channel active or reset */
 	wlc_mchan_algo_info_t *mchan_algo_info; /* mchan algo related info */
 	wlc_modesw_cb_ctx *modesw_ctx; /* Mode switch timer context */
-
-	uint32 prev_abs_tsfl;
-	uint32 prev_psc_tsfl;
 	uint32 mchan_err_counter;	/* Error counter for MCHAN */
 	mchan_dynalgo_params_info_t *dyn_algo_params;	/* Pointer to vsdb params */
-
 };
 
 /* local macros */
@@ -459,7 +450,6 @@ typedef struct {
 	uint8 mchan_tbtt_since_bcn;		/* number of tbtt since last bcn */
 	uint32 duration;                        /* msch interval */
 	uint32 interval;                        /* msch interval */
-	uint32 prev_onchan_time;
 	int time_gap;
 	bool clone_pending;
 	bool modesw_pending;
@@ -485,13 +475,15 @@ static void wlc_mchan_watchdog(void *context);
 static int wlc_mchan_up(void *context);
 static int wlc_mchan_down(void *context);
 static void wlc_mchan_enab(mchan_info_t *mchan, bool enable);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_mchan_dump(void *context, struct bcmstrbuf *b);
+#endif
 
 static int wlc_mchan_bsscfg_up(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 static int wlc_mchan_bsscfg_down(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 
 static void wlc_mchan_sched_add(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg, uint32 duration,
 	uint32 interval, uint32 start_tsf);
-static void wlc_mchan_sched_update(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg);
 static void wlc_mchan_switch_chan_context(mchan_info_t *mchan, wlc_bsscfg_t *target_cfg,
 	wlc_bsscfg_t *other_cfg);
 static void wlc_mchan_multichannel_upd(wlc_info_t *wlc, mchan_info_t *mchan);
@@ -499,7 +491,7 @@ static void wlc_mchan_multichannel_upd(wlc_info_t *wlc, mchan_info_t *mchan);
 static int8 wlc_mchan_set_other_cfg_idx(mchan_info_t *mchan, wlc_bsscfg_t *del_cfg);
 static void wlc_mchan_swap_cfg_idx(mchan_info_t *mchan);
 static wlc_bsscfg_t *wlc_mchan_get_other_cfg_frm_cur(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg);
-
+static void wlc_mchan_correction_update(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg);
 static void wlc_mchan_return_home_channel(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg);
 #if defined(WLRSDB) && defined(WL_MODESW)
 static int
@@ -546,6 +538,9 @@ static int wlc_mchan_go_si_algo(mchan_info_t *mchan);
 static int wlc_mchan_go_bandwidth_algo(mchan_info_t *mchan);
 static int wlc_mchan_tbtt_gap_adj(mchan_info_t *mchan);
 static int wlc_mchan_tsf_adj(mchan_info_t *mchan, int32 tsf_adj);
+static void wlc_mchan_disassoc_clbk(void *ctx, bss_disassoc_notif_data_t *notif_data);
+static void wlc_mchan_assoc_state_clbk(void *arg,
+	bss_assoc_state_data_t *notif_data);
 static void wlc_mchan_bsscfg_up_down(void *ctx, bsscfg_up_down_event_data_t *evt);
 static int wlc_mchan_if_time(wlc_info_t *wlc, wlc_bsscfg_t *curr_cfg, wlc_bsscfg_t *other_cfg);
 static void wlc_mchan_psc_cleanup(mchan_info_t *mchan, wlc_bsscfg_t *cfg);
@@ -564,7 +559,11 @@ wlc_mchan_bss_deinit(void *context, wlc_bsscfg_t *cfg);
 static void
 wlc_mchan_update_stats(wlc_info_t *wlc, wlc_bsscfg_t *on_chan_cfg);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_mchan_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_mchan_bss_dump NULL
+#endif
 static bool wlc_mchan_load_inc_or_dec(mchan_info_t *mchan, uint32 primary_bss_load,
 	uint32 secondary_bss_load);
 static void wlc_mchan_inc_bw(mchan_info_t *mchan, uint8 bw_inc_type, bool inc_primary);
@@ -583,6 +582,11 @@ static mchan_dyn_algo_action wlc_vsdb_dyn_algo_get_action(mchan_info_t *mchan,
 	bool *act_on_primary, uint32 prim_bss_load, uint32 sec_bss_load);
 
 static int wlc_mchan_parse_tim_ie(void *ctx, wlc_iem_parse_data_t *data);
+static int
+wlc_mchan_bsscfg_config_set(void *hdl, wlc_bsscfg_t *bsscfg, const uint8 *data, int len);
+static int
+wlc_mchan_bsscfg_config_get(void *hdl, wlc_bsscfg_t *bsscfg, uint8 *data, int *len);
+
 
 static uint32 mchan_test_var = 0x0401;
 
@@ -645,6 +649,7 @@ mchan_info_t *
 BCMATTACHFN(wlc_mchan_attach)(wlc_info_t *wlc)
 {
 	mchan_info_t *mchan;
+	bsscfg_cubby_params_t cubby_params;
 
 	/* sanity check */
 
@@ -714,12 +719,21 @@ BCMATTACHFN(wlc_mchan_attach)(wlc_info_t *wlc)
 
 	}
 #endif /* WLRSDB && WL_MODESW */
-
+	bzero(&cubby_params, sizeof(cubby_params));
+	cubby_params.context = mchan;
+	cubby_params.fn_init = wlc_mchan_bss_init;
+	cubby_params.fn_deinit = wlc_mchan_bss_deinit;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = wlc_mchan_bss_dump;
+#endif
+	cubby_params.fn_get = wlc_mchan_bsscfg_config_get;
+	cubby_params.fn_set = wlc_mchan_bsscfg_config_set;
+	cubby_params.config_size = sizeof(chanspec_t);
 	/* reserve cubby in the bsscfg container for per-bsscfg private data */
-	if ((mchan->cfgh = wlc_bsscfg_cubby_reserve(wlc, sizeof(mchan_bss_info_t),
-			wlc_mchan_bss_init, wlc_mchan_bss_deinit, wlc_mchan_bss_dump, mchan)) < 0) {
+	mchan->cfgh = wlc_bsscfg_cubby_reserve_ext(wlc, sizeof(mchan_bss_info_t), &cubby_params);
+	if (mchan->cfgh < 0) {
 		WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve() failed\n",
-		          wlc->pub->unit, __FUNCTION__));
+			wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
 
@@ -730,6 +744,9 @@ BCMATTACHFN(wlc_mchan_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "mchan", wlc_mchan_dump, (void *)mchan);
+#endif
 
 #if defined(WLRSDB) && defined(WL_MODESW)
 	if (wlc == WLC_RSDB_GET_PRIMARY_WLC(wlc)) {
@@ -767,6 +784,19 @@ BCMATTACHFN(wlc_mchan_attach)(wlc_info_t *wlc)
 	mchan->switch_interval = 50 * 1024;
 	mchan->switch_algo = MCHAN_DEFAULT_ALGO;
 	mchan->percentage_bw = MCHAN_DEFAULT_BW;
+
+	if (wlc_bss_disassoc_notif_register(wlc, wlc_mchan_disassoc_clbk, mchan)
+		!= BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bss_disassoc_notif_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+	if (wlc_bss_assoc_state_register(wlc, wlc_mchan_assoc_state_clbk, mchan)
+		!= BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bss_assoc_state_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
 
 	if (wlc_bsscfg_updown_register(wlc, wlc_mchan_bsscfg_up_down, mchan) != BCME_OK) {
 		WL_ERROR(("wl%d: %s: wlc_bsscfg_state_upd_register() failed\n",
@@ -995,6 +1025,8 @@ BCMATTACHFN(wlc_mchan_detach)(mchan_info_t *mchan)
 	}
 #endif /* WLRSDB && WL_MODESW */
 
+	(void)wlc_bss_disassoc_notif_unregister(wlc, wlc_mchan_disassoc_clbk, mchan);
+	(void)wlc_bss_assoc_state_unregister(wlc, wlc_mchan_assoc_state_clbk, mchan);
 	(void)wlc_bsscfg_updown_unregister(wlc, wlc_mchan_bsscfg_up_down, mchan);
 
 	/* unregister callback */
@@ -1007,18 +1039,57 @@ BCMATTACHFN(wlc_mchan_detach)(mchan_info_t *mchan)
 }
 
 static void
+wlc_mchan_disassoc_clbk(void *ctx, bss_disassoc_notif_data_t *notif_data)
+{
+	wlc_bsscfg_t *cfg;
+
+	ASSERT(ctx != NULL);
+	ASSERT(notif_data != NULL);
+	ASSERT(notif_data->cfg != NULL);
+	ASSERT(notif_data->cfg->wlc != NULL);
+
+	cfg = notif_data->cfg;
+
+	if (!BSSCFG_STA(cfg) || BSSCFG_SPECIAL(cfg->wlc, cfg) || !cfg->BSS) {
+		return;
+	}
+	if (notif_data->state == DAN_ST_DISASSOC_CMPLT) {
+		wlc_mchan_bsscfg_down(cfg->wlc, cfg);
+	}
+}
+
+static void
+wlc_mchan_assoc_state_clbk(void *arg, bss_assoc_state_data_t *notif_data)
+{
+	wlc_bsscfg_t *cfg;
+
+	ASSERT(notif_data != NULL);
+
+	cfg = notif_data->cfg;
+	ASSERT(cfg != NULL);
+
+	if (!BSSCFG_STA(cfg) || BSSCFG_SPECIAL(cfg->wlc, cfg) || !cfg->BSS) {
+		return;
+	}
+	if ((notif_data->state == AS_IDLE) && cfg->associated) {
+		wlc_mchan_bsscfg_up(cfg->wlc, cfg);
+	}
+}
+
+static void
 wlc_mchan_bsscfg_up_down(void *ctx, bsscfg_up_down_event_data_t *evt)
 {
 	wlc_bsscfg_t *cfg = evt->bsscfg;
 	ASSERT(cfg != NULL);
 
-	if (BSSCFG_SPECIAL(cfg->wlc, cfg) || !cfg->BSS) {
+	if (BSSCFG_SPECIAL(cfg->wlc, cfg) || !cfg->BSS ||
+		BSS_P2P_DISC_ENAB(cfg->wlc, cfg)) {
 		return;
 	}
 
-	if (evt->up) {
+	if (BSSCFG_AP(cfg) && evt->up) {
 		wlc_mchan_bsscfg_up(cfg->wlc, cfg);
-	} else {
+	} else if (!evt->up) {
 		wlc_mchan_bsscfg_down(cfg->wlc, cfg);
 	}
 }
@@ -1055,42 +1126,6 @@ wlc_mchan_sched_add(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg, uint32 duration,
 		wlc_sta_timeslot_update(bsscfg, start_tsf, interval);
 	else
 		wlc_ap_timeslot_update(bsscfg, start_tsf, interval);
-}
-
-static void
-wlc_mchan_sched_update(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg)
-{
-	wlc_info_t *wlc = mchan->wlc;
-	mchan_bss_info_t *mbi = MCHAN_BSS_INFO(mchan, bsscfg);
-	uint32 tsf_l = read_tsf_low(wlc);
-	uint32 start_tsf = mbi->start_tsf;
-	uint32 interval = mbi->interval;
-
-	mchan->time_lost = mchan->time_drifted = 0;
-
-	if (SCAN_IN_PROGRESS(mchan->wlc->scan)) {
-		/*
-		* do not update if scan in prgoress to prevent
-		* schedule conflicts with MSCH. Else result in scan-timeout
-		*/
-		return;
-	}
-
-	tsf_l += MSCH_PREPARE_DUR;
-	while (start_tsf < tsf_l) {
-		start_tsf += interval;
-	}
-
-	tsf_l += interval;
-	while (start_tsf > tsf_l) {
-		start_tsf -= interval;
-	}
-
-	WL_MCHAN(("wl%d.%d: %s: start %u, interval %u\n",
-		mchan->wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), __FUNCTION__,
-		start_tsf, interval));
-
-	wlc_mchan_sched_add(mchan, bsscfg, mbi->duration, interval, start_tsf);
 }
 
 static void
@@ -1416,6 +1451,56 @@ wlc_mchan_enab(mchan_info_t *mchan, bool enable)
 	wlc->pub->_mchan = enable;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_mchan_dump(void *context, struct bcmstrbuf *b)
+{
+	mchan_info_t *mchan = (mchan_info_t *)context;
+	wlc_info_t *wlc = mchan->wlc;
+	uint8 cnt = 0;
+	wlc_txq_info_t *qi = wlc->tx_queues;
+	int idx;
+	wlc_bsscfg_t *cfg;
+	char chanbuf[CHANSPEC_STR_LEN];
+
+	bcm_bprintf(b, "\nmchan is %sABLED\n", MCHAN_ENAB(wlc->pub) ? "EN" : "DIS");
+	bcm_bprintf(b, "\nmchan is %sACTIVE\n", MCHAN_ACTIVE(wlc->pub) ? "" : "IN");
+	bcm_bprintf(b, "\nmchan->trigger_cfg_idx = %d, mchan->other_cfg_idx = %d\n",
+	    mchan->trigger_cfg_idx, mchan->other_cfg_idx);
+	bcm_bprintf(b, "current_idx = %d\n", mchan->onchan_cfg_idx);
+	bcm_bprintf(b, "\ndisable_stago_mchan = %d\n", mchan->disable_stago_mchan);
+	bcm_bprintf(b, "blocking_enab = %d, blocking_thresh = %d\n",
+	            mchan->blocking_enab, mchan->tbtt_since_bcn_thresh);
+	bcm_bprintf(b, "bypass_pm = %d\n", mchan->bypass_pm);
+	bcm_bprintf(b, "bypas_dtim = %d\n", mchan->bypass_dtim);
+	bcm_bprintf(b, "sched_mode = %s\n",
+	            (mchan->sched_mode == WLC_MCHAN_SCHED_MODE_STA) ? "sta" :
+	            (mchan->sched_mode == WLC_MCHAN_SCHED_MODE_P2P) ? "p2p" : "fair");
+	bcm_bprintf(b, "\nlisting all tx_queues:\n");
+	while (qi) {
+		bcm_bprintf(b, "queue(%d) = %p, stopped = 0x%x\n",
+			cnt++, OSL_OBFUSCATE_BUF(qi), qi->stopped);
+		FOREACH_BSS(wlc, idx, cfg) {
+			if (cfg->wlcif->qi == qi) {
+				char ifname[32];
+
+				strncpy(ifname, wl_ifname(wlc->wl, cfg->wlcif->wlif),
+					sizeof(ifname));
+				ifname[sizeof(ifname) - 1] = '\0';
+				bcm_bprintf(b, "\tbsscfg %d (%s)\n", WLC_BSSCFG_IDX(cfg), ifname);
+			}
+		}
+		qi = qi->next;
+	}
+	bcm_bprintf(b, "wlc->active_queue = %p\n", OSL_OBFUSCATE_BUF(wlc->active_queue));
+	bcm_bprintf(b, "wlc->primary_queue = %p\n", OSL_OBFUSCATE_BUF(wlc->primary_queue));
+	bcm_bprintf(b, "wlc->excursion_queue = %p\n", OSL_OBFUSCATE_BUF(wlc->excursion_queue));
+	bcm_bprintf(b, "wlc->home_chanspec = %s\n\n",
+	    wf_chspec_ntoa(wlc->home_chanspec, chanbuf));
+
+	return 0;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 uint16 wlc_mchan_get_pretbtt_time(mchan_info_t *mchan)
 {
@@ -1464,7 +1549,7 @@ wlc_mchan_set_other_cfg_idx(mchan_info_t *mchan, wlc_bsscfg_t *del_cfg)
 		if (!cfg->up) {
 			continue;
 		}
-		if (BSSCFG_SPECIAL(wlc, cfg)) {
+		if (BSSCFG_SPECIAL(wlc, cfg) || BSS_P2P_DISC_ENAB(wlc, cfg)) {
 			continue;
 		}
 		if (WLC_MCHAN_SAME_CTLCHAN(cfg->current_bss->chanspec, chanspec)) {
@@ -1572,7 +1657,7 @@ wlc_mchan_multichannel_upd(wlc_info_t *wlc, mchan_info_t *mchan)
 
 #if defined(WLRSDB) && defined(WL_MODESW)
 	if (RSDB_ENAB(wlc->pub) && WLC_MODESW_ENAB(wlc->pub)) {
-		if (wlc->pub->_mchan_active) {
+		if (wlc->pub->_mchan_active && !WLC_DUALMAC_RSDB(wlc->cmn)) {
 			/* Should not have MCHAN operating in core 1 */
 			ASSERT(wlc == WLC_RSDB_GET_PRIMARY_WLC(wlc));
 			if (wlc != WLC_RSDB_GET_PRIMARY_WLC(wlc)) {
@@ -1680,23 +1765,6 @@ wlc_mchan_bsscfg_up(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	/* update mchan active status */
 	wlc_mchan_multichannel_upd(wlc, mchan);
 
-#if defined(WL_MODESW) && defined(WLRSDB)
-	if (WLC_MODESW_ENAB(wlc->pub) && RSDB_ENAB(wlc->pub) &&
-		MCHAN_ACTIVE(wlc->pub)) {
-		wlc_bsscfg_t* trigg_cfg;
-		wlc_bsscfg_t* oth_cfg;
-		trigg_cfg = WLC_BSSCFG(wlc, mchan->trigger_cfg_idx);
-		oth_cfg = WLC_BSSCFG(wlc, mchan->other_cfg_idx);
-
-		if (!wlc_mcnx_tbtt_valid(wlc->mcnx, trigg_cfg)) {
-			wlc_mchan_switch_chan_context(wlc->mchan, trigg_cfg, oth_cfg);
-		}
-		else if (!wlc_mcnx_tbtt_valid(wlc->mcnx, oth_cfg)) {
-			wlc_mchan_switch_chan_context(wlc->mchan, oth_cfg, trigg_cfg);
-		}
-	}
-#endif /* WLRSDB && WL_MODESW */
-
 	return (BCME_OK);
 }
 
@@ -1731,10 +1799,11 @@ wlc_mchan_bsscfg_down(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 		uint16 shortest_bi = 0xFFFF;
 
 		FOREACH_BSS(wlc, idx, icfg) {
-			if (!cfg->up) {
+			if (!icfg->up) {
 				continue;
 			}
-			if (BSSCFG_SPECIAL(wlc, icfg) || (icfg == cfg)) {
+			if (BSSCFG_SPECIAL(wlc, icfg) || (icfg == cfg) ||
+				BSS_P2P_DISC_ENAB(wlc, icfg)) {
 				continue;
 			}
 			if (BSSCFG_AP(icfg)) {
@@ -1784,11 +1853,11 @@ wlc_mchan_bsscfg_down(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 #ifdef STA
 					if (P2P_CLIENT(wlc, icfg)) {
 						if (wlc_p2p_noa_valid(wlc->p2p, icfg)) {
-							mboolclr(cfg->pm->PMblocked,
+							mboolclr(icfg->pm->PMblocked,
 								WLC_PM_BLOCK_MCHAN_ABS);
 						}
 					} else {
-						mboolclr(cfg->pm->PMblocked, WLC_PM_BLOCK_CHANSW);
+						mboolclr(icfg->pm->PMblocked, WLC_PM_BLOCK_CHANSW);
 					}
 					wlc_update_pmstate(icfg, TX_STATUS_NO_ACK);
 #endif /* STA */
@@ -1916,34 +1985,49 @@ wlc_mchan_msch_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 }
 
 static void
-wlc_mchan_return_home_channel(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg)
+wlc_mchan_correction_update(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg)
 {
 	wlc_info_t *wlc = mchan->wlc;
 	mchan_bss_info_t *mbi = MCHAN_BSS_INFO(mchan, bsscfg);
 	int gap = 0;
 	uint32 tsf_l = read_tsf_low(wlc);
-	uint32 start_tsf = mbi->start_tsf;
 
 	if (mbi->interval) {
-		uint32 diff = tsf_l - mbi->prev_onchan_time;
-		if ((diff < mbi->interval - MCHAN_MAX_INTERVAL_DRIFT_US) ||
-			(diff > mbi->interval + MCHAN_MAX_INTERVAL_DRIFT_US)) {
-			mchan->time_lost++;
-		} else {
+		/*
+		* no need to report delta when scan is in progress
+		* or if any mchan initiated correction is in progress
+		*/
+		if (!SCAN_IN_PROGRESS(mchan->wlc->scan) &&
+			!mchan->blocking_bsscfg &&
+			!mchan->trigg_algo) {
 			gap = ABS((int)(tsf_l - mbi->start_tsf));
-
-			if (!mbi->time_gap) {
-				mbi->time_gap = gap;
+			if (gap > (mchan->proc_time_us +
+				MCHAN_MAX_ONCHAN_GAP_DRIFT_US)) {
+				/* force schedule update */
+				mchan->trigg_algo = TRUE;
+				mchan->timer_running = FALSE;
+				/* don't process further correction till updated */
+				mbi->interval = 0;
+			} else {
+				/* not much drift, adopt start_tsf */
+				mbi->start_tsf += mbi->interval;
 			}
-			else if (ABS(mbi->time_gap - gap) > MCHAN_MAX_TBTT_GAP_DRIFT_US) {
-				mchan->time_drifted++;
-			}
+		} else {
+			/* no action needed report problem next time */
 		}
-		start_tsf += mbi->interval;
 	}
+}
 
-	mbi->start_tsf = start_tsf;
-	mbi->prev_onchan_time = tsf_l;
+static void
+wlc_mchan_return_home_channel(mchan_info_t *mchan, wlc_bsscfg_t *bsscfg)
+{
+	wlc_info_t *wlc = mchan->wlc;
+	mchan_bss_info_t *mbi = MCHAN_BSS_INFO(mchan, bsscfg);
+
+	if (WLC_BSSCFG_IDX(bsscfg) == mchan->trigger_cfg_idx) {
+		/* update mchan-msch related correction params */
+		wlc_mchan_correction_update(mchan, bsscfg);
+	}
 
 	mchan->onchan_cfg_idx = WLC_BSSCFG_IDX(bsscfg);
 
@@ -2367,12 +2451,6 @@ wlc_mchan_ap_pretbtt_proc(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, uint32 tsf_l, u
 
 		if (!tbtt_drifted && (mchan->trigg_algo == FALSE) &&
 			(wlc_p2p_noa_valid(wlc->p2p, bsscfg))) {
-			if ((mchan->time_drifted > 0) || (mchan->time_lost > 2)) {
-				wlc_mchan_sched_update(mchan, WLC_BSSCFG(wlc,
-					mchan->trigger_cfg_idx));
-				wlc_mchan_sched_update(mchan, WLC_BSSCFG(wlc,
-					mchan->other_cfg_idx));
-			}
 			/* schedule already setup */
 			return (err);
 		}
@@ -2453,7 +2531,6 @@ wlc_mchan_algo_selection(mchan_info_t *mchan)
 	}
 
 	mchan->trigg_algo = FALSE;
-	mchan->time_lost = mchan->time_drifted = 0;
 
 	/* Decides which algo to invoke.
 	 * Also it checks whether the bsscfg is AP or STA
@@ -2994,9 +3071,7 @@ wlc_mchan_sta_pretbtt_proc(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg_sel, uint32 tsf
 	}
 
 	if ((wlc->stas_associated > 2) || (mchan->switch_algo == MCHAN_ALTERNATE_SWITCHING)) {
-		if (!mchan->alternate_switching || mchan->trigg_algo ||
-			(mchan->time_drifted > 0) || (mchan->time_lost > 2)) {
-			mchan->time_lost = mchan->time_drifted = 0;
+		if (!mchan->alternate_switching || mchan->trigg_algo) {
 			err = wlc_mchan_alternate_switching(mchan, MCHAN_DEFAULT_BW);
 		}
 		return (err);
@@ -3022,13 +3097,6 @@ wlc_mchan_sta_pretbtt_proc(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg_sel, uint32 tsf
 		}
 
 		if (!tbtt_drifted && (mchan->trigg_algo == FALSE)) {
-			if ((mchan->time_drifted > 0) || (mchan->time_lost > 2)) {
-				wlc_mchan_sched_update(mchan, WLC_BSSCFG(wlc,
-					mchan->trigger_cfg_idx));
-				wlc_mchan_sched_update(mchan, WLC_BSSCFG(wlc,
-					mchan->other_cfg_idx));
-			}
-
 			/* schedule already setup */
 			return err;
 		}
@@ -3650,7 +3718,7 @@ wlc_mchan_pretbtt_cb(void *ctx, wlc_mcnx_intr_data_t *notif_data)
 static void wlc_mchan_blocking_bsscfg(mchan_info_t *mchan)
 {
 	if (mchan->blocking_bsscfg && !SCAN_IN_PROGRESS(mchan->wlc->scan)) {
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 		if (mchan->blocking_cnt == MCHAN_BLOCKING_CNT) {
 			wlc_mchan_switch_chan_context(mchan, mchan->blocking_bsscfg,
 				wlc_mchan_get_other_cfg_frm_cur(mchan->wlc,
@@ -3667,7 +3735,6 @@ static void wlc_mchan_blocking_bsscfg(mchan_info_t *mchan)
 				WLC_BSSCFG_IDX(mchan->blocking_bsscfg)));
 			mchan->blocking_bsscfg = NULL;
 		}
-		mchan->trigg_algo = TRUE;
 	}
 	else {
 		mchan->blocking_bsscfg = NULL;
@@ -3730,12 +3797,8 @@ _wlc_mchan_pretbtt_cb(void *ctx, wlc_mcnx_intr_data_t *notif_data)
 #endif
 
 	if (wlc_mchan_client_noa_valid(mchan)) {
-		if (mchan->timer_running &&
-			((mchan->time_drifted > 0) || (mchan->time_lost > 2))) {
-			wlc_mchan_sched_update(mchan, WLC_BSSCFG(wlc,
-				mchan->trigger_cfg_idx));
-			wlc_mchan_sched_update(mchan, WLC_BSSCFG(wlc,
-				mchan->other_cfg_idx));
+		if (!mchan->adjusted_for_nchan) {
+			mchan->trigg_algo = TRUE;
 		}
 		return;
 	}
@@ -3769,27 +3832,27 @@ wlc_mchan_recv_process_beacon(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, struct scb 
 	wlc_d11rxhdr_t *wrxh, uint8 *plcp, uint8 *body, int bcn_len)
 {
 	if (scb) {
-	mchan_info_t *mchan = wlc->mchan;
-	mchan_bss_info_t *mbi;
+		mchan_info_t *mchan = wlc->mchan;
+		mchan_bss_info_t *mbi;
 
-	BCM_REFERENCE(bcn_len);
+		BCM_REFERENCE(bcn_len);
 
-	ASSERT(bsscfg != NULL);
-	ASSERT(BSSCFG_STA(bsscfg) && bsscfg->BSS);
+		ASSERT(bsscfg != NULL);
+		ASSERT(BSSCFG_STA(bsscfg) && bsscfg->BSS);
 
-	mbi = MCHAN_BSS_INFO(mchan, bsscfg);
+		mbi = MCHAN_BSS_INFO(mchan, bsscfg);
 
-	if (mbi->mchan_tbtt_since_bcn > mchan->tbtt_since_bcn_thresh) {
-		/* force p2p module to update tbtt */
-		wlc_mcnx_tbtt_inv(wlc->mcnx, bsscfg);
-		WL_MCHAN(("wl%d.%d: force tbtt upd, mchan_tbtt_since_bcn = %u\n",
-		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
-		          mbi->mchan_tbtt_since_bcn));
-	}
-	if (bsscfg == mchan->blocking_bsscfg) {
-		wlc_mchan_reset_blocking_bsscfg(mchan);
-	}
-	mbi->mchan_tbtt_since_bcn = 0;
+		if (mbi->mchan_tbtt_since_bcn > mchan->tbtt_since_bcn_thresh) {
+			/* force p2p module to update tbtt */
+			wlc_mcnx_tbtt_inv(wlc->mcnx, bsscfg);
+			WL_MCHAN(("wl%d.%d: force tbtt upd, mchan_tbtt_since_bcn = %u\n",
+			          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
+			          mbi->mchan_tbtt_since_bcn));
+		}
+		if (bsscfg == mchan->blocking_bsscfg) {
+			wlc_mchan_reset_blocking_bsscfg(mchan);
+		}
+		mbi->mchan_tbtt_since_bcn = 0;
 	}
 }
 
@@ -3802,7 +3865,6 @@ wlc_mchan_client_noa_clear(mchan_info_t *mchan, wlc_bsscfg_t *cfg)
 		WLC_BSSCFG_IDX(cfg), __FUNCTION__));
 	mchan->timer_running = FALSE;
 	wlc_mchan_psc_cleanup(mchan, cfg);
-	mchan->prev_psc_tsfl = mchan->prev_abs_tsfl = 0;
 	mbi->in_psc = FALSE;
 }
 
@@ -3834,7 +3896,7 @@ static int wlc_mchan_if_time(wlc_info_t *wlc, wlc_bsscfg_t *curr_cfg, wlc_bsscfg
 		uint32 new_rts = 0;
 		uint32 rts_diff = 0;
 		uint8 index;
-		uint16 sifs = SIFS(wlc->band);
+		uint16 sifs = SIFS(wlc->band->bandtype);
 
 		wlc_statsupd(wlc);
 		sifs *= 3;
@@ -4609,20 +4671,11 @@ wlc_mchan_abs_proc(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint32 tsf_l)
 
 	/* return if not mchan not active or AP bsscfg */
 	if (!(MCHAN_ENAB(wlc->pub) && MCHAN_ACTIVE(wlc->pub)) || BSSCFG_AP(cfg)) {
-		mchan->prev_abs_tsfl = tsf_l;
 		return;
 	}
 
 	mbi = MCHAN_BSS_INFO(mchan, cfg);
 	mbi->in_psc = FALSE;
-
-	if (mchan->timer_running && mchan->prev_abs_tsfl) {
-		mchan->prev_abs_tsfl += (cfg->current_bss->beacon_period << 10);
-		if (ABS((int)(mchan->prev_abs_tsfl - tsf_l)) > MCHAN_MAX_ONCHAN_GAP_DRIFT_US) {
-			mchan->timer_running = FALSE;
-		}
-	}
-	mchan->prev_abs_tsfl = tsf_l;
 
 	if (!mchan->adjusted_for_nchan) {
 		wlc_mchan_set_adjusted_for_nchan(mchan);
@@ -4697,7 +4750,6 @@ wlc_mchan_psc_proc(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint32 tsf_l)
 
 	/* return if not mchan not active or AP bsscfg */
 	if (!(MCHAN_ENAB(wlc->pub) && MCHAN_ACTIVE(wlc->pub)) || BSSCFG_AP(cfg)) {
-		mchan->prev_psc_tsfl = tsf_l;
 		return;
 	}
 
@@ -4708,19 +4760,10 @@ wlc_mchan_psc_proc(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint32 tsf_l)
 		wlc_mchan_set_adjusted_for_nchan(mchan);
 	}
 
-	if (mchan->timer_running && mchan->prev_psc_tsfl) {
-		mchan->prev_psc_tsfl += (cfg->current_bss->beacon_period << 10);
-		if (ABS((int)(mchan->prev_psc_tsfl - tsf_l)) > MCHAN_MAX_ONCHAN_GAP_DRIFT_US) {
-			mchan->timer_running = FALSE;
-		}
-	}
-	mchan->prev_psc_tsfl = tsf_l;
-
 	/* schedule timers only if the other cfg is not in blocking state
 	 * if not, then just do prepare_pm_mode and let that cfg come
 	 * out of blocking mode. simple return in that case.
 	 */
-
 	if (mchan->blocking_bsscfg && mchan->timer_running &&
 		!SCAN_IN_PROGRESS(mchan->wlc->scan)) {
 		wlc_mchan_blocking_bsscfg(mchan);
@@ -4815,6 +4858,28 @@ wlc_mchan_algo_change_allowed(mchan_info_t * mchan, int algo)
 	return TRUE;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_mchan_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	mchan_info_t *mchan = (mchan_info_t *)ctx;
+	wlc_info_t *wlc = mchan->wlc;
+	mchan_bss_info_t *mbi = MCHAN_BSS_INFO(mchan, cfg);
+	char chanbuf[CHANSPEC_STR_LEN];
+
+	bcm_bprintf(b, "\tmchan: sw_dtim_cnt %u "
+	            "in_psc %d mchan_tbtt_since_bcn %u\n",
+	            mbi->sw_dtim_cnt, mbi->in_psc,
+	            mbi->mchan_tbtt_since_bcn);
+	bcm_bprintf(b, "\tcontext: %d chanspec %s wlcif->qi %p\n",
+	            wlc_has_chanctxt(wlc, cfg), (wlc_has_chanctxt(wlc, cfg) ?
+	             wf_chspec_ntoa(wlc_get_chanspec(wlc, cfg), chanbuf) :
+	             "0"),
+	            cfg->wlcif->qi);
+	bcm_bprintf(b, "\tconfig: chanspec %s\n",
+	            wf_chspec_ntoa(mbi->chanspec, chanbuf));
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /** TIM */
 static int
@@ -5158,6 +5223,71 @@ wlc_mchan_if_byte(wlc_info_t *wlc, wlc_bsscfg_t *curr_cfg, wlc_bsscfg_t *other_c
 	return BCME_OK;
 }
 
+static int
+wlc_mchan_bsscfg_config_get(void *hdl, wlc_bsscfg_t *bsscfg, uint8 *data, int *len)
+{
+	mchan_info_t *mchan = (mchan_info_t *)hdl;
+	mchan_bss_info_t *mbi;
+	if (len == NULL) {
+		WL_ERROR(("wl%d: %s: Null length passed\n", mchan->wlc->pub->unit, __FUNCTION__));
+		return BCME_ERROR;
+	}
+
+	if ((data == NULL) || (*len < sizeof(chanspec_t))) {
+		WL_ERROR(("wl%d: %s: Buffer too short\n", mchan->wlc->pub->unit, __FUNCTION__));
+		*len = sizeof(chanspec_t);
+		return BCME_BUFTOOSHORT;
+	}
+
+	ASSERT(bsscfg != NULL);
+
+	mbi =  MCHAN_BSS_INFO(mchan, bsscfg);
+
+	if (mbi == NULL) {
+		WL_ERROR(("wl%d: %s: NULL MCHAN Cubby\n", mchan->wlc->pub->unit, __FUNCTION__));
+		*len = 0;
+		return BCME_OK;
+	}
+	/* If the current STA CFG is roaming don't copy */
+	if (BSSCFG_STA(bsscfg) && !WLC_BSS_ASSOC_NOT_ROAM(bsscfg)) {
+		WL_INFORM(("wl%d: %s: Not copying cubby\n", mchan->wlc->pub->unit, __FUNCTION__));
+		*len = 0;
+		return BCME_OK;
+	}
+	memcpy(data, (&mbi->chanspec), sizeof(chanspec_t));
+	*len = sizeof(chanspec_t);
+	return BCME_OK;
+}
+
+static int
+wlc_mchan_bsscfg_config_set(void *hdl, wlc_bsscfg_t *bsscfg, const uint8 *data, int len)
+{
+	mchan_info_t *mchan = (mchan_info_t *)hdl;
+	mchan_bss_info_t *mbi;
+
+	if ((data == NULL) || (len < sizeof(chanspec_t))) {
+		WL_ERROR(("wl%d: %s: data(%p) len(%d)\n", mchan->wlc->pub->unit, __FUNCTION__,
+			data, len));
+		return BCME_ERROR;
+	}
+
+	ASSERT(bsscfg != NULL);
+	mbi = MCHAN_BSS_INFO(mchan, bsscfg);
+
+	if ((mbi == NULL)) {
+		WL_ERROR(("wl%d: %s: Not copying cubby\n", mchan->wlc->pub->unit, __FUNCTION__));
+		return BCME_OK;
+	}
+	memcpy((&mbi->chanspec), data, sizeof(chanspec_t));
+	return BCME_OK;
+}
+
+wlc_bsscfg_t *
+wlc_mchan_get_blocking_bsscfg(mchan_info_t *mchan)
+{
+	return mchan->blocking_bsscfg;
+}
+
 void
 wlc_mchan_reset_blocking_bsscfg(mchan_info_t *mchan)
 {
@@ -5165,5 +5295,4 @@ wlc_mchan_reset_blocking_bsscfg(mchan_info_t *mchan)
 	mchan->blocking_cnt = 0;
 	mchan->trigg_algo = TRUE;
 }
-
 #endif /* WLMCHAN */

@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_misc_hndlrs.c 636823 2016-05-10 21:38:16Z $
+ * $Id: wlc_ie_misc_hndlrs.c 656767 2016-08-30 01:02:39Z $
  */
 
 #include <wlc_cfg.h>
@@ -135,7 +135,6 @@
 #endif
 #include <wlc_macfltr.h>
 #include <wlc_addrmatch.h>
-#include <wlc_bmon.h>
 #ifdef WL_RELMCAST
 #include "wlc_relmcast.h"
 #endif

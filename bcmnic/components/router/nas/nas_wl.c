@@ -9,7 +9,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: nas_wl.c 533930 2015-02-12 04:18:41Z $
+ * $Id: nas_wl.c 663604 2016-10-06 06:18:22Z $
  */
 
 #include <typedefs.h>
@@ -454,6 +454,9 @@ nas_set_key(nas_t *nas, struct ether_addr *ea, uint8 *key, int len, int index,
             int tx, uint32 hi, uint16 lo)
 {
 	wl_wsec_key_t wep;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	char ki[] = "index XXXXXXXXXXX";
 
 	memset(&wep, 0, sizeof(wep));
@@ -603,7 +606,7 @@ nas_get_wpa_ie(nas_t *nas, char *ret_buf, int ret_buf_len, uint32 sta_mode)
 		}
 		else if (ie_getbuf->id != DOT11_MNG_RSN_ID) {
 			dbg(nas, "found WPA IE of length %d\n", wpa_len);
-			if (sta_mode == WPA2 || sta_mode == WPA2_PSK) {
+			if (sta_mode == WPA2 || sta_mode == WPA2_PSK || sta_mode == WPA2_FT) {
 				buf_ptr += wpa_len + TLV_HDR_LEN;
 				continue;
 			}
@@ -638,3 +641,161 @@ nas_send_brcm_event(nas_t *nas, uint8* mac, int reason)
 	}
 	return err;
 }
+
+int
+nas_get_ssid(nas_t *nas, uint8 *ssid_ptr, uint32 *ssid_len)
+{
+	char buf[WLC_IOCTL_SMLEN];
+
+	if (nas == NULL)
+	{
+		return -1;
+	}
+
+	wl_iovar_getbuf(nas->interface, "ssid", &nas->ea, ETHER_ADDR_LEN, buf, sizeof(buf));
+	wlc_ssid_t * ssid = (wlc_ssid_t *) buf;
+	if (ssid->SSID_len > 0 && ssid->SSID_len < DOT11_MAX_SSID_LEN - 1) {
+		ssid->SSID[ssid->SSID_len] = 0;
+		*ssid_len = ssid->SSID_len;
+		memcpy(ssid_ptr, ssid->SSID, *ssid_len);
+	}
+	return 0;
+}
+
+int
+nas_get_bssid(nas_t *nas, char *buf, int buf_len)
+{
+	char *tmp_ptr;
+
+	if (nas == NULL || buf == NULL) {
+		return -1;
+	}
+
+	tmp_ptr = buf;
+	strcpy(buf, "bssid");
+	tmp_ptr += strlen(buf);
+	tmp_ptr++;
+	memcpy(tmp_ptr, nas->ea.octet, ETHER_ADDR_LEN);
+
+	return wl_ioctl(nas->interface, WLC_GET_BSSID, buf, buf_len);
+}
+
+#ifdef WLHOSTFBT
+
+/* get current FBT MDID */
+int
+nas_get_fbt_mdid(nas_t *nas, uint16 *mdid)
+{
+	int err;
+	int val;
+
+	err = wl_iovar_getint(nas->interface, "fbt_mdid", &val);
+	if (!err)
+		*mdid = val;
+
+	return err;
+}
+
+int
+nas_set_fbt_auth_resp(nas_t *nas, uint8* resp_ies, int resp_ies_len)
+{
+	int err;
+	char mdbuf[WLC_IOCTL_MEDLEN];
+
+	if (nas == NULL || resp_ies == NULL)
+	{
+		return -1;
+	}
+
+	err = wl_iovar_setbuf(nas->interface, "fbt_auth_resp", resp_ies, resp_ies_len,
+			mdbuf, sizeof(mdbuf));
+	if (err) {
+		dbg(nas, "set fbt_auth_resp iovar error %d, ifname %s", err, nas->interface);
+	}
+	return err;
+}
+
+int nas_set_fbt_action(nas_t *nas, uint8 *fbt_act_ies, int fbt_act_ies_len)
+{
+	int err;
+	char mdbuf[WLC_IOCTL_MEDLEN];
+
+	if (nas == NULL || fbt_act_ies == NULL)
+	{
+		return -1;
+	}
+
+	err = wl_iovar_setbuf(nas->interface, "fbt_act_resp", fbt_act_ies, fbt_act_ies_len,
+			mdbuf, sizeof(mdbuf));
+	if (err) {
+		dbg(nas, "set fbt_act_resp iovar error %d, ifname %s", err, nas->interface);
+	}
+
+	return err;
+}
+
+int nas_set_fbt_ds_add_sta(nas_t *nas, uint8 *fbt_ds_add_sta_ies, int fbt_add_sta_ies_len)
+{
+	int err;
+	char mdbuf[WLC_IOCTL_MEDLEN];
+
+	if (nas == NULL || fbt_ds_add_sta_ies == NULL)
+	{
+		return -1;
+	}
+
+	err = wl_iovar_setbuf(nas->interface, "fbt_ds_add_sta", fbt_ds_add_sta_ies,
+			fbt_add_sta_ies_len, mdbuf, sizeof(mdbuf));
+	if (err) {
+		dbg(nas, "set fbt_act_resp iovar error %d, ifname %s", err, nas->interface);
+	}
+
+	return err;
+}
+
+/* get current FBT Reassoc timer */
+int
+nas_get_reassoc_timer(nas_t *nas, uint32 *reassoc_deadline)
+{
+	int err;
+	int val;
+
+	err = wl_iovar_getint(nas->interface, "fbt_reassoc_time", &val);
+	if (!err)
+		*reassoc_deadline = val;
+
+	return err;
+}
+
+int
+nas_get_fbt_overds(nas_t *nas, uint32 *fbt_overds)
+{
+	int err;
+	int val;
+
+	err = wl_iovar_getint(nas->interface, "fbtoverds", &val);
+	if (!err)
+		*fbt_overds = val;
+
+	return err;
+}
+
+int nas_get_fbt_r0kh(nas_t *nas, char *buf, uint32 size)
+{
+	if (nas == NULL || buf == NULL)
+	{
+		return -1;
+	}
+	return  wl_iovar_getbuf(nas->interface, "fbt_r0kh_id", &nas->ea, 6, buf, size);
+}
+
+int nas_get_fbt_r1kh(nas_t *nas, char *buf, uint32 buf_len)
+{
+	if (nas == NULL || buf == NULL)
+	{
+		return -1;
+	}
+	return  wl_iovar_getbuf(nas->interface, "fbt_r1kh_id", &nas->ea, 6, buf, buf_len);
+}
+
+#endif /* WLHOSTFBT */

@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: sbconfig.h 530150 2015-01-29 08:43:40Z $
+ * $Id: sbconfig.h 654158 2016-08-11 09:30:01Z $
  */
 
 #ifndef	_SBCONFIG_H
@@ -31,11 +31,11 @@
 #define	PAD		_XSTR(__LINE__)
 #endif
 
-/* enumeration in SB is based on the premise that cores are contiguos in the
+/* enumeration in SB is based on the premise that cores are contiguous in the
  * enumeration space.
  */
 #define SB_BUS_SIZE		0x10000		/**< Each bus gets 64Kbytes for cores */
-#define SB_BUS_BASE(b)		(SI_ENUM_BASE + (b) * SB_BUS_SIZE)
+#define SB_BUS_BASE(sih, b)		(SI_ENUM_BASE(sih) + (b) * SB_BUS_SIZE)
 #define	SB_BUS_MAXCORES		(SB_BUS_SIZE / SI_CORE_SIZE)	/**< Max cores per bus */
 
 /*

@@ -30,7 +30,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: WLAN.usf 632491 2016-04-19 13:26:38Z $
+# $Id: WLAN.usf 662436 2016-09-29 12:31:56Z $
 #
 
 # Current list of components
@@ -41,8 +41,9 @@ WLAN_COMPONENT_PATHS=src/shared/bcmwifi components/clm-api src/wl/lwip src/wl/pp
                      src/wl/rel_mcast src/wl/gas src/wl/encode src/wl/olpc \
 		     src/wl/keymgmt src/wl/iocv src/wl/dump \
 		     components/ndis src/wl/proxd src/dongle src/rte \
-		     src/wl/nan src/wl/ate src/wl/mesh src/wl/randmac \
-		     components/phy src/wl/natoe
+		     components/nan src/wl/ate src/wl/mesh src/wl/randmac \
+		     components/phy src/wl/natoe components/accel components/avs \
+		     components/msch components/apf components/hml src/wl/chctx src/wl/mbo_oce
 
 # This is a staging area for generated content that need to be shared
 # between build step and packaging step. E.g when CLM data files

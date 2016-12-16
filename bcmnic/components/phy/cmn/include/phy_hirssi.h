@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_hirssi.h 617885 2016-02-09 00:18:54Z jkoster $
+ * $Id: phy_hirssi.h 617885 2016-02-09 00:18:54Z $
  */
 
 #ifndef _phy_hirssi_h_

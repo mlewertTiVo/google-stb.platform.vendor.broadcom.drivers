@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_dsi_iov.c 619527 2016-02-17 05:54:49Z renukad $
+ * $Id: phy_dsi_iov.c 658512 2016-09-08 07:03:22Z $
  */
 
 #include <wlc_cfg.h>
@@ -46,6 +46,12 @@ static const bcm_iovar_t phy_dsi_iovars[] = {
 #ifndef ALL_NEW_PHY_MOD
 #include <wlc_phy_int.h>
 #endif
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 static int
 phy_dsi_doiovar(void *ctx, uint32 aid,

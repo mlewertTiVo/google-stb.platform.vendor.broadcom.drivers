@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_radar.c 625132 2016-03-15 18:24:29Z vyass $
+ * $Id: phy_n_radar.c 657811 2016-09-02 17:48:43Z $
  */
 
 #include <typedefs.h>
@@ -45,7 +45,9 @@ struct phy_n_radar_info {
 static int phy_n_radar_init(phy_type_radar_ctx_t *ctx, bool on);
 static void _phy_n_radar_update(phy_type_radar_ctx_t *ctx);
 static void phy_n_radar_set_mode(phy_type_radar_ctx_t *ctx, phy_radar_detect_mode_t mode);
-static uint8 phy_n_radar_run(phy_type_radar_ctx_t *ctx, radar_detected_info_t *radar_detected);
+static uint8 phy_n_radar_run(phy_type_radar_ctx_t *ctx,
+	radar_detected_info_t *radar_detected, bool sec_pll, bool bw80_80_mode);
+static int phy_n_radar_set_thresholds(phy_type_radar_ctx_t *ctx, wl_radar_thr_t *thresholds);
 static void phy_radar_init_st(phy_info_t *pi, phy_radar_st_t *st);
 
 /* Register/unregister NPHY specific implementation to common layer */
@@ -74,6 +76,7 @@ BCMATTACHFN(phy_n_radar_register_impl)(phy_info_t *pi, phy_n_info_t *ni, phy_rad
 	fns.update = _phy_n_radar_update;
 	fns.mode = phy_n_radar_set_mode;
 	fns.run = phy_n_radar_run;
+	fns.set_thresholds = phy_n_radar_set_thresholds;
 	fns.ctx = info;
 
 	if (phy_radar_register_impl(ri, &fns) != BCME_OK) {
@@ -157,10 +160,6 @@ WLBANDINITFN(_phy_n_radar_init)(phy_n_radar_info_t *info, bool on)
 			st->rparams.radar_args.st_level_time);
 		phy_utils_write_phyreg(pi, NPHY_StrAddress2l,
 			st->rparams.radar_args.st_level_time);
-		phy_utils_write_phyreg(pi, NPHY_crsControlu,
-			(uint8)st->rparams.radar_args.autocorr);
-		phy_utils_write_phyreg(pi, NPHY_crsControll,
-			(uint8)st->rparams.radar_args.autocorr);
 		phy_utils_write_phyreg(pi, NPHY_FMDemodConfig,
 			st->rparams.radar_args.fmdemodcfg);
 
@@ -221,14 +220,15 @@ WLBANDINITFN(phy_n_radar_init)(phy_type_radar_ctx_t *ctx, bool on)
 }
 
 static uint8
-phy_n_radar_run(phy_type_radar_ctx_t *ctx, radar_detected_info_t *radar_detected)
+phy_n_radar_run(phy_type_radar_ctx_t *ctx, radar_detected_info_t *radar_detected,
+bool sec_pll, bool bw_80_80_mode)
 {
 	phy_n_radar_info_t *info = (phy_n_radar_info_t *)ctx;
 	phy_info_t *pi = info->pi;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
-	return phy_radar_run_nphy(pi, radar_detected);
+	return phy_radar_run_nphy(pi, radar_detected, sec_pll, bw_80_80_mode);
 }
 
 static void
@@ -270,17 +270,20 @@ phy_n_radar_upd(phy_n_radar_info_t *ri)
 
 static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_nphy_ge7) = {
 	WL_RADAR_THR_VERSION,
-	0x64a, 0x30, 0x64a, 0x30, 0, 0, 0x64a, 0x30, 0x64a, 0x30, 0, 0
+	0x64a, 0x30, 0x64a, 0x30, 0, 0, 0x64a, 0x30, 0x64a, 0x30, 0, 0,
+	0, 0, 0, 0
 };
 
 static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_nphy_ge3) = {
 	WL_RADAR_THR_VERSION,
-	0x6c0, 0x6f0, 0x6c0, 0x6f0, 0, 0, 0x6c0, 0x6f0, 0x6c0, 0x6f0, 0, 0
+	0x6c0, 0x6f0, 0x6c0, 0x6f0, 0, 0, 0x6c0, 0x6f0, 0x6c0, 0x6f0, 0, 0,
+	0, 0, 0, 0
 };
 
 static const wl_radar_thr_t BCMATTACHDATA(wlc_phy_radar_thresh_nphy_lt3) = {
 	WL_RADAR_THR_VERSION,
-	0x6a8, 0x6d0, 0x6b8, 0x6e0, 0, 0, 0x69c, 0x6c6, 0x6b8, 0x6e0, 0, 0
+	0x6a8, 0x6d0, 0x6b8, 0x6e0, 0, 0, 0x69c, 0x6c6, 0x6b8, 0x6e0, 0, 0,
+	0, 0, 0, 0
 };
 
 static void
@@ -378,8 +381,6 @@ phy_radar_init_st(phy_info_t *pi, phy_radar_st_t *st)
 	/* bits 7:4 = 4 for EU type 2, bits 3:0= 4 for EU type 1 */
 	/* 10 00 1100 1100 1100 */
 	st->rparams.radar_args.npulses_fra = 34406;  /* 0x8666, bits 15:14 low_intv_eu_t2 */
-	st->rparams.radar_args.npulses_stg2 = 5;
-	st->rparams.radar_args.npulses_stg3 = 5;
 	st->rparams.radar_args.percal_mask = 0x31;
 	st->rparams.radar_args.feature_mask = RADAR_FEATURE_USE_MAX_PW | RADAR_FEATURE_FCC_DETECT;
 
@@ -416,4 +417,16 @@ phy_n_radar_set_mode(phy_type_radar_ctx_t *ctx, phy_radar_detect_mode_t mode)
 	if (st->rdm == RADAR_DETECT_MODE_FCC || st->rdm == RADAR_DETECT_MODE_EU) {
 		st->rparams.radar_args.st_level_time = 0x1591;
 	}
+}
+
+static int
+phy_n_radar_set_thresholds(phy_type_radar_ctx_t *ctx, wl_radar_thr_t *thresholds)
+{
+	phy_n_radar_info_t *radari = (phy_n_radar_info_t *)ctx;
+	phy_radar_st_t *st = phy_radar_get_st(radari->ri);
+	st->rparams.radar_thrs.thresh0_40_lo = thresholds->thresh0_40_lo;
+	st->rparams.radar_thrs.thresh1_40_lo = thresholds->thresh1_40_lo;
+	st->rparams.radar_thrs.thresh0_40_hi = thresholds->thresh0_40_hi;
+	st->rparams.radar_thrs.thresh1_40_hi = thresholds->thresh1_40_hi;
+	return BCME_OK;
 }

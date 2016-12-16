@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11.h 639448 2016-05-23 20:23:42Z $
+ * $Id: 802.11.h 647113 2016-07-03 09:16:38Z $
  */
 
 #ifndef _802_11_H_
@@ -96,6 +96,8 @@
 
 /** 802.2 LLC/SNAP header used by 802.11 per 802.1H */
 #define DOT11_LLC_SNAP_HDR_LEN		8	/* d11 LLC/SNAP header length */
+/* minimum LLC header length; DSAP, SSAP, 8 bit Control (unnumbered) */
+#define DOT11_LLC_HDR_LEN_MIN		3
 #define DOT11_OUI_LEN			3	/* d11 OUI length */
 BWL_PRE_PACKED_STRUCT struct dot11_llc_snap_header {
 	uint8	dsap;				/* always 0xAA */
@@ -2359,6 +2361,17 @@ typedef struct dot11_dms_resp_st dot11_dms_resp_st_t;
 #define DOT11_DMS_RESP_TYPE_TERM	2
 
 #define DOT11_DMS_RESP_LSC_UNSUPPORTED	0xFFFF
+
+/** WNM-Notification Request frame header */
+BWL_PRE_PACKED_STRUCT struct dot11_wnm_notif_req {
+	uint8 category;				/* category of action frame (10) */
+	uint8 action;				/* WNM action: Notification request (26) */
+	uint8 token;				/* dialog token */
+	uint8 type;				   /* type */
+	uint8 data[1];				/* Sub-elements */
+} BWL_POST_PACKED_STRUCT;
+typedef struct dot11_wnm_notif_req dot11_wnm_notif_req_t;
+#define DOT11_WNM_NOTIF_REQ_LEN		4	/* Fixed length */
 
 /** FMS Management Request frame header */
 BWL_PRE_PACKED_STRUCT struct dot11_fms_req {

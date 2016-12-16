@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_cache.c 620412 2016-02-23 02:54:43Z hou $
+ * $Id: phy_n_cache.c 660552 2016-09-21 01:45:12Z $
  */
 
 #include <phy_cfg.h>
@@ -187,7 +187,7 @@ wlc_phy_cal_cache_restore_nphy(phy_type_cache_ctx_t * cache_ctx)
 
 	if (!ctx->valid) {
 		PHY_ERROR(("wl%d: %s: Chanspec 0x%x found, but not valid in phycal cache\n",
-		           pi->sh->unit, __FUNCTION__, ctx->chanspec));
+		           pi->sh->unit, __FUNCTION__, pi->radio_chanspec));
 		return BCME_ERROR;
 	}
 
@@ -209,7 +209,7 @@ wlc_phy_cal_cache_restore_nphy(phy_type_cache_ctx_t * cache_ctx)
 	phy_utils_phyreg_enter(pi);
 
 	if (pi_nphy->phyhang_avoid)
-		wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	tx_pwr_ctrl_state = pi->nphy_txpwrctrl;
 	wlc_phy_txpwrctrl_enable_nphy(pi, PHY_TPC_HW_OFF);
@@ -335,7 +335,7 @@ wlc_phy_cal_cache_restore_nphy(phy_type_cache_ctx_t * cache_ctx)
 	wlc_phy_txpwrctrl_enable_nphy(pi, tx_pwr_ctrl_state);
 
 	if (pi_nphy->phyhang_avoid)
-		wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	phy_utils_phyreg_exit(pi);
 
@@ -345,7 +345,7 @@ wlc_phy_cal_cache_restore_nphy(phy_type_cache_ctx_t * cache_ctx)
 	}
 
 	PHY_INFORM(("wl%d: %s: Restored values for chanspec 0x%x are:\n", pi->sh->unit,
-	           __FUNCTION__, ctx->chanspec));
+	           __FUNCTION__, pi->radio_chanspec));
 	wlc_phy_cal_cache_dbg_nphy((wlc_phy_t *)pi, ctx);
 	return BCME_OK;
 }
@@ -372,7 +372,7 @@ wlc_phy_cal_cache_nphy(phy_type_cache_ctx_t * cache_ctx)
 	cache = &ctx->u.nphy_cache;
 
 	if (pi_nphy->phyhang_avoid)
-		wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	if (NREV_LT(pi->pubpi->phy_rev, LCNXN_BASEREV + 3)) {
 		cache->rssical_radio_regs[0] =
@@ -513,10 +513,10 @@ wlc_phy_cal_cache_nphy(phy_type_cache_ctx_t * cache_ctx)
 #endif
 	}
 	if (pi_nphy->phyhang_avoid)
-		wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	PHY_INFORM(("wl%d: %s: Cached cal values for chanspec 0x%x are:\n",
-	           pi->sh->unit, __FUNCTION__,  ctx->chanspec));
+	           pi->sh->unit, __FUNCTION__,  pi->radio_chanspec));
 	wlc_phy_cal_cache_dbg_nphy((wlc_phy_t *)pi, ctx);
 }
 
@@ -577,7 +577,6 @@ wlc_phy_cal_dump_nphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 	uint16 crs_min_pwr[] = {0, 0};
 	uint16 listen_gain_A[] = {0, 0};
 	uint16 listen_gain_B[] = {0, 0};
-	int ei, eq, fi, fq;
 	int time_elapsed;
 	phy_info_nphy_t *pi_nphy = NULL;
 
@@ -625,7 +624,7 @@ wlc_phy_cal_dump_nphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 	phy_utils_phyreg_enter(pi);
 
 	if (pi_nphy->phyhang_avoid)
-		wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	/* Read Rx calibration co-efficients */
 	wlc_phy_rx_iq_coeffs_nphy(pi, 0, &rxcal_coeffs);
@@ -643,28 +642,6 @@ wlc_phy_cal_dump_nphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 		rcal_value = phy_utils_read_radioreg(pi, RADIO_20671_BG_CFG1_CORE0);
 		rcal_value = ((rcal_value & 0xf000) >> 12);
 	} else {
-		radio_regs[0] =	phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_FINE_I | RADIO_2056_TX0);
-		radio_regs[1] = phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_FINE_Q | RADIO_2056_TX0);
-		radio_regs[2] = phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_FINE_I | RADIO_2056_TX1);
-		radio_regs[3] = phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_FINE_Q | RADIO_2056_TX1);
-		radio_regs[4] = phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_COARSE_I | RADIO_2056_TX0);
-		radio_regs[5] = phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_COARSE_Q | RADIO_2056_TX0);
-		radio_regs[6] = phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_COARSE_I | RADIO_2056_TX1);
-		radio_regs[7] = phy_utils_read_radioreg(pi,
-			RADIO_2056_TX_LOFT_COARSE_Q | RADIO_2056_TX1);
-		/* read rccal value */
-		rccal_val[0] = phy_utils_read_radioreg(pi,
-			RADIO_2056_RX_RXLPF_RCCAL_LPC | RADIO_2056_RX0);
-		rccal_val[1] = phy_utils_read_radioreg(pi,
-			RADIO_2056_RX_RXLPF_RCCAL_LPC | RADIO_2056_RX1);
-
 		if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV)) {
 			rccal_val[0] = phy_utils_read_radioreg(pi, RADIO_2057_RCCAL_BCAP_VAL);
 			rccal_val[1] = phy_utils_read_radioreg(pi, RADIO_2057_RCCAL_SCAP_VAL);
@@ -679,7 +656,7 @@ wlc_phy_cal_dump_nphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 	wlc_phy_table_read_nphy(pi, NPHY_TBL_ID_IQLOCAL, 8, 88, 16, txcal_bphy_coeffs);
 
 	if (pi_nphy->phyhang_avoid)
-		wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	/* reg access is done, enable the mac */
 	phy_utils_phyreg_exit(pi);
@@ -710,25 +687,29 @@ wlc_phy_cal_dump_nphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 		txcal_ofdm_coeffs[2],
 		txcal_ofdm_coeffs[3]);
 
-	ei = (int)(radio_regs[0] & 0xf) - (int)((radio_regs[0] & 0xf0) >> 4);
-	eq = (int)(radio_regs[1] & 0xf) - (int)((radio_regs[1] & 0xf0) >> 4);
-	fi = (int)(radio_regs[4] & 0xf) - (int)((radio_regs[4] & 0xf0) >> 4);
-	fq = (int)(radio_regs[5] & 0xf) - (int)((radio_regs[5] & 0xf0) >> 4);
-	bcm_bprintf(b, "Core 0: LOFT_FINE_I=0x%0x, LOFT_FINE_Q=0x%0x\n",
-		radio_regs[0], radio_regs[1]);
-	bcm_bprintf(b, "Core 0: LOFT_COARSE_I=0x%0x, LOFT_COARSE_Q=0x%0x\n",
-		radio_regs[4], radio_regs[5]);
-	bcm_bprintf(b, "Core 0: ei=%d, eq=%d, fi=%d, fq=%d\n", ei, eq, fi, fq);
+	if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3)) {
+		int ei, eq, fi, fq;
 
-	ei = (int)(radio_regs[2] & 0xf) - (int)((radio_regs[2] & 0xf0) >> 4);
-	eq = (int)(radio_regs[3] & 0xf) - (int)((radio_regs[3] & 0xf0) >> 4);
-	fi = (int)(radio_regs[6] & 0xf) - (int)((radio_regs[6] & 0xf0) >> 4);
-	fq = (int)(radio_regs[7] & 0xf) - (int)((radio_regs[7] & 0xf0) >> 4);
-	bcm_bprintf(b, "Core 1: LOFT_FINE_I=0x%0x, LOFT_FINE_Q=0x%0x\n",
-		radio_regs[2], radio_regs[3]);
-	bcm_bprintf(b, "Core 1: LOFT_COARSE_I=0x%0x, LOFT_COARSE_Q=0x%0x\n",
-		radio_regs[6], radio_regs[7]);
-	bcm_bprintf(b, "Core 1: ei=%d, eq=%d, fi=%d, fq=%d\n", ei, eq, fi, fq);
+		ei = (int)(radio_regs[0] & 0xf) - (int)((radio_regs[0] & 0xf0) >> 4);
+		eq = (int)(radio_regs[1] & 0xf) - (int)((radio_regs[1] & 0xf0) >> 4);
+		fi = (int)(radio_regs[4] & 0xf) - (int)((radio_regs[4] & 0xf0) >> 4);
+		fq = (int)(radio_regs[5] & 0xf) - (int)((radio_regs[5] & 0xf0) >> 4);
+		bcm_bprintf(b, "Core 0: LOFT_FINE_I=0x%0x, LOFT_FINE_Q=0x%0x\n",
+			radio_regs[0], radio_regs[1]);
+		bcm_bprintf(b, "Core 0: LOFT_COARSE_I=0x%0x, LOFT_COARSE_Q=0x%0x\n",
+			radio_regs[4], radio_regs[5]);
+		bcm_bprintf(b, "Core 0: ei=%d, eq=%d, fi=%d, fq=%d\n", ei, eq, fi, fq);
+
+		ei = (int)(radio_regs[2] & 0xf) - (int)((radio_regs[2] & 0xf0) >> 4);
+		eq = (int)(radio_regs[3] & 0xf) - (int)((radio_regs[3] & 0xf0) >> 4);
+		fi = (int)(radio_regs[6] & 0xf) - (int)((radio_regs[6] & 0xf0) >> 4);
+		fq = (int)(radio_regs[7] & 0xf) - (int)((radio_regs[7] & 0xf0) >> 4);
+		bcm_bprintf(b, "Core 1: LOFT_FINE_I=0x%0x, LOFT_FINE_Q=0x%0x\n",
+			radio_regs[2], radio_regs[3]);
+		bcm_bprintf(b, "Core 1: LOFT_COARSE_I=0x%0x, LOFT_COARSE_Q=0x%0x\n",
+			radio_regs[6], radio_regs[7]);
+		bcm_bprintf(b, "Core 1: ei=%d, eq=%d, fi=%d, fq=%d\n", ei, eq, fi, fq);
+	}
 
 	bcm_bprintf(b, "Di0=%d, Dq0=%d, Di1=%d, Dq1=%d, m0=%d, m1=%d\n\n\n",
 		(int8) ((txcal_ofdm_coeffs[5] & 0xFF00) >> 8),
@@ -796,10 +777,8 @@ wlc_phy_cal_dump_nphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 			pi_nphy->rccal_capval[0], pi_nphy->rccal_capval[1],
 			pi_nphy->rccal_capval[2], pi_nphy->rccal_capval[3],
 			pi_nphy->rccal_capval[4], pi_nphy->rccal_capval[5]);
-	} else {
+	} else if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV)) {
 		bcm_bprintf(b, "RC CAL value: %d, %d\n", rccal_val[0], rccal_val[1]);
-	}
-	if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV)) {
 		bcm_bprintf(b, "\nR CAL value: %d\n", rcal_value);
 	}
 

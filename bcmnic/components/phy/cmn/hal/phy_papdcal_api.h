@@ -20,7 +20,7 @@
 
 #include <phy_api.h>
 
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 bool wlc_phy_isperratedpden(wlc_phy_t *ppi);
 void wlc_phy_perratedpdset(wlc_phy_t *ppi, bool enable);
 #endif

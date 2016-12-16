@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:.*>>
  *
- * $Id: test_phy_radar.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: test_phy_radar.h 606042 2015-12-14 06:21:23Z $
  */
 
 #include <check.h> /* Includes Check framework */

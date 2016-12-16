@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_tpc.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_ht_tpc.c 659421 2016-09-14 06:45:22Z $
  */
 
 #include <typedefs.h>
@@ -24,6 +24,7 @@
 #include <phy_ht_tpc.h>
 #include <phy_tpc_api.h>
 #include <phy_ht_info.h>
+#include <phy_utils_reg.h>
 
 #ifndef ALL_NEW_PHY_MOD
 /* < TODO: all these are going away... */
@@ -52,10 +53,12 @@ static int phy_ht_tpc_txpower_core_offset_set(phy_type_tpc_ctx_t *ctx,
         struct phy_txcore_pwr_offsets *offsets);
 static int phy_ht_tpc_txpower_core_offset_get(phy_type_tpc_ctx_t *ctx,
 	struct phy_txcore_pwr_offsets *offsets);
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-static int phy_ht_tpc_set_pavars(phy_type_tpc_ctx_t *ctx, void* a, void* p);
-static int phy_ht_tpc_get_pavars(phy_type_tpc_ctx_t *ctx, void* a, void* p);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+static int phy_ht_tpc_get_est_pout(phy_type_tpc_ctx_t *ctx,
+	uint8* est_Pout, uint8* est_Pout_adj, uint8* est_Pout_cck);
+#ifdef BCMDBG
+static void phy_ht_tpc_dump_txpower_limits(phy_type_tpc_ctx_t *ctx, ppr_t* txpwr);
+#endif /* BCMDBG */
+static void phy_ht_tpc_set_hw_ctrl(phy_type_tpc_ctx_t *ctx, bool hwpwrctrl);
 
 /* Register/unregister HTPHY specific implementation to common layer. */
 phy_ht_tpc_info_t *
@@ -86,10 +89,11 @@ BCMATTACHFN(phy_ht_tpc_register_impl)(phy_info_t *pi, phy_ht_info_t *hti, phy_tp
 	fns.setmax = phy_ht_tpc_set_max;
 	fns.txcorepwroffsetset = phy_ht_tpc_txpower_core_offset_set;
 	fns.txcorepwroffsetget = phy_ht_tpc_txpower_core_offset_get;
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-	fns.set_pavars = phy_ht_tpc_set_pavars;
-	fns.get_pavars = phy_ht_tpc_get_pavars;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+	fns.get_est_pout = phy_ht_tpc_get_est_pout;
+#ifdef BCMDBG
+	fns.dump_txpower_limits = phy_ht_tpc_dump_txpower_limits;
+#endif /* BCMDBG */
+	fns.set_hwctrl = phy_ht_tpc_set_hw_ctrl;
 	fns.ctx = info;
 
 	phy_tpc_register_impl(ti, &fns);
@@ -157,7 +161,7 @@ wlc_phy_txpower_recalc_target_ht_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_targ
 		 */
 		ppr_set_cmn_val(tx_pwr_target, info->ti->data->tx_user_target);
 
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(WL_EXPORT_TXPOWER)
+#if defined(WL_EXPORT_TXPOWER)
 		/* Only allow tx power override for internal or test builds. */
 		if (!info->ti->data->txpwroverride)
 #endif
@@ -265,9 +269,6 @@ wlc_phy_txpower_recalc_target_ht_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_targ
 	 * PHY_ERROR(("#####The final power offset limit########\n"));
 	 * ppr_mcs_printf(pi->tx_power_offset);
 	 */
-	ppr_delete(pi->sh->osh, reg_txpwr_limit);
-	ppr_delete(pi->sh->osh, tx_pwr_target);
-	ppr_delete(pi->sh->osh, srom_max_txpwr);
 	/* Common Code End */
 }
 
@@ -394,76 +395,268 @@ phy_ht_tpc_txpower_core_offset_get(phy_type_tpc_ctx_t *ctx, struct phy_txcore_pw
 	return BCME_OK;
 }
 
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-static int
-phy_ht_tpc_set_pavars(phy_type_tpc_ctx_t *ctx, void *a, void *p)
-{
-	phy_ht_tpc_info_t *tpci = (phy_ht_tpc_info_t *)ctx;
-	phy_info_t *pi = tpci->pi;
-	uint16 inpa[WL_PHY_PAVARS_LEN];
-	uint j = 3; /* PA parameters start from offset 3 */
-	bcopy(p, inpa, sizeof(inpa));
-
-	if (inpa[0] != PHY_TYPE_HT) {
-		return BCME_BADARG;
-	}
-
-	if (inpa[2] >= PHYCORENUM(pi->pubpi->phy_corenum)) {
-		return BCME_BADARG;
-	}
-
-	switch (inpa[1]) {
-	case WL_CHAN_FREQ_RANGE_2G:
-	case WL_CHAN_FREQ_RANGE_5G_BAND0:
-	case WL_CHAN_FREQ_RANGE_5G_BAND1:
-	case WL_CHAN_FREQ_RANGE_5G_BAND2:
-	case WL_CHAN_FREQ_RANGE_5G_BAND3:
-		wlc_phy_pavars_set_htphy(pi, &inpa[j], inpa[1], inpa[2]);
-		return BCME_OK;
-	default:
-		PHY_ERROR(("bandrange %d is out of scope\n", inpa[1]));
-		return BCME_OUTOFRANGECHAN;
-	}
-}
 
 static int
-phy_ht_tpc_get_pavars(phy_type_tpc_ctx_t *ctx, void *a, void *p)
+phy_ht_tpc_get_est_pout(phy_type_tpc_ctx_t *ctx,
+	uint8* est_Pout, uint8* est_Pout_adj, uint8* est_Pout_cck)
 {
-	phy_ht_tpc_info_t *tpci = (phy_ht_tpc_info_t *)ctx;
-	phy_info_t *pi = tpci->pi;
-	uint16 *outpa = a;
-	uint16 inpa[WL_PHY_PAVARS_LEN];
-	uint j = 3; /* PA parameters start from offset 3 */
+	phy_ht_tpc_info_t *tpc_info = (phy_ht_tpc_info_t *) ctx;
+	phy_info_t *pi = tpc_info->pi;
 
-	bcopy(p, inpa, sizeof(inpa));
+	*est_Pout_cck = 0;
 
-	outpa[0] = inpa[0]; /* Phy type */
-	outpa[1] = inpa[1]; /* Band range */
-	outpa[2] = inpa[2]; /* Chain */
+	/* Get power estimates */
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+	phy_utils_phyreg_enter(pi);
+	wlc_phy_txpwr_est_pwr_htphy(pi, est_Pout, est_Pout_adj);
+	phy_utils_phyreg_exit(pi);
+	wlapi_enable_mac(pi->sh->physhim);
 
-	if (inpa[0] != PHY_TYPE_HT) {
-		outpa[0] = PHY_TYPE_NULL;
-		return BCME_BADARG;
-	}
-
-	if (inpa[2] >= PHYCORENUM(pi->pubpi->phy_corenum)) {
-		return BCME_BADARG;
-	}
-
-	switch (inpa[1]) {
-	case WL_CHAN_FREQ_RANGE_2G:
-	case WL_CHAN_FREQ_RANGE_5G_BAND0:
-	case WL_CHAN_FREQ_RANGE_5G_BAND1:
-	case WL_CHAN_FREQ_RANGE_5G_BAND2:
-	case WL_CHAN_FREQ_RANGE_5G_BAND3:
-		wlc_phy_pavars_get_htphy(pi, &outpa[j], inpa[1], inpa[2]);
-		return BCME_OK;
-	default:
-		PHY_ERROR(("bandrange %d is out of scope\n", inpa[1]));
-		return BCME_OUTOFRANGECHAN;
-	}
+	return BCME_OK;
 }
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+
+#ifdef BCMDBG
+static void
+phy_ht_tpc_dump_txpower_limits(phy_type_tpc_ctx_t *ctx, ppr_t* txpwr)
+{
+	int i;
+	char fraction[4][4] = {"   ", ".25", ".5 ", ".75"};
+	ppr_dsss_rateset_t dsss_limits;
+	ppr_ofdm_rateset_t ofdm_limits;
+	ppr_ht_mcs_rateset_t mcs_limits;
+	bool phy_specific_log = TRUE;
+
+	printf("%s", phy_specific_log ? "20MHz 1 Nsts to 1 Tx " : "20MHz MCS 0-7 SISO   ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("%s", phy_specific_log ? "20MHz 1 Nsts to 2 Tx " : "20MHz MCS 0-7 CDD    ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	if (phy_specific_log) {
+		printf("20MHz 1 Nsts to 3 Tx ");
+		ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+			&mcs_limits);
+	} else {
+		printf("20MHz MCS 0-7 STBC   ");
+		ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2, WL_TX_MODE_STBC, WL_TX_CHAINS_2,
+			&mcs_limits);
+	}
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("%s", phy_specific_log ? "20MHz 2 Nsts to 2 Tx " : "20MHz MCS 8-15 SDM   ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2, WL_TX_MODE_NONE, WL_TX_CHAINS_2,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	if (phy_specific_log) {
+		printf("20MHz 2 Nsts to 3 Tx ");
+		ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2, WL_TX_MODE_NONE, WL_TX_CHAINS_3,
+			&mcs_limits);
+		for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+			printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+				fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+		}
+		printf("\n");
+
+		printf("20MHz 3 Nsts to 3 Tx ");
+		ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_3, WL_TX_MODE_NONE, WL_TX_CHAINS_3,
+			&mcs_limits);
+		for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+			printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+				fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+		}
+		printf("\n");
+	}
+
+
+	printf("40MHz OFDM SISO      ");
+	ppr_get_ofdm(txpwr, WL_TX_BW_40, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+	for (i = 0; i < WL_RATESET_SZ_OFDM; i++) {
+		printf(" %2d%s", ofdm_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[ofdm_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("40MHz OFDM CDD       ");
+	ppr_get_ofdm(txpwr, WL_TX_BW_40, WL_TX_MODE_CDD, WL_TX_CHAINS_2, &ofdm_limits);
+	for (i = 0; i < WL_RATESET_SZ_OFDM; i++) {
+		printf(" %2d%s", ofdm_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[ofdm_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("%s", phy_specific_log ? "40MHz 1 Nsts to 1 Tx " : "40MHz MCS 0-7 SISO   ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("%s", phy_specific_log ? "40MHz 1 Nsts to 2 Tx " : "40MHz MCS 0-7 CDD    ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("%s", phy_specific_log ? "40MHz 1 Nsts to 3 Tx " : "40MHz MCS 0-7 CDD    ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("%s", phy_specific_log ? "40MHz 2 Nsts to 2 Tx " : "40MHz MCS8-15 SDM    ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2, WL_TX_MODE_NONE, WL_TX_CHAINS_2,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	if (phy_specific_log) {
+		printf("40MHz 2 Nsts to 3 Tx ");
+		ppr_get_ht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2, WL_TX_MODE_NONE, WL_TX_CHAINS_3,
+			&mcs_limits);
+		for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+			printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+				fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+		}
+		printf("\n");
+
+		printf("40MHz 3 Nsts to 3 Tx ");
+		ppr_get_ht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_3, WL_TX_MODE_NONE, WL_TX_CHAINS_3,
+			&mcs_limits);
+		for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+			printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+				fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+		}
+		printf("\n");
+	}
+
+	if (!phy_specific_log)
+		return;
+
+	printf("20MHz UL CCK         ");
+	ppr_get_dsss(txpwr, WL_TX_BW_20IN40, WL_TX_CHAINS_1, &dsss_limits);
+	for (i = 0; i < WL_RATESET_SZ_DSSS; i++) {
+		printf(" %2d%s", dsss_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[dsss_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20MHz UL OFDM SISO   ");
+	ppr_get_ofdm(txpwr, WL_TX_BW_20IN40, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+	for (i = 0; i < WL_RATESET_SZ_OFDM; i++) {
+		printf(" %2d%s", ofdm_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[ofdm_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20MHz UL OFDM CDD    ");
+	ppr_get_ofdm(txpwr, WL_TX_BW_20IN40, WL_TX_MODE_CDD, WL_TX_CHAINS_2, &ofdm_limits);
+	for (i = 0; i < WL_RATESET_SZ_OFDM; i++) {
+		printf(" %2d%s", ofdm_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[ofdm_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20UL 1 Nsts to 1 Tx  ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20UL 1 Nsts to 2 Tx  ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20UL 1 Nsts to 3 Tx  ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20UL 2 Nsts to 2 Tx  ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2, WL_TX_MODE_NONE, WL_TX_CHAINS_2,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20UL 2 Nsts to 3 Tx  ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2, WL_TX_MODE_NONE, WL_TX_CHAINS_3,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+
+	printf("20UL 3 Nsts to 3 Tx  ");
+	ppr_get_ht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_3, WL_TX_MODE_NONE, WL_TX_CHAINS_3,
+		&mcs_limits);
+	for (i = 0; i < WL_RATESET_SZ_HT_MCS; i++) {
+		printf(" %2d%s", mcs_limits.pwr[i]/ WLC_TXPWR_DB_FACTOR,
+			fraction[mcs_limits.pwr[i] % WLC_TXPWR_DB_FACTOR]);
+	}
+	printf("\n");
+}
+#endif /* BCMDBG */
+
+static void
+phy_ht_tpc_set_hw_ctrl(phy_type_tpc_ctx_t *ctx, bool hwpwrctrl)
+{
+	phy_ht_tpc_info_t *tpc_info = (phy_ht_tpc_info_t *) ctx;
+	phy_info_t *pi = tpc_info->pi;
+
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+
+	/* turn on/off power control */
+	wlc_phy_txpwrctrl_enable_htphy(pi, pi->txpwrctrl);
+
+	wlapi_enable_mac(pi->sh->physhim);
+}
 /* *************************************** */
 /*                    External Functions                                 */
 /* *************************************** */

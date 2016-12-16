@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_cache.c 664725 2016-10-13 15:23:03Z mvermeid $
+ * $Id: phy_ac_cache.c 670800 2016-11-17 16:00:05Z $
  */
 
 #include <phy_ac.h>
@@ -26,6 +26,7 @@
 #include <phy_ac_rxgcrs.h>
 #include <phy_ac_txiqlocal.h>
 #include <phy_papdcal.h>
+#include <phy_stf.h>
 
 /* ************************ */
 /* Modules used by this module */
@@ -53,17 +54,14 @@ struct phy_ac_cache_info {
 #ifdef PHYCAL_CACHING
 static void wlc_phy_cal_cache_acphy(phy_type_cache_ctx_t * cache_ctx);
 static int wlc_phy_cal_cache_restore_acphy(phy_type_cache_ctx_t * cache_ctx);
-#if defined(BCMDBG)
-static void wlc_phy_cal_cache_dbg_acphy(wlc_phy_t *pih, ch_calcache_t *ctx);
-#endif /* BCMDBG */
 #endif /* PHYCAL_CACHING */
 bool BCMATTACHFN(phy_ac_reg_cache_attach)(phy_info_acphy_t *pi_ac);
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static void
 wlc_phydump_cal_cache_acphy(phy_type_cache_ctx_t * cache_ctx, ch_calcache_t *ctx,
 	struct bcmstrbuf *b);
-#endif /* BCMDBG || WLTEST */
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST)
+#endif 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
 /* dump calibration regs/info */
 static void wlc_phy_cal_dump_acphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b);
 #endif
@@ -94,10 +92,10 @@ BCMATTACHFN(phy_ac_cache_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	fns.cal_cache = wlc_phy_cal_cache_acphy;
 	fns.restore = wlc_phy_cal_cache_restore_acphy;
 #endif /* PHYCAL_CACHING */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 	fns.dump_chanctx = wlc_phydump_cal_cache_acphy;
 #endif
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
 	fns.dump_cal = wlc_phy_cal_dump_acphy;
 #endif
 	fns.ctx = ac_info;
@@ -493,7 +491,10 @@ phy_ac_reg_cache_parse(phy_info_acphy_t *pi_ac, uint16 id, bool populate)
 		RADIO_REG_20695(pi, RF, TESTBUF_OVR1, 0),
 		RADIO_REG_20695(pi, RF, TESTBUF_CFG1, 0),
 		RADIO_REG_20695(pi, RF, AUXPGA_OVR1, 0),
-		RADIO_REG_20695(pi, RF, AUXPGA_CFG1, 0)
+		RADIO_REG_20695(pi, RF, AUXPGA_CFG1, 0),
+		RADIO_REG_20695(pi, RF, PA2G_CFG1, 0),
+		RADIO_REG_20695(pi, RF, PA5G_CFG4, 0),
+		RADIO_REG_20695(pi, RF, TX5G_CFG1_OVR, 0)
 	};
 
 	uint16 phyreg_tssi_setup_20695[] = {
@@ -503,6 +504,24 @@ phy_ac_reg_cache_parse(phy_info_acphy_t *pi_ac, uint16 id, bool populate)
 		ACPHY_REG(pi, ClassifierCtrl),
 		ACPHY_REG(pi, RxFeCtrl1),
 		ACPHY_REG(pi, AfePuCtrl)
+	};
+
+	uint16 radioregs_tempsense_vbat_20696[] = {
+		RADIO_REG_20696(pi, TEMPSENSE_OVR1, 0),
+		RADIO_REG_20696(pi, TEMPSENSE_CFG, 0),
+		RADIO_REG_20696(pi, TESTBUF_OVR1, 0),
+		RADIO_REG_20696(pi, TESTBUF_CFG1, 0),
+		RADIO_REG_20696(pi, AUXPGA_OVR1, 0),
+		RADIO_REG_20696(pi, AUXPGA_CFG1, 0),
+		RADIO_REG_20696(pi, AUXPGA_VMID, 0),
+		RADIO_REG_20696(pi, TIA_CFG1_OVR, 0),
+		RADIO_REG_20696(pi, TIA_REG7, 0),
+		RADIO_REG_20696(pi, LPF_OVR1, 0),
+		RADIO_REG_20696(pi, LPF_OVR2, 0),
+		RADIO_REG_20696(pi, LPF_REG7, 0),
+		RADIO_REG_20696(pi, IQCAL_CFG4, 0),
+		RADIO_REG_20696(pi, IQCAL_OVR1, 0),
+		RADIO_REG_20696(pi, IQCAL_CFG5, 0)
 	};
 
 	/* 7271 IQLOCAL Radio Reg to be backed up */
@@ -728,8 +747,13 @@ phy_ac_reg_cache_parse(phy_info_acphy_t *pi_ac, uint16 id, bool populate)
 				p->reg_cache_id = id;
 				break;
 			case RADIOREGS_TEMPSENSE_VBAT:
-				list = radioregs_tempsense_vbat_20695;
-				sz   = ARRAYSIZE(radioregs_tempsense_vbat_20695);
+				if (ACMAJORREV_37(pi->pubpi->phy_rev)) {
+					list = radioregs_tempsense_vbat_20696;
+					sz   = ARRAYSIZE(radioregs_tempsense_vbat_20696);
+				} else {
+					list = radioregs_tempsense_vbat_20695;
+					sz   = ARRAYSIZE(radioregs_tempsense_vbat_20695);
+				}
 				base = p->reg_cache; /* to baseline for looping over cores */
 				p->reg_sz = sz;
 				p->reg_cache_id = id;
@@ -756,6 +780,7 @@ phy_ac_reg_cache_parse(phy_info_acphy_t *pi_ac, uint16 id, bool populate)
 			/* update reg cache id in use */
 			/* align to base */
 			cache = base;
+			PHY_INFORM(("***** core %d ***** : %s\n", core, __FUNCTION__));
 			for (i = 0; i < sz; i++) {
 				if (ACMAJORREV_40(pi->pubpi->phy_rev) ||
 					ACMAJORREV_25(pi->pubpi->phy_rev)) {
@@ -778,6 +803,7 @@ phy_ac_reg_cache_parse(phy_info_acphy_t *pi_ac, uint16 id, bool populate)
 					cache->addr[core] = list[i];
 					cache->data[core] = 0;
 				}
+				PHY_INFORM(("0x%8p: 0x%04x\n", cache, cache->addr[core]));
 				cache++;
 			}
 		}
@@ -855,18 +881,8 @@ wlc_phy_cal_cache_acphy(phy_type_cache_ctx_t * cache_ctx)
 {
 	phy_info_t *pi = (phy_info_t *) cache_ctx;
 	ch_calcache_t *ctx = NULL;
-	acphy_calcache_t *cache;
-	acphy_ram_calcache_t *ctx_ac;
 
-	uint8 core;
 	uint16 tbl_cookie;
-
-	uint16 *epstbl_offset_cache;
-	uint32 *epsilon_cache;
-	uint32 epsilon_table_ids[] =
-		{ACPHY_TBL_ID_EPSILON0, ACPHY_TBL_ID_EPSILON1, ACPHY_TBL_ID_EPSILON2};
-	uint32 rfpwrlut_table_ids[] =
-		{ACPHY_TBL_ID_RFPWRLUTS0, ACPHY_TBL_ID_RFPWRLUTS1, ACPHY_TBL_ID_RFPWRLUTS2};
 
 	ctx = wlc_phy_get_chanctx(pi, pi->radio_chanspec);
 
@@ -893,125 +909,54 @@ wlc_phy_cal_cache_acphy(phy_type_cache_ctx_t * cache_ctx)
 
 	ctx->valid = TRUE;
 
-	cache = &ctx->u.acphy_cache;
-	ctx_ac = ctx->u_ram_cache.acphy_ram_calcache;
-
-	epsilon_cache = cache->papd_eps;
-	epstbl_offset_cache = cache->eps_offset_cache;
-
 	/* save the callibration to cache */
-	FOREACH_CORE(pi, core) {
-		uint16 ab_int[2];
-		/* Save OFDM Tx IQ Imb Coeffs A,B and Digital Loft Comp Coeffs */
-		wlc_phy_cal_txiqlo_coeffs_acphy(pi, CAL_COEFF_READ,
-		                                ab_int, TB_OFDM_COEFFS_AB, core);
-		cache->ofdm_txa[core] = ab_int[0];
-		cache->ofdm_txb[core] = ab_int[1];
-		wlc_phy_cal_txiqlo_coeffs_acphy(pi, CAL_COEFF_READ,
-		                                &cache->ofdm_txd[core], TB_OFDM_COEFFS_D, core);
-		/* Save OFDM Tx IQ Imb Coeffs A,B and Digital Loft Comp Coeffs */
-		wlc_phy_cal_txiqlo_coeffs_acphy(pi, CAL_COEFF_READ,
-		                                ab_int, TB_BPHY_COEFFS_AB, core);
-		cache->bphy_txa[core] = ab_int[0];
-		cache->bphy_txb[core] = ab_int[1];
-		wlc_phy_cal_txiqlo_coeffs_acphy(pi, CAL_COEFF_READ,
-		                                &cache->bphy_txd[core], TB_BPHY_COEFFS_D, core);
-#ifdef WLC_TXFDIQ
-		cache->txs[core] = phy_ac_txiqlocal_get_fdiqi_slope(pi->u.pi_acphy->txiqlocali,
-			core);
-#endif
-		if (!TINY_RADIO(pi)) {
-			/* Save Analog Tx Loft Comp Coeffs */
-			if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
-				cache->txei[core] = 0;
-				cache->txeq[core] = 0;
-				cache->txfi[core] = 0;
-				cache->txfq[core] = 0;
-			} else {
-				cache->txei[core] = (uint8)READ_RADIO_REGC(pi, RF,
-					TXGM_LOFT_FINE_I, core);
-				cache->txeq[core] = (uint8)READ_RADIO_REGC(pi, RF,
-					TXGM_LOFT_FINE_Q, core);
-				cache->txfi[core] = (uint8)READ_RADIO_REGC(pi, RF,
-					TXGM_LOFT_COARSE_I, core);
-				cache->txfq[core] = (uint8)READ_RADIO_REGC(pi, RF,
-					TXGM_LOFT_COARSE_Q, core);
-			}
-		}
-
-		/* Save Rx IQ Imb Coeffs */
-		cache->rxa[core] = READ_PHYREGCE(pi, Core1RxIQCompA, core);
-		cache->rxb[core] = READ_PHYREGCE(pi, Core1RxIQCompB, core);
-		cache->rxs[core] = phy_ac_rxiqcal_get_fdiqi_slope(pi->u.pi_acphy->rxiqcali, core);
-		cache->rxe =  phy_ac_rxiqcal_is_fdiqi_enabled(pi->u.pi_acphy->rxiqcali);
-		/* Save base index */
-		cache->baseidx[core] = READ_PHYREGFLDCE(pi, TxPwrCtrlStatus_path, core, baseIndex);
-		/* save idle TSSI */
-		cache->idle_tssi[core] = READ_PHYREGCE(pi, TxPwrCtrlIdleTssi_path, core);
-
-		ctx_ac->epsilon_offset[core] = READ_PHYREGFLDCEE(pi,
-			EpsilonTableAdjust, core, epsilonOffset);
-		ctx_ac->papd_comp_en[core] = READ_PHYREGFLDCEE(pi, PapdEnable,
-			core, papd_compEnb);
-
-		/* save PAPD epsilon offsets */
-		if (PHY_PAPDEN(pi)) {
-			wlc_phy_table_read_acphy_dac_war(pi, epsilon_table_ids[core],
-				ACPHY_PAPD_EPS_TBL_SIZE, 0, 32, epsilon_cache, core);
-			epsilon_cache += ACPHY_PAPD_EPS_TBL_SIZE;
-			wlc_phy_table_read_acphy(pi, rfpwrlut_table_ids[core],
-				ACPHY_PAPD_RFPWRLUT_TBL_SIZE, 0, 16, epstbl_offset_cache);
-			epstbl_offset_cache += ACPHY_PAPD_RFPWRLUT_TBL_SIZE;
-		}
+	phy_ac_txiqlocal_save_cache(pi->u.pi_acphy->txiqlocali, ctx);
+	phy_ac_rxiqcal_save_cache(pi->u.pi_acphy->rxiqcali, ctx);
+	phy_ac_tssical_idle_save_cache(pi->u.pi_acphy->tssicali, ctx);
+	if (PHY_PAPDEN(pi)) {
+		phy_ac_papdcal_save_cache(pi->u.pi_acphy->papdcali, ctx);
 	}
-
-#ifdef BCMDBG
-	PHY_CAL(("wl%d: %s: Cached cal values for chanspec 0x%x are:\n",
-		pi->sh->unit, __FUNCTION__,  ctx->chanspec));
-	wlc_phy_cal_cache_dbg_acphy((wlc_phy_t *)pi, ctx);
-#endif
+	phy_ac_tpc_save_cache(pi->u.pi_acphy->tpci, ctx);
 }
 
-#ifdef BCMDBG
-static void
+#if defined(BCMDBG)
+void
 wlc_phy_cal_cache_dbg_acphy(wlc_phy_t *pih, ch_calcache_t *ctx)
 {
 	phy_info_t *pi = (phy_info_t *) pih;
+	uint8 i, j;
+	acphy_calcache_t *cache = &ctx->u.acphy_cache;
+	BCM_REFERENCE(pi);
 
-	if (ISACPHY(pi)) {
-		uint8 i, j;
-		acphy_calcache_t *cache = &ctx->u.acphy_cache;
-
-		FOREACH_CORE(pi, i) {
-			PHY_CAL(("CORE %d:\n", i));
-			PHY_CAL(("\tofdm_txa:0x%x  ofdm_txb:0x%x  ofdm_txd:0x%x\n",
-				cache->ofdm_txa[i], cache->ofdm_txb[i], cache->ofdm_txd[i]));
-			PHY_CAL(("\tbphy_txa:0x%x  bphy_txb:0x%x  bphy_txd:0x%x\n",
-				cache->bphy_txa[i], cache->bphy_txb[i], cache->bphy_txd[i]));
-			PHY_CAL(("\ttxei:0x%x  txeq:0x%x\n", cache->txei[i], cache->txeq[i]));
-			PHY_CAL(("\ttxfi:0x%x  txfq:0x%x\n", cache->txfi[i], cache->txfq[i]));
+	FOREACH_CORE(pi, i) {
+		PHY_CAL(("CORE %d:\n", i));
+		PHY_CAL(("\tofdm_txa:0x%x  ofdm_txb:0x%x  ofdm_txd:0x%x\n",
+			cache->ofdm_txa[i], cache->ofdm_txb[i], cache->ofdm_txd[i]));
+		PHY_CAL(("\tbphy_txa:0x%x  bphy_txb:0x%x  bphy_txd:0x%x\n",
+			cache->bphy_txa[i], cache->bphy_txb[i], cache->bphy_txd[i]));
+		PHY_CAL(("\ttxei:0x%x  txeq:0x%x\n", cache->txei[i], cache->txeq[i]));
+		PHY_CAL(("\ttxfi:0x%x  txfq:0x%x\n", cache->txfi[i], cache->txfq[i]));
 #ifdef WLC_TXFDIQ
-			PHY_CAL(("\ttxs:0x%x\n", cache->txs[i]));
+		PHY_CAL(("\ttxs:0x%x\n", cache->txs[i]));
 #endif
-			PHY_CAL(("\trxa:0x%x  rxb:0x%x\n", cache->rxa[i], cache->rxb[i]));
-			PHY_CAL(("\trxs:0x%x  rxe:0x%x\n", cache->rxs[i], cache->rxe));
-			PHY_CAL(("\tidletssi:0x%x\n", cache->idle_tssi[i]));
-			PHY_CAL(("\tbasedindex:0x%x\n", cache->baseidx[i]));
+		PHY_CAL(("\trxa:0x%x  rxb:0x%x\n", cache->rxa[i], cache->rxb[i]));
+		PHY_CAL(("\trxs:0x%x  rxe:0x%x\n", cache->rxs[i], cache->rxe));
+		PHY_CAL(("\tidletssi:0x%x\n", cache->idle_tssi[i]));
+		PHY_CAL(("\tbasedindex:0x%x\n", cache->baseidx[i]));
 
-			if (PHY_PAPDEN(pi)) {
-				PHY_CAL(("\tPAPD eps table\n"));
-				for (j = 0; j < ACPHY_PAPD_EPS_TBL_SIZE; j += 16) {
-					PHY_CAL(("\t%d : 0x%x\n",
-						j, cache->papd_eps[(i*
-						ACPHY_PAPD_EPS_TBL_SIZE)+j]));
-				}
-				PHY_CAL(("\tPAPD rfpwrlut\n"));
-				for (j = 0; j < ACPHY_PAPD_RFPWRLUT_TBL_SIZE; j += 32) {
-					PHY_CAL(("\t%d : 0x%x\n",
-						j,
-						cache->eps_offset_cache[(i*
-						ACPHY_PAPD_RFPWRLUT_TBL_SIZE)+j]));
-				}
+		if (PHY_PAPDEN(pi)) {
+			PHY_CAL(("\tPAPD eps table\n"));
+			for (j = 0; j < ACPHY_PAPD_EPS_TBL_SIZE; j += 16) {
+				PHY_CAL(("\t%d : 0x%x\n",
+					j, cache->papd_eps[(i*
+					ACPHY_PAPD_EPS_TBL_SIZE)+j]));
+			}
+			PHY_CAL(("\tPAPD rfpwrlut\n"));
+			for (j = 0; j < ACPHY_PAPD_RFPWRLUT_TBL_SIZE; j += 32) {
+				PHY_CAL(("\t%d : 0x%x\n",
+					j,
+					cache->eps_offset_cache[(i*
+					ACPHY_PAPD_RFPWRLUT_TBL_SIZE)+j]));
 			}
 		}
 	}
@@ -1019,7 +964,7 @@ wlc_phy_cal_cache_dbg_acphy(wlc_phy_t *pih, ch_calcache_t *ctx)
 #endif /* BCMDBG */
 #endif /* PHYCAL_CACHING */
 
-#if defined BCMDBG || defined(WLTEST)
+#if defined BCMDBG
 static void
 wlc_phydump_cal_cache_acphy(phy_type_cache_ctx_t * cache_ctx, ch_calcache_t *ctx,
 	struct bcmstrbuf *b)
@@ -1041,7 +986,7 @@ wlc_phydump_cal_cache_acphy(phy_type_cache_ctx_t * cache_ctx, ch_calcache_t *ctx
 		bcm_bprintf(b, "\tbasedindex:0x%x\n", cache->baseidx[i]);
 	}
 }
-#endif /* defined(WLTEST) */
+#endif 
 
 #ifdef PHYCAL_CACHING
 static int
@@ -1074,7 +1019,7 @@ wlc_phy_cal_cache_restore_acphy(phy_type_cache_ctx_t * cache_ctx)
 
 	if (!ctx->valid) {
 		PHY_CAL(("wl%d: %s: Chanspec 0x%x found, but not valid in phycal cache\n",
-		           pi->sh->unit, __FUNCTION__, ctx->chanspec));
+		           pi->sh->unit, __FUNCTION__, pi->radio_chanspec));
 		return BCME_ERROR;
 	}
 
@@ -1145,14 +1090,12 @@ wlc_phy_cal_cache_restore_acphy(phy_type_cache_ctx_t * cache_ctx)
 
 		/* Restore Idle TSSI & Vmid values */
 		wlc_phy_txpwrctrl_set_idle_tssi_acphy(pi, cache->idle_tssi[core], core);
-
-		MOD_PHYREGCEE(pi, EpsilonTableAdjust, core,
-			epsilonOffset, ctx_ac->epsilon_offset[core]);
-		MOD_PHYREGCEE(pi, PapdEnable, core,
-			papd_compEnb, ctx_ac->papd_comp_en[core]);
-
 		/* Restore PAPD epsilon offsets */
 		if (PHY_PAPDEN(pi)) {
+			MOD_PHYREGCEE(pi, EpsilonTableAdjust, core,
+				epsilonOffset, ctx_ac->epsilon_offset[core]);
+			MOD_PHYREGCEE(pi, PapdEnable, core,
+				papd_compEnb, ctx_ac->papd_comp_en[core]);
 			wlc_phy_table_write_acphy_dac_war(pi, epsilon_table_ids[core],
 				ACPHY_PAPD_EPS_TBL_SIZE, 0, 32, epsilon_cache, core);
 			epsilon_cache += ACPHY_PAPD_EPS_TBL_SIZE;
@@ -1179,14 +1122,14 @@ wlc_phy_cal_cache_restore_acphy(phy_type_cache_ctx_t * cache_ctx)
 
 #ifdef BCMDBG
 	PHY_CAL(("wl%d: %s: Restored values for chanspec 0x%x are:\n", pi->sh->unit,
-	           __FUNCTION__, ctx->chanspec));
+	           __FUNCTION__, pi->radio_chanspec));
 	wlc_phy_cal_cache_dbg_acphy((wlc_phy_t *)pi, ctx);
 #endif
 	return BCME_OK;
 }
 #endif /* PHYCAL_CACHING */
 
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
 /* dump calibration regs/info */
 static void
 wlc_phy_cal_dump_acphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
@@ -1194,10 +1137,15 @@ wlc_phy_cal_dump_acphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 	phy_info_t *pi = (phy_info_t *)cache_ctx;
 	uint8 core;
 	int8  ac_reg, mf_reg;
+	int8 lesiInpSc0 = 0;
+	int8 lesiInpSc1 = 0;
+	int8 lesiInpSc2 = 0;
+	int8 lesiInpSc3 = 0;
 	int16  a_reg, b_reg, a_int, b_int;
 	int32 slope;
 	uint16 ab_int[2], d_reg;
 	uint16 coremask;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 
 	if (!pi->sh->up) {
 		return;
@@ -1207,13 +1155,13 @@ wlc_phy_cal_dump_acphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 	phy_utils_phyreg_enter(pi);
 
 	if (ACMAJORREV_4(pi->pubpi->phy_rev) && (phy_get_phymode(pi) != PHYMODE_RSDB)) {
-		coremask = pi->sh->hw_phyrxchain;
+		coremask = stf_shdata->hw_phyrxchain;
 	} else {
-		coremask = pi->sh->phyrxchain;
+		coremask = stf_shdata->phyrxchain;
 	}
 
 	bcm_bprintf(b, "Tx-IQ/LOFT-Cal:\n");
-	FOREACH_ACTV_CORE(pi, coremask, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phytxchain, core) {
 		wlc_phy_cal_txiqlo_coeffs_acphy(pi, CAL_COEFF_READ, ab_int,
 			TB_OFDM_COEFFS_AB, core);
 		wlc_phy_cal_txiqlo_coeffs_acphy(pi, CAL_COEFF_READ, &d_reg,
@@ -1282,29 +1230,18 @@ wlc_phy_cal_dump_acphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 	ac_reg =  READ_PHYREGFLD(pi, crsminpoweru0, crsminpower0);
 	mf_reg =  READ_PHYREGFLD(pi, crsmfminpoweru0, crsmfminpower0);
 
-	bcm_bprintf(b, "crs_min_pwr cal:\n");
-	if (phy_ac_rxgcrs_get_crsmincal_run(pi->u.pi_acphy->rxgcrsi) != 1) {
-		bcm_bprintf(b, "  ACI desense is on:  crs_min_pwr cal DID NOT run\n");
-	} else {
-		bcm_bprintf(b, "   crsmin_cal ran %d times for channel %d:\n",
-		            pi->u.pi_acphy->phy_debug_crscal_counter,
-		            pi->u.pi_acphy->phy_debug_crscal_channel);
-	}
-	bcm_bprintf(b, "   Noise power used for setting crs_min thresholds : ");
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
-		bcm_bprintf(b, "Core-%d : %d, ", core, pi->u.pi_acphy->phy_noise_in_crs_min[core]);
-	}
+	phy_ac_rxgcrs_cal_dump(pi->u.pi_acphy->rxgcrsi, b);
 
 	bcm_bprintf(b, "\n");
 	bcm_bprintf(b, "   AC-CRS = %d,", ac_reg);
 	bcm_bprintf(b, "   MF-CRS = %d,", mf_reg);
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		int8 offset = READ_PHYREGFLDCE(pi, crsminpoweroffset, core, crsminpowerOffsetu);
 		bcm_bprintf(b, "   Offset %d = %d,", core, offset);
 	}
 	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
 		bcm_bprintf(b, "\n");
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+		FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 			bcm_bprintf(b, "ADCCAPCAL: core%d: adc0: cap0 I: 0x%2x Q: 0x%2x\n", core,
 				READ_RADIO_REGFLD_20694(pi, RF, RXADC_CFG6,
 				core, rxadc_coeff_cap0_adc0_I),
@@ -1321,13 +1258,41 @@ wlc_phy_cal_dump_acphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 				READ_RADIO_REGFLD_20694(pi, RF, RXADC_CFG8,
 				core, rxadc_coeff_cap2_adc0_Q));
 		}
+		if ((READ_PHYREG(pi, lesi_control) & 0x1) > 0) {
+			bcm_bprintf(b, "LESI Noise Pwr Cal:\n");
+			FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
+				if (core == 0) {
+					lesiInpSc0 = READ_PHYREGFLD(pi, lesiInputScaling0_0,
+						inpScalingFactor_0);
+					lesiInpSc1 = READ_PHYREGFLD(pi, lesiInputScaling1_0,
+						inpScalingFactor_1);
+					lesiInpSc2 = READ_PHYREGFLD(pi, lesiInputScaling2_0,
+						inpScalingFactor_2);
+					lesiInpSc3 = READ_PHYREGFLD(pi, lesiInputScaling3_0,
+						inpScalingFactor_3);
+				} else if (core == 1) {
+					lesiInpSc0 = READ_PHYREGFLD(pi, lesiInputScaling0_1,
+						inpScalingFactor_0);
+					lesiInpSc1 = READ_PHYREGFLD(pi, lesiInputScaling1_1,
+						inpScalingFactor_1);
+					lesiInpSc2 = READ_PHYREGFLD(pi, lesiInputScaling2_1,
+						inpScalingFactor_2);
+					lesiInpSc3 = READ_PHYREGFLD(pi, lesiInputScaling3_1,
+						inpScalingFactor_3);
+				} else {
+					ASSERT(0);
+				}
+				bcm_bprintf(b, "\tcore-%d: lesiInpScalingFactor = %d  %d  %d  %d\n",
+				core, lesiInpSc0, lesiInpSc1, lesiInpSc2, lesiInpSc3);
+			}
+		}
 	}
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
 	if (PHY_PAPDEN(pi)) {
 		/* Make dump available for both iPA and ePA */
 		wlc_phy_papd_dump_eps_trace_acphy(pi, b);
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+		FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 			if (ACMAJORREV_1(pi->pubpi->phy_rev)) {
 				bcm_bprintf(b, "papdcalidx%d %d\n", core, papd_gainctrl_pga[core]);
 			} else if (ACMAJORREV_2(pi->pubpi->phy_rev) ||
@@ -1342,4 +1307,4 @@ wlc_phy_cal_dump_acphy(phy_type_cache_ctx_t * cache_ctx, struct bcmstrbuf *b)
 
 	return;
 }
-#endif	/*  defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST) */
+#endif	

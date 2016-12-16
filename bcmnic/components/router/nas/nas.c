@@ -23,7 +23,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: nas.c 489259 2014-07-04 05:24:34Z $
+ * $Id: nas.c 661477 2016-09-26 07:44:24Z $
  */
 
 #include <typedefs.h>
@@ -58,6 +58,11 @@
 #include "nas.h"
 #include "wpa.h"
 
+#ifdef WLHOSTFBT
+#include <wpa_auth_ft.h>
+#include <bcmnvram.h>
+#endif /* WLHOSTFBT */
+
 #include "radius.h"
 #include "nas_radius.h"
 
@@ -72,6 +77,10 @@ static void eapol_canned(nas_t *nas, nas_sta_t *sta, unsigned char code,
 static void eapol_dispatch_ex(nas_t *nas, eapol_header_t *eapol, int preauth, int bytes);
 
 static void toss_sta(nas_t *nas, nas_sta_t *sta, int reason, int driver_signal);
+#ifdef WLHOSTFBT
+static void nas_watchdog(bcm_timer_id td, nas_t *nas);
+static void nas_start_watchdog(nas_t *nas);
+#endif /* WLHOSTFBT */
 
 void
 send_identity_req(nas_t *nas, nas_sta_t *sta)
@@ -92,6 +101,9 @@ void
 cleanup_sta(nas_t *nas, nas_sta_t *sta, int reason, int driver_signal)
 {
 	unsigned char toss = 1;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	if (sta == NULL) {
 		dbg(nas, "called with NULL STA ponter");
@@ -145,6 +157,9 @@ toss_sta(nas_t *nas, nas_sta_t *sta, int reason, int driver_signal)
 {
 	nas_sta_t *sta_list;
 	uint hash;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	if (sta == NULL) {
 		dbg(nas, "called with NULL STA ponter");
 		return;
@@ -284,6 +299,9 @@ lookup_sta(nas_t *nas, struct ether_addr *ea, sta_lookup_mode_t mode)
 void
 pae_state(nas_t *nas, nas_sta_t *sta, int state)
 {
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	sta->pae.state = state;
 
 	/* New PAE state */
@@ -543,6 +561,36 @@ eapol_key(nas_t *nas, nas_sta_t *sta,
 	free(packet.iov_base);
 }
 
+#ifdef BCMDBG
+/* Make a debug message lucid for those who don't know types by number */
+static char *
+eapol_msg_type_name(int type_no)
+{
+	char *name;
+
+	switch (type_no) {
+	case EAP_PACKET:
+		name = "EAP";
+		break;
+	case EAPOL_START:
+		name = "EAPOL start";
+		break;
+	case EAPOL_LOGOFF:
+		name = "EAPOL logoff";
+		break;
+	case EAPOL_KEY:
+		name = "EAPOL key";
+		break;
+	case EAPOL_ASF:
+		name = "EAPOL ASF";
+		break;
+	default:
+		name = "unexpected type";
+		break;
+	}
+	return name;
+}
+#endif /* BCMDBG */
 
 void
 eapol_dispatch(nas_t *nas, eapol_header_t *eapol, int bytes)
@@ -562,6 +610,9 @@ eapol_dispatch_ex(nas_t *nas, eapol_header_t *eapol, int preauth, int bytes)
 {
 	nas_sta_t *sta;
 	eap_header_t *eap;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	/* Validate EAPOL version */
 	if (!eapol) {
@@ -757,6 +808,9 @@ void
 eapol_sup_dispatch(nas_t *nas, eapol_header_t *eapol)
 {
 	nas_sta_t *sta;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	if (!eapol) {
 		dbg(nas, "Missing EAPOL header");
@@ -798,6 +852,33 @@ eapol_sup_dispatch(nas_t *nas, eapol_header_t *eapol)
 }
 #endif /* BCMSUPPL */
 
+#ifdef BCMDBG
+/* Make a debug message lucid for those who don't know types by number */
+static char *
+driver_msg_name(int type)
+{
+	switch (type) {
+	case WLC_E_LINK:
+		return "LINK";
+	case WLC_E_ASSOC_IND:
+		return "ASSOC";
+	case WLC_E_REASSOC_IND:
+		return "REASSOC";
+	case WLC_E_DISASSOC_IND:
+		return "DISASSOC";
+	case WLC_E_DEAUTH_IND:
+		return "DEAUTH";
+	case WLC_E_MIC_ERROR:
+		return "MIC error";
+#ifdef WLHOSTFBT
+	case WLC_E_FBT_AUTH_REQ_IND:
+		return "FT AUTH REQ";
+#endif
+	default:
+		return "unknown";
+	}
+}
+#endif /* BCMDBG */
 
 void
 driver_message_dispatch(nas_t *nas, bcm_event_t *dpkt)
@@ -805,7 +886,11 @@ driver_message_dispatch(nas_t *nas, bcm_event_t *dpkt)
 	wl_event_msg_t *event = &(dpkt->event);
 	int type = ntohl(event->event_type);
 	uint8 *addr = (uint8 *)&(event->addr);
+	uint32 auth_type = ntohl(event->auth_type);
 	nas_sta_t *sta;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	/* !!!THESE ARE THE MESSAGES WE CARE!!! */
 	dbg(nas, "received event of type : %d\n", type);
@@ -838,6 +923,9 @@ driver_message_dispatch(nas_t *nas, bcm_event_t *dpkt)
 #ifdef WLWNM
 	case WLC_E_WNM_STA_SLEEP:
 #endif /* WLWNM */
+#ifdef WLHOSTFBT
+	case WLC_E_FBT_AUTH_REQ_IND:
+#endif /* WLHOSTFBT */
 		break;
 	default:
 		/* quietly discard unwanted events */
@@ -864,6 +952,10 @@ driver_message_dispatch(nas_t *nas, bcm_event_t *dpkt)
 		if (!(CHECK_NAS(nas->mode))) {
 			dbg(nas, "Unexpected driver %s message in mode %d", driver_msg_name(type),
 			    nas->mode);
+			return;
+		}
+		if ((auth_type == DOT11_FAST_BSS) && (type == WLC_E_REASSOC_IND)) {
+			dbg(nas, "No need to do anything here for reassociation in case of FBT");
 			return;
 		}
 		if (wpa_driver_assoc_msg(nas->wpa, dpkt, sta) == 0)
@@ -909,6 +1001,11 @@ driver_message_dispatch(nas_t *nas, bcm_event_t *dpkt)
 		if (sta != NULL) {
 			int sleeping = ntohl(event->status);
 			int mfp = ntohl(event->reason);
+#ifdef BCMDBG
+			char eabuf[ETHER_ADDR_STR_LEN];
+			dbg(nas, "Sleep event: sta %s: %x->%x (MFP:%x)",
+				ether_etoa((uchar *)&sta->ea, eabuf), sta->sleeping, sleeping, mfp);
+#endif
 			/* If STA is getting out of sleep and does not support MFP, send the key */
 			if (!sleeping && sta->sleeping) {
 				if (!mfp && sta->gtk_expire)
@@ -921,6 +1018,13 @@ driver_message_dispatch(nas_t *nas, bcm_event_t *dpkt)
 		break;
 #endif /* WLWNM */
 
+#ifdef WLHOSTFBT
+	case WLC_E_FBT_AUTH_REQ_IND:
+		dbg(nas, "FT Authentication Request received by AP");
+		wpa_ft_process_auth(nas->wpa, dpkt, sta);
+			break;
+#endif
+
 	default:
 		dbg(nas, "Tossing unexpected event #%u", type);
 	}
@@ -929,12 +1033,22 @@ driver_message_dispatch(nas_t *nas, bcm_event_t *dpkt)
 }
 
 static void
-nas_watchdog(bcm_timer_id td, nas_t *nas)
+nas_radius_watchdog(bcm_timer_id td, nas_t *nas)
 {
 	nas_sta_t *sta;
 	int i;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	for (i = 0; i < MAX_SUPPLICANTS; i ++) {
 		for (sta = nas->sta_hashed[i]; sta; sta = sta->next) {
+#ifdef BCMDBG
+			if (nas->auth_blockout_time) {
+				if (sta->pae.flags & PAE_FLAG_RADIUS_ACCESS_REJECT)
+					dbg(nas, "blocking %s, time remaining = %d",
+					    ether_etoa((uchar *)&sta->ea, eabuf), sta->quiet_while);
+			}
+#endif
 			/* check for time out */
 			switch (sta->pae.state) {
 			case AUTHENTICATED:
@@ -974,6 +1088,41 @@ nas_watchdog(bcm_timer_id td, nas_t *nas)
 }
 
 static void
+nas_start_radius_watchdog(nas_t *nas)
+{
+	itimer_status_t ts;
+
+	if (nas->watchdog_td)
+		TIMER_DELETE(nas->watchdog_td);
+
+	ts = wpa_set_itimer(nas->timer, &nas->watchdog_td,
+	                    (bcm_timer_cb)nas_radius_watchdog,
+	                    (int)nas, 1, 0);
+	if (ts != ITIMER_OK)
+		dbg(nas, "Session timeout timer set failed, code %d", ts);
+}
+
+#ifdef WLHOSTFBT
+static void
+nas_watchdog(bcm_timer_id td, nas_t *nas)
+{
+	wpa_t *wpa = nas->wpa;
+	char *fbt_aps;
+	uint16 max_len;
+
+	fbt_aps = nvram_get("fbt_aps");
+	max_len = strlen(fbt_aps);
+	if (max_len < strlen(wpa->fbt_info.fbt_aps))
+		max_len = strlen(wpa->fbt_info.fbt_aps);
+	if (memcmp(fbt_aps, wpa->fbt_info.fbt_aps, max_len) != 0) {
+		memset(wpa->fbt_info.fbt_aps, 0, sizeof(wpa->fbt_info.fbt_aps));
+		memcpy(wpa->fbt_info.fbt_aps, fbt_aps, strlen(fbt_aps));
+		wpa_ft_r0kh_r1kh_init(wpa);
+		wpa_ft_push_pmk_r1(wpa);
+	}
+}
+
+static void
 nas_start_watchdog(nas_t *nas)
 {
 	itimer_status_t ts;
@@ -987,6 +1136,7 @@ nas_start_watchdog(nas_t *nas)
 	if (ts != ITIMER_OK)
 		dbg(nas, "Session timeout timer set failed, code %d", ts);
 }
+#endif /* WLHOSTFBT */
 
 void
 nas_start(nas_t *nas)
@@ -1000,9 +1150,15 @@ nas_start(nas_t *nas)
 	nas->MIC_countermeasures = 0;
 	nas->prev_MIC_error = 0;
 
-	/* start session count down timer */
-	if (CHECK_RADIUS(nas->mode))
+#ifdef WLHOSTFBT
+	if (CHECK_FBT(nas->mode)) {
 		nas_start_watchdog(nas);
+	}
+#endif /* WLHOSTFBT */
+	/* start session count down timer */
+	if (CHECK_RADIUS(nas->mode)) {
+		nas_start_radius_watchdog(nas);
+	}
 
 	/* initiate/request pairwise key exchange */
 	if (!(nas->flags & NAS_FLAG_WDS))
@@ -1011,6 +1167,9 @@ nas_start(nas_t *nas)
 	sta = lookup_sta(nas, (struct ether_addr *)nas->remote,
 	                 SEARCH_ENTER);
 	if (!sta) {
+#ifdef BCMDBG
+		char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 		dbg(nas, "sta %s not available", ether_etoa(nas->remote, eabuf));
 		return;
 	}

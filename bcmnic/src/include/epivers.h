@@ -23,23 +23,23 @@
 #ifndef _epivers_h_
 #define _epivers_h_
 
-#define	EPI_MAJOR_VERSION	1
+#define	EPI_MAJOR_VERSION	15
 
-#define	EPI_MINOR_VERSION	1
+#define	EPI_MINOR_VERSION	10
 
-#define	EPI_RC_NUMBER		16
+#define	EPI_RC_NUMBER		25
 
 #define	EPI_INCREMENTAL_NUMBER	0
 
 #define EPI_BUILD_NUMBER	1
 
-#define	EPI_VERSION		1, 1, 16, 0
+#define	EPI_VERSION		15, 10, 25, 0
 
-#define	EPI_VERSION_NUM		0x01011000
+#define	EPI_VERSION_NUM		0x0f0a1900
 
-#define EPI_VERSION_DEV		1.1.16
+#define EPI_VERSION_DEV		15.10.25
 
 /* Driver Version String, ASCII, 32 chars max */
-#define	EPI_VERSION_STR		"1.1.16 (r664235)"
+#define	EPI_VERSION_STR		"15.10.25 (r673610)"
 
 #endif /* _epivers_h_ */

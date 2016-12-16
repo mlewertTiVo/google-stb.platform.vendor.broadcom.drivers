@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_dbg.h 612953 2016-01-15 19:26:02Z vyass $
+ * $Id: phy_dbg.h 659514 2016-09-14 20:19:00Z $
  */
 
 #ifndef _phy_dbg_h_
@@ -23,6 +23,7 @@
 #include <bcmutils.h>
 #include <wlc_dump_reg.h>
 #include <phy_api.h>
+#include <phy_dbg_api.h>
 
 #include <devctrl_if/phyioctl_defs.h>
 
@@ -39,11 +40,7 @@ char *wlc_dbg_get_hw_timestamp(void);
 #define PHY_TIMESTAMP()
 #endif
 
-#if defined(BCMTSTAMPEDLOGS)
-extern void phy_log(phy_info_t *pi, const char* str, uint32 p1, uint32 p2);
-#else
 #define phy_log(wlc, str, p1, p2)       do {} while (0)
-#endif
 
 
 #define PHY_PRINT(args) do { PHY_TIMESTAMP(); printf args; } while (0)
@@ -132,5 +129,12 @@ int phy_dbg_add_dump_fns(phy_info_t *pi, const char *name,
 /* keep the old style API for all existing callers who don't have dump clear fn */
 #define phy_dbg_add_dump_fn(pi, name, fn, ctx) \
 	phy_dbg_add_dump_fns(pi, name, fn, NULL, ctx)
+
+#if defined(BCMDBG)
+void phy_dbg_test_evm_init(phy_info_t *pi);
+uint16 phy_dbg_test_evm_reg(uint rate);
+int phy_dbg_test_evm(phy_info_t *pi, int channel, uint rate, int txpwr);
+int phy_dbg_test_carrier_suppress(phy_info_t *pi, int channel);
+#endif
 
 #endif /* _phy_dbg_h_ */

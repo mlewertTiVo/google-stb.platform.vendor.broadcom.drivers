@@ -9,7 +9,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: nas_wksp.c 655851 2016-08-24 02:04:55Z $
+ * $Id: nas_wksp.c 661448 2016-09-26 05:49:24Z $
  */
 
 #include <bcmcrypto/passhash.h>
@@ -47,7 +47,19 @@
 #include <eapd.h>
 #include <security_ipc.h>
 
+#ifdef WLHOSTFBT
+#include <wpa_auth_ft.h>
+#include <bcmnvram.h>
+#include <eloop.h>
+#endif /* WLHOSTFBT */
+
 /* debug stuff */
+#ifdef BCMDBG
+#ifndef NAS_WKSP_DEBUG
+#define NAS_WKSP_DEBUG	0
+#endif
+int debug_nwksp = NAS_WKSP_DEBUG;
+#endif	/* #if BCMDBG */
 
 /*
 * Locally used globals
@@ -75,6 +87,38 @@ static int nas_wksp_inited = 0;
 void
 nas_wksp_display_usage(void)
 {
+#ifdef BCMDBG
+	printf("\nUsage: nas [options]\n\n");
+	printf("\t-i <interface>       Wireless interface name\n");
+#if defined(NAS_WKSP_BUILD_NAS_AUTH) && defined(NAS_WKSP_BUILD_NAS_SUPPL)
+	printf("\t-A                   Authenticator\n");
+	printf("\t-S                   Supplicant\n");
+#endif	/* #if defined(NAS_WKSP_BUILD_NAS_AUTH) && defined(NAS_WKSP_BUILD_NAS_SUPPL) */
+#ifdef NAS_WKSP_BUILD_NAS_AUTH
+	printf("\t-g <interval>        WPA GTK rotation interval (ms)\n");
+	printf("\t-h <address>         RADIUS server IP address\n");
+	printf("\t-p <port>            RADIUS server UDP port\n");
+#endif	/* #ifdef NAS_WKSP_BUILD_NAS_AUTH */
+	printf("\t-k <secret>          WPA pre-shared key\n");
+	printf("\t-r <secret>          RADIUS server secret\n");
+	printf("\t-m <authentication>  Authentication protocol - %d:WPA | %d:WPA-PSK | %d:802.1x\n",
+		WPA, WPA_PSK, RADIUS);
+	printf("\t                                               %d:WPA2 | %d:WPA2-PSK\n",
+		WPA2, WPA2_PSK);
+	printf("\t-s <SSID>            Service Set Identity\n");
+	printf("\t-w <encryption>      Crypto algorithm - %d:WEP | %d:TKIP | %d:AES\n",
+		WEP_ENABLED, TKIP_ENABLED, AES_ENABLED);
+	printf("\t-I <index>           WEP key index - 2 | 3\n");
+	printf("\t-K <key>             WEP key\n");
+	printf("\t-t <duration>        Radius Session timeout/PMK Caching duration (ms)\n");
+	printf("\t-N <NasID>           NAS id\n");
+#ifdef BCMDBG
+	printf("\t-v <debug>           Verbose mode - 0:off | 1:console\n");
+#endif	/* #ifdef BCMDBG */
+	printf("\nThe -i <interface> option must be present before any other per interface options "
+	       "to specify the wireless interface\n");
+	printf("\n");
+#endif	/* #ifdef BCMDBG */
 };
 
 /*
@@ -100,6 +144,10 @@ nas_wksp_parse_cmd(int argc, char *argv[], nas_wksp_t *nwksp)
 				return -1;
 			}
 			break;
+#ifdef BCMDBG
+		case 'v':
+			break;
+#endif
 		default:
 			if (i < 0) {
 				NASDBG("no I/F specified\n");
@@ -143,6 +191,9 @@ nas_wksp_parse_cmd(int argc, char *argv[], nas_wksp_t *nwksp)
 			nwcb->nas.wsec = TKIP_ENABLED|AES_ENABLED;
 			nwcb->nas.wpa = &nwcb->wpa;
 			nwcb->nas.appl = nwcb;
+#ifdef BCMDBG
+			nwcb->nas.debug = 1;
+#endif
 			nwcb->nas.disable_preauth = 0;
 			nwcb->nas.ssn_to = 36000;	/* 10hrs */
 			nwcb->wpa.nas = &nwcb->nas;
@@ -244,6 +295,18 @@ nas_wksp_parse_cmd(int argc, char *argv[], nas_wksp_t *nwksp)
 				nwcb->nas.remote[2], nwcb->nas.remote[3],
 				nwcb->nas.remote[4], nwcb->nas.remote[5]);
 			break;
+#ifdef BCMDBG
+		case 'v':
+			/* verbose - 0:no | others:yes */
+			/* for workspace */
+			if (i < 0) {
+				debug_nwksp = (int)strtoul(optarg, NULL, 0);
+			}
+			/* for nas */
+			else
+				nwcb->nas.debug = (bool)strtoul(optarg, NULL, 0);
+			break;
+#endif
 
 		case 'I':
 			/* WEP key index */
@@ -314,6 +377,7 @@ nas_wksp_main_loop(nas_wksp_t *nwksp)
 	while (1) {
 		/* check user command for shutdown */
 		if (nwksp->flags & NAS_WKSP_FLAG_SHUTDOWN) {
+
 			/* clean up nas workspace */
 			nas_wksp_cleanup(nwksp);
 
@@ -382,7 +446,16 @@ nas_wksp_dispatch_packet(nas_wksp_t *nwksp)
 				nwksp->fdmax = nwcb->nas.wan;
 		}
 #endif	/* #ifdef NAS_WKSP_BUILD_NAS_AUTH */
+#ifdef WLHOSTFBT
+		if (nwcb->nas.l2_rrb_fd != NAS_WKSP_UNK_FILE_DESC) {
+			FD_SET(nwcb->nas.l2_rrb_fd, &nwksp->fdset);
+			if (nwcb->nas.l2_rrb_fd > nwksp->fdmax) {
+				nwksp->fdmax = nwcb->nas.l2_rrb_fd;
+			}
+		}
+#endif /* WLHOSTFBT */
 	}
+
 	/* check if there is any sockets in the fd set */
 	if (nwksp->fdmax == -1) {
 		/* do shutdown procedure */
@@ -506,6 +579,16 @@ nas_wksp_dispatch_packet(nas_wksp_t *nwksp)
 			}
 		}
 #endif	/* #ifdef NAS_WKSP_BUILD_NAS_AUTH */
+
+#ifdef WLHOSTFBT
+		for (i = 0; i < nwksp->nwcbs; i ++) {
+			nwcb = nwksp->nwcb[i];
+			if (nwcb->nas.l2_rrb_fd != NAS_WKSP_UNK_FILE_DESC &&
+					FD_ISSET(nwcb->nas.l2_rrb_fd, &fdset)) {
+				eloop_read();
+			} /* FD_ISSET(nwcb->nas.l2_rrb->fd, &fdset) */
+		}
+#endif /* WLHOSTFBT */
 
 	}
 
@@ -671,6 +754,14 @@ nas_init_nas(nas_wksp_t *nwksp, nas_wpa_cb_t *nwcb)
 {
 	uint8 *data, *key;
 	int len;
+#ifdef WLHOSTFBT
+	char *lan_iface;
+	char *fbt_aps;
+#endif
+#ifdef BCMDBG
+	if (nwcb->nas.debug == 0)
+		nwcb->nas.debug = NAS_DEBUG;
+#endif
 #if !NAS_WKSP_MODULE_TIMER
 	nwcb->nas.timer = nwksp->timer;
 #else
@@ -726,6 +817,18 @@ nas_init_nas(nas_wksp_t *nwksp, nas_wpa_cb_t *nwcb)
 #ifdef MFP
 	nwcb->wpa.igtk.id = IGTK_INDEX_1;
 #endif
+#ifdef WLHOSTFBT
+	if (CHECK_FBT(nwcb->nas.mode)) {
+		nwcb->wpa.fbt_info.ft_pmk_cache = wpa_ft_pmk_cache_init();
+		lan_iface = nvram_get("lan_ifname");
+		/* setup connection to receive rrb messages */
+		setup_rrb_socket(&nwcb->wpa, lan_iface);
+		fbt_aps = nvram_get("fbt_aps");
+		memset(&nwcb->wpa.fbt_info.fbt_aps, 0, sizeof(nwcb->wpa.fbt_info.fbt_aps));
+		memcpy(nwcb->wpa.fbt_info.fbt_aps, fbt_aps, strlen(fbt_aps));
+		wpa_ft_r0kh_r1kh_init(&nwcb->wpa);
+	}
+#endif /* WLHOSTFBT */
 
 	if (nwcb->nas.mode & RADIUS)
 		nwcb->wpa.gtk_len = WEP128_KEY_SIZE;
@@ -876,6 +979,46 @@ nas_init_nas(nas_wksp_t *nwksp, nas_wpa_cb_t *nwcb)
 	return 0;
 }
 
+#if WLHOSTFBT
+/* init RRB socket for all NAS instances */
+static int
+nas_wksp_rrb_sock_init(nas_wksp_t *nwksp)
+{
+	nas_wpa_cb_t *nwcb;
+	int i;
+	char * lan_iface;
+
+	for (i = 0; i < nwksp->nwcbs; i ++) {
+		nwcb = nwksp->nwcb[i];
+		assert(nwcb);
+		if (CHECK_FBT(nwcb->nas.mode)) {
+			lan_iface = nvram_get("lan_ifname");
+			setup_rrb_socket(&nwcb->wpa, lan_iface);
+		}
+	}
+
+	return 0;
+}
+
+/* deinit RRB socket for all NAS instances */
+static int
+nas_wksp_rrb_sock_deinit(nas_wksp_t *nwksp)
+{
+	nas_wpa_cb_t *nwcb;
+	int i;
+
+	for (i = 0; i < nwksp->nwcbs; i ++) {
+		nwcb = nwksp->nwcb[i];
+		assert(nwcb);
+		if (CHECK_FBT(nwcb->nas.mode)) {
+			deinit_rrb_socket(&nwcb->nas);
+		}
+	}
+
+	return 0;
+}
+#endif /* WLHOSTFBT */
+
 /* init all NAS instances */
 static int
 nas_wksp_init_nas(nas_wksp_t *nwksp)
@@ -898,7 +1041,10 @@ static void
 nas_cleanup_nas(nas_wksp_t *nwksp, nas_wpa_cb_t *nwcb)
 {
 	wpa_reset_countermeasures(nwcb->nas.wpa);
-
+#ifdef WLHOSTFBT
+	wpa_ft_pmk_cache_deinit((nwcb->nas.wpa)->fbt_info.ft_pmk_cache);
+	deinit_rrb_socket(&nwcb->nas);
+#endif /* WLHOSTFBT */
 #if !NAS_WKSP_MODULE_TIMER
 	nwcb->nas.timer = 0;
 #else
@@ -949,6 +1095,11 @@ nas_wksp_init(nas_wksp_t *nwksp)
 	(void)NAS_WKSP_OPEN_RADIUS(nwksp);
 #endif	/* #ifdef NAS_WKSP_BUILD_NAS_AUTH */
 
+#ifdef WLHOSTFBT
+	eloop_init(nwksp);
+	nas_wksp_rrb_sock_init(nwksp);
+#endif /* WLHOSTFBT */
+
 	/* init each instance */
 	nas_wksp_init_nas(nwksp);
 
@@ -961,6 +1112,11 @@ nas_wksp_cleanup(nas_wksp_t *nwksp)
 {
 	/* stop running nas */
 	nas_wksp_cleanup_nas(nwksp);
+
+#ifdef WLHOSTFBT
+	eloop_destroy();
+	nas_wksp_rrb_sock_deinit(nwksp);
+#endif /* WLHOSTFBT */
 
 #ifdef NAS_WKSP_BUILD_NAS_AUTH
 	/* disconnect from radius server */
@@ -1019,6 +1175,9 @@ nas_get_wsec(nas_wksp_t *nwksp, uint8 *mac, char *osifname, nas_wpa_cb_t *nwcb_r
 	nwcb->nas.wsec = TKIP_ENABLED|AES_ENABLED;
 	nwcb->nas.wpa = &nwcb->wpa;
 	nwcb->nas.appl = nwcb;
+#ifdef BCMDBG
+	nwcb->nas.debug = 1;
+#endif
 	nwcb->nas.disable_preauth = 0;
 	nwcb->nas.ssn_to = 36000;	/* 10hrs */
 	nwcb->wpa.nas = &nwcb->nas;
@@ -1124,6 +1283,11 @@ nas_get_wsec(nas_wksp_t *nwksp, uint8 *mac, char *osifname, nas_wpa_cb_t *nwcb_r
 	NASDBG("new nwcb's nas ssn timeout %d\n", nwcb->nas.ssn_to);
 #endif	/* #ifdef NAS_WKSP_BUILD_NAS_AUTH */
 
+#ifdef BCMDBG
+	/* verbose - 0:no | others:yes */
+	nwcb->nas.debug = info.debug;
+	NASDBG("new nwcb's nas debug %d\n", nwcb->nas.debug);
+#endif
 
 	nwcb->nas.disable_preauth = (info.preauth == 0) ? 1 : 0;
 	NASDBG("new nwcb's nas disable_preauth %d\n", nwcb->nas.disable_preauth);
@@ -1178,6 +1342,9 @@ nas_wksp_add_nwcb(nas_wksp_t *nwksp, uint8 *mac, char *osifname, nas_wpa_cb_t *n
 nas_wpa_cb_t *
 nas_wksp_find_nwcb(nas_wksp_t *nwksp, uint8 *mac, char *osifname, int mode)
 {
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	nas_wpa_cb_t *nwcb = NULL;
 	int i;
 

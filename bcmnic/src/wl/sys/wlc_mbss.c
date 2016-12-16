@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mbss.c 635703 2016-05-05 00:26:28Z $
+ * $Id: wlc_mbss.c 661824 2016-09-27 12:32:54Z $
  */
 
 /**
@@ -121,7 +121,11 @@ typedef struct {
 
 static int wlc_mbss_info_init(void *hdl, wlc_bsscfg_t *cfg);
 static void wlc_mbss_info_deinit(void *hdl, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_mbss_info_dump(void *hdl, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_mbss_info_dump NULL
+#endif
 
 /* bsscfg specific info access accessor */
 #define MBSS_BSSCFG_CUBBY_LOC(mbss, cfg) ((bss_mbss_info_t **)BSSCFG_CUBBY((cfg), (mbss)->cfgh))
@@ -654,6 +658,9 @@ wlc_bsscfg_macgen(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	bool collision = TRUE;
 	int cfg_idx = WLC_BSSCFG_IDX(cfg);
 	struct ether_addr newmac;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	ASSERT(MBSS_SUPPORT(wlc->pub));
 
@@ -856,6 +863,32 @@ wlc_mbss_bsscfg_down(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	}
 }
 
+#ifdef BCMDBG
+void
+wlc_mbss_dump_spt_pkt_state(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int i)
+{
+	bss_mbss_info_t *bmi = BSS_MBSS_INFO(wlc->mbss, cfg);
+
+	ASSERT(bmi != NULL);
+
+	/* Dump SPT pkt state */
+	if (bmi->bcn_template != NULL) {
+		int j;
+		wlc_spt_t *spt = bmi->bcn_template;
+
+		for (j = 0; j < WLC_SPT_COUNT_MAX; j++) {
+			if (spt->pkts[j] != NULL) {
+				wlc_pkttag_t *tag = WLPKTTAG(spt->pkts[j]);
+
+				WL_ERROR(("bss[%d] spt[%d]=%p in_use=%d flags=%08x flags2=%04x\n",
+				          i, j, OSL_OBFUSCATE_BUF(spt->pkts[j]),
+				          SPT_IN_USE(bmi->bcn_template, j),
+				          tag->flags, tag->flags2));
+			}
+		}
+	}
+}
+#endif /* BCMDBG */
 
 /* Under MBSS, this routine handles all TX dma done packets from the ATIM fifo. */
 void
@@ -870,6 +903,14 @@ wlc_mbss_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, void *pkt, uint16 fc,
 	ASSERT(MBSS_SUPPORT(wlc->pub));
 
 	bss_idx = (int)(WLPKTTAG_BSSIDX_GET(pkttag));
+#if defined(BCMDBG) /* Verify it's a reasonable index */
+	if ((bss_idx < 0) || (bss_idx >= WLC_MAXBSSCFG) ||
+	    (wlc->bsscfg[bss_idx] == NULL)) {
+		WL_ERROR(("%s: bad BSS idx\n", __FUNCTION__));
+		ASSERT(!"MBSS dotxstatus: bad BSS idx");
+		return;
+	}
+#endif /* BCMDBG */
 
 	/* For probe resp, this is really only used for counters */
 	ASSERT(bss_idx < WLC_MAXBSSCFG);
@@ -887,7 +928,7 @@ wlc_mbss_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, void *pkt, uint16 fc,
 			int txerr;
 
 			WLCNTINCR(bmi->cnt->prb_resp_retrx);
-				txerr = wlc_dma_tx(wlc, TX_ATIM_FIFO, pkt, TRUE);
+			txerr = wlc_bmac_dma_txfast(wlc, TX_ATIM_FIFO, pkt, TRUE);
 
 			if (txerr < 0) {
 				WL_MBSS(("Failed to retransmit suppressed probe resp for bss %d\n",
@@ -917,6 +958,11 @@ wlc_mbss_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, void *pkt, uint16 fc,
 		ASSERT(bsscfg->up);
 		/* Assume only one beacon in use at a time */
 		bmi->bcn_template->in_use_bitmap = 0;
+#if defined(WLC_SPT_DEBUG) && defined(BCMDBG)
+		if (supr_status != TX_STATUS_SUPR_NONE) {
+			bmi->bcn_template->suppressed++;
+		}
+#endif /* WLC_STP_DEBUG && BCMDBG */
 		break;
 	default: /* Bad packet type for ATIM fifo */
 		ASSERT(!"TX done ATIM packet neither BCN or PRB");
@@ -1039,6 +1085,192 @@ wlc_mbss_update_beacon(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 		} \
 	} while (0)
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* Get the SSID for the indicated (idx) bsscfg from SHM Return the length */
+static void
+wlc_shm_ssid_get(wlc_info_t *wlc, int idx, wlc_ssid_t *ssid)
+{
+	wlc_mbss_info_t *mbss = wlc->mbss;
+	int i;
+	int base;
+	uint16 tmpval;
+	int ucode_idx;
+	bss_mbss_info_t *bmi = BSS_MBSS_INFO(mbss, wlc->bsscfg[idx]);
+
+	ASSERT(bmi != NULL);
+
+	ucode_idx = bmi->_ucidx;
+
+	if (MBSS_ENAB(wlc->pub)) {
+		base = SHM_MBSS_SSIDSE_BASE_ADDR(wlc) + (ucode_idx * SHM_MBSS_SSIDSE_BLKSZ(wlc));
+		wlc_bmac_copyfrom_objmem(wlc->hw, base, &ssid->SSID_len,
+		                       SHM_MBSS_SSIDLEN_BLKSZ, OBJADDR_SRCHM_SEL);
+		/* search mem length field is always little endian */
+		ssid->SSID_len = ltoh32(ssid->SSID_len);
+		base += SHM_MBSS_SSIDLEN_BLKSZ;
+		wlc_bmac_copyfrom_objmem(wlc->hw, base, ssid->SSID,
+		                       SHM_MBSS_SSID_BLKSZ, OBJADDR_SRCHM_SEL);
+		return;
+	}
+
+	WLC_MBSS_SSID_LEN_GET(wlc, ucode_idx, ssid->SSID_len);
+	base = SHM_MBSS_SSID_ADDR(wlc, ucode_idx);
+	for (i = 0; i < DOT11_MAX_SSID_LEN; i += 2) {
+		tmpval = wlc_read_shm(wlc, base + i);
+		ssid->SSID[i] = tmpval & 0xFF;
+		ssid->SSID[i + 1] = tmpval >> 8;
+	}
+}
+
+/* Set this definition to 1 for additional verbosity */
+#define BSSCFG_EXTRA_VERBOSE 1
+
+#define SHOW_SHM(wlc, bf, addr, name) do { \
+		uint16 tmpval; \
+		tmpval = wlc_read_shm((wlc), (addr)); \
+		bcm_bprintf(bf, "%15s     offset: 0x%04x (0x%04x)     0x%04x (%6d)\n", \
+			name, addr / 2, addr, tmpval, tmpval); \
+	} while (0)
+
+static void
+wlc_mbss_info_dump(void *hdl, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_mbss_info_t *mbss = (wlc_mbss_info_t *)hdl;
+	wlc_info_t *wlc = mbss->wlc;
+	bss_mbss_info_t *bmi;
+	int bsscfg_idx;
+
+	ASSERT(cfg != NULL);
+
+	bmi = BSS_MBSS_INFO(mbss, cfg);
+	bsscfg_idx = WLC_BSSCFG_IDX(cfg);
+
+	if (!MBSS_SUPPORT(wlc->pub) || bmi == NULL)
+		return;
+
+	bcm_bprintf(b, "MBSS Build.  MBSS is %s. SW MBSS MHF band 0: %s; band 1: %s\n",
+		MBSS_ENAB(wlc->pub) ? "enabled" : "disabled",
+		(wlc_bmac_mhf_get(wlc->hw, MHF1, WLC_BAND_2G) & MHF1_MBSS_EN) ? "set" : "clear",
+		(wlc_bmac_mhf_get(wlc->hw, MHF1, WLC_BAND_5G) & MHF1_MBSS_EN) ? "set" : "clear");
+	bcm_bprintf(b, "Pkts suppressed from ATIM:  %d. Bcn Tmpl not ready/done %d/%d\n",
+		WLCNTVAL(wlc->pub->_cnt->atim_suppress_count),
+		WLCNTVAL(wlc->pub->_cnt->bcn_template_not_ready),
+		WLCNTVAL(wlc->pub->_cnt->bcn_template_not_ready_done));
+
+	bcm_bprintf(b, "WLC: cached prq base 0x%x, current prq rd 0x%x\n",
+	            mbss->prq_base, mbss->prq_rd_ptr);
+
+	bcm_bprintf(b, "Late TBTT counter %d\n",
+		WLCNTVAL(wlc->pub->_cnt->late_tbtt_dpc));
+	if (BSSCFG_EXTRA_VERBOSE && wlc->clk) {
+		bcm_bprintf(b, "MBSS shared memory offsets and values:\n");
+		SHOW_SHM(wlc, b, M_MBS_BSSID0(wlc), "BSSID0");
+		SHOW_SHM(wlc, b, M_MBS_BSSID1(wlc), "BSSID1");
+		SHOW_SHM(wlc, b, M_MBS_BSSID2(wlc), "BSSID2");
+		SHOW_SHM(wlc, b, M_MBS_NBCN(wlc), "BCN_COUNT");
+		SHOW_SHM(wlc, b, M_MBS_PRQBASE(wlc), "PRQ_BASE");
+		SHOW_SHM(wlc, b, SHM_MBSS_BC_FID0(wlc), "BC_FID0");
+		SHOW_SHM(wlc, b, SHM_MBSS_BC_FID1(wlc), "BC_FID1");
+		SHOW_SHM(wlc, b, SHM_MBSS_BC_FID2(wlc), "BC_FID2");
+		SHOW_SHM(wlc, b, SHM_MBSS_BC_FID3(wlc), "BC_FID3");
+		SHOW_SHM(wlc, b, M_MBS_PRETBTT(wlc), "PRE_TBTT");
+		SHOW_SHM(wlc, b, SHM_MBSS_SSID_LEN0(wlc), "SSID_LEN0");
+		SHOW_SHM(wlc, b, SHM_MBSS_SSID_LEN1(wlc), "SSID_LEN1");
+		SHOW_SHM(wlc, b, M_PRQFIFO_RPTR(wlc), "PRQ_RD");
+		SHOW_SHM(wlc, b, M_PRQFIFO_WPTR(wlc), "PRQ_WR");
+		SHOW_SHM(wlc, b, M_HOST_FLAGS(wlc), "M_HOST1");
+		SHOW_SHM(wlc, b, M_HOST_FLAGS2(wlc), "M_HOST2");
+	}
+	/* Dump out data at current PRQ ptrs */
+	bcm_bprintf(b, "PRQ entries handled %d. Undirected %d. Bad %d\n",
+		WLCNTVAL(wlc->pub->_cnt->prq_entries_handled),
+		WLCNTVAL(wlc->pub->_cnt->prq_undirected_entries),
+		WLCNTVAL(wlc->pub->_cnt->prq_bad_entries));
+
+	if (BSSCFG_EXTRA_VERBOSE && wlc->clk) {
+		uint16 rdptr, wrptr, base, totbytes, offset;
+		int j;
+		shm_mbss_prq_entry_t entry;
+		char ea_buf[ETHER_ADDR_STR_LEN];
+
+		base = wlc_read_shm(wlc, M_MBS_PRQBASE(wlc));
+		rdptr = wlc_read_shm(wlc, M_PRQFIFO_RPTR(wlc));
+		wrptr = wlc_read_shm(wlc, M_PRQFIFO_WPTR(wlc));
+		totbytes = SHM_MBSS_PRQ_ENTRY_BYTES * SHM_MBSS_PRQ_ENTRY_COUNT;
+		if (rdptr < base || (rdptr >= base + totbytes)) {
+			bcm_bprintf(b, "WARNING: PRQ read pointer out of range\n");
+		}
+		if (wrptr < base || (wrptr >= base + totbytes)) {
+			bcm_bprintf(b, "WARNING: PRQ write pointer out of range\n");
+		}
+
+		bcm_bprintf(b, "PRQ data at %8s %25s\n", "TA", "PLCP0  Time");
+		for (offset = base * 2, j = 0; j < SHM_MBSS_PRQ_ENTRY_COUNT;
+			j++, offset += SHM_MBSS_PRQ_ENTRY_BYTES) {
+			wlc_copyfrom_shm(wlc, offset, &entry, sizeof(entry));
+			bcm_bprintf(b, "  0x%04x:", offset);
+			bcm_bprintf(b, "  %s ", bcm_ether_ntoa(&entry.ta, ea_buf));
+			bcm_bprintf(b, " 0x%0x 0x%02x 0x%04x", entry.prq_info[0],
+				entry.prq_info[1], entry.time_stamp);
+			if (SHM_MBSS_PRQ_ENT_DIR_SSID(&entry) ||
+				SHM_MBSS_PRQ_ENT_DIR_BSSID(&entry)) {
+				int uc, sw;
+
+				uc = SHM_MBSS_PRQ_ENT_UC_BSS_IDX(&entry);
+				sw = WLC_BSSCFG_HW2SW_IDX(wlc, mbss, uc);
+				bcm_bprintf(b, "  (bss uc %d/sw %d)", uc, sw);
+			}
+			bcm_bprintf(b, "\n");
+		}
+	}
+
+	bcm_bprintf(b, "PS trans %u.\n", WLCNTVAL(bmi->cnt->ps_trans));
+#if defined(WLC_SPT_DEBUG)
+	bcm_bprintf(b, "BCN: bcn tx cnt %u. bcn suppressed %u\n",
+		bmi->bcn_template->tx_count, bmi->bcn_template->suppressed);
+#endif /* WLC_SPT_DEBUG */
+	bcm_bprintf(b,
+		"PrbResp: soft-prb-resp %s. directed req %d, alloc_fail %d, tx_fail %d\n",
+		SOFTPRB_ENAB(cfg) ? "enabled" : "disabled",
+		WLCNTVAL(bmi->cnt->prq_directed_entries),
+		WLCNTVAL(bmi->cnt->prb_resp_alloc_fail),
+		WLCNTVAL(bmi->cnt->prb_resp_tx_fail));
+	bcm_bprintf(b, "PrbResp: TBTT suppressions %d. TTL expires %d. retrx fail %d.\n",
+		WLCNTVAL(bmi->cnt->prb_resp_retrx), WLCNTVAL(bmi->cnt->prb_resp_ttl_expy),
+		WLCNTVAL(bmi->cnt->prb_resp_retrx_fail));
+	bcm_bprintf(b, "BCN: soft-bcn %s. bcn in use bmap 0x%x. bcn fail %u\n",
+		SOFTBCN_ENAB(cfg) ? "enabled" : "disabled",
+		bmi->bcn_template->in_use_bitmap, WLCNTVAL(bmi->cnt->bcn_tx_failed));
+	bcm_bprintf(b, "BCN: HW MBSS %s. bcn in use bmap 0x%x. bcn fail %u\n",
+		HWBCN_ENAB(cfg) ? "enabled" : "disabled",
+		bmi->bcn_template->in_use_bitmap, WLCNTVAL(bmi->cnt->bcn_tx_failed));
+	bcm_bprintf(b, "PRB: HW MBSS %s.\n",
+		HWPRB_ENAB(cfg) ? "enabled" : "disabled");
+	bcm_bprintf(b, "MC pkts in fifo %u. Max %u\n", bmi->mc_fifo_pkts,
+		WLCNTVAL(bmi->cnt->mc_fifo_max));
+	if (wlc->clk) {
+		char ssidbuf[SSID_FMT_BUF_LEN];
+		wlc_ssid_t ssid;
+		uint16 shm_fid;
+
+		shm_fid = wlc_read_shm(wlc, SHM_MBSS_WORD_OFFSET_TO_ADDR(wlc, 5 + bmi->_ucidx));
+		bcm_bprintf(b, "bcmc_fid 0x%x. bcmc_fid_shm 0x%x. shm last fid 0x%x. "
+			"bcmc TX pkts %u\n", cfg->bcmc_fid, cfg->bcmc_fid_shm, shm_fid,
+			WLCNTVAL(bmi->cnt->bcmc_count));
+		wlc_shm_ssid_get(wlc, bsscfg_idx, &ssid);
+		if (ssid.SSID_len > DOT11_MAX_SSID_LEN) {
+			WL_ERROR(("Warning: Invalid MBSS ssid length %d for BSS %d\n",
+				ssid.SSID_len, bsscfg_idx));
+			ssid.SSID_len = DOT11_MAX_SSID_LEN;
+		}
+		wlc_format_ssid(ssidbuf, ssid.SSID, ssid.SSID_len);
+		bcm_bprintf(b, "MBSS: ucode idx %d; shm ssid >%s< of len %d\n",
+			bmi->_ucidx, ssidbuf, ssid.SSID_len);
+	} else {
+		bcm_bprintf(b, "Core clock disabled, not dumping SHM info\n");
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* Use to set a specific SSID length */
 static void
@@ -1184,6 +1416,7 @@ wlc_mbss16_write_beacon(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 
 		start = BCN0_TPL_BASE_ADDR + (ucidx * bcn_tmpl_len);
 		if (D11REV_GE(wlc->pub->corerev, 40)) {
+			uint8 offset = wlc_template_plcp_offset(wlc, wlc->bcn_rspec);
 
 			/* Get pointer TX header and build the phy header */
 			pt = (uint8 *) PKTDATA(wlc->osh, pkt);
@@ -1201,21 +1434,9 @@ wlc_mbss16_write_beacon(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 			txh = (d11actxh_t *) pt;
 			local_rate_info = WLC_TXD_RATE_INFO_GET(txh, wlc->pub->corerev);
 
-			if (D11REV_GE(wlc->pub->corerev, 64)) {
-				/* put plcp from offset 0 */
-				bcopy(local_rate_info[0].plcp,
-					&phy_hdr[D11AC_PHY_BEACON_PLCP_OFFSET], D11_PHY_HDR_LEN);
-			} else {
-				/* PLCP starts at offset 3 for 5 GHz and offset 6 for 2.4 GHz */
-				if (BAND_2G(wlc->band->bandtype)) {
-					bcopy(local_rate_info[0].plcp,
-					      &phy_hdr[D11AC_PHY_CCK_PLCP_OFFSET], D11_PHY_HDR_LEN);
-				} else {
-					bcopy(local_rate_info[0].plcp,
-					      &phy_hdr[D11AC_PHY_OFDM_PLCP_OFFSET],
-						D11_PHY_HDR_LEN);
-				}
-			}
+			bcopy(local_rate_info[0].plcp,
+			      &phy_hdr[offset], D11_PHY_HDR_LEN);
+
 			/* Now get the MAC frame */
 			pt += D11AC_TXH_LEN;
 			len -= D11AC_TXH_LEN;
@@ -1710,8 +1931,49 @@ prq_entry_convert(wlc_info_t *wlc, shm_mbss_prq_entry_t *in, wlc_prq_info_t *out
 	return 0;
 }
 
+#if defined(BCMDBG)
+static void
+prq_entry_dump(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, uint16 rd_ptr, shm_mbss_prq_entry_t *entry)
+{
+	uint8 *ptr;
+	char ssidbuf[SSID_FMT_BUF_LEN];
+
+	ptr = (uint8 *)entry;
+	if (rd_ptr != 0) {
+		WL_MBSS(("Dump of raw PRQ entry from offset 0x%x (word offset 0x%x)\n",
+			rd_ptr * 2, rd_ptr));
+	} else {
+		WL_MBSS(("    Dump of raw PRQ entry\n"));
+	}
+	WL_MBSS(("    %02x%02x %02x%02x %02x%02x %02x%02x %04x\n",
+		ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5],
+		entry->prq_info[0], entry->prq_info[1], entry->time_stamp));
+	WL_MBSS(("    %sdirected SSID. %sdirected BSSID. uc_idx: %d. type %d. upband %d.\n",
+		SHM_MBSS_PRQ_ENT_DIR_SSID(entry) ? "" : "not ",
+		SHM_MBSS_PRQ_ENT_DIR_BSSID(entry) ? "" : "not ",
+		SHM_MBSS_PRQ_ENT_UC_BSS_IDX(entry),
+		SHM_MBSS_PRQ_ENT_FRAMETYPE(entry),
+		SHM_MBSS_PRQ_ENT_UPBAND(entry)));
+	if (bsscfg != NULL) {
+		wlc_format_ssid(ssidbuf, bsscfg->SSID, bsscfg->SSID_len);
+		WL_MBSS(("    Entry mapped to bss %d, ssid %s\n", WLC_BSSCFG_IDX(bsscfg), ssidbuf));
+	}
+}
+
+static void
+prq_info_dump(wlc_info_t *wlc, wlc_prq_info_t *info)
+{
+	WL_MBSS(("Dump of PRQ info: dir %d. dir ssid %d. dir bss %d. bss cfg idx %d\n",
+		info->is_directed, info->directed_ssid, info->directed_bssid,
+		WLC_BSSCFG_IDX(info->bsscfg)));
+	WL_MBSS(("    frame type %d, up_band %d, plcp0 0x%x\n",
+		info->frame_type, info->up_band, info->plcp0));
+	prq_entry_dump(wlc, info->bsscfg, 0, &info->source);
+}
+#else
 #define prq_entry_dump(a, b, c, d)
 #define prq_info_dump(a, b)
+#endif /* BCMDBG */
 
 /*
  * PRQ FIFO Processing
@@ -1841,7 +2103,9 @@ wlc_prb_resp_plcp_hdrs(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, wlc_prq_info_t *in
 			preamble = WLC_LONG_PREAMBLE;
 		}
 
-		durid = wlc_compute_frame_dur(wlc, rspec, preamble, 0);
+		durid = wlc_compute_frame_dur(wlc,
+				CHSPEC2WLC_BAND(bsscfg->current_bss->chanspec),
+				rspec, preamble, 0);
 		h->durid = htol16(durid);
 		txh->FragDurFallback = h->durid;
 	}
@@ -1933,7 +2197,7 @@ wlc_prq_directed(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, wlc_prq_info_t *info)
 
 	prb_pkt_final_setup(wlc, bsscfg, info, pkt_start, len);
 
-	if (wlc_dma_tx(wlc, TX_ATIM_FIFO, pkt, TRUE) < 0) {
+	if (wlc_bmac_dma_txfast(wlc, TX_ATIM_FIFO, pkt, TRUE) < 0) {
 		PKTFREE(wlc->osh, pkt, TRUE);
 		WL_MBSS(("Failed to transmit probe resp for bss %d\n", WLC_BSSCFG_IDX(bsscfg)));
 		WLCNTINCR(bmi->cnt->prb_resp_tx_fail);
@@ -2013,6 +2277,20 @@ wlc_prq_process(wlc_info_t *wlc, bool bounded)
 	rd_ptr = wlc->mbss->prq_rd_ptr;
 	wr_ptr = wlc_read_shm(wlc, M_PRQFIFO_WPTR(wlc));
 
+#if defined(BCMDBG)
+	/* Debug checks for rd and wr ptrs */
+	if (wr_ptr < prq_base || wr_ptr >= prq_top) {
+		WL_ERROR(("Error: PRQ fifo write pointer 0x%x out of bounds (%d, %d)\n",
+			wr_ptr, prq_base, prq_top));
+		return FALSE;
+	}
+	if (rd_ptr < prq_base || rd_ptr >= prq_top) {
+		WL_ERROR(("Error: PRQ read pointer 0x%x out of bounds; clearing fifo\n", rd_ptr));
+		/* Reset read pointer to write pointer, emptying the fifo */
+		rd_ptr = wr_ptr;
+		set_rd_ptr = TRUE;
+	}
+#endif /* BCMDBG */
 
 	while (rd_ptr != wr_ptr) {
 		WLCNTINCR(wlc->pub->_cnt->prq_entries_handled);
@@ -2028,7 +2306,7 @@ wlc_prq_process(wlc_info_t *wlc, bool bounded)
 			WL_MBSS(("MBSS: Received PRQ entry on down BSS (%d)\n",
 				WLC_BSSCFG_IDX(info.bsscfg)));
 		} else {
-#if defined(WLCNT)
+#if defined(BCMDBG) || defined(WLCNT)
 			if (info.is_directed && info.bsscfg != NULL) {
 				bss_mbss_info_t *bmi = BSS_MBSS_INFO(wlc->mbss, info.bsscfg);
 				ASSERT(bmi != NULL);

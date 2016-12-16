@@ -36,7 +36,8 @@ void wlc_murx_filter_bfe_cap(wlc_murx_info_t *mu_info, wlc_bsscfg_t *bsscfg, uin
 bool wlc_murx_is_bi_mu_bfr_cap(wlc_murx_info_t *mu_info, wlc_bss_info_t *bi);
 int wlc_murx_gid_update(wlc_info_t *wlc, struct scb *scb,
                         uint8 *membership_status, uint8 *user_position);
-#if defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || defined(BCMDBG_MU) || \
+	defined(BCMDBG_DUMP))
 void wlc_murx_update_rxcounters(wlc_murx_info_t *mu_info, uint32 ft, struct scb *scb,
 	struct dot11_header *h);
 #endif

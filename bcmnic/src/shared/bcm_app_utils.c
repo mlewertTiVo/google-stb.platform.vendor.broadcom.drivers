@@ -20,7 +20,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcm_app_utils.c 625864 2016-03-18 00:12:54Z $
+ * $Id: bcm_app_utils.c 663318 2016-10-04 19:02:16Z $
  */
 
 #include <typedefs.h>

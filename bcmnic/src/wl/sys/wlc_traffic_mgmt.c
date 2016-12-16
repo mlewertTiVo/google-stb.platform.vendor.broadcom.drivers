@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_traffic_mgmt.c 645694 2016-06-27 02:51:08Z $
+ * $Id: wlc_traffic_mgmt.c 663073 2016-10-04 01:33:08Z $
  */
 
 
@@ -238,7 +238,12 @@ typedef struct {
 	bool			rssi_on;	/* Is RSSI update turned on ? */
 } trf_mgmt_rssi_info_t;
 
+# if defined(BCMDBG)
+/* Internal debugging */
+#define WL_RSSI(s) WL_TRF_MGMT(s)
+#else
 #define WL_RSSI(s)
+#endif /* BCMDBG */
 
 #endif /* TRAFFIC_MGMT_RSSI_POLICY */
 
@@ -314,22 +319,19 @@ static const uint8 rfc1042_snap_hdr[] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00};
 
 
 /* IOVar table */
-enum {
-    IOV_TRF_MGMT_CONFIG,            /* Get/set traffic management parameters */
-    IOV_TRF_MGMT_FILTERS_ADD,       /* Adds one or more traffic management filters. */
-    IOV_TRF_MGMT_FILTERS_REMOVE,    /* Removes one or more traffic management filters. */
-    IOV_TRF_MGMT_FILTERS_LIST,      /* Lists all current traffic management filters. */
-    IOV_TRF_MGMT_FILTERS_CLEAR,     /* Clear traffic management filters. */
-    IOV_TRF_MGMT_FLAGS,		    /* Get/set traffic management operational flags */
-    IOV_TRF_MGMT_STATS,             /* Get traffic management statistics. */
-#ifdef TRAFFIC_MGMT
-    IOV_TRF_MGMT_BANDWIDTH,         /* Get/set traffic management bandwidth parameters */
-    IOV_TRF_MGMT_SHAPING_INFO,      /* Get the shaping parameters. */
-#endif
-#ifdef TRAFFIC_MGMT_RSSI_POLICY
-    IOV_TRF_MGMT_RSSI_POLICY,	    /* Get/set traffic management RSSI policy */
-#endif /* TRAFFIC_MGMT_RSSI_POLICY */
-    IOV_INTFER_PARAMS,	/* get/set intfer config parameters */
+enum wlc_trf_mgmt_iov {
+    IOV_TRF_MGMT_CONFIG = 1,		/* Get/set traffic management parameters */
+    IOV_TRF_MGMT_FILTERS_ADD = 2,	/* Adds one or more traffic management filters. */
+    IOV_TRF_MGMT_FILTERS_REMOVE = 3,	/* Removes one or more traffic management filters. */
+    IOV_TRF_MGMT_FILTERS_LIST = 4,	/* Lists all current traffic management filters. */
+    IOV_TRF_MGMT_FILTERS_CLEAR = 5,	/* Clear traffic management filters. */
+    IOV_TRF_MGMT_FLAGS = 6,		/* Get/set traffic management operational flags */
+    IOV_TRF_MGMT_STATS = 7,		/* Get traffic management statistics. */
+    IOV_TRF_MGMT_BANDWIDTH = 8,		/* Get/set traffic management bandwidth parameters */
+    IOV_TRF_MGMT_SHAPING_INFO = 9,	/* Get the shaping parameters. */
+    IOV_TRF_MGMT_RSSI_POLICY = 10,	/* Get/set traffic management RSSI policy */
+    IOV_TRF_MGMT_INTFER_PARAMS = 11,	/* Get/set intfer config parameters */
+    IOV_TRF_MGMT_LAST
 };
 
 #ifdef TRAFFIC_MGMT_RSSI_POLICY
@@ -419,7 +421,7 @@ static const bcm_iovar_t trf_mgmt_iovars[] = {
 #endif /* TRAFFIC_MGMT_RSSI_POLICY */
 #ifdef WLINTFERSTAT
 	{"intfer_params",
-	IOV_INTFER_PARAMS,
+	IOV_TRF_MGMT_INTFER_PARAMS,
 	(0), 0,
 	IOVT_BUFFER,
 	sizeof(wl_intfer_params_t)},
@@ -1282,12 +1284,12 @@ static int wlc_trf_mgmt_doiovar(
 
 #endif /* TRAFFIC_MGMT_RSSI_POLICY */
 #ifdef WLINTFERSTAT
-		case IOV_GVAL(IOV_INTFER_PARAMS): {
+		case IOV_GVAL(IOV_TRF_MGMT_INTFER_PARAMS): {
 			wl_intfer_params_t *config = (wl_intfer_params_t *)a;
 			memcpy(config, trf_mgmt_info->intfer_params, sizeof(wl_intfer_params_t));
 			break;
 		}
-		case IOV_SVAL(IOV_INTFER_PARAMS): {
+		case IOV_SVAL(IOV_TRF_MGMT_INTFER_PARAMS): {
 			wl_intfer_params_t *config = (wl_intfer_params_t *)a;
 			if (config->version != INTFER_VERSION) {
 				err = BCME_VERSION;

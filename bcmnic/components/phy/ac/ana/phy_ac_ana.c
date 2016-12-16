@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_ana.c 662174 2016-09-28 17:43:59Z randyjew $
+ * $Id: phy_ac_ana.c 659938 2016-09-16 16:47:54Z $
  */
 
 #include <phy_cfg.h>
@@ -35,6 +35,7 @@
 #include <phy_rstr.h>
 #include <phy_utils_var.h>
 #include <bcmdevs.h>
+#include <phy_radio_api.h>
 
 /**
  * Front End Control table contents for a single radio core. For some chips, the per-core tables are
@@ -52,7 +53,7 @@ struct phy_ac_ana_info {
 	phy_info_t *pi;
 	phy_ac_info_t *aci;
 	phy_ana_info_t *ani;
-	acphy_fe_ctrl_table_t fectrl_c[PHY_CORE_MAX];
+	acphy_fe_ctrl_table_t *fectrl_c; /* array of size PHY_CORE_MAX */
 	uint16	*fectrl_idx, *fectrl_val;
 	uint16	fectrl_table_len;
 	uint16	fectrl_sparse_table_len;
@@ -62,7 +63,7 @@ struct phy_ac_ana_info {
 };
 
 /* local functions */
-static int BCMATTACHFN(wlc_phy_srom_swctrlmap4_read)(phy_info_t *pi);
+static int BCMATTACHFN(phy_ac_ana_srom_swctrlmap4_read)(phy_info_t *pi);
 static bool BCMATTACHFN(wlc_phy_attach_femctrl_table)(phy_ac_ana_info_t *ani);
 static int phy_ac_ana_switch(phy_type_ana_ctx_t *ctx, bool on);
 static void phy_ac_ana_reset(phy_type_ana_ctx_t *ctx);
@@ -546,7 +547,7 @@ BCMATTACHFN(phy_ac_ana_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	phy_ac_ana_nvram_attach(info);
 
 	/* function to read femctrl params from nvram */
-	if (!wlc_phy_srom_swctrlmap4_read(pi))
+	if (!phy_ac_ana_srom_swctrlmap4_read(pi))
 		goto fail;
 
 	if (ACPHY_FEMCTRL_ACTIVE(pi) && !ACPHY_SWCTRLMAP4_EN(pi) &&
@@ -569,8 +570,7 @@ BCMATTACHFN(phy_ac_ana_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 
 	return info;
 fail:
-	if (info != NULL)
-		phy_mfree(pi, info, sizeof(phy_ac_ana_info_t));
+	phy_ac_ana_unregister_impl(info);
 	return NULL;
 }
 
@@ -581,7 +581,9 @@ BCMATTACHFN(phy_ac_ana_unregister_impl)(phy_ac_ana_info_t *info)
 	phy_ana_info_t *ani;
 	uint8 core = 0;
 
-	ASSERT(info);
+	if (info == NULL) {
+		return;
+	}
 	pi = info->pi;
 	ani = info->ani;
 
@@ -589,10 +591,14 @@ BCMATTACHFN(phy_ac_ana_unregister_impl)(phy_ac_ana_info_t *info)
 
 	phy_ana_unregister_impl(ani);
 
-	FOREACH_CORE(pi, core) {
-		if (info->fectrl_c[core].subtable != NULL)
-			phy_mfree(pi, info->fectrl_c[core].subtable,
-				info->fectrl_c[core].n_entries * sizeof(uint8));
+	if (info->fectrl_c != NULL) {
+		FOREACH_CORE(pi, core) {
+			if (info->fectrl_c[core].subtable != NULL) {
+				phy_mfree(pi, info->fectrl_c[core].subtable,
+					info->fectrl_c[core].n_entries * sizeof(uint8));
+			}
+		}
+		phy_mfree(pi, info->fectrl_c, sizeof(acphy_fe_ctrl_table_t[PHY_CORE_MAX]));
 	}
 
 	if (info->fectrl_idx != NULL) {
@@ -726,7 +732,7 @@ wlc_phy_init_adc_read(phy_info_t* pi, uint16* save_afePuCtrl, uint16* save_gpio,
 	*save_gpio = READ_PHYREG(pi, gpioSel);
 	*save_gpioHiOutEn = READ_PHYREG(pi, gpioHiOutEn);
 
-	if (pi_ac->poll_adc_WAR) {
+	if (phy_ac_btcx_get_data(pi_ac->btcxi)->poll_adc_WAR) {
 		ACPHY_REG_LIST_START
 			ACPHY_DISABLE_STALL_ENTRY(pi)
 
@@ -768,7 +774,7 @@ wlc_phy_restore_after_adc_read(phy_info_t *pi, uint16* save_afePuCtrl, uint16 *s
 	ACPHY_DISABLE_STALL(pi);
 	WRITE_PHYREG(pi, gpioSel, *save_gpio);
 	WRITE_PHYREG(pi, gpioHiOutEn, *save_gpioHiOutEn);
-	if (pi_ac->poll_adc_WAR) {
+	if (phy_ac_btcx_get_data(pi_ac->btcxi)->poll_adc_WAR) {
 		ACPHY_REG_LIST_START
 			MOD_PHYREGCE_ENTRY(pi, RfctrlIntc, 1, ext_2g_papu, 0)
 			MOD_PHYREGCE_ENTRY(pi, RfctrlIntc, 1, ext_5g_papu, 0)
@@ -862,6 +868,11 @@ BCMATTACHFN(wlc_phy_attach_femctrl_table)(phy_ac_ana_info_t *ani)
 	ani->fectrl_sparse_table_len = 0;
 	ani->fectrl_spl_entry_flag = 0;
 
+	if ((ani->fectrl_c = phy_malloc(pi, sizeof(acphy_fe_ctrl_table_t[PHY_CORE_MAX]))) == NULL) {
+		PHY_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+			pi->sh->unit, __FUNCTION__, MALLOCED(pi->sh->osh)));
+		return FALSE;
+	}
 	/* majorrev0 chips don't use sparse tables: they have their entire femctrl table */
 	FOREACH_CORE(pi, core) {
 		ani->fectrl_c[core].subtable = NULL;
@@ -1604,7 +1615,6 @@ wlc_phy_enable_pavref_war(phy_info_t *pi)
 	wlc_phy_table_write_acphy(pi, ACPHY_TBL_ID_RFSEQ,
 		ARRAYSIZE(lna_trsw_timing), 0x70, 16, &lna_trsw_timing);
 
-	/* JIRA:HW43602-197 WAR: enable PAVREF programming by ucode */
 	WRITE_PHYREG(pi, dot11acphycrsTxExtension, 0x1);
 	W_REG(pi->sh->osh, &pi->regs->PHYREF_IFS_SIFS_RX_TX_TX, 0x7676);
 	W_REG(pi->sh->osh, &pi->regs->PHYREF_IFS_SIFS_NAV_TX, 0x0276);
@@ -1784,7 +1794,7 @@ wlc_phy_set_regtbl_on_femctrl(phy_info_t *pi)
 		}
 	}
 
-	if (!ACMAJORREV_4(pi->pubpi->phy_rev)) {
+	if (!ACMAJORREV_4(pi->pubpi->phy_rev) && !ACMAJORREV_37(pi->pubpi->phy_rev)) {
 		if (BF_SROM11_BTCOEX(pi->u.pi_acphy)) {
 			if (ACMAJORREV_0(pi->pubpi->phy_rev)) {
 				if (ACMINORREV_0(pi)) {
@@ -1803,8 +1813,7 @@ wlc_phy_set_regtbl_on_femctrl(phy_info_t *pi)
 				ACMAJORREV_3(pi->pubpi->phy_rev) ||
 				ACMAJORREV_25(pi->pubpi->phy_rev) ||
 				ACMAJORREV_40(pi->pubpi->phy_rev) ||
-				ACMAJORREV_5(pi->pubpi->phy_rev) ||
-				ACMAJORREV_37(pi->pubpi->phy_rev)) {
+				ACMAJORREV_5(pi->pubpi->phy_rev)) {
 				PHY_ERROR(("\n"));
 			} else {
 				ASSERT(0);
@@ -1845,7 +1854,7 @@ wlc_phy_set_mask_for_femctrl10(phy_info_t *pi)
 #endif	/* SWCTRL_TO_BT_IN_COEX */
 
 static int
-BCMATTACHFN(wlc_phy_srom_swctrlmap4_read)(phy_info_t *pi)
+BCMATTACHFN(phy_ac_ana_srom_swctrlmap4_read)(phy_info_t *pi)
 {
 	uint8 core, slice_ant_core;
 	uint16 tmp;

@@ -16,7 +16,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlfc_proto.h 632491 2016-04-19 13:26:38Z $
+ * $Id: wlfc_proto.h 662131 2016-09-28 11:58:08Z $
  *
  */
 
@@ -75,39 +75,40 @@
 	 ---------------------------------------------------------------------------
 	*/
 
-#define WLFC_CTL_TYPE_MAC_OPEN			1
-#define WLFC_CTL_TYPE_MAC_CLOSE			2
-#define WLFC_CTL_TYPE_MAC_REQUEST_CREDIT	3
-#define WLFC_CTL_TYPE_TXSTATUS			4
-#define WLFC_CTL_TYPE_PKTTAG			5	/** host<->dongle */
+typedef enum {
+	WLFC_CTL_TYPE_MAC_OPEN = 1,
+	WLFC_CTL_TYPE_MAC_CLOSE	= 2,
+	WLFC_CTL_TYPE_MAC_REQUEST_CREDIT = 3,
+	WLFC_CTL_TYPE_TXSTATUS = 4,
+	WLFC_CTL_TYPE_PKTTAG = 5,	/** host<->dongle */
 
-#define WLFC_CTL_TYPE_MACDESC_ADD		6
-#define WLFC_CTL_TYPE_MACDESC_DEL		7
-#define WLFC_CTL_TYPE_RSSI			8
+	WLFC_CTL_TYPE_MACDESC_ADD = 6,
+	WLFC_CTL_TYPE_MACDESC_DEL = 7,
+	WLFC_CTL_TYPE_RSSI = 8,
 
-#define WLFC_CTL_TYPE_INTERFACE_OPEN		9
-#define WLFC_CTL_TYPE_INTERFACE_CLOSE		10
+	WLFC_CTL_TYPE_INTERFACE_OPEN = 9,
+	WLFC_CTL_TYPE_INTERFACE_CLOSE = 10,
 
-#define WLFC_CTL_TYPE_FIFO_CREDITBACK		11
+	WLFC_CTL_TYPE_FIFO_CREDITBACK = 11,
 
-#define WLFC_CTL_TYPE_PENDING_TRAFFIC_BMP	12	/** host->dongle */
-#define WLFC_CTL_TYPE_MAC_REQUEST_PACKET	13
-#define WLFC_CTL_TYPE_HOST_REORDER_RXPKTS	14
+	WLFC_CTL_TYPE_PENDING_TRAFFIC_BMP = 12,	/** host->dongle */
+	WLFC_CTL_TYPE_MAC_REQUEST_PACKET = 13,
+	WLFC_CTL_TYPE_HOST_REORDER_RXPKTS = 14,
 
-#define WLFC_CTL_TYPE_TX_ENTRY_STAMP		15
-#define WLFC_CTL_TYPE_RX_STAMP			16
-#define WLFC_CTL_TYPE_TX_STATUS_STAMP		17	/** obsolete */
+	WLFC_CTL_TYPE_TX_ENTRY_STAMP = 15,
+	WLFC_CTL_TYPE_RX_STAMP = 16,
+	WLFC_CTL_TYPE_TX_STATUS_STAMP = 17,	/** obsolete */
 
-#define WLFC_CTL_TYPE_TRANS_ID			18
-#define WLFC_CTL_TYPE_COMP_TXSTATUS		19
+	WLFC_CTL_TYPE_TRANS_ID = 18,
+	WLFC_CTL_TYPE_COMP_TXSTATUS = 19,
 
-#define WLFC_CTL_TYPE_TID_OPEN			20
-#define WLFC_CTL_TYPE_TID_CLOSE			21
-#define WLFC_CTL_TYPE_UPD_FLR_WEIGHT		22
-#define WLFC_CTL_TYPE_ENAB_FFSCH		23
+	WLFC_CTL_TYPE_TID_OPEN = 20,
+	WLFC_CTL_TYPE_TID_CLOSE = 21,
+	WLFC_CTL_TYPE_UPD_FLR_WEIGHT = 22,
+	WLFC_CTL_TYPE_ENAB_FFSCH = 23,
 
-
-#define WLFC_CTL_TYPE_FILLER			255
+	WLFC_CTL_TYPE_FILLER = 255
+} wlfc_ctl_type_t;
 
 #define WLFC_CTL_VALUE_LEN_MACDESC		8	/** handle, interface, MAC */
 
@@ -360,8 +361,14 @@
 #define WLFC_SET_REUSESEQ(x, val)	((x) = \
 	((x) & ~(1 << WLFC_MODE_REUSESEQ_SHIFT)) | \
 	(((val) & 1) << WLFC_MODE_REUSESEQ_SHIFT))
+
 /** returns TRUE if 'd11 sequence reuse' has been agreed upon between host and dongle */
+#if defined(BCMPCIEDEV_ENABLED) && !defined(WL_ENAB_RUNTIME_CHECK)
+/* GET_REUSESEQ is always TRUE in pciedev */
+#define WLFC_GET_REUSESEQ(x)	(TRUE)
+#else
 #define WLFC_GET_REUSESEQ(x)	(((x) >> WLFC_MODE_REUSESEQ_SHIFT) & 1)
+#endif /* defined(BCMPCIEDEV_ENABLED) && !defined(WL_ENAB_RUNTIME_CHECK) */
 
 #define WLFC_MODE_REORDERSUPP_SHIFT	4	/* host reorder suppress pkt bit */
 #define WLFC_SET_REORDERSUPP(x, val)	((x) = \

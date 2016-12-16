@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_dbg.c 620395 2016-02-23 01:15:14Z vyass $
+ * $Id: phy_dbg.c 658374 2016-09-07 19:38:20Z $
  */
 
 #include <phy_cfg.h>
@@ -29,6 +29,11 @@
 #include <phy_radio.h>
 #include <phy_utils_reg.h>
 #endif
+#if defined(BCMDBG)
+#include <bcmdevs.h>
+#include <phy_utils_reg.h>
+#endif 
+
 typedef struct phy_dbg_mem phy_dbg_mem_t;
 
 /* module private states */
@@ -439,3 +444,137 @@ phy_dbg_dump_binary(wlc_phy_t *ppi, uint8 type, uchar *p, int * buf_len)
 	return BCME_UNSUPPORTED;
 #endif /* PHY_DUMP_BINARY */
 }
+
+#if defined(BCMDBG)
+void
+phy_dbg_test_evm_init(phy_info_t *pi)
+{
+	d11regs_t *regs = pi->regs;
+	if (BOARDFLAGS(GENERIC_PHY_INFO(pi)->boardflags) & BFL_PACTRL) {
+		PHY_INFORM(("wl%d: %s: PACTRL boardflag set, clearing gpio 0x%04x\n",
+			pi->sh->unit, __FUNCTION__, BOARD_GPIO_PACTRL));
+		/* Store initial values */
+		pi->evm_o = R_REG(pi->sh->osh, &pi->regs->psm_gpio_out);
+		pi->evm_oe = R_REG(pi->sh->osh, &pi->regs->psm_gpio_oe);
+		AND_REG(pi->sh->osh, &regs->psm_gpio_out, ~BOARD_GPIO_PACTRL);
+		OR_REG(pi->sh->osh, &regs->psm_gpio_oe, BOARD_GPIO_PACTRL);
+		OSL_DELAY(1000);
+	}
+}
+
+uint16
+phy_dbg_test_evm_reg(uint rate)
+{
+	uint16 reg = TST_TXTEST_RATE_2MBPS;
+	switch (rate) {
+	case 2:
+		reg = TST_TXTEST_RATE_1MBPS;
+		break;
+	case 4:
+		reg = TST_TXTEST_RATE_2MBPS;
+		break;
+	case 11:
+		reg = TST_TXTEST_RATE_5_5MBPS;
+		break;
+	case 22:
+		reg = TST_TXTEST_RATE_11MBPS;
+		break;
+	}
+	return ((reg << TST_TXTEST_RATE_SHIFT) & TST_TXTEST_RATE);
+}
+
+/*
+ * Rate is number of 500 Kb units.
+ */
+int
+phy_dbg_test_evm(phy_info_t *pi, int channel, uint rate, int txpwr)
+{
+	phy_type_dbg_fns_t *fns = pi->dbgi->fns;
+	int err = BCME_UNSUPPORTED;
+
+	if (fns->test_evm != NULL) {
+		err = (fns->test_evm)(fns->ctx, channel, rate, txpwr);
+	} else {
+		d11regs_t *regs = pi->regs;
+		uint16 reg = 0;
+		int bcmerror = 0;
+
+		/* stop any test in progress */
+		wlc_phy_test_stop(pi);
+
+		/* channel 0 means restore original contents and end the test */
+		if (channel == 0) {
+			W_REG(pi->sh->osh, &regs->phytest, pi->evm_phytest);
+
+			pi->evm_phytest = 0;
+
+			if (BOARDFLAGS(GENERIC_PHY_INFO(pi)->boardflags) & BFL_PACTRL) {
+				W_REG(pi->sh->osh, &pi->regs->psm_gpio_out, pi->evm_o);
+				W_REG(pi->sh->osh, &pi->regs->psm_gpio_oe, pi->evm_oe);
+				OSL_DELAY(1000);
+			}
+			return 0;
+		}
+
+		phy_dbg_test_evm_init(pi);
+
+		if ((bcmerror = wlc_phy_test_init(pi, channel, TRUE)))
+			return bcmerror;
+
+		reg = phy_dbg_test_evm_reg(rate);
+
+		PHY_INFORM(("wlc_evm: rate = %d, reg = 0x%x\n", rate, reg));
+
+		/* Save original contents */
+		if (pi->evm_phytest == 0) {
+			pi->evm_phytest = R_REG(pi->sh->osh, &regs->phytest);
+		}
+
+		/* Set EVM test mode */
+		AND_REG(pi->sh->osh, &regs->phytest,
+		        ~(TST_TXTEST_ENABLE|TST_TXTEST_RATE|TST_TXTEST_PHASE));
+		OR_REG(pi->sh->osh, &regs->phytest, TST_TXTEST_ENABLE | reg);
+		err = BCME_OK;
+	}
+	return err;
+}
+
+int
+phy_dbg_test_carrier_suppress(phy_info_t *pi, int channel)
+{
+	phy_type_dbg_fns_t *fns = pi->dbgi->fns;
+	int err = BCME_UNSUPPORTED;
+
+	if (fns->test_carrier_suppress != NULL) {
+		err = (fns->test_carrier_suppress)(fns->ctx, channel);
+	} else {
+		d11regs_t *regs = pi->regs;
+		int bcmerror = 0;
+
+		/* stop any test in progress */
+		wlc_phy_test_stop(pi);
+
+		/* channel 0 means restore original contents and end the test */
+		if (channel == 0) {
+			W_REG(pi->sh->osh, &regs->phytest, pi->car_sup_phytest);
+
+			pi->car_sup_phytest = 0;
+			return 0;
+		}
+
+		if ((bcmerror = wlc_phy_test_init(pi, channel, TRUE)))
+			return bcmerror;
+
+		/* Save original contents */
+		if (pi->car_sup_phytest == 0) {
+			pi->car_sup_phytest = R_REG(pi->sh->osh, &regs->phytest);
+		}
+
+		/* set carrier suppression test mode */
+		AND_REG(pi->sh->osh, &regs->phytest, 0xfc00);
+		OR_REG(pi->sh->osh, &regs->phytest, 0x0228);
+		err = BCME_OK;
+	}
+	return err;
+}
+#endif 

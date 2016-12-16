@@ -30,6 +30,11 @@ enum {
 	IOV_LAST
 };
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void wlc_obss_util_stats(wlc_info_t *wlc, wlc_bmac_obss_counts_t *msrmnt_stored,
+	wlc_bmac_obss_counts_t *prev_stats, wlc_bmac_obss_counts_t *curr_stats,
+	uint8 report_opt, struct bcmstrbuf *b);
+#endif 
 
 void wlc_obss_util_update(wlc_info_t *wlc, wlc_bmac_obss_counts_t *curr,
 	wlc_bmac_obss_counts_t *prev, wlc_bmac_obss_counts_t *o_total, chanspec_t chanspec);

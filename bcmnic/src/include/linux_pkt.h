@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_pkt.h 623604 2016-03-08 17:40:25Z $
+ * $Id: linux_pkt.h 654730 2016-08-16 09:04:55Z $
  */
 
 #ifndef _linux_pkt_h_
@@ -26,28 +26,11 @@
 
 #include <typedefs.h>
 
-#ifdef WLCXO
-#define PKTD2C(osh, p)		(p)
-#define PKTC2D(osh, p)		(p)
-#endif /* WLCXO */
-
-#ifdef WLCXO
-#ifdef WLCXO_SIM
-#define PKT_CXO_HEADROOM 64
-#else
-#define PKT_CXO_HEADROOM 16
-#endif /* WLCXO_SIM */
-#else /* !WLCXO */
-#define PKT_CXO_HEADROOM 0
-#endif /* WLCXO */
-
 #ifdef __ARM_ARCH_7A__
-#define PKT_LINUX_HEADROOM NET_SKB_PAD /**< NET_SKB_PAD is defined in a linux kernel header */
+#define PKT_HEADROOM_DEFAULT NET_SKB_PAD /**< NET_SKB_PAD is defined in a linux kernel header */
 #else
-#define PKT_LINUX_HEADROOM 16
+#define PKT_HEADROOM_DEFAULT 16
 #endif /* __ARM_ARCH_7A__ */
-
-#define PKT_HEADROOM_DEFAULT MAX(PKT_CXO_HEADROOM, PKT_LINUX_HEADROOM)
 
 #ifdef BCMDRIVER
 /*
@@ -284,7 +267,6 @@ extern void osl_ctfpool_stats(osl_t *osh, void *b);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
 #define	SKIPCT	(1 << 2)
 #define	CHAINED	(1 << 3)
-#define	CXODATA	(1 << 4)
 #define	PKTSETSKIPCT(osh, skb)	\
 	({ \
 	 BCM_REFERENCE(osh); \
@@ -311,21 +293,9 @@ extern void osl_ctfpool_stats(osl_t *osh, void *b);
 	 (((struct sk_buff*)(skb))->pktc_flags &= (~CHAINED)); \
 	 })
 #define	PKTISCHAINED(skb)	(((struct sk_buff*)(skb))->pktc_flags & CHAINED)
-#define	PKTSETCXODATA(osh, skb)	\
-	({ \
-	 BCM_REFERENCE(osh); \
-	 (((struct sk_buff*)(skb))->pktc_flags |= CXODATA); \
-	 })
-#define	PKTCLRCXODATA(osh, skb)	\
-	({ \
-	 BCM_REFERENCE(osh); \
-	 (((struct sk_buff*)(skb))->pktc_flags &= (~CXODATA)); \
-	 })
-#define	PKTISCXODATA(skb)	(((struct sk_buff*)(skb))->pktc_flags & CXODATA)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 22)
 #define	SKIPCT	(1 << 18)
 #define	CHAINED	(1 << 19)
-#define	CXODATA	(1 << 20)
 #define	PKTSETSKIPCT(osh, skb)	\
 	({ \
 	 BCM_REFERENCE(osh); \
@@ -352,21 +322,9 @@ extern void osl_ctfpool_stats(osl_t *osh, void *b);
 	 (((struct sk_buff*)(skb))->mac_len &= (~CHAINED)); \
 	 })
 #define	PKTISCHAINED(skb)	(((struct sk_buff*)(skb))->mac_len & CHAINED)
-#define	PKTSETCXODATA(osh, skb)	\
-	({ \
-	 BCM_REFERENCE(osh); \
-	 (((struct sk_buff*)(skb))->mac_len |= CXODATA); \
-	 })
-#define	PKTCLRCXODATA(osh, skb)	\
-	({ \
-	 BCM_REFERENCE(osh); \
-	 (((struct sk_buff*)(skb))->mac_len &= (~CXODATA)); \
-	 })
-#define	PKTISCXODATA(skb)	(((struct sk_buff*)(skb))->mac_len & CXODATA)
 #else /* 2.6.22 */
 #define	SKIPCT	(1 << 2)
 #define	CHAINED	(1 << 3)
-#define	CXODATA	(1 << 4)
 #define	PKTSETSKIPCT(osh, skb)	\
 	({ \
 	 BCM_REFERENCE(osh); \
@@ -393,17 +351,6 @@ extern void osl_ctfpool_stats(osl_t *osh, void *b);
 	 (((struct sk_buff*)(skb))->__unused &= (~CHAINED)); \
 	 })
 #define	PKTISCHAINED(skb)	(((struct sk_buff*)(skb))->__unused & CHAINED)
-#define	PKTSETCXODATA(osh, skb)	\
-	({ \
-	 BCM_REFERENCE(osh); \
-	 (((struct sk_buff*)(skb))->__unused |= CXODATA); \
-	 })
-#define	PKTCLRCXODATA(osh, skb)	\
-	({ \
-	 BCM_REFERENCE(osh); \
-	 (((struct sk_buff*)(skb))->__unused &= (~CXODATA)); \
-	 })
-#define	PKTISCXODATA(skb)	(((struct sk_buff*)(skb))->__unused & CXODATA)
 #endif /* 2.6.22 */
 
 #define CTF_MARK(m)				(m.value)
@@ -412,9 +359,6 @@ extern void osl_ctfpool_stats(osl_t *osh, void *b);
 #define	PKTCLRSKIPCT(osh, skb)	({BCM_REFERENCE(osh); BCM_REFERENCE(skb);})
 #define	PKTSKIPCT(osh, skb)	({BCM_REFERENCE(osh); BCM_REFERENCE(skb);})
 #define CTF_MARK(m)		({BCM_REFERENCE(m); 0;})
-#define	PKTSETCXODATA(osh, skb)
-#define	PKTCLRCXODATA(osh, skb)
-#define	PKTISCXODATA(skb)	(FALSE)
 #endif /* HNDCTF || PKTC */
 
 #define PKTFRAGLEN(osh, lb, ix)			(0)

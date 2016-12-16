@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2002 Broadcom Corporation
  *
- * $Id: wpa.h 450929 2014-01-23 14:13:46Z $
+ * $Id: wpa.h 660153 2016-09-19 07:48:57Z $
  */
 
 #ifndef _wpa_h_
@@ -15,6 +15,9 @@
 #include <proto/eapol.h>
 #include <proto/wpa.h>
 #include <wlioctl.h>
+#ifdef WLHOSTFBT
+#include <common.h>
+#endif
 #define REPLAY_LEN		8
 #define NONCE_LEN		32
 #define PMK_LEN			32
@@ -59,6 +62,22 @@ typedef uint8 wpaie_buf_t[MAX_WPA_IE];
 #define IGTK_INDEX_1   4
 #define IGTK_INDEX_2   5
 #endif /* GTK_INDEX_1 */
+
+/* Toggle GTK index.  Indices 1 - 3 are usable; spec recommends 1 and 2. */
+#define GTK_NEXT_INDEX(wpa)	((wpa)->gtk_index == GTK_INDEX_1 ? GTK_INDEX_2 : GTK_INDEX_1)
+/* Toggle IGTK index.  Indices 4 - 5 are usable per spec */
+#define IGTK_NEXT_INDEX(wpa)	((wpa)->igtk.id == IGTK_INDEX_1 ? IGTK_INDEX_2 : IGTK_INDEX_1)
+
+/* mapping from WEP key length to CRYPTO_ALGO_WEPXXX */
+#define WEP_KEY2ALGO(len)	((len) == WEP1_KEY_SIZE ? CRYPTO_ALGO_WEP1 : \
+				(len) == WEP128_KEY_SIZE ? CRYPTO_ALGO_WEP128 : \
+				CRYPTO_ALGO_OFF)
+
+#ifdef WLHOSTFBT
+#define DOT11_FAST_BSS 2
+#define ETH_ALEN 6
+#define KEY_LIFETIME 60
+#endif /* WLHOSTFBT */
 
 /* WPA states */
 typedef enum {
@@ -146,6 +165,9 @@ typedef struct wpa_suppl {
 	/* need to differentiate message 1 and 3 in 4 way handshake */
 	eapol_sup_pk_state_t pk_state;
 #endif
+#ifdef WLHOSTFBT
+	supp_ft_t ft_info;
+#endif /* WLHOSTFBT */
 } wpa_suppl_t;
 
 /* This coalesces the WPA supplicant and RADIUS PAE structs.
@@ -238,6 +260,10 @@ typedef struct wpa {
 #ifdef NAS_GTK_PER_STA
 	bool gtk_per_sta; /* unique GTK per STA */
 #endif
+#ifdef WLHOSTFBT
+	fbt_t fbt_info;
+	struct wpa_ptk PTK;
+#endif /* WLHOSTFBT */
 } wpa_t;
 
 extern int process_wpa(wpa_t *wpa, eapol_header_t *eapol, nas_sta_t *sta);
@@ -274,7 +300,10 @@ extern void wpa_reset_countermeasures(wpa_t *wpa);
 extern void wpa_set_gtk_per_sta(wpa_t *wpa, bool gtk_per_sta);
 #endif
 
+extern uint8 wpa_auth2akm(wpa_t *wpa, uint32 auth);
 extern void wpa_send_rekey_frame(wpa_t *wpa, nas_sta_t *sta);
 extern void wpa_new_gtk(wpa_t *wpa);
-
+extern void wpa_incr_gkc(wpa_t *wpa);
+extern void wpa_gen_gtk(wpa_t *wpa, nas_sta_t *sta);
+extern void wpa_plumb_gtk(wpa_t *wpa, int primary);
 #endif /* _wpa_h_ */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_txpwrcap.c 644299 2016-06-18 03:37:28Z gpasrija $
+ * $Id: phy_txpwrcap.c 652728 2016-08-03 07:25:22Z $
  */
 
 #include <phy_cfg.h>
@@ -34,11 +34,13 @@
 
 /* ******* Local Functions ************ */
 static int phy_txpwrcap_init(phy_init_ctx_t *ctx);
+static void phy_txpwrcap_set_cellstatus(phy_txpwrcap_info_t *info,
+	int mask, int value);
 
 /* ********************************** */
 
 /* module private states */
-struct phy_txpwrcap_info {
+struct phy_txpwrcap_priv_info {
 	phy_info_t *pi;
 	phy_type_txpwrcap_fns_t *fns;
 };
@@ -47,6 +49,8 @@ struct phy_txpwrcap_info {
 typedef struct {
 	phy_txpwrcap_info_t info;
 	phy_type_txpwrcap_fns_t fns;
+	phy_txpwrcap_priv_info_t priv;
+	phy_txpwrcap_data_t data;
 /* add other variable size variables here at the end */
 } phy_txpwrcap_mem_t;
 
@@ -57,7 +61,7 @@ phy_txpwrcap_info_t *
 BCMATTACHFN(phy_txpwrcap_attach)(phy_info_t *pi)
 {
 	phy_txpwrcap_info_t *info;
-	phy_type_txpwrcap_fns_t *fns;
+	uint8 i;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
@@ -66,12 +70,32 @@ BCMATTACHFN(phy_txpwrcap_attach)(phy_info_t *pi)
 		PHY_ERROR(("%s: phy_malloc failed\n", __FUNCTION__));
 		goto fail;
 	}
-	info->pi = pi;
-	fns = &((phy_txpwrcap_mem_t *)info)->fns;
-	info->fns = fns;
+
+	info->priv = &((phy_txpwrcap_mem_t *)info)->priv;
+	info->priv->pi = pi;
+	info->priv->fns = &((phy_txpwrcap_mem_t *)info)->fns;
+	info->data = &((phy_txpwrcap_mem_t *)info)->data;
+
+	if ((info->data->txpwrcap_tbl =
+		phy_malloc(pi, sizeof(wl_txpwrcap_tbl_t))) == NULL) {
+		PHY_ERROR(("%s: txpwrcap_tbl malloc failed\n", __FUNCTION__));
+		goto fail;
+	}
+
+	/* By default TxPwerCap state has CellOn state */
+	info->data->txpwrcap_cellstatus = TXPWRCAP_CELLSTATUS_ON;
+
+	for (i = 0; i < TXPWRCAP_MAX_NUM_CORES; i++) {
+		info->data->txpwrcap_tbl->num_antennas_per_core[i] = 2;
+	}
+	for (i = 0; i < TXPWRCAP_MAX_NUM_ANTENNAS; i++) {
+		info->data->txpwrcap_tbl->pwrcap_cell_off[i] = TXPOWERCAP_MAX_QDB;
+		info->data->txpwrcap_tbl->pwrcap_cell_on[i] = TXPOWERCAP_MAX_QDB;
+	}
 
 	/* register init fn */
-	if (phy_init_add_init_fn(pi->initi, phy_txpwrcap_init, info, PHY_INIT_TXPWRCAP) != BCME_OK) {
+	if (phy_init_add_init_fn(pi->initi, phy_txpwrcap_init,
+		info, PHY_INIT_TXPWRCAP) != BCME_OK) {
 		PHY_ERROR(("%s: phy_init_add_init_fn failed\n", __FUNCTION__));
 		goto fail;
 	}
@@ -98,7 +122,11 @@ BCMATTACHFN(phy_txpwrcap_detach)(phy_txpwrcap_info_t *info)
 		return;
 	}
 
-	pi = info->pi;
+	pi = info->priv->pi;
+
+	if (info->data->txpwrcap_tbl != NULL) {
+		phy_mfree(pi, info->data->txpwrcap_tbl, sizeof(wl_txpwrcap_tbl_t));
+	}
 
 	phy_mfree(pi, info, sizeof(phy_txpwrcap_mem_t));
 }
@@ -111,7 +139,7 @@ BCMATTACHFN(phy_txpwrcap_register_impl)(phy_txpwrcap_info_t *ti, phy_type_txpwrc
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 
-	*ti->fns = *fns;
+	*ti->priv->fns = *fns;
 
 	return BCME_OK;
 }
@@ -127,7 +155,7 @@ static int
 WLBANDINITFN(phy_txpwrcap_init)(phy_init_ctx_t *ctx)
 {
 	phy_txpwrcap_info_t *ii = (phy_txpwrcap_info_t *)ctx;
-	phy_type_txpwrcap_fns_t *fns = ii->fns;
+	phy_type_txpwrcap_fns_t *fns = ii->priv->fns;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
@@ -141,66 +169,103 @@ wlc_phy_txpwrcap_tbl_set(wlc_phy_t *pih, wl_txpwrcap_tbl_t *txpwrcap_tbl)
 {
 	phy_info_t *pi = (phy_info_t *)pih;
 	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
-	phy_type_txpwrcap_fns_t *fns = ti->fns;
+	phy_type_txpwrcap_fns_t *fns = ti->priv->fns;
+	uint8 i, j = 0, k;
+	uint8 num_antennas = 0, max_antennas = 0, min_antennas = 0;
+	uint16 phy_mode;
+	uint8 core;
+
+	/* Some Error Checking */
+	phy_mode = phy_get_phymode(pi);
+	if (phy_mode == PHYMODE_MIMO) {
+		for (i = 0; i < TXPWRCAP_MAX_NUM_CORES; i++) {
+			num_antennas += txpwrcap_tbl->num_antennas_per_core[i];
+		}
+		FOREACH_CORE(pi, core) {
+			max_antennas += 2;
+			min_antennas++;
+		}
+	} else if (phy_mode == PHYMODE_RSDB) { /* SDB mode */
+		num_antennas += txpwrcap_tbl->num_antennas_per_core[phy_get_current_core(pi)];
+		max_antennas += 2;
+		min_antennas++;
+	} else
+		return BCME_ERROR;
+
+	if ((num_antennas > max_antennas) || (num_antennas < min_antennas))
+		return BCME_ERROR;
+
+	for (i = 0; i < TXPWRCAP_MAX_NUM_CORES; i++) {
+		ti->data->txpwrcap_tbl->num_antennas_per_core[i] =
+			txpwrcap_tbl->num_antennas_per_core[i];
+		for (k = 0; k < ti->data->txpwrcap_tbl->num_antennas_per_core[i]; k++) {
+			ti->data->txpwrcap_tbl->pwrcap_cell_off[2*i+k] =
+				txpwrcap_tbl->pwrcap_cell_off[j];
+			ti->data->txpwrcap_tbl->pwrcap_cell_on[2*i+k] =
+				txpwrcap_tbl->pwrcap_cell_on[j];
+			j++;
+		}
+	}
 
 	if (fns->txpwrcap_tbl_set)
-		return (fns->txpwrcap_tbl_set)(fns->ctx, txpwrcap_tbl);
+		return (fns->txpwrcap_tbl_set)(fns->ctx);
 	else
 		return BCME_UNSUPPORTED;
+
 }
+
 
 int
 wlc_phy_txpwrcap_tbl_get(wlc_phy_t *pih, wl_txpwrcap_tbl_t *txpwrcap_tbl)
 {
 	phy_info_t *pi = (phy_info_t *)pih;
 	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
-	phy_type_txpwrcap_fns_t *fns = ti->fns;
+	uint8 i, j = 0, k;
 
-	if (fns->txpwrcap_tbl_get)
-		return (fns->txpwrcap_tbl_get)(fns->ctx, txpwrcap_tbl);
-	else
-		return BCME_UNSUPPORTED;
-
+	for (i = 0; i < TXPWRCAP_MAX_NUM_CORES; i++) {
+		txpwrcap_tbl->num_antennas_per_core[i] =
+			ti->data->txpwrcap_tbl->num_antennas_per_core[i];
+		for (k = 0; k < ti->data->txpwrcap_tbl->num_antennas_per_core[i]; k++) {
+			txpwrcap_tbl->pwrcap_cell_off[j] =
+				ti->data->txpwrcap_tbl->pwrcap_cell_off[2*i+k];
+			txpwrcap_tbl->pwrcap_cell_on[j] =
+				ti->data->txpwrcap_tbl->pwrcap_cell_on[2*i+k];
+			j++;
+		}
+	}
+	return BCME_OK;
 }
 
+
 int
-wlc_phy_cellstatus_override_set(phy_info_t *pi, int value)
+phy_txpwrcap_cellstatus_override_set(phy_info_t *pi, int value)
 {
 	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
-	phy_type_txpwrcap_fns_t *fns = ti->fns;
 
-	if (fns->txpwrcap_set_cellstatus) {
-		if (value == -1)
-			/* Clear the Force bit allowing WCI2 updates to take effect */
-			(fns->txpwrcap_set_cellstatus)(fns->ctx,
-				(TXPWRCAP_CELLSTATUS_FORCE_MASK |
-				TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK),
-				0);
-		else
-			(fns->txpwrcap_set_cellstatus)(fns->ctx,
-				(TXPWRCAP_CELLSTATUS_FORCE_MASK |
-				TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK |
-				TXPWRCAP_CELLSTATUS_MASK),
-				(TXPWRCAP_CELLSTATUS_FORCE_MASK |
-				TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK |
-				(value & TXPWRCAP_CELLSTATUS_MASK)));
-		return BCME_OK;
-	} else
-		return BCME_UNSUPPORTED;
+	if (value == -1)
+		/* Clear the Force bit allowing WCI2 updates to take effect */
+		phy_txpwrcap_set_cellstatus(ti,
+			(TXPWRCAP_CELLSTATUS_FORCE_MASK |
+			TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK),
+			0);
+	else
+		phy_txpwrcap_set_cellstatus(ti,
+			(TXPWRCAP_CELLSTATUS_FORCE_MASK |
+			TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK |
+			TXPWRCAP_CELLSTATUS_MASK),
+			(TXPWRCAP_CELLSTATUS_FORCE_MASK |
+			TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK |
+			(value & TXPWRCAP_CELLSTATUS_MASK)));
+	return BCME_OK;
+
 }
 
 int wlc_phyhal_txpwrcap_get_cellstatus(wlc_phy_t *pih, int32* cellstatus)
 {
 	phy_info_t *pi = (phy_info_t *)pih;
 	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
-	phy_type_txpwrcap_fns_t *fns = ti->fns;
-
-	if (fns->txpwrcap_get_cellstatus) {
-		*cellstatus = (fns->txpwrcap_get_cellstatus)(fns->ctx);
-		return BCME_OK;
-	}
-	else
-		return BCME_UNSUPPORTED;
+	*cellstatus = (ti->data->txpwrcap_cellstatus & TXPWRCAP_CELLSTATUS_MASK);
+	return BCME_OK;
 }
 
 void
@@ -208,19 +273,68 @@ wlc_phyhal_txpwrcap_set_cellstatus(wlc_phy_t *pih, int status)
 {
 	phy_info_t *pi = (phy_info_t*)pih;
 	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
-	phy_type_txpwrcap_fns_t *fns = ti->fns;
+	phy_txpwrcap_set_cellstatus(ti, TXPWRCAP_CELLSTATUS_WCI2_MASK,
+		(status & 1) << TXPWRCAP_CELLSTATUS_WCI2_NBIT);
+}
 
-	if (fns->txpwrcap_set_cellstatus) {
-		(fns->txpwrcap_set_cellstatus)(fns->ctx, TXPWRCAP_CELLSTATUS_WCI2_MASK,
-			(status & 1) << TXPWRCAP_CELLSTATUS_WCI2_NBIT);
+static void
+phy_txpwrcap_set_cellstatus(phy_txpwrcap_info_t *info, int mask, int value)
+{
+	phy_txpwrcap_info_t *ti = info;
+
+	phy_info_t *pi = ti->priv->pi;
+	phy_type_txpwrcap_fns_t *fns = ti->priv->fns;
+
+	int txpwrcap_upreqd = FALSE;
+	int cellstatus_new, cellstatus_cur;
+
+	ti->data->txpwrcap_cellstatus &= ~(mask);
+	value &= mask;
+	ti->data->txpwrcap_cellstatus |= value;
+
+	/* CELLSTATUS_FORCE_UPD => Update forced, either by iovar or at init time
+	 * CELLSTATUS_FORCE => value forced by iovar, ignore value from WCI2
+	 * else compare value from WCI2 (cellstatus_new) and current value (cellstatus_cur)
+	 * to determine if update needed
+	 */
+	if (ti->data->txpwrcap_cellstatus & TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK) {
+		ti->data->txpwrcap_cellstatus &= ~(TXPWRCAP_CELLSTATUS_FORCE_UPD_MASK);
+		txpwrcap_upreqd = TRUE;
+	}
+	else if (!(ti->data->txpwrcap_cellstatus & TXPWRCAP_CELLSTATUS_FORCE_MASK)) {
+		cellstatus_cur = (ti->data->txpwrcap_cellstatus & TXPWRCAP_CELLSTATUS_MASK)
+			>> TXPWRCAP_CELLSTATUS_NBIT;
+		cellstatus_new = (ti->data->txpwrcap_cellstatus & TXPWRCAP_CELLSTATUS_WCI2_MASK)
+			>> TXPWRCAP_CELLSTATUS_WCI2_NBIT;
+		/* Note if status change, as need to update PHY */
+		if (cellstatus_cur != cellstatus_new) {
+			ti->data->txpwrcap_cellstatus &= ~(1 << TXPWRCAP_CELLSTATUS_NBIT);
+			ti->data->txpwrcap_cellstatus |=
+				(cellstatus_new << TXPWRCAP_CELLSTATUS_NBIT);
+			txpwrcap_upreqd = TRUE;
+		}
+	}
+
+	if (txpwrcap_upreqd && pi->sh->clk) {
+		/* PHY update required */
+#ifdef WLC_SW_DIVERSITY
+		if (PHYSWDIV_ENAB(pi)) {
+			wlapi_swdiv_cellstatus_notif(pi->sh->physhim,
+				(ti->data->txpwrcap_cellstatus & TXPWRCAP_CELLSTATUS_MASK));
+		}
+#endif
+		if (fns->txpwrcap_set) {
+			(fns->txpwrcap_set)(fns->ctx);
+		}
 	}
 }
 
+
 uint32
-wlc_phy_get_txpwrcap_inuse(phy_info_t *pi)
+phy_txpwrcap_get_caps_inuse(phy_info_t *pi)
 {
 	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
-	phy_type_txpwrcap_fns_t *fns = ti->fns;
+	phy_type_txpwrcap_fns_t *fns = ti->priv->fns;
 
 	if (fns->txpwrcap_in_use) {
 		return (fns->txpwrcap_in_use)(fns->ctx);
@@ -231,7 +345,7 @@ wlc_phy_get_txpwrcap_inuse(phy_info_t *pi)
 bool
 wlc_phy_txpwrcap_get_enabflg(wlc_phy_t *pih)
 {
-	return (((phy_info_t *)pih)->_txpwrcap);
+	return (((phy_info_t *)pih)->txpwrcapi->data->_txpwrcap);
 }
 
 #ifdef WLC_SW_DIVERSITY
@@ -246,10 +360,35 @@ wlc_phy_txpwrcap_to_shm(wlc_phy_t *pih, uint16 tx_ant, uint16 rx_ant)
 {
 	phy_info_t *pi = (phy_info_t*)pih;
 	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
-	phy_type_txpwrcap_fns_t *fns = ti->fns;
+	phy_type_txpwrcap_fns_t *fns = ti->priv->fns;
 
 	if (fns->txpwrcap_to_shm)
 		(fns->txpwrcap_to_shm)(fns->ctx, tx_ant, rx_ant);
 }
 #endif /* WLC_SW_DIVERSITY */
+
+
+int8
+phy_txpwrcap_tbl_get_max_percore(phy_info_t *pi, uint8 core)
+{
+	phy_txpwrcap_info_t *ti = pi->txpwrcapi;
+
+	uint8 k;
+	int8 maxpwr = 127;
+
+	if (!PHYTXPWRCAP_ENAB(ti))
+		return maxpwr;
+
+	for (k = 0; k < ti->data->txpwrcap_tbl->num_antennas_per_core[core]; k++) {
+		/* Get the min of txpwrcap for all cores/cell on/off */
+		if (ti->data->txpwrcap_tbl->pwrcap_cell_off[2*core+k] != -128) {
+			maxpwr = MIN(maxpwr, ti->data->txpwrcap_tbl->pwrcap_cell_off[2*core+k]);
+		}
+		if (ti->data->txpwrcap_tbl->pwrcap_cell_on[2*core+k] != -128) {
+			maxpwr = MIN(maxpwr, ti->data->txpwrcap_tbl->pwrcap_cell_on[2*core+k]);
+		}
+	}
+	return maxpwr;
+}
+
 #endif /* WLC_TXPWRCAP */

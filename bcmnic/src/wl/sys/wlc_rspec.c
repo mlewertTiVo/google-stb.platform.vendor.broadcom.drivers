@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rspec.c 655322 2016-08-19 00:34:25Z $
+ * $Id: wlc_rspec.c 659512 2016-09-14 20:17:50Z $
  */
 
 #include <wlc_cfg.h>
@@ -36,12 +36,14 @@
 #include <wlc_txbf.h>
 #include <wlc_txc.h>
 #include <wlc_ht.h>
-#include <wlc_ulb.h>
 #include <wlc_rspec.h>
+#include <phy_api.h>
 #if defined(WLAMPDU) && defined(WLATF)
 #include <wlc_ampdu.h>
 #endif
-
+#if defined(WL_PROXDETECT)
+#include <wlc_ftm.h>
+#endif /* WL_PROXDETECT */
 
 /* module info */
 struct wlc_rspec_info {
@@ -260,6 +262,12 @@ wlc_rspec_to_rts_rspec(wlc_bsscfg_t *cfg, ratespec_t rspec, bool use_rspec)
 {
 	wlc_info_t *wlc = cfg->wlc;
 	bool g_prot = wlc->band->gmode && WLC_PROT_G_CFG_G(wlc->prot_g, cfg);
+#if defined(WL_PROXDETECT) && defined(WL_FTM)
+	if (WLC_BSSCFG_SECURE_FTM(cfg) && !use_rspec && !RSPEC_ISCCK(rspec)) {
+		use_rspec = TRUE;
+		rspec = WLC_BASIC_RATE(wlc, WLC_RATE_6M);
+	}
+#endif /* WL_PROXDETECT && WL_FTM */
 	return wlc_rspec_to_rts_rspec_ex(wlc, rspec, use_rspec, g_prot);
 }
 
@@ -429,7 +437,7 @@ wlc_get_rspec_history(wlc_bsscfg_t *cfg)
 					chspec = WLC_BAND_PI_RADIO_CHANSPEC;
 				}
 
-				if (WLC_ULB_CHSPEC_ISLE20(wlc, chspec)) {
+				if (CHSPEC_IS20(chspec)) {
 					reprspec |= RSPEC_BW_20MHZ;
 				} else if (CHSPEC_IS40(chspec)) {
 					reprspec |= RSPEC_BW_40MHZ;
@@ -526,14 +534,6 @@ wlc_wlrspec2ratespec(wlc_bsscfg_t *bsscfg, uint32 wlrspec, ratespec_t *pratespec
 	}
 
 	/* Bandwidth */
-#ifdef WL11ULB
-	/* In ULB Mode BW is forced to 20MHz always */
-	if (WLC_ULB_MODE_ENABLED(bsscfg->wlc) &&
-		((bw == WL_RSPEC_BW_10MHZ) || (bw == WL_RSPEC_BW_5MHZ) ||
-		(bw == WL_RSPEC_BW_2P5MHZ))) {
-		bw = WL_RSPEC_BW_20MHZ;
-	}
-#endif /* WL11ULB */
 
 	if (bw == WL_RSPEC_BW_20MHZ) {
 		rspec |= RSPEC_BW_20MHZ;
@@ -556,9 +556,6 @@ wlc_ratespec2wlrspec(wlc_bsscfg_t *bsscfg, ratespec_t ratespec, uint32 *pwlrspec
 {
 	uint8 rate = (ratespec & RSPEC_RATE_MASK);
 	ratespec_t wlrspec;
-#ifdef WL11ULB
-	chanspec_t min_bw = WLC_ULB_GET_BSS_MIN_BW(bsscfg->wlc, bsscfg);
-#endif /* WL11ULB */
 
 	*pwlrspec = 0;
 
@@ -590,18 +587,7 @@ wlc_ratespec2wlrspec(wlc_bsscfg_t *bsscfg, ratespec_t ratespec, uint32 *pwlrspec
 #endif
 	/* Bandwidth */
 	if (RSPEC_IS20MHZ(ratespec)) {
-#ifdef WL11ULB
-		if (WLC_ULB_MODE_ENABLED(bsscfg->wlc) && (min_bw != WL_CHANSPEC_BW_20)) {
-			if (min_bw == WL_CHANSPEC_BW_10)
-				wlrspec |= WL_RSPEC_BW_10MHZ;
-			else if (min_bw == WL_CHANSPEC_BW_5)
-				wlrspec |= WL_RSPEC_BW_5MHZ;
-			else if (min_bw == WL_CHANSPEC_BW_2P5)
-				wlrspec |= WL_RSPEC_BW_2P5MHZ;
-
-		} else
-#endif /* WL11ULB */
-			wlrspec |= WL_RSPEC_BW_20MHZ;
+		wlrspec |= WL_RSPEC_BW_20MHZ;
 	} else if (RSPEC_IS40MHZ(ratespec)) {
 		wlrspec |= WL_RSPEC_BW_40MHZ;
 	} else if (RSPEC_IS80MHZ(ratespec)) {
@@ -761,7 +747,7 @@ wlc_set_ratespec_override(wlc_info_t *wlc, int band_id, ratespec_t rspec, bool m
 
 		/* mcs 32 is a special case, DUP mode 40 only */
 		if (mcs == 32) {
-			if (WLC_ULB_CHSPEC_ISLE20(wlc, wlc->home_chanspec) ||
+			if (CHSPEC_IS20(wlc->home_chanspec) ||
 				(isstbc && (txexp > 1))) {
 				bcmerror = BCME_RANGE;
 				goto done;

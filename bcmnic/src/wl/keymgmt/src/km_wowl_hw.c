@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_wowl_hw.c 647622 2016-07-06 22:37:28Z $
+ * $Id: km_wowl_hw.c 670817 2016-11-17 18:17:59Z $
  */
 
 /* This file implements the wlc keymgmt functionality. It provides
@@ -80,13 +80,24 @@ wowl_hw_key_set(km_hw_t *hw, hw_idx_t hw_idx, wlc_key_t *key, wlc_key_info_t *ke
 	if (skl_idx >= WLC_KEYMGMT_NUM_GROUP_KEYS)
 		amt_idx = skl_idx - WLC_KEYMGMT_NUM_GROUP_KEYS;
 
+#ifdef BCMDBG
+	/* ensure the address programmed into amt idx belongs to the key */
+	if (amt_idx != KM_HW_AMT_IDX_INVALID) {
+		struct ether_addr debug_ea;
+		amt_attr_t debug_amt_attr;
+		wlc_get_addrmatch(KM_HW_WLC(hw), amt_idx, &debug_ea, &debug_amt_attr);
+		KM_DBG_ASSERT(!memcmp(&debug_ea, &key_info->addr, sizeof(debug_ea)));
+	}
+#endif
 
 	/* clear pairwise key match in amt during key related shm writes */
 	if (amt_idx != KM_HW_AMT_IDX_INVALID)
 		amt_attr = wlc_clear_addrmatch(KM_HW_WLC(hw), amt_idx);
 
 	/* update secalgo */
-	skl_val = (KM_HW_SKL_HW_ALGO(hw, key_info))|(skl_idx << SKL_INDEX_SHIFT);
+	skl_val = (KM_HW_SKL_HW_ALGO(hw, key_info)) |
+		((KM_HW_IDX_TO_SLOT(hw, hw_idx) << SKL_INDEX_SHIFT) &
+		(KM_HW_SKL_INDEX_MASK(hw)));
 	wlc_write_shm(KM_HW_WLC(hw), KM_HW_SKL_IDX_ADDR(hw, skl_idx), skl_val);
 
 	err = km_hw_algo_set_hw_key(hw, hw_idx, ae, ae->impl.dt_mask, key, key_info);

@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux.c 629487 2016-04-05 17:53:48Z $
+ * $Id: dhd_linux.c 648647 2016-07-13 06:54:27Z $
  */
 
 #include <typedefs.h>
@@ -1441,6 +1441,26 @@ int dhd_dbus_txdata(dhd_pub_t *dhdp, void *pktbuf);
 
 static int dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, uint16 pktlen,
                              wl_event_msg_t *event_ptr, void **data_ptr);
+
+#ifdef UPDATE_LINK_STATE
+void dhd_link_down(struct dhd_info *dhd_info, int *ifidx)
+{
+	if (!netif_dormant(dhd_info->iflist[*ifidx]->net)) {
+		netif_dormant_on(dhd_info->iflist[*ifidx]->net);
+	}
+	return;
+}
+
+void dhd_link_up(struct dhd_info *dhd_info, int *ifidx)
+{
+	if (netif_dormant(dhd_info->iflist[*ifidx]->net)) {
+		netif_dormant_off(dhd_info->iflist[*ifidx]->net);
+	} else {
+		netif_carrier_on(dhd_info->iflist[*ifidx]->net);
+	}
+	return;
+}
+#endif /* UPDATE_LINK_STATE */
 
 #if defined(CONFIG_PM_SLEEP)
 static int dhd_pm_callback(struct notifier_block *nfb, unsigned long action, void *ignored)
@@ -4914,9 +4934,11 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan)
 					continue;
 				}
 			} else {
-				void *npktbuf = PKTDUP(dhdp->osh, pktbuf);
-				if (npktbuf)
+				void *npktbuf = NULL;
+				if ((ntoh16(eh->ether_type) != ETHER_TYPE_IAPP_L2_UPDATE) &&
+						(npktbuf = PKTDUP(dhdp->osh, pktbuf)) != NULL) {
 					dhd_sendpkt(dhdp, ifidx, npktbuf);
+				}
 			}
 		}
 #endif /* PCIE_FULL_DONGLE */

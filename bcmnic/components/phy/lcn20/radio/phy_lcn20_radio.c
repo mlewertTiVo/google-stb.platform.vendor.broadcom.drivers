@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_radio.c 616484 2016-02-01 17:32:27Z guangjie $
+ * $Id: phy_lcn20_radio.c 659938 2016-09-16 16:47:54Z $
  */
 
 #include <typedefs.h>
@@ -34,6 +34,11 @@
 #include <wlc_phy_lcn20.h>
 /* TODO: all these are going away... > */
 #endif
+
+#define IDCODE_LCN20PHY_ID_MASK   0xffff
+#define IDCODE_LCN20PHY_ID_SHIFT  0
+#define IDCODE_LCN20PHY_REV_MASK  0xffff0000
+#define IDCODE_LCN20PHY_REV_SHIFT 16
 
 /* module private states */
 struct phy_lcn20_radio_info {
@@ -154,8 +159,16 @@ _phy_lcn20_radio_query_idcode(phy_type_radio_ctx_t *ctx)
 {
 	phy_lcn20_radio_info_t *info = (phy_lcn20_radio_info_t *)ctx;
 	phy_info_t *pi = info->pi;
+	uint32 idcode;
 
-	return phy_lcn20_radio_query_idcode(pi);
+	idcode = phy_lcn20_radio_query_idcode(pi);
+#ifdef BCMRADIOREV
+	if (ISSIM_ENAB(pi->sh->sih)) {
+		idcode = (idcode & ~IDCODE_REV_MASK) | (BCMRADIOREV << IDCODE_REV_SHIFT);
+	}
+#endif	/* BCMRADIOREV */
+
+	return idcode;
 }
 
 uint32

@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_bsscfg.c 644849 2016-06-21 22:16:20Z $
+ * $Id: km_bsscfg.c 668403 2016-11-03 05:55:46Z $
  */
 
 #include "km_pvt.h"
@@ -30,37 +30,40 @@ km_bsscfg_cleanup(keymgmt_t *km, wlc_bsscfg_t *bsscfg)
 	bss_km = KM_BSSCFG(km, bsscfg);
 	bss_km->flags |= KM_BSSCFG_FLAG_CLEANUP;
 
-	km_free_key_block(km, WLC_KEY_FLAG_NONE, bss_km->key_idx,
-		WLC_KEYMGMT_NUM_GROUP_KEYS);
+	if (bss_km->flags & KM_BSSCFG_FLAG_INITIALIZED) {
+		km_free_key_block(km, WLC_KEY_FLAG_NONE, bss_km->key_idx,
+			WLC_KEYMGMT_NUM_GROUP_KEYS);
 
 #ifdef MFP
-	{
-		wlc_key_id_t key_id;
+		{
+			wlc_key_id_t key_id;
 
-		bss_km->igtk_tx_key_id = WLC_KEY_ID_INVALID;
-		for (key_id = WLC_KEY_ID_IGTK_1; key_id <= WLC_KEY_ID_IGTK_2; ++key_id) {
-			if (bss_km->igtk_key_idx[KM_BSSCFG_IGTK_IDX_POS(key_id)] ==
-				WLC_KEY_INDEX_INVALID) {
-				continue;
+			bss_km->igtk_tx_key_id = WLC_KEY_ID_INVALID;
+			for (key_id = WLC_KEY_ID_IGTK_1; key_id <= WLC_KEY_ID_IGTK_2; ++key_id) {
+				if (bss_km->igtk_key_idx[KM_BSSCFG_IGTK_IDX_POS(key_id)] ==
+					WLC_KEY_INDEX_INVALID) {
+					continue;
+				}
+
+				km_free_key_block(km, WLC_KEY_FLAG_NONE,
+					&bss_km->igtk_key_idx[KM_BSSCFG_IGTK_IDX_POS(key_id)], 1);
+				KM_DBG_ASSERT(
+					bss_km->igtk_key_idx[KM_BSSCFG_IGTK_IDX_POS(key_id)] ==
+					WLC_KEY_INDEX_INVALID);
 			}
-
-			km_free_key_block(km, WLC_KEY_FLAG_NONE,
-				&bss_km->igtk_key_idx[KM_BSSCFG_IGTK_IDX_POS(key_id)], 1);
-			KM_DBG_ASSERT(bss_km->igtk_key_idx[KM_BSSCFG_IGTK_IDX_POS(key_id)] ==
-				WLC_KEY_INDEX_INVALID);
 		}
-	}
 #endif /* MFP */
 
 #ifdef STA
-	/* clean up b4m4 keys, if applicable */
-	if (KM_BSSCFG_B4M4_ENABLED(bss_km))
-		km_b4m4_reset_keys(km, bsscfg);
+		/* clean up b4m4 keys, if applicable */
+		if (KM_BSSCFG_B4M4_ENABLED(bss_km))
+			km_b4m4_reset_keys(km, bsscfg);
 #endif /* STA */
 
-	/* bss_km->sta_key_idx will be cleared below */
+		/* bss_km->sta_key_idx will be cleared below */
 
-	km_bsscfg_sync_bssid(km, bsscfg);
+		km_bsscfg_sync_bssid(km, bsscfg);
+	}
 
 	memset(bss_km, 0, sizeof(*bss_km));
 	KM_LOG(("wl%d.%d: %s: exit\n",  KM_UNIT(km), WLC_BSSCFG_IDX(bsscfg),
@@ -110,6 +113,13 @@ km_bsscfg_init_internal(wlc_keymgmt_t *km, wlc_bsscfg_t *bsscfg)
 
 	bss_km->scb_key_idx = WLC_KEY_INDEX_INVALID;
 
+	/*
+	 * At this point, mark the state as "initialized". We do this here
+	 * so key resources can be freed during cubby deinit, even if a resource
+	 * allocaion fail.
+	 */
+	bss_km->flags |= KM_BSSCFG_FLAG_INITIALIZED;
+
 	/* reserve a key block for bss keys, not all of them are used by
 	 * all features. PSTA does not use them, STA uses only 2 group keys
 	 */
@@ -151,7 +161,7 @@ km_bsscfg_init_internal(wlc_keymgmt_t *km, wlc_bsscfg_t *bsscfg)
 		key_info.key_id = key_id;
 		err = km_key_create(km, &key_info, &key);
 		if (err != BCME_OK) {
-			KM_ERR(("wl%d.%d: %s: key create status %d\n",  KM_UNIT(km),
+			KM_ALLOC_ERR(("wl%d.%d: %s: key create status %d\n",  KM_UNIT(km),
 				WLC_BSSCFG_IDX(bsscfg), __FUNCTION__, err));
 			km_free_key_block(km, WLC_KEY_FLAG_NONE, &key_idx_arr[key_id], 1);
 			continue; /* so we initialize all bss keys */
@@ -215,7 +225,7 @@ km_bsscfg_init_internal(wlc_keymgmt_t *km, wlc_bsscfg_t *bsscfg)
 			key_info.key_id = key_id;
 			mfp_err = km_key_create(km, &key_info, &key);
 			if (mfp_err != BCME_OK) {
-				KM_ERR(("wl%d.%d: %s: igtk key create status %d\n",
+				KM_ALLOC_ERR(("wl%d.%d: %s: igtk key create status %d\n",
 					KM_UNIT(km), WLC_BSSCFG_IDX(bsscfg), __FUNCTION__,
 					mfp_err));
 				km_free_key_block(km, WLC_KEY_FLAG_NONE, &key_idx_arr[pos], 1);
@@ -325,7 +335,7 @@ km_bsscfg_sync_bssid(keymgmt_t *km, wlc_bsscfg_t *bsscfg)
 	/* reserve an amt for this bssid, update amt attributes */
 	bss_km->amt_idx = km_hw_amt_alloc(km->hw, &bsscfg->BSSID);
 	if (bss_km->amt_idx == KM_HW_AMT_IDX_INVALID) {
-		KM_ERR(("wl%d.%d: %s: amt idx alloc failed\n", KM_UNIT(km),
+		KM_ALLOC_ERR(("wl%d.%d: %s: amt idx alloc failed\n", KM_UNIT(km),
 			WLC_BSSCFG_IDX(bsscfg), __FUNCTION__));
 		goto done;
 	}
@@ -373,8 +383,10 @@ km_bsscfg_get_amt_idx(keymgmt_t *km, wlc_bsscfg_t *bsscfg)
 #ifdef WLMCNX
 	if (MCNX_ENAB(KM_PUB(km))) {
 		amt_idx = (km_amt_idx_t)wlc_mcnx_rcmta_bssid_idx(KM_MCNX(km), bsscfg);
-		if (km_hw_amt_idx_valid(km->hw, amt_idx))
+		if (km_hw_amt_idx_valid(km->hw, amt_idx)) {
+			km_hw_amt_reserve(km->hw, amt_idx, 1, TRUE);
 			goto done;
+		}
 	}
 #endif /* WLMCNX */
 
@@ -979,7 +991,7 @@ km_bsscfg_get_static_config(void *ctx, wlc_bsscfg_t *bsscfg,
 	uint8 *buf_num_tlvs = NULL;
 	int buf_len = 0;
 	km_serial_t *ser = NULL;
-	uint32 wsec;
+	uint32 wsec = 0;
 
 	km = (keymgmt_t *)ctx;
 	KM_DBG_ASSERT(KM_VALID(km));
@@ -1010,20 +1022,20 @@ km_bsscfg_get_static_config(void *ctx, wlc_bsscfg_t *bsscfg,
 
 	/* wsec */
 	wsec = km_bsscfg_get_wsec(km, bsscfg);
-	if (buf_len >= KM_SERIAL_TLV_SIZE(sizeof(uint32))) {
+	if (buf_len >= KM_SERIAL_TLV_SIZE(sizeof(wsec))) {
 		wsec = htol32(wsec);
 		buf = bcm_write_tlv_safe(KM_SERIAL_TLV_BSS_WSEC,
 			&wsec, sizeof(wsec), buf, buf_len);
 		wsec = ltoh32(wsec);
 		num_tlvs++;
 	}
-	buf_len -= KM_SERIAL_TLV_SIZE(sizeof(uint32));
+	buf_len -= KM_SERIAL_TLV_SIZE(sizeof(wsec));
 
 	/* if there are no static wep keys, and WPA_AUTH_NONE is not enabled,
-	 * return 0 length output
+	 * skip copying tx key id and bss keys
 	 */
 	if (!(wsec & WEP_ENABLED) && !(bsscfg->WPA_auth & WPA_AUTH_NONE))
-		goto done;
+		goto do_b4m4;
 
 	/* tx key id */
 	if (buf_len >= KM_SERIAL_TLV_SIZE(sizeof(key_id))) {
@@ -1090,15 +1102,17 @@ km_bsscfg_get_static_config(void *ctx, wlc_bsscfg_t *bsscfg,
 		buf_len -= KM_SERIAL_TLV_SIZE(sizeof(wlc_key_flags_t));
 	}
 
-	if (buf_len >= KM_SERIAL_TLV_SIZE(sizeof(uint8))) {
+do_b4m4:
+	if (buf_len >= KM_SERIAL_TLV_SIZE(sizeof(b4_m4_enab))) {
 		b4_m4_enab = (uint8)wlc_keymgmt_b4m4_enabled(km, bsscfg);
 		buf = bcm_write_tlv_safe(KM_SERIAL_TLV_B4M4_ENAB, &b4_m4_enab, sizeof(b4_m4_enab),
-			buf, buf_len);
+				buf, buf_len);
 		num_tlvs++;
 	}
 	buf_len -= KM_SERIAL_TLV_SIZE(sizeof(b4_m4_enab));
 
 done:
+
 	if (buf_num_tlvs)
 		htol16_ua_store(num_tlvs, buf_num_tlvs);
 	if (in_len)
@@ -1119,8 +1133,9 @@ km_bsscfg_set_static_config(void *ctx, wlc_bsscfg_t *bsscfg,
 	int err = BCME_OK;
 	int num_tlvs = 0;
 	const bcm_tlv_t *tlv;
-	wlc_key_id_t tx_key_id;
+	wlc_key_id_t tx_key_id = 0;
 	uint8 b4_m4_enab = FALSE;
+	uint32 wsec = 0;
 
 	km = (keymgmt_t *)ctx;
 	KM_DBG_ASSERT(KM_VALID(km));
@@ -1148,20 +1163,40 @@ km_bsscfg_set_static_config(void *ctx, wlc_bsscfg_t *bsscfg,
 	}
 
 	tlv = (const bcm_tlv_t *)buf;
-	if (tlv->id == KM_SERIAL_TLV_BSS_WSEC &&
-		tlv->len == sizeof(uint32)) {
-		uint32 wsec;
+	if (tlv->id != KM_SERIAL_TLV_BSS_WSEC ||
+			tlv->len != sizeof(wsec)) {
+		err = BCME_UNSUPPORTED;
+		goto done;
+	}
 
-		wsec = ltoh32_ua(tlv->data);
-		err = wlc_keymgmt_wsec(km->wlc, bsscfg, wsec);
+	wsec = ltoh32_ua(tlv->data);
+	err = wlc_keymgmt_wsec(km->wlc, bsscfg, wsec);
 
-		if (!err) {
-			goto done;
-		}
+	if (err != BCME_OK)
+		goto done;
 
-		num_tlvs--;
-		buf += KM_SERIAL_TLV_SIZE(sizeof(wsec));
-		len -= KM_SERIAL_TLV_SIZE(sizeof(wsec));
+	num_tlvs--;
+	buf += KM_SERIAL_TLV_SIZE(sizeof(wsec));
+	len -= KM_SERIAL_TLV_SIZE(sizeof(wsec));
+
+	/* when only wsec configuration is applied and
+	* keys are not yet applied in such case minimum tlv length
+	* will be atleast wsec param so once after 1st tlv is read
+	* i.e wsec, we need to check for the length
+	*/
+	if (len == 0) {
+		goto done;
+	}
+
+	/* if there are no static wep keys, and WPA_AUTH_NONE is not enabled skip
+	 * copying tx key id and bss keys
+	 */
+	if (!(wsec & WEP_ENABLED) && !(bsscfg->WPA_auth & WPA_AUTH_NONE))
+			goto do_b4m4;
+
+	if (len < KM_SERIAL_TLV_SIZE(sizeof(wlc_key_id_t))) {
+		err = BCME_BUFTOOSHORT;
+		goto done;
 	}
 
 	tlv = (const bcm_tlv_t *)buf;
@@ -1266,14 +1301,28 @@ km_bsscfg_set_static_config(void *ctx, wlc_bsscfg_t *bsscfg,
 		buf += KM_SERIAL_TLV_SIZE(sizeof(wlc_key_flags_t));
 		len -= KM_SERIAL_TLV_SIZE(sizeof(wlc_key_flags_t));
 	}
-	tlv = (const bcm_tlv_t *)buf;
-	if (tlv->id == KM_SERIAL_TLV_B4M4_ENAB) {
-		b4_m4_enab = tlv->data[0];
-		num_tlvs--;
-		buf += KM_SERIAL_TLV_SIZE(sizeof(uint8));
-		len -= KM_SERIAL_TLV_SIZE(sizeof(uint8));
+
+do_b4m4:
+	if (len < KM_SERIAL_TLV_SIZE(sizeof(b4_m4_enab))) {
+		err = BCME_BUFTOOSHORT;
+		goto done;
 	}
+
+	tlv = (const bcm_tlv_t *)buf;
+	if (tlv->id != KM_SERIAL_TLV_B4M4_ENAB ||
+			tlv->len != sizeof(b4_m4_enab)) {
+		err = BCME_UNSUPPORTED;
+		goto done;
+	}
+
+	b4_m4_enab = tlv->data[0];
 	km_b4m4_set(km, bsscfg,	(bool)b4_m4_enab);
+
+	num_tlvs--;
+	buf += KM_SERIAL_TLV_SIZE(sizeof(uint8));
+	len -= KM_SERIAL_TLV_SIZE(sizeof(uint8));
+
+
 	err = wlc_keymgmt_set_bss_tx_key_id(km, bsscfg, tx_key_id, FALSE);
 
 done:

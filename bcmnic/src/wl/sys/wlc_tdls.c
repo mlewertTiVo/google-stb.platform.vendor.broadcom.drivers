@@ -10,7 +10,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: wlc_tdls.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_tdls.c 665073 2016-10-14 20:33:29Z $
  */
 
 
@@ -68,6 +68,7 @@
 #include <wlc_ie_mgmt_types.h>
 #include <wlc_ie_mgmt_ft.h>
 #include <wlc_ie_mgmt_vs.h>
+#include <wlc_ie_helper.h>
 #include <wlc_ie_reg.h>
 #include <wlc_ht.h>
 #include <wlc_obss.h>
@@ -88,7 +89,6 @@
 #endif
 
 #ifdef PROP_TXSTATUS
-#include <wlfc_proto.h>
 #include <wlc_wlfc.h>
 #endif /* PROP_TXSTATUS */
 
@@ -107,41 +107,40 @@
 }
 
 /* iovar table */
-enum {
-	IOV_TDLS_ENABLE,		/**< enable/disable TDLS */
-	IOV_TDLS_AUTO_OP,		/**< enable TDLS auto operation */
-	IOV_TDLS_DISC_WINDOW,	/**< TDLS DiscoveryRequestWindow */
-	IOV_TDLS_UAPSD_SLEEP,	/**< TDLS U-APSD sleep */
-	IOV_TDLS_QOSINFO,		/**< TDLS QoS info */
-	IOV_TDLS_TRIGGER_PKTCNT_HIGH, /**< TDLS discvoery trigger pkt count per second */
-	IOV_TDLS_TRIGGER_PKTCNT_LOW,  /**< TDLS teardown trigger pkt count per second */
-	IOV_TDLS_RSSI_HIGH,		/**< higher RSSI threshold to establish the TDLS link */
-	IOV_TDLS_RSSI_LOW,		/**< lower RSSI threshold to teardown the TDLS link */
-	IOV_TDLS_ENDPOINT,		/**< create/mod/del TDLS manual endpoint  */
-	IOV_TDLS_MAX_SESSIONS,	/**< max # of TDLS connections */
-	IOV_TDLS_LIFETIME,		/**< SA lifetime for TDLS link */
-	IOV_TDLS_PU_IND_WINDOW,
-	IOV_TDLS_SWITCH_TIME,	/**< in us */
-	IOV_TDLS_SWITCH_TIMEOUT,	/**< in us */
-	IOV_TDLS_MANUAL_CHSW,	/**< TDLS manual channel switch */
-	IOV_TDLS_WFD_IE,
-#ifdef TDLS_TESTBED
-	IOV_TDLS_TEST_PROHIBIT,
-	IOV_TDLS_TEST_MAC,
-	IOV_TDLS_WRONG_BSSID,
-	IOV_TDLS_NO_RESP,
-	IOV_TDLS_CHSW_TIMEOUT,
-	IOV_TDLS_STATUS,
-	IOV_TDLS_QUIET_DOWN,
-	IOV_TDLS_TEST_TKIP,
-#endif
-	IOV_TDLS_CHSW_MODE,
-	IOV_TDLS_IDLE_TIME,
-	IOV_TDLS_STA_INFO,
-	IOV_TDLS_SETUP_RESP_TIMEOUT,	/**< in seconds */
-	IOV_TDLS_CERT_TEST,
-	IOV_TDLS_WFD_MODE
-	};
+enum wlc_tdls_iov {
+	IOV_TDLS_ENABLE = 1,		/**< enable/disable TDLS */
+	IOV_TDLS_AUTO_OP = 2,		/**< enable TDLS auto operation */
+	IOV_TDLS_DISC_WINDOW = 3,	/**< TDLS DiscoveryRequestWindow */
+	IOV_TDLS_UAPSD_SLEEP = 4,	/**< TDLS U-APSD sleep */
+	IOV_TDLS_QOSINFO = 5,		/**< TDLS QoS info */
+	IOV_TDLS_TRIGGER_PKTCNT_HIGH = 6, /**< TDLS discvoery trigger pkt count per second */
+	IOV_TDLS_TRIGGER_PKTCNT_LOW = 7,  /**< TDLS teardown trigger pkt count per second */
+	IOV_TDLS_RSSI_HIGH = 8,		/**< higher RSSI threshold to establish the TDLS link */
+	IOV_TDLS_RSSI_LOW = 9,		/**< lower RSSI threshold to teardown the TDLS link */
+	IOV_TDLS_ENDPOINT = 10,		/**< create/mod/del TDLS manual endpoint  */
+	IOV_TDLS_MAX_SESSIONS = 11,	/**< max # of TDLS connections */
+	IOV_TDLS_LIFETIME = 12,		/**< SA lifetime for TDLS link */
+	IOV_TDLS_PU_IND_WINDOW = 13,
+	IOV_TDLS_SWITCH_TIME = 14,	/**< in us */
+	IOV_TDLS_SWITCH_TIMEOUT = 15,	/**< in us */
+	IOV_TDLS_MANUAL_CHSW = 16,	/**< TDLS manual channel switch */
+	IOV_TDLS_WFD_IE = 17,
+	IOV_TDLS_TEST_PROHIBIT = 18,
+	IOV_TDLS_TEST_MAC = 19,
+	IOV_TDLS_WRONG_BSSID = 20,
+	IOV_TDLS_NO_RESP = 21,
+	IOV_TDLS_CHSW_TIMEOUT = 22,
+	IOV_TDLS_STATUS = 23,
+	IOV_TDLS_QUIET_DOWN = 24,
+	IOV_TDLS_TEST_TKIP = 25,
+	IOV_TDLS_CHSW_MODE = 26,
+	IOV_TDLS_IDLE_TIME = 27,
+	IOV_TDLS_STA_INFO = 28,
+	IOV_TDLS_SETUP_RESP_TIMEOUT = 29,	/**< in seconds */
+	IOV_TDLS_CERT_TEST = 30,
+	IOV_TDLS_WFD_MODE = 31,
+	IOV_TDLS_LAST
+};
 
 static const bcm_iovar_t tdls_iovars[] = {
 	{"tdls_enable", IOV_TDLS_ENABLE, IOVF_RSDB_SET, 0, IOVT_BOOL, 0},
@@ -294,6 +293,9 @@ typedef enum tpk_handshake_msg {
 /* SCB TDLS Operating Mode Nofitication Capability */
 #define	TDLS_SCB_OP_MODE_NOTIF(a)	(((a)->ext_cap_flags & TDLS_SCB_TDLS_OP_MODE_NOTIF))
 
+#define BETDLS_RETRY_CTXT_GET(a)	((tdls_retry_ctx_t *)((a)->tdls_retry_timer_arg->hdl))
+#define BETDLS_RETRY_CTXT_SET(a, b)	((a)->tdls_retry_timer_arg->hdl = (void*)(b))
+
 #define TDLS_SCBFLAGS_STR \
 	"active", \
 	"manual", \
@@ -339,7 +341,8 @@ typedef enum tpk_handshake_msg {
 enum {
 	TDLS_RETRY_DISC_RESP = 1,
 	TDLS_RETRY_SETUP_RESP = 2,
-	TDLS_RETRY_SETUP_CFM = 3
+	TDLS_RETRY_SETUP_CFM = 3,
+	TDLS_RETRY_SETUP_REQ = 4
 };
 
 /* context for retransmission */
@@ -354,11 +357,6 @@ typedef struct tdls_retry_ctx {
 	uint8 token;
 	uint8 retry_cnt;        /**< discovery/setup response retry counter */
 } tdls_retry_ctx_t;
-
-#ifdef BE_TDLS
-static void wlc_tdls_retry_cb(void *arg);
-static void wlc_tdls_retry_complete(wlc_info_t *wlc, uint32 txstatus, void *arg);
-#endif /* BE_TDLS */
 
 static void wlc_tdls_chsw_timer_cb(void *arg);
 
@@ -418,8 +416,6 @@ typedef struct tdls_lookaside {
 	bool cb_req;
 	struct scb *scb_peer;
 	struct wl_timer *chsw_timer;
-	/* retry context for discovery resp, setup resp/cfm retransmission */
-	tdls_retry_ctx_t *retry_ctx;
 	/* discovery request retry counter, no need retry context. */
 	uint8 retry_cnt;
 	tdls_timer_arg_t *timer_arg;
@@ -508,6 +504,7 @@ struct tdls_info {
 	/* use this variable when disc/setup response-frame retransmission */
 	struct wl_timer *tdls_retry_timer;
 	tdls_timer_arg_t *tdls_retry_timer_arg;
+	bool tdls_enab;
 };
 
 #define TDLS_UAPSD_BUF_STA		0x1
@@ -641,12 +638,16 @@ typedef struct tdls_bss {
 /* local prototypes */
 static int scb_tdls_init(void *context, struct scb *scb);
 static void scb_tdls_deinit(void *context, struct scb *scb);
-#if defined(TDLS_TESTBED)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(TDLS_TESTBED)
 static void wlc_tdls_scb_dump(void *context, struct scb *scb, struct bcmstrbuf *b);
 #else
 #define wlc_tdls_scb_dump NULL
 #endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_tdls_scb_cmn_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_tdls_scb_cmn_dump NULL
+#endif
 
 static int wlc_tdls_doiovar(void *hdl, uint32 actionid,
         void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
@@ -763,13 +764,17 @@ static void wlc_tdls_post_chsw_off_chan(tdls_info_t *tdls, struct scb *scb);
 static void wlc_tdls_post_chsw_base_chan(tdls_info_t *tdls, struct scb *scb);
 static void wlc_tdls_free_scb_complete(tdls_info_t *tdls, struct scb *scb, scb_tdls_t *scb_tdls);
 
-#if defined(TDLS_TESTBED)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(TDLS_TESTBED)
 static int wlc_tdls_dump(tdls_info_t *tdls, struct bcmstrbuf *b);
 #endif
 
 static int bss_tdls_init(void *ctx, wlc_bsscfg_t *cfg);
 static void bss_tdls_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void bss_tdls_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define bss_tdls_dump NULL
+#endif
 
 static void wlc_tdls_wake_ctrl(wlc_info_t *wlc, tdls_info_t *tdls, struct scb *scb);
 /* IE mgmt callbacks */
@@ -844,6 +849,14 @@ static int wlc_tdls_disc_blist_find(tdls_info_t *tdls, struct ether_addr *ea);
 static int wlc_tdls_disc_blist_find_empty(tdls_info_t *tdls);
 static int wlc_tdls_disc_blist_check(tdls_info_t *tdls, struct ether_addr *ea);
 static int wlc_tdls_disc_blist_query(tdls_info_t *tdls, struct ether_addr *ea);
+
+#ifdef BE_TDLS
+static void wlc_tdls_retry_cb(void *arg);
+static void wlc_tdls_retry_complete(wlc_info_t *wlc, uint32 txstatus, void *arg);
+static void wlc_tdls_free_retry_ctxt(tdls_info_t *tdls);
+static void wlc_tdls_prepare_retry_ctxt(tdls_info_t *tdls, scb_tdls_t *scb_tdls,
+	struct ether_addr *dst, link_id_ie_t *link_id, uint8 token, uint type);
+#endif /* BE_TDLS */
 
 /* functions for the upper TDLS txmod; This is used to buffer frames at the top
  * during the setup process. To avoid the re-ordering, TDLS initiator and responder
@@ -1043,7 +1056,7 @@ BCMATTACHFN(wlc_tdls_attach)(wlc_info_t *wlc)
 			goto fail;
 		}
 		if ((tdls->tdls_retry_timer = wl_init_timer(wlc->wl, wlc_tdls_retry_cb,
-			(void *)tdls->tdls_retry_timer_arg, "tdls_retry")) == NULL) {
+			(void *)tdls->tdls_retry_timer_arg->hdl, "tdls_retry")) == NULL) {
 			WL_ERROR(("wl%d: wl_init_timer for TDLS retry timer failed\n",
 				wlc->pub->unit));
 			goto fail;
@@ -1060,7 +1073,7 @@ BCMATTACHFN(wlc_tdls_attach)(wlc_info_t *wlc)
 
 	wlc_txmod_fn_register(wlc->txmodi, TXMOD_TDLS, tdls, tdls_txmod_upper_fns);
 
-#if defined(TDLS_TESTBED)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)|| defined(TDLS_TESTBED)
 	wlc_dump_register(wlc->pub, "tdls", (dump_fn_t)wlc_tdls_dump, (void *)tdls);
 #endif
 
@@ -1446,7 +1459,6 @@ BCMATTACHFN(wlc_tdls_detach)(tdls_info_t *tdls)
 		MFREE(tdls->wlc->osh, tdls->tdls_retry_timer_arg,
 		sizeof(*tdls->tdls_retry_timer_arg));
 	}
-
 	if (tdls->tdls_pm_timer) {
 		wl_free_timer(tdls->wlc->wl, tdls->tdls_pm_timer);
 		tdls->tdls_pm_timer = NULL;
@@ -1517,6 +1529,13 @@ wlc_tdls_scbfindband_all(wlc_info_t *wlc, const struct ether_addr *ea, int bandu
 		}
 		return scb;
 	}
+}
+
+/* warpper function for the static function defined to be used globally */
+struct scb *
+_wlc_tdls_scbfind_all(wlc_info_t *wlc, const struct ether_addr *ea)
+{
+	return wlc_tdls_scbfind_all(wlc, ea);
 }
 
 /* Global find of station control block corresponding to the remote id */
@@ -1667,6 +1686,7 @@ scb_tdls_deinit(void *context, struct scb *scb)
 	ASSERT(peer);
 	if (peer)
 		wlc_tdls_lookaside_delete(tdls, peer);
+	bsscfg->tdls->tdls_scb = NULL;
 }
 
 
@@ -1698,23 +1718,13 @@ wlc_tdls_down_complete(tdls_info_t *tdls)
 		}
 	}
 
-	if (tdls->tdls_pm_timer) {
-		wlc_tdls_pm_timer_params_reset(tdls);
-		wl_del_timer(wlc->wl, tdls->tdls_pm_timer);
-	}
+	ASSERT(tdls->tdls_pm_timer);
+	wlc_tdls_pm_timer_params_reset(tdls);
+	wl_del_timer(wlc->wl, tdls->tdls_pm_timer);
 
 #ifdef BE_TDLS
 	if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
-		if (tdls->tdls_retry_timer_arg->hdl != NULL) {
-			tdls_retry_ctx_t *trc = tdls->tdls_retry_timer_arg->hdl;
-			if (trc->f)
-				MFREE(tdls->osh, trc->f, sizeof(struct wlc_frminfo));
-			MFREE(tdls->osh, trc, sizeof(tdls_retry_ctx_t));
-			tdls->tdls_retry_timer_arg->hdl = NULL;
-			if (tdls->tdls_retry_timer) {
-				wl_del_timer(tdls->wlc->wl, tdls->tdls_retry_timer);
-			}
-		}
+		wlc_tdls_free_retry_ctxt(tdls);
 	}
 #endif
 }
@@ -1779,6 +1789,42 @@ bss_tdls_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+bss_tdls_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	tdls_info_t *tdls = (tdls_info_t *)ctx;
+	wlc_info_t *wlc = tdls->wlc;
+
+	BCM_REFERENCE(wlc);
+
+	if (BSS_TDLS_ENAB(wlc, cfg)) {
+		bss_tdls_t *tc = cfg->tdls;
+		uint i;
+
+		bcm_bprintf(b, "up_time: %d, SA life time : %d\n",
+			tc->up_time, tc->tpk_lifetime);
+		bcm_bprintf(b, "TDLS bsscfg: initiator = %s, TDLS_PMEnable = %s, "
+			"TDLS_PMAwake = %s\n", tc->initiator ? "TRUE" : "FALSE",
+			tc->tdls_PMEnable ? "TRUE" : "FALSE",
+			tc->tdls_PMAwake? "TRUE" : "FALSE");
+		bcm_bprintf(b, "tdls_cap : 0x%02x\n", cfg->tdls_cap);
+#ifdef WL11N
+		bcm_bprintf(b, "Supported Regulatory Classes: %d\n", tc->rclen);
+		for (i = 0; i < tc->rclen; i++) {
+			bcm_bprintf(b, " %d ", tc->rclist[i]);
+		}
+		bcm_bprintf(b, "\n");
+		bcm_bprintf(b, "HT capinfo: 0x%04x\n", tc->ht_capinfo);
+#endif /* WL11N */
+		bcm_bprintf(b, "\n");
+
+		if (cfg == wlc->cfg)
+			bcm_bprintf(b, "TDLS parent: ts_allowed = %s\n",
+			            tc->ps_allowed ? "TRUE" : "FALSE");
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* frees all the buffers and cleanup everything on down */
 int
@@ -1798,7 +1844,7 @@ wlc_tdls_down(void *hdl)
 }
 
 /* Setup Request frame IEs' order */
-static const uint8 BCMINITDATA(srq_ie_tags)[] = {
+static const wlc_iem_tag_t BCMINITDATA(srq_ie_tags)[] = {
 	DOT11_MNG_RATES_ID,
 	DOT11_MNG_COUNTRY_ID,
 	DOT11_MNG_EXT_RATES_ID,
@@ -1818,7 +1864,7 @@ static const uint8 BCMINITDATA(srq_ie_tags)[] = {
 };
 
 /* Setup Response frame IEs' order */
-static const uint8 BCMINITDATA(srs_ie_tags)[] = {
+static const wlc_iem_tag_t BCMINITDATA(srs_ie_tags)[] = {
 	DOT11_MNG_RATES_ID,
 	DOT11_MNG_COUNTRY_ID,
 	DOT11_MNG_EXT_RATES_ID,
@@ -1839,7 +1885,7 @@ static const uint8 BCMINITDATA(srs_ie_tags)[] = {
 };
 
 /* Setup Confirm frame IEs' order */
-static const uint8 BCMINITDATA(scf_ie_tags)[] = {
+static const wlc_iem_tag_t BCMINITDATA(scf_ie_tags)[] = {
 	DOT11_MNG_RSN_ID,
 	DOT11_MNG_EDCA_PARAM_ID,	/* IEEE 802.11 - 2012 */
 	DOT11_MNG_FTIE_ID,
@@ -1856,7 +1902,7 @@ static const uint8 BCMINITDATA(scf_ie_tags)[] = {
 };
 
 /* Discovery Response frame IEs' order */
-static const uint8 BCMINITDATA(drs_ie_tags)[] = {
+static const wlc_iem_tag_t BCMINITDATA(drs_ie_tags)[] = {
 	DOT11_MNG_RATES_ID,
 	DOT11_MNG_EXT_RATES_ID,
 	DOT11_MNG_SUPP_CHANNELS_ID,
@@ -1884,13 +1930,17 @@ wlc_tdls_up(void *hdl)
 		}
 	}
 
+	if (!tdls->tdls_enab) {
+		return BCME_OK;
+	}
+
 	if (!tdls->up) {
 		/* sort calc_len/build callbacks */
 		/* ignore the return code */
-		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_srq, srq_ie_tags, sizeof(srq_ie_tags));
-		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_srs, srs_ie_tags, sizeof(srs_ie_tags));
-		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_scf, scf_ie_tags, sizeof(scf_ie_tags));
-		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_drs, drs_ie_tags, sizeof(drs_ie_tags));
+		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_srq, srq_ie_tags, ARRAYSIZE(srq_ie_tags));
+		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_srs, srs_ie_tags, ARRAYSIZE(srs_ie_tags));
+		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_scf, scf_ie_tags, ARRAYSIZE(scf_ie_tags));
+		(void)wlc_ier_sort_cbtbl(wlc->ier_tdls_drs, drs_ie_tags, ARRAYSIZE(drs_ie_tags));
 	}
 	tdls->up = TRUE;
 
@@ -2519,12 +2569,14 @@ wlc_tdls_doiovar(void *hdl, uint32 actionid,
 	}
 
 	case IOV_GVAL(IOV_TDLS_ENABLE):
-		*ret_uint_ptr = (uint32)tdls->up;
+		*ret_uint_ptr = (uint32)tdls->tdls_enab;
 		break;
 
-	case IOV_SVAL(IOV_TDLS_ENABLE):
+	case IOV_SVAL(IOV_TDLS_ENABLE): {
+		tdls->tdls_enab = bool_val;
 		err =  wlc_tdls_set(tdls, bool_val);
 		break;
+	}
 
 	case IOV_GVAL(IOV_TDLS_AUTO_OP):
 		*ret_uint_ptr = (uint32)tdls->tdls_cmn->auto_op;
@@ -2829,6 +2881,13 @@ wlc_tdls_free_scb_complete(tdls_info_t *tdls, struct scb *scb, scb_tdls_t *scb_t
 	}
 	wlc_tdls_del_chsw_timer(tdls->wlc, scb_tdls);
 
+	if (wlc_tdls_msch_unregister(tdls->wlc, bsscfg) != BCME_OK) {
+		WL_TDLS(("wl%d:%s(): MSCH unregistration failed\n",
+			tdls->pub->unit, __FUNCTION__));
+		/* continue though */
+		scb_tdls->tdls_msch_req_hdl = NULL;
+	}
+
 	_wlc_tdls_free_scb(tdls->wlc, scb);
 	wlc_tdls_bsscfg_free(tdls, bsscfg, parent);
 
@@ -2988,6 +3047,9 @@ wlc_tdls_peer_timer(void *arg)
 	tdls_info_t *tdls = NULL;
 	int idx;
 	tdls_lookaside_t *peer;
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	ASSERT(arg);
 
 	local_timer_arg = (tdls_timer_arg_t *)arg;
@@ -3332,7 +3394,7 @@ wlc_tdls_set(tdls_info_t *tdls, bool on)
 {
 	wlc_info_t *wlc = tdls->wlc;
 	if (on) {
-		if (wlc->pub->up) {
+		if (wlc->pub->up && tdls->tdls_enab) {
 			wlc_tdls_up(tdls);
 		} else {
 			wlc_tdls_down(tdls);
@@ -3340,6 +3402,7 @@ wlc_tdls_set(tdls_info_t *tdls, bool on)
 	} else {
 		wlc_tdls_down(tdls);
 	}
+	wlc_set_wake_ctrl(wlc);
 	return 0;
 }
 
@@ -4141,10 +4204,23 @@ wlc_tdls_msch_cb(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 			} else {
 				/* TDLS was already at base channel */
 				scb_tdls->cur_chanspec = cb_info->chanspec;
+#ifdef PROP_TXSTATUS
+				if (PROP_TXSTATUS_ENAB(wlc->pub)) {
+					wlc_wlfc_mchan_interface_state_update(wlc, cfg,
+						WLFC_CTL_TYPE_INTERFACE_OPEN, FALSE);
+				}
+#endif /* PROP_TXSTATUS */
+
 			}
 		}
 	}
 	else if (type & MSCH_CT_OFF_CHAN) {
+#ifdef PROP_TXSTATUS
+		if (PROP_TXSTATUS_ENAB(wlc->pub)) {
+			wlc_wlfc_mchan_interface_state_update(wlc, cfg,
+				WLFC_CTL_TYPE_INTERFACE_CLOSE, FALSE);
+		}
+#endif /* PROP_TXSTATUS */
 		wlc_tdls_notify_pm_state(cfg->wlc->tdls, cfg, TRUE);
 	}
 	else if (type & MSCH_CT_OFF_CHAN_DONE) {
@@ -4153,6 +4229,9 @@ wlc_tdls_msch_cb(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 	else if ((type & MSCH_CT_SLOT_END) || (type & MSCH_CT_REQ_END)) {
 		uint32 duration = MSCH_ONCHAN_PREPARE;
 		wlc_txqueue_end(wlc, cfg, NULL);
+		if (type & MSCH_CT_REQ_END) {
+			scb_tdls->tdls_msch_req_hdl = NULL;
+		}
 		wlc_tdls_del_chsw_timer(wlc, scb_tdls);
 		scb_tdls->chsw_flags |= TDLS_SCB_CHSW_MSCH_REGISTER_POST_SLOT_END;
 		wl_add_timer(wlc->wl, scb_tdls->peer_addr->chsw_timer,
@@ -4791,30 +4870,36 @@ wlc_tdls_action_frame_tx_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 	struct scb *scb;
 	scb_tdls_t *scb_tdls;
 	wlc_txq_info_t *qi;
+	tdls_info_t *tdls;
 
 	if (!arg)
 		return;
+
+	tdls = (tdls_info_t *)dla->timer_arg->hdl;
 
 	scb = dla->scb_peer;
 	if (!scb || !scb->bsscfg || !BSS_TDLS_ENAB(wlc, scb->bsscfg))
 		return;
 
-	scb_tdls = SCB_TDLS(wlc->tdls, scb);
+	scb_tdls = SCB_TDLS(tdls, scb);
 	if (!scb_tdls)
 		return;
 
 	WL_TDLS(("wl%d:%s():flags = 0x%08x!\n", wlc->pub->unit, __FUNCTION__, scb_tdls->flags));
 
 	if (scb_tdls->flags & TDLS_SCB_SENT_PTI) {
-		wlc_tdls_pti_tx_complete(wlc->tdls, scb, txstatus);
+		wlc_tdls_pti_tx_complete(tdls, scb, txstatus);
 		return;
 	}
 #ifdef BE_TDLS
-	if (BE_TDLS_ENAB(wlc->tdls->tdls_cmn)) {
-		/* If TDLS_SCB_SENT_SETUP_RESP/CFM, passes to wlc_tdls_retry_complete() */
+	if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
+		/* If TDLS_SCB_SENT_SETUP_RESP/CFM/REQ,
+		* passes to wlc_tdls_retry_complete()
+		*/
 		if (scb_tdls->flags & (TDLS_SCB_SENT_SETUP_RESP |
-			TDLS_SCB_SENT_SETUP_CFM)) {
-			wlc_tdls_retry_complete(wlc, txstatus, (void *)(dla->retry_ctx));
+			TDLS_SCB_SENT_SETUP_CFM | TDLS_SCB_SENT_SETUP_REQ)) {
+			wlc_tdls_retry_complete(wlc, txstatus,
+				(void *)BETDLS_RETRY_CTXT_GET(tdls));
 		}
 	}
 #endif
@@ -4823,34 +4908,25 @@ wlc_tdls_action_frame_tx_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 		WL_TDLS(("wl%d:%s(): no ACK!\n", wlc->pub->unit, __FUNCTION__));
 		if (scb_tdls->flags & TDLS_SCB_SENT_TEARDOWN) {
 			if (!(scb_tdls->flags & TDLS_SCB_SENT_TEARDOWN_VIA_AP) &&
-				wlc_tdls_send_teardown(wlc->tdls, scb, FALSE)) {
+				wlc_tdls_send_teardown(tdls, scb, FALSE)) {
 				goto exit;
 			} else {
 				scb_tdls->free_me = FALSE;
-				wlc_tdls_free_scb(wlc->tdls, scb);
+				wlc_tdls_free_scb(tdls, scb);
 			}
 exit:
 			return;
 		}
 #ifdef BE_TDLS
-		if (BE_TDLS_ENAB(wlc->tdls->tdls_cmn)) {
-			/* restart TDLS setup-phase */
-			if ((scb_tdls->retry_cnt < BETDLS_MAX_REQ_RETRY_CNT) &&
-				(scb_tdls->flags & (TDLS_SCB_SENT_SETUP_REQ))) {
-			WL_TDLS(("wl%d:%s(): retry wlc_tdls_send_setup_req(), scb_tdls->flags: %d, "
-				"retry_cnt: %d\n", wlc->pub->unit, __FUNCTION__,
-				scb_tdls->flags, scb_tdls->retry_cnt));
-				wlc_tdls_send_setup_req(wlc->tdls, scb_tdls->parent, &scb->ea);
-				scb_tdls->retry_cnt++;
-				return;
-			}
-
+		if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
 			/* If remain retry-opportunities when no ack, return now.
-			 * And then retransmit saved TDLS setup resp/cfm frame after unit-time.
-			 * otherwise, wlc_tdls_disconnect()
-			 */
-			if ((dla->retry_ctx->retry_cnt > 0) && (scb_tdls->flags &
-					(TDLS_SCB_SENT_SETUP_RESP | TDLS_SCB_SENT_SETUP_CFM))) {
+			* And then retransmit saved TDLS setup req/resp/cfm frame
+			* after unit-time. otherwise, wlc_tdls_disconnect()
+			*/
+			tdls_retry_ctx_t *trc = BETDLS_RETRY_CTXT_GET(tdls);
+			if (trc && (trc->retry_cnt > 0) && (scb_tdls->flags &
+				(TDLS_SCB_SENT_SETUP_RESP | TDLS_SCB_SENT_SETUP_CFM |
+				TDLS_SCB_SENT_SETUP_REQ))) {
 				return;
 			}
 		}
@@ -4860,7 +4936,7 @@ exit:
 			/* If Setup REQ/RESP/CFM is not acked, disconnect immediately (no need
 			 *  to start response timer and wait for timeout to trigger disconnect)
 			 */
-			wlc_tdls_disconnect(wlc->tdls, scb, TRUE);
+			wlc_tdls_disconnect(tdls, scb, TRUE);
 			return;
 		}
 	}
@@ -4872,7 +4948,7 @@ exit:
 		for (qi = wlc->tx_queues; qi != NULL; qi = qi->next)
 			wlc_pktq_scb_free(wlc, WLC_GET_TXQ(qi), scb);
 		scb_tdls->free_me = FALSE;
-		wlc_tdls_free_scb(wlc->tdls, scb);
+		wlc_tdls_free_scb(tdls, scb);
 		return;
 	}
 
@@ -4900,13 +4976,13 @@ exit:
 		* which could be the same or different from primary
 		*/
 		if (wlc_tdls_msch_register(cfg->wlc, cfg, MSCH_RT_BOTH_FLEX) != BCME_OK) {
-			wlc_tdls_disconnect(wlc->tdls, scb, FALSE);
+			wlc_tdls_disconnect(tdls, scb, FALSE);
 			return;
 		}
 
 		/* update rate set for this bsscfg */
 		wlc_scb_ratesel_init(cfg->wlc, scb);
-		wlc_tdls_port_open(wlc->tdls, &scb->ea);
+		wlc_tdls_port_open(tdls, &scb->ea);
 
 		wlc_bss_mac_event(wlc, scb_tdls->parent, WLC_E_TDLS_PEER_EVENT, &scb->ea,
 			WLC_E_STATUS_SUCCESS, WLC_E_TDLS_PEER_CONNECTED, 0, NULL, 0);
@@ -4917,7 +4993,7 @@ exit:
 		(scb_tdls->flags == TDLS_SCB_SENT_SETUP_RESP)) {
 		scb_tdls->action_frame_sent_time = OSL_SYSUPTIME();
 		wl_add_timer(wlc->wl, scb_tdls->peer_addr->timer,
-			wlc->tdls->tdls_cmn->setup_resp_timeout * 1000, 0);
+			tdls->tdls_cmn->setup_resp_timeout * 1000, 0);
 		scb_tdls->timer_start = TRUE;
 
 		WL_TDLS(("wl%d:%s(): req/resp ACKed, start timer for response,"
@@ -4930,6 +5006,9 @@ static void
 wlc_tdls_send_discovery_req(tdls_info_t *tdls, wlc_bsscfg_t *parent, struct ether_addr *dst)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	int len = 0;
 	uchar *pdata;
@@ -5028,6 +5107,9 @@ static void
 wlc_tdls_send_setup_req(tdls_info_t *tdls, wlc_bsscfg_t *parent, struct ether_addr *dst)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	struct scb *scb;
 	scb_tdls_t *scb_tdls;
@@ -5084,9 +5166,15 @@ wlc_tdls_send_setup_req(tdls_info_t *tdls, wlc_bsscfg_t *parent, struct ether_ad
 		tdls->tdls_cmn->test_send = FALSE;
 #endif
 
+#ifdef BE_TDLS
+	if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
+		wlc_tdls_prepare_retry_ctxt(tdls, scb_tdls, dst,
+			0, 0, TDLS_RETRY_SETUP_REQ);
+	}
+#endif /* BE_TDLS */
+
 	wlc_pcb_fn_register(wlc->pcb, wlc_tdls_action_frame_tx_complete,
 		(void *)scb_tdls->peer_addr, p);
-
 	scb_tdls->flags = TDLS_SCB_SENT_SETUP_REQ;
 	wlc_tdls_send_action_frame(tdls, parent, dst, p, FALSE);
 
@@ -5201,6 +5289,9 @@ wlc_tdls_send_setup_resp(tdls_info_t *tdls, wlc_bsscfg_t *parent, struct ether_a
 	uint16 status_code, uint8 token, link_id_ie_t *link_id)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	struct scb *scb;
 	scb_tdls_t *scb_tdls = NULL;
@@ -5236,40 +5327,10 @@ wlc_tdls_send_setup_resp(tdls_info_t *tdls, wlc_bsscfg_t *parent, struct ether_a
 
 	if (scb) {
 #ifdef BE_TDLS
-		if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
-			do {
-				tdls_retry_ctx_t *trc = scb_tdls->peer_addr->retry_ctx;
-				if (trc && trc->tdls == tdls) { /* already exist trc */
-					break;
-				}
-				if (tdls->tdls_retry_timer_arg->hdl) {
-					/* timer arg in use by some other peer on this tdls instance
-					* Only one BETDLS arg per TDLS allowed, exit betdls loop.
-					*/
-					break;
-				}
-				/* building retry context */
-				if (!(trc = (tdls_retry_ctx_t *)MALLOC(tdls->osh,
-					sizeof(tdls_retry_ctx_t)))) {
-					WL_ERROR(("wl%d: %s: MALLOC failed\n", tdls->pub->unit,
-						__FUNCTION__));
-					break;
-				}
-				WL_TDLS(("%s: Alloc trc => %p\n", __FUNCTION__,
-					OSL_OBFUSCATE_BUF(trc)));
-				trc->flags = TDLS_RETRY_SETUP_RESP;
-				trc->tdls = tdls;
-				trc->shared = (void *)parent;
-				trc->f = NULL;
-				memcpy(&trc->link_id, link_id, sizeof(link_id_ie_t));
-				memcpy(&trc->dst, dst, sizeof(struct ether_addr));
-				trc->status_code = status_code;
-				trc->token = token;
-				trc->retry_cnt = TDLS_RETRY_MAX_CNT;
-				/* associate to tdls_lookaside_t structure */
-				scb_tdls->peer_addr->retry_ctx = trc;
-				tdls->tdls_retry_timer_arg->hdl = trc;
-			} while (0);
+		if (BE_TDLS_ENAB(tdls->tdls_cmn) && !status_code) {
+			/* BETDLS response needed only if accepting connection */
+			wlc_tdls_prepare_retry_ctxt(tdls, scb_tdls, dst,
+				link_id, token, TDLS_RETRY_SETUP_RESP);
 		}
 #endif /* BE_TDLS */
 		wlc_pcb_fn_register(wlc->pcb, wlc_tdls_action_frame_tx_complete,
@@ -5291,6 +5352,9 @@ wlc_tdls_send_setup_cfm(tdls_info_t *tdls, wlc_bsscfg_t *parent, struct ether_ad
 	uint16 status_code, uint8 token)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	struct scb *scb;
 	scb_tdls_t *scb_tdls = NULL;
@@ -5329,56 +5393,26 @@ wlc_tdls_send_setup_cfm(tdls_info_t *tdls, wlc_bsscfg_t *parent, struct ether_ad
 	if (!status_code) {
 #ifdef BE_TDLS
 		if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
-			do {
-				tdls_retry_ctx_t *trc = scb_tdls->peer_addr->retry_ctx;
-				if (trc && trc->tdls == tdls) { /* already exist trc */
-					break;
-				}
-				if (tdls->tdls_retry_timer_arg->hdl) {
-					/* timer arg in use by some other peer on this tdls instance
-					* Only one BETDLS arg per TDLS allowed, exit betdls loop.
-					*/
-					break;
-				}
-				/* building retry context */
-				if (!(trc = (tdls_retry_ctx_t *)MALLOC(tdls->osh,
-					sizeof(tdls_retry_ctx_t)))) {
-					WL_ERROR(("wl%d: %s: MALLOC failed\n", tdls->pub->unit,
-						__FUNCTION__));
-					break;
-				}
-				WL_TDLS(("%s: Alloc trc => %p\n", __FUNCTION__,
-					OSL_OBFUSCATE_BUF(trc)));
-				trc->flags = TDLS_RETRY_SETUP_CFM;
-				trc->tdls = tdls;
-				trc->shared = (void *)parent;
-				trc->f = NULL;
-				memset(&trc->link_id, 0, sizeof(link_id_ie_t));
-				memcpy(&trc->dst, dst, sizeof(struct ether_addr));
-				trc->status_code = status_code;
-				trc->token = token;
-				trc->retry_cnt = TDLS_RETRY_MAX_CNT;
-				/* associate to tdls_lookaside_t structure */
-				scb_tdls->peer_addr->retry_ctx = trc;
-				tdls->tdls_retry_timer_arg->hdl = trc;
-			} while (0);
+			wlc_tdls_prepare_retry_ctxt(tdls, scb_tdls, dst,
+				0, token, TDLS_RETRY_SETUP_CFM);
 		}
 #endif /* BE_TDLS */
-		wlc_pcb_fn_register(wlc->pcb, wlc_tdls_action_frame_tx_complete,
-			(void *)scb_tdls->peer_addr, p);
 	}
 
+	wlc_pcb_fn_register(wlc->pcb, wlc_tdls_action_frame_tx_complete,
+		(void *)scb_tdls->peer_addr, p);
 	scb_tdls->flags = TDLS_SCB_SENT_SETUP_CFM;
 	wlc_tdls_send_action_frame(tdls, parent, dst, p, FALSE);
-
 	WLCNTINCR(tdls->tdls_cmn->cnt->txsetupcfm);
-
 }
 
 static bool
 wlc_tdls_send_teardown(tdls_info_t *tdls, struct scb *scb, bool direct)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	scb_tdls_t *scb_tdls = NULL;
 
@@ -5443,6 +5477,9 @@ void
 wlc_tdls_send_pti(tdls_info_t *tdls, struct scb *scb)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	scb_tdls_t *scb_tdls = NULL;
 
@@ -5495,6 +5532,9 @@ static void
 wlc_tdls_send_pti_resp(tdls_info_t *tdls, struct scb *scb)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	scb_tdls_t *scb_tdls = NULL;
 
@@ -5646,6 +5686,9 @@ wlc_tdls_send_chsw_resp(tdls_info_t *tdls, struct scb *scb,
 	uint16 status_code, tdls_chsw_resp_t *chsw_resp, bool cb)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	scb_tdls_t *scb_tdls = NULL;
 
@@ -5713,6 +5756,9 @@ wlc_tdls_send_tunneled_probe(tdls_info_t *tdls, wlc_bsscfg_t *parent,
 	struct ether_addr *dst, uint8 type)
 {
 	wlc_info_t *wlc = tdls->wlc;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	void *p;
 	uchar *data, *data_save;
 	int pkt_len;
@@ -5836,6 +5882,9 @@ wlc_tdls_join(tdls_info_t *tdls, wlc_bss_info_t *bi, struct scb *scb, uint8 *par
 	bool bss_ht, bss_vht;
 	uint8 mcsallow = 0;
 	scb_cmn_cubby_t *scb_cmn;
+#if defined(BCMDBG) && defined(PROP_TXSTATUS)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* defined(BCMDBG) && defined(PROP_TXSTATUS) */
 	wlc_bsscfg_t *cfg = SCB_BSSCFG(scb);
 
 	ASSERT(scb_tdls != NULL);
@@ -5873,12 +5922,18 @@ wlc_tdls_join(tdls_info_t *tdls, wlc_bss_info_t *bi, struct scb *scb, uint8 *par
 		WL_RATE(("wl%d: %s: invalid rateset in target_bss. bandunit 0x%x phy_type 0x%x "
 			"gmode 0x%x\n", wlc->pub->unit, __FUNCTION__, wlc->band->bandunit,
 			wlc->band->phytype, wlc->band->gmode));
+#ifdef BCMDBG
+		wlc_rateset_show(wlc, &target_bss->rateset, &bi->BSSID);
+#endif
 		wlc_rateset_default(&target_bss->rateset, &wlc->band->hw_rateset,
 			wlc->band->phytype, wlc->band->bandtype, cck_only,
 			RATE_MASK_FULL, cck_only ? 0 : wlc_get_mcsallow(wlc, NULL),
 			CHSPEC_WLC_BW(bi->chanspec), wlc->stf->op_rxstreams);
 	}
 
+#ifdef BCMDBG
+	wlc_rateset_show(wlc, &target_bss->rateset, &bi->BSSID);
+#endif
 
 	/* Update SCB WB Capability */
 	if (bi->ext_cap_flags & TDLS_CAP_TDLS_WIDER_BW) {
@@ -5893,6 +5948,19 @@ wlc_tdls_join(tdls_info_t *tdls, wlc_bss_info_t *bi, struct scb *scb, uint8 *par
 
 	bss_ht = ((bi->flags & WLC_BSS_HT)) && BSS_N_ENAB(wlc, cfg);
 	bss_vht = ((bi->flags2 & WLC_BSS_VHT)) && BSS_VHT_ENAB(wlc, cfg);
+
+	/* replace any old scb rateset with new target rateset */
+	if (bss_ht)
+		mcsallow |= WLC_MCS_ALLOW;
+	if (bss_vht)
+		mcsallow |= WLC_MCS_ALLOW_VHT;
+
+	if (WLPROPRIETARY_11N_RATES_ENAB(wlc->pub)&&
+	    wlc->pub->ht_features == WLC_HT_FEATURES_PROPRATES_FORCE)
+		mcsallow |= WLC_MCS_ALLOW_PROP_HT;
+
+	wlc_rateset_filter(&target_bss->rateset /* src */, &scb->rateset /* dst */, FALSE,
+	                   WLC_RATES_CCK_OFDM, RATE_MASK, FALSE);
 
 	if (bss_ht) {
 		ht_cap_ie_t *cap_ie;
@@ -5935,21 +6003,10 @@ wlc_tdls_join(tdls_info_t *tdls, wlc_bss_info_t *bi, struct scb *scb, uint8 *par
 	           ((bi->flags & WLC_BSS_HT) != WLC_BSS_HT))
 		wlc_ht_update_scbstate(wlc->hti, scb, NULL, NULL, NULL);
 
-	/* replace any old scb rateset with new target rateset */
-	if (bss_ht)
-		mcsallow |= WLC_MCS_ALLOW;
-	if (bss_vht)
-		mcsallow |= WLC_MCS_ALLOW_VHT;
+	wlc_scb_ratesel_init(wlc, scb);
 
-	if (WLPROPRIETARY_11N_RATES_ENAB(wlc->pub)&&
-	    wlc->pub->ht_features == WLC_HT_FEATURES_PROPRATES_FORCE)
-		mcsallow |= WLC_MCS_ALLOW_PROP_HT;
-
-	wlc_rateset_filter(&target_bss->rateset /* src */, &scb->rateset /* dst */, FALSE,
-	                   WLC_RATES_CCK_OFDM, RATE_MASK, mcsallow);
 	scb_tdls->base_chan_bandunit = wlc->band->bandunit;
 	bcopy(&scb->rateset, &scb_tdls->base_chan_rateset, sizeof(wlc_rateset_t));
-	wlc_scb_ratesel_init(wlc, scb);
 
 	scb_tdls->base_chanspec =
 		scb_tdls->cur_chanspec =
@@ -5999,6 +6056,9 @@ wlc_tdls_scb_create(tdls_info_t *tdls, wlc_bsscfg_t *parent,
 	scb_tdls_cubby_t *scb_tdls_cubby;
 	tdls_lookaside_t *dla;
 	scb_tdls_t *scb_tdls = NULL;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	ASSERT(parent != NULL);
 
@@ -6006,7 +6066,11 @@ wlc_tdls_scb_create(tdls_info_t *tdls, wlc_bsscfg_t *parent,
 
 	/* cleanup up the existing info on the scb */
 	if (scb) {
-		wlc_tdls_disconnect(tdls, scb, FALSE);
+		if (BSSCFG_IS_TDLS(SCB_BSSCFG(scb))) {
+			wlc_tdls_disconnect(tdls, scb, FALSE);
+		} else {
+			wlc_scbfree(wlc, scb);
+		}
 	}
 
 	/* cleanup the lookaside entry if it exists */
@@ -6030,6 +6094,10 @@ wlc_tdls_scb_create(tdls_info_t *tdls, wlc_bsscfg_t *parent,
 		WL_ERROR(("wl%d: cannot malloc bsscfg\n", tdls->pub->unit));
 		return NULL;
 	}
+
+	ASSERT(bsscfg->wlcif);
+	ASSERT(parent->wlcif && parent->wlcif->qi);
+	bsscfg->wlcif->qi = parent->wlcif->qi;
 
 	scb = wlc_scblookupband(wlc, bsscfg, ea,
 	                        CHSPEC_WLCBANDUNIT(wlc->home_chanspec));
@@ -6107,6 +6175,9 @@ wlc_tdls_port_open(tdls_info_t *tdls, struct ether_addr *ea)
 {
 	wlc_info_t *wlc = tdls->wlc;
 	struct scb *scb;
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* defined(BCMDBG) || defined(BCMDBG_ERR) */
 	int err = 0;
 
 	scb = wlc_tdls_scbfindband_all(wlc, ea, CHSPEC_WLCBANDUNIT(wlc->home_chanspec));
@@ -6231,6 +6302,12 @@ wlc_tdls_update_pm(tdls_info_t *tdls, wlc_bsscfg_t *bsscfg, uint txstatus)
 
 	pm = bsscfg->pm;
 	scb = bsscfg->tdls->tdls_scb;
+
+	/* check for scb sanity before proceeding */
+	if (!scb) {
+		/* TDLS bsscfg does not have an associated scb now */
+		return;
+	}
 
 	pm->PMpending = FALSE;
 
@@ -6432,18 +6509,9 @@ wlc_tdls_lookaside_delete(tdls_info_t *tdls, tdls_lookaside_t *peer)
 {
 #ifdef BE_TDLS
 	if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
-		tdls_retry_ctx_t *trc;
-		trc = peer->retry_ctx;
-		if (trc) {
-			if (trc == tdls->tdls_retry_timer_arg->hdl) {
-				tdls->tdls_retry_timer_arg->hdl = NULL;
-				if (tdls->tdls_retry_timer)
-					wl_del_timer(tdls->wlc->wl, tdls->tdls_retry_timer);
-			}
-			if (trc->f)
-				MFREE(tdls->osh, trc->f, sizeof(struct wlc_frminfo));
-			MFREE(tdls->osh, trc, sizeof(tdls_retry_ctx_t));
-			peer->retry_ctx = NULL;
+		if (tdls->tdls_retry_timer_arg->idx == peer->timer_arg->idx) {
+			/* this peer was holding TDLS retry context, free it now */
+			wlc_tdls_free_retry_ctxt(tdls);
 		}
 	}
 #endif /* BE_TDLS */
@@ -6478,6 +6546,35 @@ wlc_tdls_lookaside_status_upd(tdls_info_t * tdls, tdls_lookaside_t * peer, uint8
 	peer->status = status;
 	peer->upd_time = OSL_SYSUPTIME();
 }
+
+#ifdef BCMPCIEDEV
+void
+wlc_tdls_flush_pkts(tdls_info_t *tdls, struct scb *scb, uint16 flowid)
+{
+	wlc_info_t *wlc = tdls->wlc;
+	scb_tdls_t *scb_tdls;
+	scb_tdls = SCB_TDLS(tdls, scb);
+	void *pkt;
+	int prec;
+	struct pktq tmp_q;
+
+	ASSERT(scb_tdls);
+
+	pktq_init(&tmp_q, WLC_PREC_COUNT, PKTQ_LEN_DEFAULT);
+	while ((pkt = pktq_deq(&scb_tdls->ubufq, &prec))) {
+		if (PKTISTXFRAG(wlc->osh, pkt) &&
+			(flowid == PKTFRAGFLOWRINGID(wlc->osh, pkt))) {
+			PKTFREE(wlc->pub->osh, pkt, TRUE);
+			continue;
+		}
+		pktq_penq(&tmp_q, prec, pkt);
+	}
+	/* Enqueue back rest of the packets */
+	while ((pkt = pktq_deq(&tmp_q, &prec))) {
+		pktq_penq(&scb_tdls->ubufq, prec, pkt);
+	}
+}
+#endif /* BCMPCIEDEV */
 
 void
 wlc_tdls_free_scb(tdls_info_t *tdls, struct scb *scb)
@@ -6526,30 +6623,25 @@ wlc_tdls_disconnect(tdls_info_t *tdls, struct scb *scb, bool force)
 	ASSERT(scb_tdls != NULL);
 	ASSERT(scb_tdls->peer_addr);
 
-	if (scb_tdls->cur_chanspec != scb_tdls->base_chanspec) {
-		/*
-		* cannot proceed with disconnect right now
-		* mark teardown pending and return
-		*/
-		scb_tdls->flags |= TDLS_SCB_TEARDOWN_PENDING;
-		wlc_chanctxt_set_passive_use(wlc, cfg, FALSE);
-		return;
-	}
+	if (scb_tdls->flags & TDLS_SCB_CONNECTED) {
+		if (scb_tdls->cur_chanspec != scb_tdls->base_chanspec) {
+			/*
+			* cannot proceed with disconnect right now
+			* mark teardown pending and return
+			*/
+			scb_tdls->flags |= TDLS_SCB_TEARDOWN_PENDING;
+			wlc_chanctxt_set_passive_use(wlc, cfg, FALSE);
+			return;
+		}
 
-	if (wlc_tdls_msch_unregister(wlc, cfg) != BCME_OK) {
-		WL_TDLS(("wl%d:%s(): MSCH unregistration failed\n",
-			tdls->pub->unit, __FUNCTION__));
-		/* continue though */
-		scb_tdls->tdls_msch_req_hdl = NULL;
-	}
-
-	scb_tdls->flags |= TDLS_SCB_TEARDOWN_BLOCK;
-	wlc_tdls_chansw_disable(tdls, scb);
+		scb_tdls->flags |= TDLS_SCB_TEARDOWN_BLOCK;
+		wlc_tdls_chansw_disable(tdls, scb);
 
 #if defined(PROP_TXSTATUS)
-	wlc_tdls_suppress_pending_tx_pkts(scb_tdls->parent);
-	wlc_tdls_suppress_pending_tx_pkts(SCB_BSSCFG(scb));
+		wlc_tdls_suppress_pending_tx_pkts(scb_tdls->parent);
+		wlc_tdls_suppress_pending_tx_pkts(SCB_BSSCFG(scb));
 #endif
+	}
 
 #ifdef TDLS_TESTBED
 	if (tdls->tdls_cmn->quiet_down) {
@@ -6568,25 +6660,20 @@ wlc_tdls_disconnect(tdls_info_t *tdls, struct scb *scb, bool force)
 				TDLS_MAX_HEARTBEAT_MISSED)) {
 				if (!wlc_tdls_send_teardown(tdls, scb, FALSE) || !tdls->up) {
 					goto done;
-				}
-				else {
+				} else {
 					/* wait for ACK */
 					return;
 				}
-			}
-			else {
+			} else {
 				if (!wlc_tdls_send_teardown(tdls, scb, TRUE)) {
 					goto done;
-				}
-				else {
+				} else {
 					/* wait for ACK */
 					return;
 				}
 			}
-		}
-		else {
-			/* send a teardown frame, no need to check txstatus */
-			(void)wlc_tdls_send_teardown(tdls, scb, FALSE);
+		} else {
+			/* do not send a teardown frame */
 		}
 	}
 done:
@@ -6656,6 +6743,9 @@ static uint16
 wlc_tdls_validate_linkId_ie(tdls_info_t *tdls, wlc_bsscfg_t *parent, uchar *tlv, int len,
 	struct wlc_frminfo *f, bool initiator)
 {
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* defined(BCMDBG) || defined(BCMDBG_ERR) */
 	link_id_ie_t *linkId_ie;
 
 	/* starts TLV IEs */
@@ -6671,6 +6761,12 @@ wlc_tdls_validate_linkId_ie(tdls_info_t *tdls, wlc_bsscfg_t *parent, uchar *tlv,
 		return DOT11_SC_DECLINED;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	WL_TDLS(("wl%d:%s():", tdls->pub->unit, __FUNCTION__));
+	WL_TDLS(("Link Identifier: BSSID %s, ", bcm_ether_ntoa(&linkId_ie->bssid, eabuf)));
+	WL_TDLS(("init_mac %s, ", bcm_ether_ntoa(&linkId_ie->tdls_init_mac, eabuf)));
+	WL_TDLS(("resp_mac %s\n", bcm_ether_ntoa(&linkId_ie->tdls_resp_mac, eabuf)));
+#endif
 
 	if (memcmp(&linkId_ie->bssid, &parent->BSSID, ETHER_ADDR_LEN)) {
 		WL_TDLS(("parent SSID %s, ", bcm_ether_ntoa(&parent->BSSID, eabuf)));
@@ -6878,23 +6974,6 @@ wlc_tdls_setup_parse_wme_ie(void *ctx, wlc_iem_parse_data_t *parse)
 	return BCME_OK;
 }
 
-static void
-wlc_tdls_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data)
-{
-	if (WL_INFORM_ON()) {
-		printf("%s: no parser\n", __FUNCTION__);
-		prhex("IE", data->ie, data->ie_len);
-	}
-}
-
-static uint8
-wlc_tdls_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data)
-{
-	wlc_info_t *wlc = (wlc_info_t *)ctx;
-
-	return wlc_iem_vs_get_id(wlc->iemi, data->ie);
-}
-
 
 static int
 wlc_tdls_parse_setup_ies(tdls_info_t *tdls, struct ether_addr *bssid,
@@ -6909,10 +6988,7 @@ wlc_tdls_parse_setup_ies(tdls_info_t *tdls, struct ether_addr *bssid,
 	bcopy((char *)bssid, (char *)&bi->BSSID, ETHER_ADDR_LEN);
 
 	/* prepare IE mgmt calls */
-	bzero(&upp, sizeof(upp));
-	upp.notif_fn = wlc_tdls_nhdlr_cb;
-	upp.vsie_fn = wlc_tdls_vsie_cb;
-	upp.ctx = wlc;
+	wlc_iem_parse_upp_init(wlc->iemi, &upp);
 	bzero(&ftpparm, sizeof(ftpparm));
 	ftpparm.tdls.result = bi;
 	bzero(&pparm, sizeof(pparm));
@@ -6933,7 +7009,7 @@ wlc_tdls_parse_setup_ies(tdls_info_t *tdls, struct ether_addr *bssid,
 		return BCME_BADARG;
 	}
 
-	return wlc_ier_parse_frame(ier, NULL, WLC_IEM_FC_UNK, &upp, &pparm, tlvs, tlvs_len);
+	return wlc_ier_parse_frame(ier, NULL, WLC_IEM_FC_IER, &upp, &pparm, tlvs, tlvs_len);
 }
 
 static void
@@ -8044,7 +8120,7 @@ wlc_tdls_process_setup_cfm(tdls_info_t *tdls, struct scb *scb, struct wlc_frminf
 		/* Received invalid chanspec tear down TDLS link */
 		if (wf_chspec_ctlchan(bi->chanspec) !=
 			wf_chspec_ctlchan(scb_peer->bsscfg->current_bss->chanspec)) {
-			wlc_tdls_disconnect(tdls, scb, TRUE);
+			wlc_tdls_disconnect(tdls, scb_peer, TRUE);
 			if (bi) {
 				MFREE(tdls->osh, bi, sizeof(wlc_bss_info_t));
 			}
@@ -8365,30 +8441,30 @@ wlc_tdls_process_pti_resp(tdls_info_t *tdls, struct scb *scb, struct wlc_frminfo
 	scb_tdls->flags &= ~ TDLS_SCB_SENT_PTI;
 	wlc_tdls_wake_ctrl(wlc, tdls, scb);
 
-		if (!(scb_tdls->flags & TDLS_SCB_PM_SET)) {
-			wlc_apps_apsd_trigger(wlc, scb_peer,
-				wlc_apps_apsd_ac_available(wlc, scb_peer));
-			return 0;
-		}
+	if (!(scb_tdls->flags & TDLS_SCB_PM_SET)) {
+		wlc_apps_apsd_trigger(wlc, scb_peer,
+			wlc_apps_apsd_ac_available(wlc, scb_peer));
+		return 0;
+	}
 
-		scb_tdls->flags &= ~TDLS_SCB_PM_SET;
+	scb_tdls->flags &= ~TDLS_SCB_PM_SET;
 
-		/* send NULL-data pkt with PM bit set */
-		WL_TDLS(("wl%d.%d:%s(): send null-data to peer buffer STA.\n",
-			tdls->pub->unit, WLC_BSSCFG_IDX(bsscfg), __FUNCTION__));
-		if (!wlc_sendnulldata(wlc, bsscfg, f->sa, 0, 0, PRIO_8021D_BE, NULL, NULL))
-		{
-			WL_ERROR(("wl%d.%d: failed to send PM null frame, "
-				"fake a PM0->PM1 transition\n",
-				tdls->pub->unit, WLC_BSSCFG_IDX(bsscfg)));
-			bsscfg->tdls->tdls_PMEnable = !bsscfg->tdls->tdls_PMEnable;
+	/* send NULL-data pkt with PM bit set */
+	WL_TDLS(("wl%d.%d:%s(): send null-data to peer buffer STA.\n",
+		tdls->pub->unit, WLC_BSSCFG_IDX(bsscfg), __FUNCTION__));
+	if (!wlc_sendnulldata(wlc, bsscfg, f->sa, 0, 0, PRIO_8021D_BE, NULL, NULL))
+	{
+		WL_ERROR(("wl%d.%d: failed to send PM null frame, "
+			"fake a PM0->PM1 transition\n",
+			tdls->pub->unit, WLC_BSSCFG_IDX(bsscfg)));
+		bsscfg->tdls->tdls_PMEnable = !bsscfg->tdls->tdls_PMEnable;
 
-			bsscfg->pm->PMenabled = !bsscfg->pm->PMenabled;
-			bsscfg->pm->PMpending = FALSE;
+		bsscfg->pm->PMenabled = !bsscfg->pm->PMenabled;
+		bsscfg->pm->PMpending = FALSE;
 
-			wlc_set_ps_ctrl(scb_tdls->parent);
-			wlc_tdls_wake_ctrl(wlc, tdls, scb);
-		}
+		wlc_set_ps_ctrl(scb_tdls->parent);
+		wlc_tdls_wake_ctrl(wlc, tdls, scb);
+	}
 
 	return 0;
 }
@@ -8572,7 +8648,7 @@ wlc_tdls_process_discovery_req(tdls_info_t *tdls, struct scb *scb, struct wlc_fr
 
 	if (BE_TDLS_ENAB(tdls->tdls_cmn)) {
 		wtrc = (tdls_retry_ctx_t *)f->p;
-		if (wtrc && wtrc->tdls == tdls) {
+		if (wtrc && (wtrc == BETDLS_RETRY_CTXT_GET(tdls))) {
 			valid_wtrc = TRUE;
 			linkId_ie = &(wtrc->link_id);
 			token = wtrc->token;
@@ -8681,21 +8757,21 @@ retry:
 					(void *)wtrc, p);
 				break;
 			}
-			if (tdls->tdls_retry_timer_arg->hdl) {
+			if (BETDLS_RETRY_CTXT_GET(tdls)) {
 				/* timer arg in use by some other peer on this tdls instance
 				* Only one BETDLS arg per TDLS allowed, exit betdls loop.
 				*/
 				break;
 			}
 			/* building retry context */
-			if (!(trc = (tdls_retry_ctx_t *)MALLOC(tdls->osh,
+			if (!(trc = (tdls_retry_ctx_t *)MALLOCZ(tdls->osh,
 				sizeof(tdls_retry_ctx_t)))) {
 				WL_ERROR(("wl%d:%s: MALLOC failed\n",
 					wlc->pub->unit, __FUNCTION__));
 				break;
 			}
 			WL_TDLS(("%s: Alloc trc => %p\n", __FUNCTION__, OSL_OBFUSCATE_BUF(trc)));
-			if (!(f_clone = (struct wlc_frminfo *)MALLOC(tdls->osh,
+			if (!(f_clone = (struct wlc_frminfo *)MALLOCZ(tdls->osh,
 				sizeof(struct wlc_frminfo)))) {
 				WL_ERROR(("wl%d:%s: MALLOC failed\n",
 					wlc->pub->unit, __FUNCTION__));
@@ -8717,7 +8793,8 @@ retry:
 			f_clone->p = trc;
 			f_clone->sa = &trc->dst;
 			trc->f = f_clone;
-			tdls->tdls_retry_timer_arg->hdl = trc;
+			BETDLS_RETRY_CTXT_SET(tdls, trc);
+			tdls->tdls_retry_timer_arg->idx = TDLS_INVALID_IDX;
 			wlc_pcb_fn_register(wlc->pcb, wlc_tdls_retry_complete,
 				(void *)trc, p);
 		} while (0);
@@ -9161,6 +9238,9 @@ wlc_tdls_process_vendor_specific(tdls_info_t *tdls, struct scb *scb, struct wlc_
 static void
 wlc_tdls_tx_null_data_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 {
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* defined(BCMDBG) || defined(BCMDBG_ERR) */
 	tdls_lookaside_t *dla = (tdls_lookaside_t *)arg;
 	struct scb *scb;
 	scb_tdls_t *scb_tdls;
@@ -9218,7 +9298,7 @@ wlc_tdls_tx_null_data_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 				wlc_wlfc_mchan_interface_state_update(wlc, scb_tdls->parent,
 					WLFC_CTL_TYPE_INTERFACE_OPEN, FALSE);
 				wlc_wlfc_mchan_interface_state_update(wlc, SCB_BSSCFG(scb),
-					WLFC_CTL_TYPE_MAC_OPEN, FALSE);
+					WLFC_CTL_TYPE_INTERFACE_OPEN, FALSE);
 			}
 #endif
 
@@ -9296,6 +9376,13 @@ void
 wlc_tdls_rcv_data_frame(tdls_info_t *tdls, struct scb *scb, d11rxhdr_t *rxhdr)
 {
 	scb_tdls_t *scb_tdls;
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	char chanbuf1[CHANSPEC_STR_LEN];
+	char chanbuf2[CHANSPEC_STR_LEN];
+#endif
 	wlc_info_t *wlc = tdls->wlc;
 
 	scb_tdls = SCB_TDLS(tdls, scb);
@@ -9338,7 +9425,7 @@ wlc_tdls_rcv_data_frame(tdls_info_t *tdls, struct scb *scb, d11rxhdr_t *rxhdr)
 				wlc_wlfc_mchan_interface_state_update(tdls->wlc,
 					scb_tdls->parent, WLFC_CTL_TYPE_INTERFACE_OPEN, FALSE);
 				wlc_wlfc_mchan_interface_state_update(tdls->wlc,
-					SCB_BSSCFG(scb), WLFC_CTL_TYPE_MAC_OPEN, FALSE);
+					SCB_BSSCFG(scb), WLFC_CTL_TYPE_INTERFACE_OPEN, FALSE);
 			}
 #endif
 		}
@@ -9367,6 +9454,9 @@ wlc_tdls_rcv_action_frame(tdls_info_t *tdls, struct scb *scb, struct wlc_frminfo
 	uchar *pdata;
 	uint	offset;
 	int status_code = 0;
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* defined(BCMDBG) || defined(BCMDBG_ERR) */
 	scb_cmn_cubby_t *scb_cmn;
 
 	UNUSED_PARAMETER(plen);
@@ -9530,6 +9620,9 @@ wlc_tdls_process_discovery_resp(tdls_info_t *tdls, struct dot11_management_heade
 	uint8 *body, int body_len, int8 rssi)
 {
 	tdls_pub_act_frame_t *tdls_disc_resp = (tdls_pub_act_frame_t *)body;
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* defined(BCMDBG) || defined(BCMDBG_ERR) */
 	link_id_ie_t *linkId_ie;
 	tdls_lookaside_t *peer = NULL;
 
@@ -9959,7 +10052,7 @@ wlc_tdls_chsw_complete(tdls_info_t *tdls, struct scb *scb)
 		wlc_wlfc_mchan_interface_state_update(tdls->wlc, scb_tdls->parent,
 			WLFC_CTL_TYPE_INTERFACE_CLOSE, FALSE);
 		wlc_wlfc_mchan_interface_state_update(tdls->wlc, SCB_BSSCFG(scb),
-			WLFC_CTL_TYPE_MAC_CLOSE, FALSE);
+			WLFC_CTL_TYPE_INTERFACE_CLOSE, FALSE);
 	}
 	wlc_tdls_suppress_pending_tx_pkts(scb_tdls->parent);
 	wlc_tdls_suppress_pending_tx_pkts(SCB_BSSCFG(scb));
@@ -10064,7 +10157,7 @@ wlc_tdls_post_chsw_base_chan(tdls_info_t *tdls, struct scb *scb)
 		wlc_wlfc_mchan_interface_state_update(tdls->wlc, scb_tdls->parent,
 			WLFC_CTL_TYPE_INTERFACE_OPEN, FALSE);
 		wlc_wlfc_mchan_interface_state_update(tdls->wlc, SCB_BSSCFG(scb),
-			WLFC_CTL_TYPE_MAC_OPEN, FALSE);
+			WLFC_CTL_TYPE_INTERFACE_OPEN, FALSE);
 	}
 #endif
 
@@ -10338,9 +10431,11 @@ wlc_tdls_watchdog(void *hdl)
 
 	for (i = 0; i < (tdls->tdls_cmn->max_sessions); i++) {
 		dla = &tdls->tdls_cmn->lookaside[i];
+		if (!dla || !dla->timer_arg || ((tdls_info_t *)(dla->timer_arg->hdl) != tdls)) {
+			continue;
+		}
 		if (dla->status == TDLS_LOOKASIDE_ACTIVE)
 			continue;
-
 		if (!dla->parent || !dla->parent->up) {
 			continue;
 		}
@@ -10435,6 +10530,7 @@ wlc_tdls_watchdog(void *hdl)
 #else
 			/* retry on first PTI response timeout */
 			if (scb_tdls->flags & TDLS_SCB_PTI_RESP_TIMED_OUT) {
+				scb_tdls->flags &= ~TDLS_SCB_SENT_PTI;
 				wlc_tdls_disconnect(tdls, scb, TRUE);
 				continue;
 			}
@@ -10520,7 +10616,7 @@ wlc_tdls_retry_cb(void *arg)
 		return;
 	}
 
-	trc = (tdls_retry_ctx_t *)((tdls_timer_arg_t *)arg)->hdl;
+	trc = (tdls_retry_ctx_t *)arg;
 	ASSERT(trc);
 
 	tdls = trc->tdls;
@@ -10534,31 +10630,44 @@ wlc_tdls_retry_cb(void *arg)
 	WL_TDLS(("wl%d: wlc_tdls_retry_cb: enter\n", tdls->pub->unit));
 
 	switch (trc->flags) {
-	case TDLS_RETRY_DISC_RESP: {
-		WL_TDLS(("wl%d:%s(): retry wlc_tdls_process_discovery_req(), retry_cnt: %d\n",
-			tdls->pub->unit, __FUNCTION__, *retry_cnt));
+		case TDLS_RETRY_DISC_RESP: {
+			WL_TDLS(("wl%d:%s(): retry wlc_tdls_process_discovery_req(), "
+				"retry_cnt: %d\n",
+				tdls->pub->unit, __FUNCTION__, *retry_cnt));
+				(*retry_cnt)--;
+				wlc_tdls_process_discovery_req(tdls,
+					(struct scb *)trc->shared, trc->f, 0);
+				break;
+		}
+		case TDLS_RETRY_SETUP_RESP: {
+			WL_TDLS(("wl%d:%s(): retry wlc_tdls_send_setup_resp(), "
+				"retry_cnt: %d\n",
+				tdls->pub->unit, __FUNCTION__, *retry_cnt));
 			(*retry_cnt)--;
-			wlc_tdls_process_discovery_req(tdls, (struct scb *)trc->shared, trc->f, 0);
+			wlc_tdls_send_setup_resp(tdls, parent, dst, status_code,
+				token, link_id);
 			break;
 		}
-	case TDLS_RETRY_SETUP_RESP: {
-		WL_TDLS(("wl%d:%s(): retry wlc_tdls_send_setup_resp(), retry_cnt: %d\n",
-			tdls->pub->unit, __FUNCTION__, *retry_cnt));
-		(*retry_cnt)--;
-		wlc_tdls_send_setup_resp(tdls, parent, dst, status_code, token, link_id);
-		break;
+		case TDLS_RETRY_SETUP_CFM: {
+			WL_TDLS(("wl%d:%s(): retry wlc_tdls_send_setup_cfm(), "
+				"retry_cnt: %d\n",
+				tdls->pub->unit, __FUNCTION__, *retry_cnt));
+			(*retry_cnt)--;
+			wlc_tdls_send_setup_cfm(tdls, parent, dst, status_code, token);
+			break;
 		}
-	case TDLS_RETRY_SETUP_CFM: {
-		WL_TDLS(("wl%d:%s(): retry wlc_tdls_send_setup_cfm(), retry_cnt: %d\n",
-			tdls->pub->unit, __FUNCTION__, *retry_cnt));
-		(*retry_cnt)--;
-		wlc_tdls_send_setup_cfm(tdls, parent, dst, status_code, token);
-		break;
+		case TDLS_RETRY_SETUP_REQ: {
+			WL_TDLS(("wl%d:%s(): retry wlc_tdls_send_setup_req(), "
+				"retry_cnt: %d\n",
+				tdls->pub->unit, __FUNCTION__, *retry_cnt));
+			(*retry_cnt)--;
+			wlc_tdls_send_setup_req(tdls, parent, dst);
+			break;
 		}
-	default: {
-		WL_ERROR(("wl%d:%s(): unexpected type error!(%d)\n", tdls->pub->unit,
-			__FUNCTION__, trc->flags));
-		break;
+		default: {
+			WL_ERROR(("wl%d:%s(): unexpected type error!(%d)\n",
+				tdls->pub->unit, __FUNCTION__, trc->flags));
+			break;
 		}
 	}
 }
@@ -10566,11 +10675,10 @@ wlc_tdls_retry_cb(void *arg)
 static void
 wlc_tdls_retry_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 {
-	tdls_retry_ctx_t *trc, *prev_trc;
+	tdls_retry_ctx_t *trc;
 	tdls_info_t *tdls;
 	uint8 retry_cnt;
 	struct scb* scb;
-	tdls_lookaside_t *peer;
 
 	/* valid check */
 	if (!arg) {
@@ -10579,16 +10687,15 @@ wlc_tdls_retry_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 	}
 
 	trc = (tdls_retry_ctx_t *)arg;
-	tdls = trc->tdls;
-	retry_cnt = trc->retry_cnt;
+	tdls = wlc->tdls;
 
-	if (!wlc->tdls->tdls_retry_timer_arg->hdl)
+	if (!BETDLS_RETRY_CTXT_GET(tdls) ||
+		(trc != BETDLS_RETRY_CTXT_GET(tdls))) {
+		WL_ERROR(("%s(): invalid trc\n", __FUNCTION__));
 		return;
-	else {
-		prev_trc = wlc->tdls->tdls_retry_timer_arg->hdl;
 	}
 
-	ASSERT(wlc->tdls == tdls);
+	retry_cnt = trc->retry_cnt;
 
 	if (!tdls->up) {
 		/* clean up should have been take care in the down path */
@@ -10602,22 +10709,6 @@ wlc_tdls_retry_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 
 	WL_TDLS(("wl%d: wlc_tdls_retry_complete: enter\n", tdls->pub->unit));
 
-	if ((trc != prev_trc)) {
-		/* ideally should not happen, free up prev_trc */
-		peer = wlc_tdls_lookaside_find(tdls, (struct ether_addr *)&(prev_trc->dst));
-		if (peer) {
-			/* clear peer retry context */
-			peer->retry_ctx = NULL;
-		}
-		if (prev_trc->f)
-			MFREE(tdls->osh, prev_trc->f, sizeof(struct wlc_frminfo));
-		MFREE(tdls->osh, prev_trc, sizeof(tdls_retry_ctx_t));
-		if (tdls->tdls_retry_timer) {
-			wl_del_timer(tdls->wlc->wl, tdls->tdls_retry_timer);
-		}
-		tdls->tdls_retry_timer_arg->hdl = NULL;
-	}
-
 	/* stop retry */
 	if (!retry_cnt) {
 		goto stop;
@@ -10626,31 +10717,65 @@ wlc_tdls_retry_complete(wlc_info_t *wlc, uint32 txstatus, void *arg)
 	/* no ack */
 	if (!(txstatus & TX_STATUS_ACK_RCV)) {
 		WL_TDLS(("wl%d:%s(): no ACK!\n", wlc->pub->unit, __FUNCTION__));
-		tdls->tdls_retry_timer_arg->hdl = arg;
 		wl_add_timer(tdls->wlc->wl, tdls->tdls_retry_timer, TDLS_RETRY_INTERVAL, 0);
 		return;
 	}
 stop:
-	/* clear tdls->retry_arg info if it matches with the current contxt */
-	if (trc == tdls->tdls_retry_timer_arg->hdl) {
-		tdls->tdls_retry_timer_arg->hdl = NULL;
-		if (tdls->tdls_retry_timer) {
-			wl_del_timer(tdls->wlc->wl, tdls->tdls_retry_timer);
-		}
-	}
-	/* free matching peer retry context entry if any */
-	peer = wlc_tdls_lookaside_find(tdls, (struct ether_addr *)&(trc->dst));
-	if (peer && (trc == peer->retry_ctx)) {
-		peer->retry_ctx = NULL;
-	}
 	/* free trc finally */
-	if (trc->f)
-		MFREE(tdls->osh, trc->f, sizeof(struct wlc_frminfo));
-	MFREE(tdls->osh, trc, sizeof(tdls_retry_ctx_t));
+	wlc_tdls_free_retry_ctxt(tdls);
+}
+
+static void
+wlc_tdls_free_retry_ctxt(tdls_info_t *tdls)
+{
+	if (tdls->tdls_retry_timer_arg->hdl) {
+		if ((BETDLS_RETRY_CTXT_GET(tdls))->f) {
+			MFREE(tdls->osh, (BETDLS_RETRY_CTXT_GET(tdls))->f,
+				sizeof(struct wlc_frminfo));
+			(BETDLS_RETRY_CTXT_GET(tdls))->f = NULL;
+		}
+		MFREE(tdls->osh, BETDLS_RETRY_CTXT_GET(tdls), sizeof(tdls_retry_ctx_t));
+		tdls->tdls_retry_timer_arg->hdl = NULL;
+	}
+	wl_del_timer(tdls->wlc->wl, tdls->tdls_retry_timer);
+}
+
+static void
+wlc_tdls_prepare_retry_ctxt(tdls_info_t *tdls, scb_tdls_t *scb_tdls, struct ether_addr *dst,
+	link_id_ie_t *link_id, uint8 token, uint type)
+{
+	tdls_retry_ctx_t *trc = BETDLS_RETRY_CTXT_GET(tdls);
+	if (trc) {
+		/* timer arg in use by some other peer on this tdls instance
+		* Only one BETDLS arg per TDLS allowed, exit betdls loop.
+		*/
+		return;
+	}
+	/* building retry context */
+	if (!(trc = (tdls_retry_ctx_t *)MALLOCZ(tdls->osh,
+		sizeof(tdls_retry_ctx_t)))) {
+		WL_ERROR(("wl%d: %s: MALLOC failed\n", tdls->pub->unit,
+			__FUNCTION__));
+		return;
+	}
+	WL_TDLS(("%s: Alloc trc => %p\n", __FUNCTION__,
+		OSL_OBFUSCATE_BUF(trc)));
+	trc->flags = type;
+	trc->tdls = tdls;
+	trc->shared = (void *)scb_tdls->parent;
+	trc->f = NULL;
+	memcpy(&trc->dst, dst, sizeof(struct ether_addr));
+	memcpy(&trc->link_id, link_id, sizeof(link_id_ie_t));
+	trc->status_code = 0;
+	trc->token = token;
+	trc->retry_cnt = TDLS_RETRY_MAX_CNT;
+	BETDLS_RETRY_CTXT_SET(tdls, trc);
+	tdls->tdls_retry_timer_arg->idx =
+		scb_tdls->peer_addr->timer_arg->idx;
 }
 #endif /* BE_TDLS */
 
-#if defined(TDLS_TESTBED)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)|| defined(TDLS_TESTBED)
 const char *tdls_scbflags_str[] = { TDLS_SCBFLAGS_STR };
 const int tdls_scbflags_cnt = sizeof(tdls_scbflags_str)/sizeof(tdls_scbflags_str[0]);
 
@@ -10772,8 +10897,17 @@ wlc_tdls_scb_dump(void *context, struct scb *scb, struct bcmstrbuf *b)
 		j++;
 	}
 }
-#endif 
+#endif /* BCMDBG */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_tdls_scb_cmn_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	tdls_info_t *tdls = (tdls_info_t *)ctx;
+	scb_cmn_cubby_t *scb_cmn = SCB_CMN_CUBBY(tdls, scb);
+	bcm_bprintf(b, "     flags2: 0x%x\n", scb_cmn->flags2);
+}
+#endif
 
 static void
 wlc_tdls_action_frame_tx_complete_chswresp_cb(wlc_info_t * wlc, uint32 txstatus, void * arg)
@@ -10929,5 +11063,18 @@ wlc_tdls_disc_blist_query(tdls_info_t *tdls, struct ether_addr *ea)
 		}
 	}
 	return 0;
+}
+
+bool
+wlc_tdls_wait_for_pti_resp(tdls_info_t *tdls, struct scb *scb)
+{
+	scb_tdls_t *scb_tdls;
+
+	ASSERT(scb);
+
+	scb_tdls = SCB_TDLS(tdls, scb);
+	ASSERT(scb_tdls);
+
+	return (scb_tdls->flags | TDLS_SCB_SENT_PTI);
 }
 #endif /* WLTDLS */

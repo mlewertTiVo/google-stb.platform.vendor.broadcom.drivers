@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rxspur.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_rxspur.c 657044 2016-08-30 21:37:55Z $
  */
 
 #include <phy_cfg.h>
@@ -25,6 +25,7 @@
 #include "phy_type_rxspur.h"
 #include <phy_rstr.h>
 #include <phy_rxspur.h>
+#include <phy_rxspur_api.h>
 
 /* forward declaration */
 typedef struct phy_rxspur_mem phy_rxspur_mem_t;
@@ -132,32 +133,19 @@ phy_rxspur_down(phy_rxspur_info_t *mi)
 	return callbacks;
 }
 
-#if defined(WLTEST)
-int
-phy_rxspur_set_force_spurmode(phy_rxspur_info_t *mi, int16 int_val)
+/* block bbpll change if ILP cal is in progress */
+void
+phy_rxspur_change_block_bbpll(wlc_phy_t *pih, bool block, bool going_down)
 {
-	phy_type_rxspur_fns_t *fns = mi->fns;
-	PHY_TRACE(("%s\n", __FUNCTION__));
+	phy_info_t *pi = (phy_info_t *)pih;
+	phy_type_rxspur_fns_t *fns = pi->rxspuri->fns;
 
-	if (fns->set_force_spurmode != NULL) {
-		return (fns->set_force_spurmode)(fns->ctx, int_val);
+	if (block) {
+		pi->block_for_slowcal = TRUE;
 	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-		return BCME_UNSUPPORTED;
+		pi->block_for_slowcal = FALSE;
+		if (fns->set_spurmode != NULL && pi->blocked_freq_for_slowcal && !going_down) {
+			(fns->set_spurmode)(fns->ctx, pi->blocked_freq_for_slowcal);
+		}
 	}
 }
-
-int
-phy_rxspur_get_force_spurmode(phy_rxspur_info_t *mi, int32 *ret_int_ptr)
-{
-	phy_type_rxspur_fns_t *fns = mi->fns;
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	if (fns->get_force_spurmode != NULL) {
-		return (fns->get_force_spurmode)(fns->ctx, ret_int_ptr);
-	} else {
-		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
-		return BCME_UNSUPPORTED;
-	}
-}
-#endif /* WLTEST */

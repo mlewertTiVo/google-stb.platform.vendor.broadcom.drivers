@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_pvt.h 644849 2016-06-21 22:16:20Z $
+ * $Id: km_pvt.h 652227 2016-07-30 06:54:32Z $
  */
 
 /* This header file is private to keymgmt implementation */
@@ -73,6 +73,13 @@ typedef struct km_scb km_scb_t;
 #define KM_FLAG_WOWL_DOWN		0x0200	/* WLC down w/ WOWL active */
 #define KM_FLAG_IDX_ALLOC		0x4000	/* key idx allocation support */
 #define KM_FLAG_DETACHING		0x8000	/* module detach support */
+
+/* Size of the tlv buffer used by SCB cloning for taking
+* backup of the SCB key information.
+*/
+#define TLV_KEY_SEQ_BUF_SIZE ((KM_KEY_MAX_DATA_LEN * WLC_KEY_NUM_RX_SEQ) + \
+	(WLC_KEY_NUM_RX_SEQ * TLV_HDR_LEN))
+
 typedef uint16 km_flags_t;
 
 struct km_pvt_key {
@@ -106,6 +113,8 @@ struct wlc_keymgmt {
 	km_algo_mask_t	algo_unsup;		/* unsupported CRYPTO_* */
 	km_algo_mask_t	algo_swonly;	/* swonly CRYPTO_* */
 	km_key_cache_t	*key_cache;
+	uint8		*tlv_buffer; /* buffer for scb cloning to store security key information */
+	uint16		tlv_buf_size; /* TLV_KEY_SEQ_BUF_SIZE */
 };
 
 /* convenience typedefs */
@@ -130,6 +139,7 @@ enum {
 	KM_BSSCFG_FLAG_M4TX		= 0x0020,
 
 	KM_BSSCFG_FLAG_WOWL_DOWN	= 0x0040,
+	KM_BSSCFG_FLAG_INITIALIZED	= 0x0080,
 	KM_BSSCFG_FLAG_CLEANUP		= 0x8000	/* in teardown */
 };
 typedef int16 km_bsscfg_flags_t;
@@ -384,7 +394,11 @@ int km_register_dump(keymgmt_t *km);
 int km_bsscfg_init(void *ctx, wlc_bsscfg_t *bsscfg);
 void km_bsscfg_deinit(void *ctx,  wlc_bsscfg_t *bsscfg);
 km_amt_idx_t km_bsscfg_get_amt_idx(keymgmt_t *km, wlc_bsscfg_t *bsscfg);
+#if defined BCMDBG || defined(BCMDBG_DUMP)
+void km_bsscfg_dump(void *ctx, wlc_bsscfg_t *bsscfg, struct bcmstrbuf *b);
+#else
 #define km_bsscfg_dump NULL
+#endif
 
 #ifdef KM_SERIAL_SUPPORTED
 size_t km_bsscfg_get_max_static_config_size(keymgmt_t *km);
@@ -407,11 +421,20 @@ void km_bsscfg_update(keymgmt_t *km, wlc_bsscfg_t *bsscfg,
 /* keymgmt for scb */
 int km_scb_init(void *ctx, scb_t *scb);
 void km_scb_deinit(void *ctx,  scb_t *scb);
+#ifdef WLRSDB
+int km_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg);
+int km_scb_serialize(wlc_keymgmt_t *km, struct scb *scb, void *buf_ptr, size_t buf_len);
+int km_scb_deserialize(wlc_keymgmt_t *km, struct scb*, void* buf_ptr, size_t buf_len);
+#endif /* WLRSDB */
 void km_scb_reset(keymgmt_t *km, scb_t *scb);
 km_amt_idx_t km_scb_amt_alloc(keymgmt_t *km, scb_t *scb);
 void km_scb_amt_release(keymgmt_t *km, scb_t *scb);
 void km_scb_state_upd(keymgmt_t *km, scb_state_upd_data_t *data);
+#if defined BCMDBG || defined(BCMDBG_DUMP)
+void km_scb_dump(void *ctx, scb_t *scb, struct bcmstrbuf *b);
+#else
 #define km_scb_dump NULL
+#endif
 
 /* b4m4 support - STA only */
 void km_b4m4_set(keymgmt_t *km, wlc_bsscfg_t *bsscfg, bool enable);

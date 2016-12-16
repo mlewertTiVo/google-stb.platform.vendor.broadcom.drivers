@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_dbg.c 620395 2016-02-23 01:15:14Z vyass $
+ * $Id: phy_ac_dbg.c 656120 2016-08-25 08:17:57Z $
  */
 
 #include <phy_cfg.h>
@@ -29,6 +29,8 @@
 /* Modules used by this module */
 /* *************************** */
 #include <wlc_phyreg_ac.h>
+#include <phy_ac_noise.h>
+#include <phy_ac_tpc.h>
 
 /* module private states */
 struct phy_ac_dbg_info {
@@ -153,6 +155,7 @@ wlc_acphy_print_phydbg_regs(phy_type_dbg_ctx_t *ctx)
 	phy_info_t *pi = di->pi;
 	if (ACMAJORREV_4(pi->pubpi->phy_rev)) {
 		uint16 phymode = phy_get_phymode(pi);
+		uint8 ct;
 		PHY_ERROR(("*** [PHY_DBG] *** : wl%d:: PHYMODE: 0x%x\n", pi->sh->unit, phymode));
 
 		if ((phymode == PHYMODE_RSDB) &&
@@ -165,24 +168,33 @@ wlc_acphy_print_phydbg_regs(phy_type_dbg_ctx_t *ctx)
 			PHY_ERROR(("*** [PHY_DBG] *** : MIMO : wl isup: %d\n", pi->sh->up));
 		}
 
-		PHY_ERROR(("*** [PHY_DBG] *** : RxFeStatus: 0x%x\n",
+		PHY_PRINT(("*** [PHY_DBG] *** : RxFeStatus: 0x%x\n",
 			READ_PHYREG(pi, RxFeStatus)));
-		PHY_ERROR(("*** [PHY_DBG] *** : TxFIFOStatus0: 0x%x\n",
-			READ_PHYREG(pi, TxFIFOStatus0)));
-		PHY_ERROR(("*** [PHY_DBG] *** : TxFIFOStatus1: 0x%x\n",
-			READ_PHYREG(pi, TxFIFOStatus1)));
-		PHY_ERROR(("*** [PHY_DBG] *** : RfseqMode: 0x%x\n",
+		PHY_PRINT(("*** [PHY_DBG] *** : TxFIFOStatus0/1: 0x%x 0x%x\n",
+			READ_PHYREG(pi, TxFIFOStatus0), READ_PHYREG(pi, TxFIFOStatus1)));
+		PHY_PRINT(("*** [PHY_DBG] *** : RfseqMode: 0x%x\n",
 			READ_PHYREG(pi, RfseqMode)));
-		PHY_ERROR(("*** [PHY_DBG] *** : RfseqStatus0: 0x%x\n",
-			READ_PHYREG(pi, RfseqStatus0)));
-		PHY_ERROR(("*** [PHY_DBG] *** : RfseqStatus1: 0x%x\n",
-			READ_PHYREG(pi, RfseqStatus1)));
-		PHY_ERROR(("*** [PHY_DBG] *** : bphyTxError: 0x%x\n",
-			READ_PHYREG(pi, bphyTxError)));
-		PHY_ERROR(("*** [PHY_DBG] *** : TxCCKError: 0x%x\n",
+		PHY_PRINT(("*** [PHY_DBG] *** : RfseqStatus0/1: 0x%x 0x%x\n",
+			READ_PHYREG(pi, RfseqStatus0), READ_PHYREG(pi, RfseqStatus1)));
+		PHY_PRINT(("*** [PHY_DBG] *** : RfseqStatus_Ocl/1: 0x%x 0x%x\n",
+			READ_PHYREG(pi, RfseqStatus_Ocl), READ_PHYREG(pi, RfseqStatus_Ocl1)));
+		PHY_PRINT(("*** [PHY_DBG] *** : OCLControl1: 0x%x\n",
+			READ_PHYREG(pi, OCLControl1)));
+		PHY_PRINT(("*** [PHY_DBG] *** : TxError 0x%x bphy 0x%x cck5g 0x%x\n",
+			READ_PHYREG(pi, TxError), READ_PHYREG(pi, bphyTxError),
 			READ_PHYREG(pi, TxCCKError)));
-		PHY_ERROR(("*** [PHY_DBG] *** : TxError: 0x%x\n",
-			READ_PHYREG(pi, TxError)));
+		PHY_PRINT(("*** [PHY_DBG] *** : TxCtrlWrd0/1/2: 0x%x 0x%x 0x%x\n",
+			READ_PHYREG(pi, TxCtrlWrd0), READ_PHYREG(pi, TxCtrlWrd1),
+			READ_PHYREG(pi, TxCtrlWrd2)));
+		PHY_PRINT(("*** [PHY_DBG] *** : TxLsig0/1: 0x%x 0x%x\n",
+			READ_PHYREG(pi, TxLsig0), READ_PHYREG(pi, TxLsig1)));
+		PHY_PRINT(("*** [PHY_DBG] *** : TxVhtSigA: 0x%x 0x%x 0x%x 0x%x\n",
+			READ_PHYREG(pi, TxVhtSigA10), READ_PHYREG(pi, TxVhtSigA11),
+			READ_PHYREG(pi, TxVhtSigA20), READ_PHYREG(pi, TxVhtSigA21)));
+		for (ct = 0; ct < 10; ct++) {
+			PHY_PRINT(("*** [PHY_DBG] *** : gpio(Hi/Lo)Out: 0x%x 0x%x\n",
+				READ_PHYREG(pi, gpioHiOut), READ_PHYREG(pi, gpioLoOut)));
+		}
 	}
 }
 #endif /* DNG_DBGDUMP */
@@ -211,8 +223,12 @@ phy_ac_dbg_get_phyreg_address(phy_type_dbg_ctx_t *ctx, uint16 addr)
 	phy_info_t *pi = di->pi;
 	if (addr == ACPHY_TableDataWide(pi->pubpi->phy_rev)) {
 		return 0;
+	} else if (addr == ACPHY_TableDataLo(pi->pubpi->phy_rev)) {
+		return 0;
+	} else if (addr == ACPHY_TableDataHi(pi->pubpi->phy_rev)) {
+		return 0;
 	} else {
 		return phy_utils_read_phyreg(pi, addr);
 	}
 }
-#endif
+#endif /* PHY_DUMP_BINARY */

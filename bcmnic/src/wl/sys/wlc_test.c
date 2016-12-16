@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_test.c 641180 2016-06-01 16:32:35Z $
+ * $Id: wlc_test.c 661665 2016-09-27 00:31:02Z $
  */
 
 #include <wlc_cfg.h>
@@ -33,11 +33,26 @@
 #include <wlc_bmac.h>
 #include <wlc_txbf.h>
 #include <wlc_tx.h>
-#include <wlc_ulb.h>
 #include <wlc_test.h>
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
 #include <wlc_hw_priv.h>
+#include <wlc_objregistry.h>
+#include <wl_export.h>
+
+#ifdef WL_MUPKTENG
+#include <wlc_mutx.h>
+#endif
+
+#define TU2uS(tu) ((uint32)(tu) * 1024)
+#define uS2TU(us) ((uint32)(us) / 1024)
+#define SIM_PM_DEF_CYCLE 100
+#define SIM_PM_DEF_UP 5
+typedef enum {
+	SIM_PM_STATE_DISABLE = 0,
+	SIM_PM_STATE_AWAKE = 1,
+	SIM_PM_STATE_ASLEEP = 2
+} sim_pm_state_t;
 
 /* IOVar table - please number the enumerators explicity */
 enum {
@@ -50,6 +65,7 @@ enum {
 	IOV_MANF_INFO = 6,
 	IOV_LONGPKT = 7,	/* Enable long pkts for pktengine */
 	IOV_PKTENG_STATUS = 8,
+	IOV_SIM_PM = 9,
 	IOV_LAST
 };
 
@@ -60,16 +76,22 @@ static const bcm_iovar_t test_iovars[] = {
 	{"pkteng_status", IOV_PKTENG_STATUS, IOVF_GET_UP | IOVF_MFG, 0, IOVT_BOOL, 0},
 	{"longpkt", IOV_LONGPKT, (IOVF_SET_UP | IOVF_GET_UP), 0, IOVT_INT16, 0},
 #endif
-#if defined(WLPKTENG)
-	{"longpkt", IOV_LONGPKT, (IOVF_SET_UP | IOVF_GET_UP), 0, IOVT_INT16, 0},
-#endif
 	{NULL, 0, 0, 0, 0, 0},
 };
 
 
+typedef struct wlc_test_cmn_info {
+	int sim_pm_saved_PM;		/* PM state to return to */
+	sim_pm_state_t sim_pm_state;	/* sim_pm state */
+	uint32 sim_pm_cycle;		/* sim_pm cycle time in us */
+	uint32 sim_pm_up;		/* sim_pm up time in us */
+	struct wl_timer *sim_pm_timer;	/* timer to create simulated PM wake / sleep pattern */
+} wlc_test_cmn_info_t;
+
 /* private info */
 struct wlc_test_info {
 	wlc_info_t *wlc;
+	wlc_test_cmn_info_t *cmn;
 };
 
 /* local functions */
@@ -83,6 +105,60 @@ static void *wlc_tx_testframe_get(wlc_info_t *wlc, const struct ether_addr *da,
 #endif
 
 
+#if defined(BCMDBG_DUMP)
+static int wlc_nvram_dump(wlc_info_t *wlc, struct bcmstrbuf *b);
+#endif 
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
+
+#if defined(BCMDBG_DUMP)
+static int
+wlc_nvram_dump(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	char *nvram_vars;
+	const char *q = NULL;
+	int err;
+
+	/* per-device vars first, if any */
+	if (wlc->pub->vars) {
+		q = wlc->pub->vars;
+		/* loop to copy vars which contain null separated strings */
+		while (*q != '\0') {
+			bcm_bprintf(b, "%s\n", q);
+			q += strlen(q) + 1;
+		}
+	}
+
+	/* followed by global nvram vars second, if any */
+	if ((nvram_vars = MALLOC(wlc->osh, MAXSZ_NVRAM_VARS)) == NULL) {
+		err = BCME_NOMEM;
+		goto exit;
+	}
+	if ((err = nvram_getall(nvram_vars, MAXSZ_NVRAM_VARS)) != BCME_OK)
+		goto exit;
+	if (nvram_vars[0]) {
+		q = nvram_vars;
+		/* loop to copy vars which contain null separated strings */
+		while (((q - nvram_vars) < MAXSZ_NVRAM_VARS) && *q != '\0') {
+			bcm_bprintf(b, "%s\n", q);
+			q += strlen(q) + 1;
+		}
+	}
+
+	/* check empty nvram */
+	if (q == NULL)
+		err = BCME_NOTFOUND;
+exit:
+	if (nvram_vars)
+		MFREE(wlc->osh, nvram_vars, MAXSZ_NVRAM_VARS);
+
+	return err;
+}
+#endif	
 
 
 
@@ -100,6 +176,25 @@ BCMATTACHFN(wlc_test_attach)(wlc_info_t *wlc)
 	}
 	test->wlc = wlc;
 
+		/* Check from obj registry if common info is allocated */
+	test->cmn = (wlc_test_cmn_info_t *) obj_registry_get(wlc->objr, OBJR_TEST_CMN_INFO);
+
+	if (test->cmn == NULL) {
+		/* Object not found ! so alloc new object here and set the object */
+		if (!(test->cmn = (wlc_test_cmn_info_t *)MALLOCZ(wlc->osh,
+			sizeof(wlc_test_cmn_info_t)))) {
+			WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			goto fail;
+		}
+
+
+		/* Update registry after all allocations */
+		obj_registry_set(wlc->objr, OBJR_TEST_CMN_INFO, test->cmn);
+	}
+
+	(void) obj_registry_ref(wlc->objr, OBJR_TEST_CMN_INFO);
+
 	/* register ioctl/iovar dispatchers and other module entries */
 	if (wlc_module_add_ioctl_fn(wlc->pub, test, wlc_test_doioctl, 0, NULL) != BCME_OK) {
 		WL_ERROR(("wl%d: %s: wlc_module_add_ioctl_fn() failed\n",
@@ -115,6 +210,9 @@ BCMATTACHFN(wlc_test_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "nvram", (dump_fn_t)wlc_nvram_dump, (void *)wlc);
+#endif
 
 	/* set maximum packet length */
 	wlc->pkteng_maxlen = PKTBUFSZ - TXOFF;
@@ -139,6 +237,13 @@ BCMATTACHFN(wlc_test_detach)(wlc_test_info_t *test)
 	(void)wlc_module_remove_ioctl_fn(wlc->pub, test);
 	(void)wlc_module_unregister(wlc->pub, "wltest", test);
 
+	if (obj_registry_unref(test->wlc->objr, OBJR_TEST_CMN_INFO) == 0) {
+		obj_registry_set(test->wlc->objr, OBJR_TEST_CMN_INFO, NULL);
+		if (test->cmn != NULL) {
+			MFREE(test->wlc->osh, test->cmn,
+				sizeof(wlc_test_cmn_info_t));
+		}
+	}
 	MFREE(wlc->osh, test, sizeof(*test));
 }
 
@@ -164,6 +269,13 @@ wlc_test_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif)
 		break;
 	}
 
+#if defined(BCMDBG)
+	case WLC_SET_SROM: {
+		bcmerror = wlc_iovar_op(wlc, "srom", NULL, 0, arg, len, IOV_SET, wlcif);
+		break;
+
+	}
+#endif	
 
 
 
@@ -406,7 +518,7 @@ wlc_tx_testframe(wlc_info_t *wlc, struct ether_addr *da, struct ether_addr *sa,
 
 		/* default to channel BW if the rate overrides had BW unspecified */
 		if (RSPEC_BW(rate_override) == RSPEC_BW_UNSPECIFIED) {
-			if (WLC_ULB_CHSPEC_ISLE20(wlc, wlc->chanspec)) {
+			if (CHSPEC_IS20(wlc->chanspec)) {
 				rate_override |= RSPEC_BW_20MHZ;
 			} else if (CHSPEC_IS40(wlc->chanspec)) {
 				rate_override |= RSPEC_BW_40MHZ;
@@ -449,7 +561,7 @@ wlc_tx_testframe(wlc_info_t *wlc, struct ether_addr *da, struct ether_addr *sa,
 /* Create a test frame */
 void *
 wlc_mutx_testframe(wlc_info_t *wlc, struct scb *scb, struct ether_addr *sa,
-                 ratespec_t rate_override, int fifo, int length, int seq)
+                 ratespec_t rate_override, int fifo, int length, uint16 seq)
 {
 	void *p;
 	bool shortpreamble = FALSE;

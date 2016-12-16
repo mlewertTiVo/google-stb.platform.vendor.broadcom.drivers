@@ -71,7 +71,11 @@ static int wlc_11u_doiovar(void *ctx, uint32 actionid,
 /* cubby */
 static int wlc_11u_bsscfg_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_11u_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#ifdef BCMDBG
+static void wlc_11u_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_11u_bsscfg_dump NULL
+#endif
 
 /* IE mgmt */
 static uint wlc_11u_calc_iw_ie_len(void *ctx, wlc_iem_calc_data_t *data);
@@ -495,6 +499,23 @@ wlc_11u_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	memset(cubby_11u, 0, sizeof(wlc_11u_bsscfg_cubby_t));
 }
 
+#ifdef BCMDBG
+static void
+wlc_11u_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_11u_info_t *m11u = (wlc_11u_info_t *)ctx;
+	wlc_11u_bsscfg_cubby_t *cubby_11u = WLC_11U_BSSCFG_CUBBY(m11u, cfg);
+	int i;
+	ASSERT(cubby_11u != NULL);
+
+	if (cubby_11u->iw_ie) {
+		bcm_bprintf(b, "IW IE len: %d\n", cubby_11u->iw_ie[1]);
+		for (i = 0; i < cubby_11u->iw_ie[1]; i++) {
+			bcm_bprintf(b, "IW data[%d]: 0x%x\n", i, cubby_11u->iw_ie[i]);
+		}
+	}
+}
+#endif /* BCMDBG */
 
 /* check interworking IE in probe request */
 bool

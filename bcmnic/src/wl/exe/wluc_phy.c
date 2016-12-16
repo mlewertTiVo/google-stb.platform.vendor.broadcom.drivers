@@ -49,18 +49,22 @@
 #define BWL_FILESYSTEM_SUPPORT
 #endif
 
-
 static cmd_func_t wl_pkteng, wl_pkteng_stats, wl_phy_txpwrindex, wl_pkteng_status;
 static cmd_func_t wl_sample_collect;
 static cmd_func_t wl_phy_force_crsmin;
 static cmd_func_t wl_phy_rssi_ant;
+static cmd_func_t wl_phy_snr_ant;
 static cmd_func_t wl_tssi, wl_atten, wl_evm;
 static cmd_func_t wl_interfere, wl_interfere_override;
 static cmd_func_t wl_get_instant_power;
 static cmd_func_t wl_phymsglevel;
+#if defined(BCMDBG)
+static cmd_func_t wl_phy_debug_cmd;
+#endif
 static cmd_func_t wl_rifs;
 static cmd_func_t wl_rifs_advert;
 static cmd_func_t wl_test_tssi, wl_test_tssi_offs, wl_phy_rssiant, wl_rxiq;
+static cmd_func_t wl_rxiq_sweep;
 static cmd_func_t wl_test_idletssi;
 static cmd_func_t wlu_afeoverride;
 static cmd_func_t wl_phy_papdepstbl;
@@ -75,6 +79,8 @@ static cmd_func_t wl_phy_rpcalvars;
 static cmd_func_t wl_phy_rpcalphasevars;
 static cmd_func_t wl_phy_force_vsdb_chans;
 static cmd_func_t wl_radar_args, wl_radar_thrs, wl_radar_thrs2;
+static cmd_func_t wl_phy_dyn_switch_th;
+static cmd_func_t wl_btcoex_desense_rxgain;
 
 static cmd_func_t wl_phy_tpc_av, wl_phy_tpc_vmid;
 
@@ -119,8 +125,9 @@ static cmd_t wl_phy_cmds[] = {
 	"\tGet a radio register: wl radioreg [ offset ] [ cr0/cr1/cr2 ]\n"
 	"\tSet a radio register: wl radioreg [ offset ] [ value ] [ cr0/cr1/cr2/all ]\n"
 	"ACPHY:\n"
-	"\tGet a radio register: wl radioreg [ offset ] [ cr0/cr1/cr2/pll ]\n"
-	"\tSet a radio register: wl radioreg [ offset ] [ value ] [ cr0/cr1/cr2/pll/all ]"},
+	"\tGet a radio register: wl radioreg [ offset ] [ cr0/cr1/cr2/pll/pll0/pll1 ]\n"
+	"\tSet a radio register: wl radioreg [ offset ] [ value ]"
+	" [ cr0/cr1/cr2/pll/pll0/pll1/all ]"},
 	{ "phy_afeoverride", wlu_afeoverride, WLC_GET_VAR, WLC_SET_VAR, "g/set AFE override"},
 	{ "pcieserdesreg", wlu_reg3args, WLC_GET_VAR, WLC_SET_VAR,
 	"g/set SERDES registers: dev offset [val]"},
@@ -290,6 +297,42 @@ static cmd_t wl_phy_cmds[] = {
 	{ "phy_forcesteer", wl_var_setint, -1, WLC_SET_VAR,
 	"force the beamformer to apply steering matrix when TXBF is turned on\n\n"
 	"\tusage: wl phy_forcesteer 1/0"},
+#if defined(BCMDBG)
+	{ "phy_force_gainlevel", wl_phy_debug_cmd, WLC_GET_VAR, WLC_SET_VAR,
+	"Force rxgain level \n"
+	"\t 0 : force to init gain\n"
+	"\t 1 : force to clip hi gain\n"
+	"\t 2 : force to clip md gain\n"
+	"\t 3 : force to clip lo gain\n"
+	"\t 4 : force to adc clip gain\n"
+	"\t 5 : force to nb clip gain\n"
+	"\t 6 : force to wb clip gain\n"
+	"\t -1 : disable\n"
+	"\t usage: wl phy_force_gainlevel <int32 var>"
+	},
+#endif
+#if defined(BCMDBG)
+	{ "phy_force_fdiqi", wl_phy_debug_cmd, WLC_GET_VAR, WLC_SET_VAR,
+	"Enable/disable FDIQI Cal/Comp \n"
+	"\t 0 : disable\n"
+	"\t 1 : enable\n"
+	"\t usage: wl phy_force_fdiqi <int32 var>"
+	},
+#endif
+#if defined(BCMDBG)
+	{ "phy_btcoex_desense", wl_phy_debug_cmd, WLC_GET_VAR, WLC_SET_VAR,
+	"Enable/disable btcoex desense\n"
+	"\t 0 : disable\n"
+	"\t 1 : mode 1\n"
+	"\t usage: wl phy_btcoex_desense <int32 var>"
+	},
+#endif
+	{ "phy_btcoex_desense_rxgain", wl_btcoex_desense_rxgain, WLC_GET_VAR, WLC_SET_VAR,
+	"Set the phy btcoex desence rxgain values \n"
+	"\t usage: wl phy_btcoex_desense_rxgain band num_cores value1 value2 ..\n"
+	"Get the phy btcoex desence rxgain values \n"
+	"\t usage: wl phy_btcoex_desense_rxgain ..\n"
+	},
 	{ "lcnphy_papdepstbl", wl_phy_papdepstbl, -1, WLC_GET_VAR,
 	"print papd eps table; Usage: wl lcnphy_papdepstbl"
 	},
@@ -311,6 +354,26 @@ static cmd_t wl_phy_cmds[] = {
 	  "\t	2 (enable temperature correction) or 3(verify rssi_gain_delta)\n"
 	  "\t-e extra INITgain in dB on top of default. Valid values = {0, 3, 6, .., 21, 24}\n"
 	  "\t-i gain mode select, 0 (default gain), 1 (fixed high gain) or 4 (fixed low gain)."
+	  "\t-n number of averaging iterations.\n"
+	  "\t-d delay in usecs between iterations - default 10usecs.\n"
+	},
+	{ "phy_rxiqest_sweep", wl_rxiq_sweep, WLC_GET_VAR, -1,
+	"Get phy RX IQ noise in dBm for requested channels:\n"
+	"\t-c\n"
+	"\t\tall - All channels"
+	"\t\tcomma separated list of channels (e.g. 1,2,4,136)"
+	"\t-s # of samples (2^n)\n"
+	"\t-a antenna select, 0,1 or 3\n"
+	"\t-r resolution select, 0 (coarse) or 1 (fine)\n"
+	"\t-f lpf hpc override select, 0 (hpc unchanged) or 1 (overridden to ltrn mode)\n"
+	"\t-w dig lpf override select, 0 (lpf unchanged) or 1 (overridden to ltrn_lpf mode)"
+	"\t or 2 (bypass)\n"
+	"\t-g gain-correction select, 0 (disable), 1(enable full correction) \n"
+	"\t     2 (enable temperature correction) or 3(verify rssi_gain_delta)\n"
+	"\t-e extra INITgain in dB on top of default. Valid values = {0, 3, 6, .., 21, 24}\n"
+	"\t-i gain mode select, 0 (default gain), 1 (fixed high gain) or 4 (fixed low gain). \n"
+	"\t-n number of averaging iterations. Max 5 iterations for a sweep of 10 channels or more\n"
+	"\t-d delay in usecs between iterations - default 10usecs.\n"
 	},
 	{ "phy_txiqcc", wl_phy_txiqcc, WLC_GET_VAR, WLC_SET_VAR,
 	"usage: phy_txiqcc [a b]\n"
@@ -323,7 +386,7 @@ static cmd_t wl_phy_cmds[] = {
 	{ "phytable", wl_phytable, WLC_GET_VAR, WLC_SET_VAR,
 	"usage: wl phytable table_id offset width_of_table_element [table_element]\n"
 	"Set/get table element of a table with the given ID at the given offset\n"
-	"Note that table width supplied should be 8 or 16 or 32\n"
+	"Note that table width supplied should be 8, 16, 32, 48 or 64\n"
 	"table ID, table offset can not be negative"
 	},
 	{ "force_vsdb_chans", wl_phy_force_vsdb_chans, WLC_GET_VAR, WLC_SET_VAR,
@@ -448,7 +511,8 @@ static cmd_t wl_phy_cmds[] = {
 	{ "pkteng_stop", wl_pkteng, -1, WLC_SET_VAR,
 	"stop packet engine; usage: wl pkteng_stop <tx|rx>"},
 	{ "pkteng_stats", wl_pkteng_stats, -1, WLC_GET_VAR,
-	"packet engine stats; usage: wl pkteng_stats"},
+	"packet engine stats; usage: wl pkteng_stats:\n"
+	"\t-g temperature correction mode, 0 (enabled by default), 1 (disable)"},
 	{ "pkteng_status", wl_pkteng_status, -1, WLC_GET_VAR,
 	"packet engine status; usage: wl pkteng_status"},
 	{"phy_force_crsmin", wl_phy_force_crsmin, -1, WLC_SET_VAR,
@@ -498,7 +562,11 @@ static cmd_t wl_phy_cmds[] = {
 	"\tthresh0_sc_40_hi, thresh1_sc_40_hi, thresh0_sc_80_hi, thresh1_sc_80_hi\n"
 	"\tfc_varth_sb, fc_varth_bin5_sb, notradar_enb, max_notradar_lp, max_notradar,\n"
 	"\tmax_notradar_lp_sc, max_notradar_sc, highpow_war_enb, highpow_sp_ratio"},
-
+	{ "phy_dyn_switch_th", wl_phy_dyn_switch_th, WLC_GET_VAR, WLC_SET_VAR,
+	"Set wighting number for dynamic switch:\n"
+	"\trssi_gain_80_3, rssi_gain_80_2, rssi_gain_80_1, rssi_gain_80_0\n"
+	"\trssi_gain_160_3, rssi_gain_160_2, rssi_gain_160_1, rssi_gain_160_0\n"
+	"\trssi_th_2, rssi_th_1, rssi_th_0"},
 	{ "phy_tpc_av", wl_phy_tpc_av, WLC_GET_VAR, WLC_SET_VAR,
 	"usage: \n\t(set) phy_tpc_av <core> <sub-band> <av-value>"
 	"       \n\t(get) phy_tpc_av <core> <sub-band>"
@@ -560,6 +628,8 @@ static cmd_t wl_phy_cmds[] = {
 	"wl olpc_offset \n"
 	"Set the offset to tx idx to be applied for baseindex calculation in LUT based OLPC\n"
 	"wl olpc_offset 2G 5GLow 5GMid 5Ghigh 5GX1\n"},
+	{ "phy_snr_ant", wl_phy_snr_ant, WLC_GET_VAR, WLC_SET_VAR,
+	"Get SNR per antenna (only gives SNR of current antenna for SISO PHY)"},
 	{ NULL, NULL, 0, 0, NULL }
 };
 
@@ -582,6 +652,54 @@ wl_phy_rssi_ant(void *wl, cmd_t *cmd, char **argv)
 	int ret = 0;
 	uint i;
 	wl_rssi_ant_t *rssi_ant_p;
+	struct {
+		struct ether_addr ea;
+		chanspec_t chanspec;
+	} phy_params;
+	void *phy_params_addr;
+	int phy_params_len;
+	void *ptr = NULL;
+
+	if (!*++argv) {
+		phy_params_addr = NULL;
+		phy_params_len = 0;
+	}
+	else if (wl_ether_atoe(*argv, &phy_params.ea)) {
+		phy_params_addr = &phy_params;
+		phy_params_len = ETHER_ADDR_LEN;
+		if (*++argv) {
+			phy_params.chanspec = dtoh16(strtoul(*argv, NULL, 0));
+			phy_params_len += sizeof(chanspec_t);
+		}
+	}
+	else {
+		fprintf(stderr, " ERROR: no valid ether addr provided\n");
+		return BCME_USAGE_ERROR;
+	}
+
+	if ((ret = wlu_var_getbuf(wl, cmd->name, phy_params_addr, phy_params_len, &ptr)) < 0)
+		return ret;
+
+	rssi_ant_p = (wl_rssi_ant_t *)ptr;
+	rssi_ant_p->version = dtoh32(rssi_ant_p->version);
+	rssi_ant_p->count = dtoh32(rssi_ant_p->count);
+
+	if (rssi_ant_p->count == 0) {
+		printf("not supported on this chip\n");
+	} else {
+		for (i = 0; i < rssi_ant_p->count; i++)
+			printf("rssi[%d] %d  ", i, rssi_ant_p->rssi_ant[i]);
+		printf("\n");
+	}
+	return ret;
+}
+
+static int
+wl_phy_snr_ant(void *wl, cmd_t *cmd, char **argv)
+{
+	int ret = 0;
+	uint i;
+	wl_snr_ant_t *snr_ant_p;
 	struct ether_addr ea;
 	struct ether_addr *ea_p;
 	int ea_l;
@@ -600,18 +718,18 @@ wl_phy_rssi_ant(void *wl, cmd_t *cmd, char **argv)
 		return BCME_USAGE_ERROR;
 	}
 
-	if ((ret = wlu_var_getbuf(wl, cmd->name, ea_p, ea_l, &ptr)) < 0)
+	if ((ret = wlu_var_getbuf_sm(wl, cmd->name, ea_p, ea_l, &ptr)) < 0)
 		return ret;
 
-	rssi_ant_p = (wl_rssi_ant_t *)ptr;
-	rssi_ant_p->version = dtoh32(rssi_ant_p->version);
-	rssi_ant_p->count = dtoh32(rssi_ant_p->count);
+	snr_ant_p = (wl_snr_ant_t *)ptr;
+	snr_ant_p->version = dtoh32(snr_ant_p->version);
+	snr_ant_p->count = dtoh32(snr_ant_p->count);
 
-	if (rssi_ant_p->count == 0) {
+	if (snr_ant_p->count == 0) {
 		printf("not supported on this chip\n");
 	} else {
-		for (i = 0; i < rssi_ant_p->count; i++)
-			printf("rssi[%d] %d  ", i, rssi_ant_p->rssi_ant[i]);
+		for (i = 0; i < snr_ant_p->count; i++)
+			printf("snr[%d] %d  ", i, snr_ant_p->snr_ant[i]);
 		printf("\n");
 	}
 	return ret;
@@ -621,21 +739,23 @@ wl_phy_rssi_ant(void *wl, cmd_t *cmd, char **argv)
 #include <devctrl_if/phyioctl_defs.h>
 
 static phy_msg_t wl_phy_msgs[] = {
-	{PHYHAL_ERROR,	"error"},
-	{PHYHAL_ERROR, 	"err"},
-	{PHYHAL_TRACE,	"trace"},
-	{PHYHAL_INFORM,	"inform"},
-	{PHYHAL_TMP,	"tmp"},
-	{PHYHAL_TXPWR,	"txpwr"},
-	{PHYHAL_CAL,	"cal"},
-	{PHYHAL_RADAR,	"radar"},
+	{PHYHAL_ERROR,   "error"},
+	{PHYHAL_ERROR,   "err"},
+	{PHYHAL_TRACE,   "trace"},
+	{PHYHAL_INFORM,  "inform"},
+	{PHYHAL_TMP,     "tmp"},
+	{PHYHAL_TXPWR,   "txpwr"},
+	{PHYHAL_CAL,     "cal"},
+	{PHYHAL_ACI,     "aci"},
+	{PHYHAL_RADAR,   "radar"},
 	{PHYHAL_THERMAL, "thermal"},
-	{PHYHAL_PAPD,	"papd"},
-	{PHYHAL_RXIQ,	"rxiq"},
-	{PHYHAL_FCBS,	"fcbs"},
+	{PHYHAL_PAPD,    "papd"},
+	{PHYHAL_FCBS,    "fcbs"},
+	{PHYHAL_RXIQ,    "rxiq"},
+	{PHYHAL_WD,      "wd"},
 	{PHYHAL_CHANLOG, "chanlog"},
-	{0,		NULL}
-	};
+	{0,              NULL}
+};
 
 static int
 wl_phymsglevel(void *wl, cmd_t *cmd, char **argv)
@@ -903,7 +1023,7 @@ wl_interfere(void *wl, cmd_t *cmd, char **argv)
 			} else {
 				printf("\nMode = %d. Following ACI modes are enabled:\n", mode);
 				if (mode & ACPHY_ACI_GLITCHBASED_DESENSE)
-					printf("\tbit-mask %d:  Reciever Desense based on glitch "
+					printf("\tbit-mask %d:  Receiver Desense based on glitch "
 					       "count\n",
 					       ACPHY_ACI_GLITCHBASED_DESENSE);
 				if (mode & ACPHY_ACI_HWACI_PKTGAINLMT)
@@ -1039,7 +1159,7 @@ wl_interfere_override(void *wl, cmd_t *cmd, char **argv)
 				printf("\nInterference override mode = %d. Following ACI modes "
 				       "are enabled:\n", mode);
 				if (mode & ACPHY_ACI_GLITCHBASED_DESENSE)
-					printf("\tbit-mask %d:  Reciever Desense based on glitch "
+					printf("\tbit-mask %d:  Receiver Desense based on glitch "
 					       "count\n",
 					       ACPHY_ACI_GLITCHBASED_DESENSE);
 				if (mode & ACPHY_ACI_HWACI_PKTGAINLMT)
@@ -1639,14 +1759,48 @@ wl_pkteng_stats(void *wl, cmd_t *cmd, char **argv)
 {
 	wl_pkteng_stats_t *stats;
 	void *ptr = NULL;
-	int err;
+	int err, argc, opt_err;
 	uint16 *pktstats;
 	int i, j;
+	miniopt_t to;
+	uint8 gain_correct = 0;
+	const char* fn_name = "wl_pkteng_stats";
 
-	UNUSED_PARAMETER(argv);
+	/* arg count */
+	for (argc = 0; argv[argc]; argc++);
 
-	if ((err = wlu_var_getbuf(wl, cmd->name, NULL, 0, &ptr)) < 0)
-			return err;
+	if (argc != 0) {
+		miniopt_init(&to, fn_name, NULL, FALSE);
+		while ((opt_err = miniopt(&to, argv)) != -1) {
+			if (opt_err == 1) {
+				err = BCME_USAGE_ERROR;
+				goto exit;
+			}
+			argv += to.consumed;
+
+			if (to.opt == 'g') {
+				if (!to.good_int) {
+					fprintf(stderr,
+						"%s: could not parse \"%s\" as an int"
+						" for gain-correction (0, 1)\n",
+						fn_name, to.valstr);
+
+					err = BCME_BADARG;
+					goto exit;
+				}
+				if ((to.val < 0) || (to.val > 1)) {
+					fprintf(stderr, "%s: invalid gain-correction select %d"
+						" (0,1)\n", fn_name, to.val);
+					err = BCME_BADARG;
+					goto exit;
+				}
+				gain_correct = to.val & 0xf;
+			}
+		}
+	}
+
+	if ((err = wlu_var_getbuf_sm(wl, cmd->name, &gain_correct, 1, &ptr)) < 0)
+		return err;
 
 	stats = ptr;
 	printf("Lost frame count %d\n", dtoh32(stats->lostfrmcnt));
@@ -1669,6 +1823,9 @@ wl_pkteng_stats(void *wl, cmd_t *cmd, char **argv)
 	}
 	printf("rxmcsother %d\n", stats->rxpktcnt[NUM_80211_RATES]);
 	return 0;
+
+exit:
+	return err;
 }
 
 static int
@@ -1879,16 +2036,7 @@ wl_rssi_cal_freq_grp_2g(void *wl, cmd_t *cmd, char **argv)
 	int err = -1;
 	uint8 nvramValues[14];
 	char *endptr;
-	int ret = -1;
-	wlc_rev_info_t revinfo;
-
 	uint8 N = 0;
-
-	memset(&revinfo, 0, sizeof(revinfo));
-	ret = wlu_get(wl, WLC_GET_REVINFO, &revinfo, sizeof(revinfo));
-	if (ret) {
-		return ret;
-	}
 
 	if (!*++argv) {
 		/* Reading the NVRAM variable */
@@ -1964,8 +2112,10 @@ wl_phy_rssi_gain_delta_2g_sub(void *wl, cmd_t *cmd, char **argv)
 	if (!*++argv) {
 		if ((err = wlu_iovar_get(wl, cmd->name, deltaValues, sizeof(deltaValues))) < 0)
 			return err;
-		N = 18; /* 9 entries per core, 4350 - 18 MAX entries; 4345 9 MAX entries */
-		for (i = 0; i < N; i++) {
+			N = 27; /* 9 entries per core, 43602WLCSP - 27 MAX entried;
+					 * 4350 - 18 MAX entries; 4345 9 MAX entries
+					 */
+			for (i = 0; i < N; i++) {
 			if (i%9 == 0 && i > 0) {
 				printf("\n");
 				if (deltaValues[i] == -1) break;
@@ -2175,7 +2325,7 @@ wl_phy_rssi_gain_delta_5g(void *wl, cmd_t *cmd, char **argv)
 {
 	int i;
 	int err = -1;
-	int8 deltaValues[28];
+	int8 deltaValues[40];
 	int32 value = 0;
 	char *endptr;
 	int ret = -1;
@@ -2184,18 +2334,10 @@ wl_phy_rssi_gain_delta_5g(void *wl, cmd_t *cmd, char **argv)
 	uint8 N = 0, n_per_core, n_per_core_p1;
 
 	char *varname = "rssi_cal_rev";
-	const char *iovar = "nvram_get";
-	void *p;
 
-	err = wlu_var_getbuf(wl, iovar, varname, strlen(varname) + 1, &p);
-	if (err == 0) {
-		/* This means, NVRAM variable found. */
-		/* Calls new function for accommodating ROuts */
-		value = strtol(buf, &endptr, 0);
-	}
-
+	err = wlu_iovar_getint(wl, varname, &value);
 	if ((err < 0) || ((err == 0) && (value == 0))) {
-		/* This means, NVRAM variable not found or Variable is 0 */
+		/* This means, 'rssi_cal_rev' is not supported or Variable is 0 */
 		/* Calls old function */
 		n_per_core = 6;
 	} else {
@@ -2467,11 +2609,11 @@ static int
 wl_phytable(void *wl, cmd_t *cmd, char **argv)
 {
 	int err;
-	int32 tableInfo[4];
-	int32 value;
+	uint32 tableInfo[5];
 	char *endptr;
 	void *ptr = NULL;
-	int32 tableId, tableOffset, tableWidth, tableElement;
+	int32 tableId, tableOffset, tableWidth;
+	uint64 tableElement;
 
 	if (*++argv != NULL)
 		tableId = strtol(*argv, &endptr, 0);
@@ -2491,10 +2633,11 @@ wl_phytable(void *wl, cmd_t *cmd, char **argv)
 	if ((tableId < 0) || (tableOffset < 0))
 		return BCME_BADARG;
 
-	if ((tableWidth != 8) && (tableWidth != 16) && (tableWidth != 32))
+	if ((tableWidth != 8) && (tableWidth != 16) && (tableWidth != 32) &&
+		(tableWidth != 48) && (tableWidth != 64))
 		return BCME_BADARG;
 
-	if (!*++argv) {
+	if (!*++argv) { /* wl utility reads a PHY table element */
 		tableInfo[0] = tableId;
 		tableInfo[1] = tableOffset;
 		tableInfo[2] = tableWidth;
@@ -2502,27 +2645,28 @@ wl_phytable(void *wl, cmd_t *cmd, char **argv)
 		if ((err = wlu_var_getbuf(wl, cmd->name, tableInfo, 4*sizeof(int32), &ptr)) < 0)
 			return err;
 
-		tableElement = ((int32*)ptr)[0];
+		tableElement = ((uint64*)ptr)[0]; /* ptr is guaranteed to be 64 bits aligned */
 
 		/* Mask out the correct data */
 		if (tableWidth == 8)
 			tableElement &= 0xFF;
 		else if (tableWidth == 16)
 			tableElement &= 0xFFFF;
+		else if (tableWidth == 32)
+			tableElement &= 0xFFFFFFFF;
+		else if (tableWidth == 48)
+			tableElement &= 0xFFFFFFFFFFFFULL;
 
-		printf("0x%x(%d)\n", tableElement, tableElement);
-	}
-	else
-	{
-		value = strtol(*argv++, &endptr, 0);
-		tableElement = value;
+		printf("0x%llx(%lld)\n", tableElement, tableElement);
+	} else { /* wl utility writes a PHY table element */
+		tableElement = bcm_strtoull(*argv++, &endptr, 0);
 
 		tableInfo[0] = tableId;
 		tableInfo[1] = tableOffset;
 		tableInfo[2] = tableWidth;
-		tableInfo[3] = tableElement;
+		htol64_ua_store(tableElement, &tableInfo[3]);
 
-		if ((err = wlu_var_setbuf(wl, cmd->name, tableInfo, 4*sizeof(int32))) < 0)
+		if ((err = wlu_var_setbuf(wl, cmd->name, tableInfo, 5 * sizeof(int32))) < 0)
 			return err;
 	}
 
@@ -2541,6 +2685,7 @@ wl_phy_force_crsmin(void *wl, cmd_t *cmd, char **argv)
 	int ret = -1;
 	wlc_rev_info_t revinfo;
 	uint32 phytype;
+
 	memset(&revinfo, 0, sizeof(revinfo));
 	ret = wlu_get(wl, WLC_GET_REVINFO, &revinfo, sizeof(revinfo));
 	if (ret) {
@@ -2615,7 +2760,6 @@ wl_phy_txpwrindex(void *wl, cmd_t *cmd, char **argv)
 		printf("txpwrindex for core{0...3}: %d %d %d %d\n", idx[0], idx[1],
 		       idx[2], idx[3]);
 	} else {
-
 		wlc_rev_info_t revinfo;
 		uint32 phytype;
 
@@ -3505,26 +3649,20 @@ wl_pkteng(void *wl, cmd_t *cmd, char **argv)
 	return (wlu_var_setbuf(wl, "pkteng", &pkteng, sizeof(pkteng)));
 }
 
-static int
-wl_rxiq(void *wl, cmd_t *cmd, char **argv)
+static uint32
+wl_rxiq_prepare(char **argv, wl_iqest_params_t *params, uint8 *resolution)
 {
 	miniopt_t to;
-	const char* fn_name = "wl_rxiqest";
-	int err, argc, opt_err;
-	uint32 rxiq;
-	uint8 resolution = 0;
+	const char* fn_name = "wl_rxiqest_prepare";
+	int err = BCME_OK, argc, opt_err;
 	uint8 lpf_hpc = 1;
 	uint8 dig_lpf = 1;
 	uint8 gain_correct = 0;
 	uint8 extra_gain_3dBsteps = 0;
 	uint8 force_gain_type = 0;
 	uint8 antenna = 3;
-	int16 iqest_core[WL_STA_ANT_MAX];
-	wlc_rev_info_t revinfo;
-	memset(&revinfo, 0, sizeof(revinfo));
-	if ((err = wlu_get(wl, WLC_GET_REVINFO, &revinfo, sizeof(revinfo))) < 0)
-		return err;
 
+	*resolution = 0;
 	/* arg count */
 	for (argc = 0; argv[argc]; argc++);
 
@@ -3536,265 +3674,456 @@ wl_rxiq(void *wl, cmd_t *cmd, char **argv)
 	 * samples = 1024 (2^10) and antenna = 3
 	 * force_gain_type = 0 (init gain mode)
 	 */
-	rxiq = (extra_gain_3dBsteps << 28) | (gain_correct << 24) | (dig_lpf << 22)
-	        | (lpf_hpc << 20) | (resolution << 16) | (10 << 8) | (force_gain_type << 4)
+	params->rxiq = (extra_gain_3dBsteps << 28) | (gain_correct << 24) | (dig_lpf << 22)
+	        | (lpf_hpc << 20) | (*resolution << 16) | (10 << 8) | (force_gain_type << 4)
 	        | antenna;
 
-	if (argc != 0) {
-		miniopt_init(&to, fn_name, NULL, FALSE);
-		while ((opt_err = miniopt(&to, argv)) != -1) {
-			if (opt_err == 1) {
-				err = BCME_USAGE_ERROR;
+	params->niter = 1;
+	params->delay = PHY_RXIQEST_AVERAGING_DELAY;
+	if (argc == 0)
+		return 0;
+
+	miniopt_init(&to, fn_name, NULL, FALSE);
+	while ((opt_err = miniopt(&to, argv)) != -1) {
+		if (opt_err == 1) {
+			err = BCME_USAGE_ERROR;
+			goto exit;
+		}
+		argv += to.consumed;
+
+		if (to.opt == 'g') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int"
+					" for gain-correction (0, 1, 2, 3, 4, 7, 8)\n",
+					fn_name, to.valstr);
+
+				err = BCME_BADARG;
 				goto exit;
 			}
-			argv += to.consumed;
-
-			if (to.opt == 'g') {
-				if (!to.good_int) {
-					fprintf(stderr,
-						"%s: could not parse \"%s\" as an int"
-						" for gain-correction (0, 1, 2, 3, 4, 7, 8)\n",
-						fn_name, to.valstr);
-
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if ((to.val < 0) || (to.val > 8)) {
-					fprintf(stderr, "%s: invalid gain-correction select %d"
-						" (0,1,2,3,4,7,8)\n", fn_name, to.val);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				gain_correct = to.val & 0xf;
-				rxiq = ((gain_correct << 24) | (rxiq & 0xf0ffffff));
+			if ((to.val < 0) || (to.val > 8)) {
+				fprintf(stderr, "%s: invalid gain-correction select %d"
+					" (0,1,2,3,4,7,8)\n", fn_name, to.val);
+				err = BCME_BADARG;
+				goto exit;
 			}
-			if (to.opt == 'f') {
-				if (!to.good_int) {
-					fprintf(stderr,
-						"%s: could not parse \"%s\" as an int"
-						" for lpf-hpc override select (0, 1)\n",
-						fn_name, to.valstr);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if ((to.val < 0) || (to.val > 1)) {
-					fprintf(stderr, "%s: invalid lpf-hpc override select %d"
-						" (0,1)\n", fn_name, to.val);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				lpf_hpc = to.val & 0xf;
-				rxiq = ((lpf_hpc << 20) | (rxiq & 0xff0fffff));
+			gain_correct = to.val & 0xf;
+			params->rxiq = ((gain_correct << 24) | (params->rxiq & 0xf0ffffff));
+		}
+		if (to.opt == 'f') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int"
+					" for lpf-hpc override select (0, 1)\n",
+					fn_name, to.valstr);
+				err = BCME_BADARG;
+				goto exit;
 			}
-			if (to.opt == 'w') {
-				if (!to.good_int) {
-					fprintf(stderr,
-						"%s: could not parse \"%s\" as an int"
-						" for dig-lpf override select (0, 1 or 2)\n",
-						fn_name, to.valstr);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if ((to.val < 0) || (to.val > 2)) {
-					fprintf(stderr, "%s: invalid dig-lpf override select %d"
-						" (0,1,2)\n", fn_name, to.val);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				dig_lpf = to.val & 0x3;
-				rxiq = ((dig_lpf << 22) | (rxiq & 0xff3fffff));
+			if ((to.val < 0) || (to.val > 1)) {
+				fprintf(stderr, "%s: invalid lpf-hpc override select %d"
+					" (0,1)\n", fn_name, to.val);
+				err = BCME_BADARG;
+				goto exit;
 			}
-			if (to.opt == 'r') {
-				if (!to.good_int) {
-					fprintf(stderr,
-						"%s: could not parse \"%s\" as an int"
-						" for resolution (0, 1)\n", fn_name, to.valstr);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if ((to.val < 0) || (to.val > 1)) {
-					fprintf(stderr, "%s: invalid resolution select %d"
-						" (0,1)\n", fn_name, to.val);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				resolution = to.val & 0xf;
-				rxiq = ((resolution << 16) | (rxiq & 0xfff0ffff));
+			lpf_hpc = to.val & 0x3;
+			params->rxiq = ((lpf_hpc << 20) | (params->rxiq & 0xffcfffff));
+		}
+		if (to.opt == 'w') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int"
+					" for dig-lpf override select (0, 1 or 2)\n",
+					fn_name, to.valstr);
+				err = BCME_BADARG;
+				goto exit;
 			}
-			if (to.opt == 's') {
-				if (!to.good_int) {
-					fprintf(stderr,
-						"%s: could not parse \"%s\" as an int for"
-						" the sample count\n", fn_name, to.valstr);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if (to.val < 0 || to.val > 16) {
-					fprintf(stderr, "%s: sample count too large %d"
-						"(10 <= x <= 16)\n", fn_name, to.val);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				rxiq = (((to.val & 0xff) << 8) | (rxiq & 0xffff00ff));
+			if ((to.val < 0) || (to.val > 2)) {
+				fprintf(stderr, "%s: invalid dig-lpf override select %d"
+					" (0,1,2)\n", fn_name, to.val);
+				err = BCME_BADARG;
+				goto exit;
 			}
-			if (to.opt == 'a') {
-				if (!to.good_int) {
-					fprintf(stderr,
-						"%s: could not parse \"%s\" as an int"
-						" for antenna (0, 1, 3)\n", fn_name, to.valstr);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if ((to.val < 0) || (to.val > 3)) {
-					fprintf(stderr, "%s: invalid antenna select %d\n",
-						fn_name, to.val);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				rxiq = ((rxiq & 0xffffff00) | (to.val & 0xf));
+			dig_lpf = to.val & 0x3;
+			params->rxiq = ((dig_lpf << 22) | (params->rxiq & 0xff3fffff));
+		}
+		if (to.opt == 'r') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int"
+					" for resolution (0, 1)\n", fn_name, to.valstr);
+				err = BCME_BADARG;
+				goto exit;
 			}
-			if (to.opt == 'e') {
-				if (!to.good_int) {
-					fprintf(stderr,
-					        "%s: could not parse \"%s\" as an int"
-					        " for extra INITgain\n", fn_name, to.valstr);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if ((to.val < 0) || (to.val > 24) || (to.val % 3 != 0)) {
-					fprintf(stderr,
-					        "%s: Valid extra INITgain = {0, 3, .., 21, 24}\n",
-					        fn_name);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				rxiq = ((((to.val/3) & 0xf) << 28) | (rxiq & 0x0fffffff));
+			if ((to.val < 0) || (to.val > 1)) {
+				fprintf(stderr, "%s: invalid resolution select %d"
+					" (0,1)\n", fn_name, to.val);
+				err = BCME_BADARG;
+				goto exit;
 			}
-			if (to.opt == 'i') {
-				if (!to.good_int) {
-					fprintf(stderr,
-					        "%s: could not parse \"%s\" as an int"
-					        " for init or clipLO mode\n", fn_name, to.valstr);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				if ((to.val != 0) && (to.val != 1) &&
-				    (to.val != 2) && (to.val != 3) && (to.val != 4)) {
-					fprintf(stderr,
+			*resolution = to.val & 0xf;
+			params->rxiq = ((*resolution << 16) | (params->rxiq & 0xfff0ffff));
+		}
+		if (to.opt == 's') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int for"
+					" the sample count\n", fn_name, to.valstr);
+				err = BCME_BADARG;
+				goto exit;
+			}
+			if (to.val < 0 || to.val > 16) {
+				fprintf(stderr, "%s: sample count too large %d"
+					"(10 <= x <= 16)\n", fn_name, to.val);
+				err = BCME_BADARG;
+				goto exit;
+			}
+			params->rxiq = (((to.val & 0xff) << 8) | (params->rxiq & 0xffff00ff));
+		}
+		if (to.opt == 'a') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int"
+					" for antenna (0, 1, 3)\n", fn_name, to.valstr);
+				err = BCME_BADARG;
+				goto exit;
+			}
+			if ((to.val < 0) || (to.val > 3)) {
+				fprintf(stderr, "%s: invalid antenna select %d\n",
+					fn_name, to.val);
+				err = BCME_BADARG;
+				goto exit;
+			}
+			params->rxiq = ((params->rxiq & 0xfffffff0) | (to.val & 0xf));
+		}
+		if (to.opt == 'e') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int"
+					" for extra INITgain\n", fn_name, to.valstr);
+				err = BCME_BADARG;
+				goto exit;
+			}
+			if ((to.val < 0) || (to.val > 24) || (to.val % 3 != 0)) {
+				fprintf(stderr,
+					"%s: Valid extra INITgain = {0, 3, .., 21, 24}\n",
+					fn_name);
+				err = BCME_BADARG;
+				goto exit;
+			}
+			params->rxiq = ((((to.val/3) & 0xf) << 28) | (params->rxiq & 0x0fffffff));
+		}
+		if (to.opt == 'i') {
+			if (!to.good_int) {
+				fprintf(stderr,
+					"%s: could not parse \"%s\" as an int"
+					" for init or clipLO mode\n", fn_name, to.valstr);
+				err = BCME_BADARG;
+				goto exit;
+			}
+			if ((to.val != 0) && (to.val != 1) &&
+					(to.val != 2) && (to.val != 3) && (to.val != 4)) {
+				fprintf(stderr,
 					"%s: Valid options - 0(default gain), 1(fixed high gain)"
 					"or 4(fixed low gain). \n",
 						fn_name);
-					err = BCME_BADARG;
-					goto exit;
-				}
-				rxiq = ((rxiq & 0xffffff0f) | ((to.val << 4) & 0xf0));
+				err = BCME_BADARG;
+				goto exit;
 			}
+			params->rxiq = ((params->rxiq & 0xffffff0f) | ((to.val << 4) & 0xf0));
 		}
 	}
-
-	if (BCM4365_CHIP(dtoh32(revinfo.chipnum))) {
-	  iqest_core[0] = rxiq & 0xffff;
-	  iqest_core[1] = (rxiq >> 16) & 0xffff;
-
-	  if ((err = wlu_var_setbuf(wl, cmd->name, iqest_core, WL_STA_ANT_MAX*sizeof(int16))) < 0)
-	    return err;
-	  if ((err = wlu_iovar_get(wl, cmd->name, iqest_core, WL_STA_ANT_MAX*sizeof(int16))) < 0)
-	    return err;
-
-	  if (resolution == 1) {
-	    /* fine resolution power reporting (0.25dB resolution) */
-	    uint8 core;
-	    int16 tmp;
-	    /* Four chains: */
-	    for (core = 0; core < WL_STA_ANT_MAX; core ++) {
-	      tmp = iqest_core[core];
-	      if (tmp < 0) {
-		tmp = -1*tmp;
-		printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-	      } else if (tmp > 0) {
-		printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-	      }
-	    }
-	    printf("\n");
-	  } else {
-	    /* fine resolution power reporting (0.25dB resolution) */
-	    uint8 core;
-	    int16 tmp;
-	    /* Four chains: */
-	    for (core = 0; core < WL_STA_ANT_MAX; core ++) {
-	      tmp = (int8)(iqest_core[core]);
-	      if (tmp != 0)
-		printf("%ddBm ", tmp);
-	    }
-	    printf("\n");
-	  }
-	} else {
-	  if ((err = wlu_iovar_setint(wl, cmd->name, (int)rxiq)) < 0)
-	    return err;
-	  if ((err = wlu_iovar_getint(wl, cmd->name, (int*)&rxiq)) < 0)
-	    return err;
-
-	  if (resolution == 1) {
-	    /* fine resolution power reporting (0.25dB resolution) */
-	    uint8 core;
-	    int16 tmp;
-	    if (rxiq >> 20) {
-	      /* Three chains: */
-	      for (core = 0; core < 3; core ++) {
-		tmp = (rxiq >> (10*core)) & 0x3ff;
-		tmp = ((int16)(tmp << 6)) >> 6; /* sign extension */
-		if (tmp < 0) {
-		  tmp = -1*tmp;
-		  printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-		} else {
-		  printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-		}
-	      }
-	      printf("\n");
-	    } else if (rxiq >> 10) {
-	      /* 2 chains */
-	      for (core = 0; core < 2; core ++) {
-		tmp = (rxiq >> (10*core)) & 0x3ff;
-		tmp = ((int16)(tmp << 6)) >> 6; /* sign extension */
-		if (tmp < 0) {
-		  tmp = -1*tmp;
-		  printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-		} else {
-		  printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-		}
-	      }
-	      printf("\n");
-	    } else {
-	      /* 1 chain */
-	      tmp = rxiq & 0x3ff;
-	      tmp = ((int16)(tmp << 6)) >> 6; /* sign extension */
-	      if (tmp < 0) {
-		tmp = -1*tmp;
-		printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-	      } else {
-		printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
-	      }
-	      printf("\n");
-	    }
-
-	  } else {
-	    if (rxiq >> 24)
-	      printf("%ddBm %ddBm %ddBm %ddBm \n", (int8)(rxiq & 0xff),
-	      (int8)((rxiq >> 8) & 0xff), (int8)((rxiq >> 16) & 0xff),
-	      (int8)((rxiq >> 24) & 0xff));
-	    else if (rxiq >> 16)
-	      printf("%ddBm %ddBm %ddBm\n", (int8)(rxiq & 0xff),
-	      (int8)((rxiq >> 8) & 0xff), (int8)((rxiq >> 16) & 0xff));
-	    else if (rxiq >> 8)
-	      printf("%ddBm %ddBm\n", (int8)(rxiq & 0xff), (int8)((rxiq >> 8) & 0xff));
-	    else
-	      printf("%ddBm\n", (int8)(rxiq & 0xff));
-	  }
-	}
+	params->rxiq = htod32(params->rxiq);
 exit:
 	return err;
 }
 
+static void
+wl_rxiq_print_4365(uint16 *iqest_core, uint8 resolution)
+{
+	if (resolution == 1) {
+		/* fine resolution power reporting (0.25dB resolution) */
+		uint8 core;
+		int16 tmp;
+		/* Four chains: */
+		for (core = 0; core < WL_STA_ANT_MAX; core ++) {
+			tmp = iqest_core[core];
+			if (tmp < 0) {
+				tmp = -1*tmp;
+				printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+			} else if (tmp > 0) {
+				printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+			}
+		}
+		printf("\n");
+	} else {
+		/* fine resolution power reporting (0.25dB resolution) */
+		uint8 core;
+		int16 tmp;
+		/* Four chains: */
+		for (core = 0; core < WL_STA_ANT_MAX; core ++) {
+			tmp = (int8)(iqest_core[core]);
+			if (tmp != 0)
+				printf("%ddBm ", tmp);
+		}
+		printf("\n");
+	}
+}
+
+static void
+wl_rxiq_print(uint32 rxiq, uint8 resolution)
+{
+	if (resolution == 1) {
+		/* fine resolution power reporting (0.25dB resolution) */
+		uint8 core;
+		int16 tmp;
+		if (rxiq >> 20) {
+			/* Three chains: */
+			for (core = 0; core < 3; core ++) {
+				tmp = (rxiq >> (10*core)) & 0x3ff;
+				tmp = ((int16)(tmp << 6)) >> 6; /* sign extension */
+				if (tmp < 0) {
+					tmp = -1*tmp;
+					printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+				} else {
+					printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+				}
+			}
+			printf("\n");
+		} else if (rxiq >> 10) {
+			/* 2 chains */
+			for (core = 0; core < 2; core ++) {
+				tmp = (rxiq >> (10*core)) & 0x3ff;
+				tmp = ((int16)(tmp << 6)) >> 6; /* sign extension */
+				if (tmp < 0) {
+					tmp = -1*tmp;
+					printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+				} else {
+					printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+				}
+			}
+			printf("\n");
+		} else {
+			/* 1 chain */
+			tmp = rxiq & 0x3ff;
+			tmp = ((int16)(tmp << 6)) >> 6; /* sign extension */
+			if (tmp < 0) {
+				tmp = -1*tmp;
+				printf("-%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+			} else {
+				printf("%d.%ddBm ", (tmp >> 2), (tmp & 0x3)*25);
+			}
+			printf("\n");
+		}
+
+	} else {
+		if (rxiq >> 24)
+			printf("%ddBm %ddBm %ddBm %ddBm \n", (int8)(rxiq & 0xff),
+				(int8)((rxiq >> 8) & 0xff), (int8)((rxiq >> 16) & 0xff),
+				(int8)((rxiq >> 24) & 0xff));
+		else if (rxiq >> 16)
+			printf("%ddBm %ddBm %ddBm\n", (int8)(rxiq & 0xff),
+				(int8)((rxiq >> 8) & 0xff), (int8)((rxiq >> 16) & 0xff));
+		else if (rxiq >> 8)
+			printf("%ddBm %ddBm\n", (int8)(rxiq & 0xff), (int8)((rxiq >> 8) & 0xff));
+		else
+			printf("%ddBm\n", (int8)(rxiq & 0xff));
+	}
+}
+
+#define IFERR(x) do { err = (x); if (err) return err; } while (0)
+static int
+wl_rxiq(void *wl, cmd_t *cmd, char **argv)
+{
+	wl_iqest_params_t params;
+	uint8 resolution;
+	int err;
+	uint16 iqest_core[WL_STA_ANT_MAX];
+	wlc_rev_info_t revinfo;
+
+	memset(&params, 0, sizeof(params));
+	memset(&revinfo, 0, sizeof(revinfo));
+	IFERR(wlu_get(wl, WLC_GET_REVINFO, &revinfo, sizeof(revinfo)));
+
+	IFERR(wl_rxiq_prepare(argv, &params, &resolution));
+
+	if (BCM4365_CHIP(dtoh32(revinfo.chipnum))) {
+		iqest_core[0] = params.rxiq & 0xffff;
+		iqest_core[1] = (params.rxiq >> 16) & 0xffff;
+		IFERR(wlu_var_setbuf(wl, cmd->name, iqest_core, WL_STA_ANT_MAX*sizeof(int16)));
+		IFERR(wlu_iovar_get(wl, cmd->name, iqest_core, WL_STA_ANT_MAX*sizeof(int16)));
+		wl_rxiq_print_4365(iqest_core, resolution);
+		return BCME_OK;
+	}
+
+	IFERR(wlu_iovar_set(wl, cmd->name, &params, sizeof(params)));
+	IFERR(wlu_iovar_getint(wl, cmd->name, (int*)&params.rxiq));
+	wl_rxiq_print(params.rxiq, resolution);
+
+	return BCME_OK;
+}
+
+#define SWEEP_ERROR "phy_rxiqest_sweep Error: "
+static int
+wl_rxiq_sweep(void *wl, cmd_t *cmd, char **argv)
+{
+	miniopt_t to;
+	int err, params_size, buf_size, i, offset;
+	uint8 nchannels, resolution, all;
+	char *ptr, *channels = NULL;
+	wl_iqest_sweep_params_t *sweep_params;
+	wl_iqest_result_t *result;
+	wlc_rev_info_t revinfo;
+
+	memset(&revinfo, 0, sizeof(revinfo));
+	IFERR(wlu_get(wl, WLC_GET_REVINFO, &revinfo, sizeof(revinfo)));
+
+	if (BCM4365_CHIP(dtoh32(revinfo.chipnum)))
+		return BCME_UNSUPPORTED;
+
+	offset = strlen(cmd->name) + 1;
+	sweep_params = (wl_iqest_sweep_params_t *)(buf + offset);
+	if ((err = wl_rxiq_prepare(argv, &sweep_params->params, &resolution)))
+		return err;
+	miniopt_init(&to, "wl_rxiq_sweep", NULL, FALSE);
+	while ((err = miniopt(&to, argv)) != -1) {
+		if (err == 1)
+			return BCME_USAGE_ERROR;
+
+		argv += to.consumed;
+
+		if (to.opt == 'c') {
+			if (channels) {
+				err = BCME_BADARG;
+				fprintf(stderr, SWEEP_ERROR "Duplicate channel parameters\n");
+				goto Exit;
+			}
+			channels = strdup(to.valstr);
+			if (!channels) {
+				fprintf(stderr, SWEEP_ERROR "Unable to allocate %d bytes for "
+					"wl_rxiq_sweep\n", (int)strlen(to.valstr));
+				return BCME_NOMEM;
+			}
+		}
+	}
+
+	if (!channels) {
+		err = BCME_BADCHAN;
+		fprintf(stderr, SWEEP_ERROR "Missing channel parameters\n");
+		goto Exit;
+	}
+
+	for (nchannels = 0, all = 0, ptr = channels; ptr; ptr = strchr(ptr + 1, ','), ++nchannels) {
+		char *channel = *ptr == ',' ? ptr + 1 : ptr;
+
+		if (!strnicmp(channel, "all", 3)) {
+			if (channel == ptr && !channel[3]) {
+				nchannels = 1;
+				all = 1;
+				break;
+			}
+			fprintf(stderr, SWEEP_ERROR "Channel argument should be either all or a "
+				"comma separated list of channels\n");
+			err = BCME_BADCHAN;
+			goto Exit;
+		}
+	}
+
+	if (nchannels > WL_NUMCHANNELS) {
+		fprintf(stderr, SWEEP_ERROR "Maximum of %d channels allowed\n", WL_NUMCHANNELS);
+		err = BCME_BADCHAN;
+		goto Exit;
+	}
+
+	params_size = sizeof(*sweep_params) + (nchannels - 1) * sizeof(uint8);
+	buf_size = sizeof(*result) + ((all ? WL_NUMCHANNELS : nchannels) - 1)
+		* sizeof(wl_iqest_value_t);
+	if (buf_size < params_size + offset)
+		buf_size = params_size + offset;
+	if (buf_size > WLC_IOCTL_MEDLEN) {
+		fprintf(stderr, SWEEP_ERROR "Internal error - buffer is not big enough\n");
+		err = BCME_BUFTOOSHORT;
+		goto Exit;
+	}
+	offset += params_size;
+	if (all) {
+		sweep_params->nchannels = 1;
+		sweep_params->channel[0] = 0;
+		if (sweep_params->params.niter > WL_ITER_LIMIT_MANY_CHAN) {
+			fprintf(stderr, SWEEP_ERROR "Maximum %d averaging iterations allowed if "
+				"number of channel is greater than %d\n", WL_ITER_LIMIT_MANY_CHAN,
+				WL_NUMCHANNELS_MANY_CHAN);
+			err = BCME_BADARG;
+			goto Exit;
+		}
+	}
+	else {
+		sweep_params->nchannels = 0;
+		for (i = 0, ptr = strtok(channels, ","); ptr; ++i, ptr = strtok(NULL, ",")) {
+			int j;
+			char *endptr = NULL;
+			int channel = (int)strtoul(ptr, &endptr, 0);
+
+			if (*endptr || channel < 1 || channel > 165) {
+				fprintf(stderr, SWEEP_ERROR "wrong channel value %s\n", ptr);
+				err = BCME_BADARG;
+				goto Exit;
+			}
+			for (j = 0; j < sweep_params->nchannels; ++j) {
+				if (channel == sweep_params->channel[j]) {
+					err = BCME_BADCHAN;
+					fprintf(stderr, SWEEP_ERROR "Duplicate channel "
+						"parameters\n");
+					goto Exit;
+				}
+			}
+			sweep_params->channel[sweep_params->nchannels++] = (uint8)channel;
+		}
+	}
+
+	if (sweep_params->nchannels > WL_NUMCHANNELS_MANY_CHAN && sweep_params->params.niter
+		> WL_ITER_LIMIT_MANY_CHAN) {
+		fprintf(stderr, SWEEP_ERROR "Maximum %d averaging iterations allowed if number"
+			" of channel is greater than %d\n", WL_ITER_LIMIT_MANY_CHAN,
+			WL_NUMCHANNELS_MANY_CHAN);
+		err = BCME_BADARG;
+		goto Exit;
+	}
+
+	if ((err = wlu_iovar_getbuf(wl, cmd->name, sweep_params, params_size, buf, buf_size)) < 0)
+		goto Exit;
+
+	result = (wl_iqest_result_t *)buf;
+	for (i = 0; i < result->nvalues; ++i) {
+		printf("Channel: %u\t", result->value[i].channel);
+		wl_rxiq_print(dtoh32(result->value[i].rxiq), resolution);
+	}
+Exit:
+	free(channels);
+	return err;
+}
+
+#if defined(BCMDBG)
+static int
+wl_phy_debug_cmd(void *wl, cmd_t *cmd, char **argv)
+{
+	int err;
+	int val;
+	char *val_name;
+
+	UNUSED_PARAMETER(cmd);
+
+	/* command name */
+	val_name = *argv++;
+	val = (*argv == NULL) ? 0 : atoi(*argv);
+
+
+	if ((err = wlu_iovar_setint(wl, val_name, (int)val)) < 0)
+		printf("PHY DEBUG COMMAND error %d\n", err);
+
+	return err;
+
+}
+#endif 
 
 static int
 wl_rifs(void *wl, cmd_t *cmd, char **argv)
@@ -4209,6 +4538,87 @@ wl_radar_thrs2(void *wl, cmd_t *cmd, char **argv)
 		radar_thrs2.highpow_war_enb = (uint16)*pval++;
 		radar_thrs2.highpow_sp_ratio = (uint16)*pval++;
 		return wlu_var_setbuf(wl, cmd->name, &radar_thrs2, sizeof(wl_radar_thr2_t));
+	}
+	return ret;
+
+}
+
+static int
+wl_phy_dyn_switch_th(void *wl, cmd_t *cmd, char **argv)
+{
+	int ret = -1;
+	wl_dyn_switch_th_t dyn_switch_th;
+	argv++;
+
+	if (*argv == NULL) {
+		if ((ret = wlu_iovar_get(wl, cmd->name, &dyn_switch_th, sizeof(dyn_switch_th))) < 0)
+					return ret;
+
+				if (dyn_switch_th.ver != WL_PHY_DYN_SWITCH_TH_VERSION) {
+					printf("\tIncorrect version"
+					"\tof phy_dyn_switch_th:expected %d; got %d\n",
+					WL_PHY_DYN_SWITCH_TH_VERSION, dyn_switch_th.ver);
+					return -1;
+				}
+				printf("version %d\n"
+				"rssi_gain_80_3 %d rssi_gain_80_2 %d "
+				"rssi_gain_80_1 %d rssi_gain_80_0 %d \n"
+				"rssi_gain_160_3 %d rssi_gain_160_2 %d "
+				"rssi_gain_160_1 %d rssi_gain_160_0 %d \n"
+				"rssi_th_2 %d rssi_th_1 %d "
+				"rssi_th_0 %d\n",
+				dyn_switch_th.ver, dyn_switch_th.rssi_gain_80[3],
+				dyn_switch_th.rssi_gain_80[2],
+				dyn_switch_th.rssi_gain_80[1], dyn_switch_th.rssi_gain_80[0],
+				dyn_switch_th.rssi_gain_160[3], dyn_switch_th.rssi_gain_160[2],
+				dyn_switch_th.rssi_gain_160[1], dyn_switch_th.rssi_gain_160[0],
+				dyn_switch_th.rssi_th[2], dyn_switch_th.rssi_th[1],
+				dyn_switch_th.rssi_th[0]);
+
+				/* this part prints only param values */
+				printf("%d %d %d %d %d %d %d %d %d "
+				"%d %d\n",
+				dyn_switch_th.rssi_gain_80[3], dyn_switch_th.rssi_gain_80[2],
+				dyn_switch_th.rssi_gain_80[1], dyn_switch_th.rssi_gain_80[0],
+				dyn_switch_th.rssi_gain_160[3], dyn_switch_th.rssi_gain_160[2],
+				dyn_switch_th.rssi_gain_160[1], dyn_switch_th.rssi_gain_160[0],
+				dyn_switch_th.rssi_th[2], dyn_switch_th.rssi_th[1],
+				dyn_switch_th.rssi_th[0]);
+
+	} else {
+		/* Set */
+		char *endptr = NULL;
+		uint val_count = 11;
+		long vals[11];
+		long *pval;
+		uint i;
+
+		for (i = 0; i < val_count; i++, argv++) {
+			/* verify that there is another arg */
+			if (*argv == NULL)
+				return BCME_USAGE_ERROR;
+			vals[i] = strtol(*argv, &endptr, 0);
+
+			/* make sure all the value string was parsed by strtol */
+			if (*endptr != '\0')
+				return BCME_USAGE_ERROR;
+		}
+
+		dyn_switch_th.ver = WL_PHY_DYN_SWITCH_TH_VERSION;
+
+		pval = vals;
+		dyn_switch_th.rssi_gain_80[3] = (uint16)*pval++;
+		dyn_switch_th.rssi_gain_80[2] = (uint16)*pval++;
+		dyn_switch_th.rssi_gain_80[1] = (uint16)*pval++;
+		dyn_switch_th.rssi_gain_80[0] = (uint16)*pval++;
+		dyn_switch_th.rssi_gain_160[3] = (uint16)*pval++;
+		dyn_switch_th.rssi_gain_160[2] = (uint16)*pval++;
+		dyn_switch_th.rssi_gain_160[1] = (uint16)*pval++;
+		dyn_switch_th.rssi_gain_160[0] = (uint16)*pval++;
+		dyn_switch_th.rssi_th[2] = (int16)*pval++;
+		dyn_switch_th.rssi_th[1] = (int16)*pval++;
+		dyn_switch_th.rssi_th[0] = (int16)*pval++;
+		return wlu_var_setbuf(wl, cmd->name, &dyn_switch_th, sizeof(wl_dyn_switch_th_t));
 	}
 	return ret;
 
@@ -4979,4 +5389,79 @@ wl_olpc_offset(void *wl, cmd_t *cmd, char **argv)
 		}
 	}
 	return err;
+}
+
+static int
+wl_btcoex_desense_rxgain(void *wl, cmd_t *cmd, char **argv)
+{
+	wl_desense_restage_gain_t desense_restage_gain;
+	wl_desense_restage_gain_t *desense_restage_gain_ptr;
+	uint8 num_cores = 0, i;
+	uint32 num_params = 0;
+	int err = 0;
+	void *ptr = NULL;
+
+	memset(&desense_restage_gain, 0, sizeof(desense_restage_gain));
+	desense_restage_gain.version =  0;
+	desense_restage_gain.length = sizeof(desense_restage_gain);
+
+	if (!(*++argv)) {		/* Get */
+		if ((err = wlu_var_getbuf_med(wl, cmd->name, NULL, 0, &ptr)) < 0)
+			return err;
+
+		desense_restage_gain_ptr = ptr;
+
+		if (desense_restage_gain_ptr->band == WLC_BAND_2G)
+				printf("Band: 2G\n");
+
+		if (desense_restage_gain_ptr->band == WLC_BAND_5G)
+				printf("Band: 5G\n");
+
+		printf("# of cores: %d\n", desense_restage_gain_ptr->num_cores);
+
+		for (i = 0; i < desense_restage_gain_ptr->num_cores; i++)
+				printf("Desense for core[%d] = %d \n",
+					i, desense_restage_gain_ptr->desense_array[i]);
+
+		return BCME_OK;
+	}
+
+	/* Set */
+	if (strcmp(*argv, "b") == 0) {
+		desense_restage_gain.band = WLC_BAND_2G;
+	} else if (strcmp(*argv, "a") == 0) {
+		desense_restage_gain.band = WLC_BAND_5G;
+	} else {
+		return BCME_USAGE_ERROR;
+	}
+
+	++argv;
+	if (*argv == NULL) {
+		return BCME_USAGE_ERROR;
+	}
+	num_cores = strtoul(*argv, NULL, 0);
+
+	if (num_cores > WL_TX_CHAINS_MAX) {
+		printf("Number of cores %d greater than max value %d\n",
+				num_cores, WL_TX_CHAINS_MAX);
+		return BCME_USAGE_ERROR;
+	}
+
+	desense_restage_gain.num_cores = num_cores;
+
+	++argv;
+	while ((argv[num_params] != NULL) &&
+		(num_params < num_cores)) {
+		desense_restage_gain.desense_array[num_params] =
+			strtoul(argv[num_params], NULL, 0);
+		num_params++;
+	}
+
+	if (num_params != num_cores || (argv[num_params] != NULL)) {
+		printf("Number of parameters(%d) not matching number of cores(%d)\n",
+			num_params, num_cores);
+		return BCME_USAGE_ERROR;
+	}
+
+	return (wlu_var_setbuf(wl, cmd->name, &desense_restage_gain, sizeof(desense_restage_gain)));
 }

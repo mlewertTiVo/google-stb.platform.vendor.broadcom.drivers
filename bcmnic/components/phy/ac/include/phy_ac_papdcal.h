@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_papdcal.h 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_ac_papdcal.h 656647 2016-08-29 12:15:57Z $
  */
 
 #ifndef _phy_ac_papdcal_h_
@@ -50,6 +50,8 @@
 #define PAPD_FRACDELAY_OFFSET_2G 0xFF
 #define PAPD_FRACDELAY_OFFSET_5G 0xFF00
 #define PAPD_FRACDELAY_OFFSET_5G_SHIFT 8
+#define WPAPD_MAC_PLAY_ROM_ADDR_43012B0 0x192f0
+
 
 /* forward declaration */
 typedef struct phy_ac_papdcal_info phy_ac_papdcal_info_t;
@@ -108,5 +110,8 @@ extern void wlc_phy_get_papd_cal_pwr_acphy(phy_info_t *pi, int8 *targetpwr, int8
 
 void phy_ac_papdcal_cal_init(phy_info_t *pi);
 void phy_ac_papdcal(phy_info_t *pi);
+#ifdef PHYCAL_CACHING
+void phy_ac_papdcal_save_cache(phy_ac_papdcal_info_t *papdcali, ch_calcache_t *ctx);
+#endif /* PHYCAL_CACHING */
 void phy_ac_papdcal_get_gainparams(phy_ac_papdcal_info_t *i, uint8 *Gainoverwrite, uint8 *PAgain);
 #endif /* _phy_ac_papdcal_h_ */

@@ -31,18 +31,6 @@ enum {
 };
 
 static const bcm_iovar_t phy_ac_misc_iovars[] = {
-#ifdef WLTEST
-	{"phy_rxgainerr_2g", IOV_PHY_RXGAINERR_2G,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 4*sizeof(int8)},
-	{"phy_rxgainerr_5gl", IOV_PHY_RXGAINERR_5GL,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 4*sizeof(int8)},
-	{"phy_rxgainerr_5gm", IOV_PHY_RXGAINERR_5GM,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 4*sizeof(int8)},
-	{"phy_rxgainerr_5gh", IOV_PHY_RXGAINERR_5GH,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 4*sizeof(int8)},
-	{"phy_rxgainerr_5gu", IOV_PHY_RXGAINERR_5GU,
-	(IOVF_GET_UP | IOVF_SET_UP | IOVF_MFG), 0, IOVT_BUFFER, 4*sizeof(int8)},
-#endif /* WLTEST */
 	{"rud_agc_enable", IOV_PHY_RUD_AGC_ENABLE,
 	(IOVF_SET_UP | IOVF_GET_UP | IOVF_MFG), 0, IOVT_INT16, 0},
 	{NULL, 0, 0, 0, 0, 0}
@@ -57,77 +45,14 @@ phy_ac_misc_doiovar(void *ctx, uint32 aid,
 
 	phy_info_t *pi = (phy_info_t *)ctx;
 	int err = BCME_OK;
-#ifdef WLTEST
 	int8 *setDeltaValues = p, *getDeltaValues = a;
 	uint8 core;
-#endif /* WLTEST */
+
+	BCM_REFERENCE(getDeltaValues);
+	BCM_REFERENCE(setDeltaValues);
+	BCM_REFERENCE(core);
+
 	switch (aid) {
-#ifdef WLTEST
-	case IOV_SVAL(IOV_PHY_RXGAINERR_2G):
-		FOREACH_CORE(pi, core) {
-			pi->rxgainerr_2g[core] = setDeltaValues[core];
-		}
-		pi->rxgainerr2g_isempty = FALSE;
-		break;
-
-	case IOV_GVAL(IOV_PHY_RXGAINERR_2G):
-		FOREACH_CORE(pi, core) {
-			getDeltaValues[core] = pi->rxgainerr_2g[core];
-		}
-		break;
-
-	case IOV_SVAL(IOV_PHY_RXGAINERR_5GL):
-		FOREACH_CORE(pi, core) {
-			pi->rxgainerr_5gl[core] = setDeltaValues[core];
-		}
-		pi->rxgainerr5gl_isempty = FALSE;
-		break;
-
-	case IOV_GVAL(IOV_PHY_RXGAINERR_5GL):
-		FOREACH_CORE(pi, core) {
-			getDeltaValues[core] = pi->rxgainerr_5gl[core];
-		}
-		break;
-
-	case IOV_SVAL(IOV_PHY_RXGAINERR_5GM):
-		FOREACH_CORE(pi, core) {
-			pi->rxgainerr_5gm[core] = setDeltaValues[core];
-		}
-		pi->rxgainerr5gm_isempty = FALSE;
-		break;
-
-	case IOV_GVAL(IOV_PHY_RXGAINERR_5GM):
-		FOREACH_CORE(pi, core) {
-		  getDeltaValues[core] = pi->rxgainerr_5gm[core];
-		}
-		break;
-
-	case IOV_SVAL(IOV_PHY_RXGAINERR_5GH):
-		FOREACH_CORE(pi, core) {
-			pi->rxgainerr_5gh[core] = setDeltaValues[core];
-		}
-		pi->rxgainerr5gh_isempty = FALSE;
-		break;
-
-	case IOV_GVAL(IOV_PHY_RXGAINERR_5GH):
-		FOREACH_CORE(pi, core) {
-		  getDeltaValues[core] = pi->rxgainerr_5gh[core];
-		}
-		break;
-
-	case IOV_SVAL(IOV_PHY_RXGAINERR_5GU):
-		FOREACH_CORE(pi, core) {
-			pi->rxgainerr_5gu[core] = setDeltaValues[core];
-		}
-		pi->rxgainerr5gu_isempty = FALSE;
-		break;
-
-	case IOV_GVAL(IOV_PHY_RXGAINERR_5GU):
-		FOREACH_CORE(pi, core) {
-		  getDeltaValues[core] = pi->rxgainerr_5gu[core];
-		}
-		break;
-#endif /* WLTEST */
 	case IOV_SVAL(IOV_PHY_RUD_AGC_ENABLE):
 		{
 			int32 int_val = 0;

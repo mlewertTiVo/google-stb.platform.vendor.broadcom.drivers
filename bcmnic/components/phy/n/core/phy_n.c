@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n.c 618416 2016-02-11 01:05:38Z guangjie $
+ * $Id: phy_n.c 663712 2016-10-06 18:09:29Z $
  */
 
 #include <typedefs.h>
@@ -38,7 +38,8 @@
 #include <phy_n_misc.h>
 #include <phy_n_btcx.h>
 #include <phy_n_lpc.h>
-
+#include <phy_n_rxspur.h>
+#include <phy_n_stf.h>
 
 #include "phy_type.h"
 #include "phy_type_n.h"
@@ -67,12 +68,11 @@ static int phy_n_register_impl(phy_info_t *pi, phy_type_info_t *ti, int bandtype
 static void phy_n_unregister_impl(phy_info_t *pi, phy_type_info_t *ti);
 static void phy_n_reset_impl(phy_info_t *pi, phy_type_info_t *ti);
 static int phy_n_init_impl(phy_info_t *pi, phy_type_info_t *ti);
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 static int phy_n_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b);
 #else
 #define	phy_n_dump_phyregs	NULL
-#endif /* (BCMINTERNAL || DBG_PHY_IOV) && (BCMDBG || BCMDBG_DUMP) */
+#endif 
 
 /* attach/detach */
 phy_type_info_t *
@@ -153,7 +153,7 @@ BCMATTACHFN(phy_n_attach_ext)(phy_info_t *pi, int bandtype)
 #ifdef N2WOWL
 	/* Reduce phyrxchain to 1 to save power in WOWL mode */
 	if (CHIPID(pi->sh->chip) == BCM43237_CHIP_ID) {
-		pi->sh->phyrxchain = 0x1;
+		phy_stf_set_phyrxchain(pi->stfi, 0x1);
 	}
 #endif /* N2WOWL */
 
@@ -170,9 +170,6 @@ BCMATTACHFN(phy_n_attach_ext)(phy_info_t *pi, int bandtype)
 static int
 WLBANDINITFN(phy_n_init_impl)(phy_info_t *pi, phy_type_info_t *ti)
 {
-	/* Reset gain_boost on band-change */
-	pi->nphy_gain_boost = TRUE;
-
 	return BCME_OK;
 }
 
@@ -323,6 +320,34 @@ BCMATTACHFN(phy_n_register_impl)(phy_info_t *pi, phy_type_info_t *ti, int bandty
 		PHY_ERROR(("%s: phy_n_lpc_register_impl failed\n", __FUNCTION__));
 		goto fail;
 	}
+
+	/* Register with Rx Spur canceller module */
+	if (pi->rxspuri != NULL &&
+		(ni->rxspuri = phy_n_rxspur_register_impl(pi, ni, pi->rxspuri)) == NULL) {
+		PHY_ERROR(("%s: phy_n_rxspur_register_impl failed\n", __FUNCTION__));
+		goto fail;
+	}
+
+	/* Register with STF module */
+	if (pi->stfi != NULL &&
+		(ni->stfi = phy_n_stf_register_impl(pi, ni, pi->stfi)) == NULL) {
+			PHY_ERROR(("%s: phy_n_stf_register_impl failed\n", __FUNCTION__));
+			goto fail;
+	}
+
+	/* Register with Debug module */
+	if (pi->dbgi != NULL &&
+		(ni->dbgi = phy_n_dbg_register_impl(pi, ni, pi->dbgi)) == NULL) {
+		PHY_ERROR(("%s: phy_n_dbg_register_impl failed\n", __FUNCTION__));
+		goto fail;
+	}
+
+	if (pi->rxgcrsi != NULL &&
+		(ni->rxgcrsi = phy_n_rxgcrs_register_impl(pi, ni, pi->rxgcrsi)) == NULL) {
+		PHY_ERROR(("%s: phy_n_rxgcrs_register_impl failed\n", __FUNCTION__));
+		goto fail;
+	}
+
 	/* ...Add your module registration here... */
 
 	return BCME_OK;
@@ -337,6 +362,22 @@ BCMATTACHFN(phy_n_unregister_impl)(phy_info_t *pi, phy_type_info_t *ti)
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 	/* ...Add your module registration here... */
+
+	/* Unregister from rxgcrs control module */
+	if (ni->rxgcrsi != NULL)
+		phy_n_rxgcrs_unregister_impl(ni->rxgcrsi);
+
+	/* Unregister from Debug control module */
+	if (ni->dbgi != NULL)
+		phy_n_dbg_unregister_impl(ni->dbgi);
+
+	/* Unregister from STF module */
+	if (ni->stfi != NULL)
+		phy_n_stf_unregister_impl(ni->stfi);
+
+	/* Unregister from Rx Spur canceller module */
+	if (ni->rxspuri != NULL)
+		phy_n_rxspur_unregister_impl(ni->rxspuri);
 
 	/* Unregister from Link Power Control module */
 	if (ni->lpci != NULL)
@@ -442,7 +483,7 @@ phy_n_reset_impl(phy_info_t *pi, phy_type_info_t *ti)
 }
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 
 static phy_regs_t nphy3_bphy_regs[] = {
 	{ 1,	1 },		/* 1 */
@@ -763,7 +804,7 @@ phy_n_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b)
 {
 	phy_regs_t *rl;
 
-	wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	if (CHSPEC_IS2G(pi->radio_chanspec)) {
 		rl = nphy3_bphy_regs;
@@ -779,9 +820,9 @@ phy_n_dump_phyregs(phy_info_t *pi, phy_type_info_t *ti, struct bcmstrbuf *b)
 	}
 	phy_dump_phyregs(pi, "nphy", rl, 0, b);
 
-	wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	return BCME_OK;
 }
-#endif /* BCMINTERNAL || DBG_PHY_IOV */
+#endif 
 #endif /* BCMDBG || BCMDBG_DUMP */

@@ -1287,7 +1287,8 @@ p2papi_encode_inv_rsp_p2p_ie(p2papi_instance_t* hdl, uint8 status,
 		subel = p2papi_enc_se_grp_bssid(p2p_grp_bssid, subel, ie_len);
 
 	/* Add the Channel List subelement */
-	subel = p2papi_enc_se_chan_list(country, chanlist, subel, ie_len);
+	if (chanlist)
+		subel = p2papi_enc_se_chan_list(country, chanlist, subel, ie_len);
 
 	/* Fill in the IE's length field */
 	p2p_ie->len = (uint8) *ie_len - 2;

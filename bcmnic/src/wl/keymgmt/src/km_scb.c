@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_scb.c 643347 2016-06-14 10:20:25Z $
+ * $Id: km_scb.c 673610 2016-12-02 18:52:07Z $
  */
 
 #include "km_pvt.h"
@@ -295,6 +295,131 @@ done:
 	return BCME_OK;
 }
 
+#ifdef WLRSDB
+int
+km_scb_serialize(wlc_keymgmt_t *km, struct scb *scb, void *buf_ptr, size_t buf_len)
+{
+	wlc_key_t *key;
+	size_t tot_len = 0, data_len = 0;
+	wlc_key_id_t id = WLC_KEY_ID_PAIRWISE;
+	uint8 data[KM_KEY_MAX_DATA_LEN];
+	int seq_id = 0, err = BCME_OK;
+	wlc_key_info_t key_info_f;
+	bool tx = TRUE;
+	memset(buf_ptr, 0, buf_len);
+	{
+		key = wlc_keymgmt_get_scb_key(km, scb, id, WLC_KEY_FLAG_NONE,
+			&key_info_f);
+
+		/* Copy key algo to buffer */
+		buf_ptr = bcm_write_tlv(KM_SERIAL_TLV_KEY_ALGO, &key_info_f.algo,
+			sizeof(key_info_f.algo), buf_ptr);
+		tot_len += sizeof(key_info_f.algo);
+
+		/* Back the key data */
+		err = wlc_key_get_data(key, data, sizeof(data), &data_len);
+		if (err) {
+			return BCME_ERROR;
+		}
+		buf_ptr = bcm_write_tlv(KM_SERIAL_TLV_KEY_DATA, data, data_len, buf_ptr);
+		tot_len += data_len;
+
+		/* Back-up tx seq number */
+		data_len = wlc_key_get_seq(key, data, sizeof(data), seq_id, tx);
+		buf_ptr = bcm_write_tlv(KM_SERIAL_TLV_TX_SEQ, data, data_len, buf_ptr);
+		tot_len += data_len;
+
+		/* Back-up rx seq number */
+		for (seq_id = 0; seq_id < (size_t)WLC_KEY_NUM_RX_SEQ; seq_id++) {
+			data_len = wlc_key_get_seq(key, data, sizeof(data), seq_id, !tx);
+			buf_ptr = bcm_write_tlv(KM_SERIAL_TLV_RX_SEQ, data, data_len, buf_ptr);
+			tot_len += data_len;
+		}
+	}
+	KM_DBG_ASSERT(tot_len <= buf_len);
+	return BCME_OK;
+}
+
+int
+km_scb_deserialize(wlc_keymgmt_t *km, struct scb *scb, void* buf_ptr, size_t buf_len)
+{
+	wlc_key_info_t key_info_t, key_info_f;
+	bcm_tlv_t *key_tlv;
+	wlc_key_t *to_key;
+	bool tx = TRUE;
+	wlc_key_id_t id = WLC_KEY_ID_PAIRWISE;
+	int seq_id = 0, ret = BCME_OK;
+	{
+		/* Get the SCB key on the new wlc */
+		to_key = wlc_keymgmt_get_scb_key(km, scb, id, WLC_KEY_FLAG_NONE, &key_info_t);
+
+		/* Get the key algo from backup */
+		key_tlv = bcm_parse_tlvs(buf_ptr, buf_len, KM_SERIAL_TLV_KEY_ALGO);
+		if (key_tlv && key_tlv->len) {
+			memcpy(&key_info_f.algo, key_tlv->data, key_tlv->len);
+			buf_ptr += (key_tlv->len + TLV_HDR_LEN);
+			buf_len -= (key_tlv->len + TLV_HDR_LEN);
+		}
+
+		/* Set the data taken from old wlc to new wlc */
+		key_tlv = bcm_parse_tlvs(buf_ptr, buf_len, KM_SERIAL_TLV_KEY_DATA);
+		if (key_tlv && key_tlv->len) {
+			ret = wlc_key_set_data(to_key, key_info_f.algo, key_tlv->data,
+				key_tlv->len);
+			buf_ptr += (key_tlv->len + TLV_HDR_LEN);
+			buf_len -= (key_tlv->len + TLV_HDR_LEN);
+		}
+
+		/* Clone tx seq number */
+		key_tlv = bcm_parse_tlvs(buf_ptr, buf_len, KM_SERIAL_TLV_TX_SEQ);
+		if (key_tlv && key_tlv->len) {
+			ret = wlc_key_set_seq(to_key, key_tlv->data, key_tlv->len,
+				seq_id, tx);
+			buf_ptr += (key_tlv->len + TLV_HDR_LEN);
+			buf_len -= (key_tlv->len + TLV_HDR_LEN);
+		}
+
+		/* Clone rx seq number */
+		for (seq_id = 0; seq_id < (size_t)WLC_KEY_NUM_RX_SEQ; seq_id++) {
+			key_tlv = bcm_parse_tlvs(buf_ptr, buf_len, KM_SERIAL_TLV_RX_SEQ);
+			if (key_tlv && key_tlv->len) {
+				ret = wlc_key_set_seq(to_key, key_tlv->data, key_tlv->len,
+					seq_id, !tx);
+				buf_ptr += (key_tlv->len + TLV_HDR_LEN);
+				buf_len -= (key_tlv->len + TLV_HDR_LEN);
+			}
+		}
+	}
+	return ret;
+}
+
+int
+km_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg)
+{
+	keymgmt_t *km = (keymgmt_t *)context;
+	wlc_info_t *new_wlc = new_cfg->wlc;
+	wlc_bsscfg_t *from_bsscfg = scb->bsscfg;
+
+	/* Back up the SCB clone data to buffer */
+	km_scb_serialize(km, scb, km->tlv_buffer, km->tlv_buf_size);
+	/* Cleanup the keys on from_wlc */
+	km_scb_cleanup(km, scb);
+	/* Update the cfg to new cfg pointer */
+	scb->bsscfg = new_cfg;
+	/* Initialize the keys on to_wlc with default values */
+	km_scb_init_internal(new_wlc->keymgmt, scb);
+	/* Restore the SCB clone data */
+	km_scb_deserialize(new_wlc->keymgmt, scb, km->tlv_buffer, km->tlv_buf_size);
+	/* Restore back the old cfg value
+	* so that remaining update functions
+	* can complete their operation.
+	*/
+	scb->bsscfg = from_bsscfg;
+	return BCME_OK;
+}
+#endif /* WLRSDB */
+
+
 /* public interface */
 int
 km_scb_init(void *ctx, scb_t *scb)
@@ -429,7 +554,7 @@ wlc_keymgmt_get_tx_key(wlc_keymgmt_t *km, scb_t *scb,
 		const km_key_cache_t *kc = km->key_cache;
 		scb_km = KM_SCB(km, scb);
 		if (kc && key_info && !BSSCFG_PSTA(scb->bsscfg) &&
-				!memcmp(&scb->ea, &kc->key_info->addr, sizeof(scb->ea))) {
+				!ether_cmp(&scb->ea, &kc->key_info->addr)) {
 			if (key_info->key_idx == scb_km->key_idx) {
 				key = kc->key;
 				*key_info = *kc->key_info;
@@ -462,10 +587,6 @@ wlc_keymgmt_ivtw_enable(wlc_keymgmt_t *km, scb_t *scb, bool enable)
 	bsscfg = SCB_BSSCFG(scb);
 	KM_DBG_ASSERT(bsscfg != NULL);
 
-	/* no support for ivtw on non STA and IBSS */
-	if (!BSSCFG_STA(bsscfg) || !bsscfg->BSS)
-		enable = FALSE;
-
 	scb_km = KM_SCB(km, scb);
 	if (KM_VALID_KEY_IDX(km, scb_km->key_idx))
 		err = km_ivtw_enable(km->ivtw, scb_km->key_idx, enable);
@@ -495,7 +616,8 @@ km_scb_state_upd(keymgmt_t *km, scb_state_upd_data_t *data)
 	key = wlc_keymgmt_get_scb_key(km, scb, WLC_KEY_ID_PAIRWISE, WLC_KEY_FLAG_NONE, &key_info);
 	if ((key_info.algo != CRYPTO_ALGO_OFF) &&
 			((!bsscfg->BSS && !SCB_AUTHORIZED(scb)) ||
-			(bsscfg->BSS && !SCB_ASSOCIATED(scb))) &&
+			(bsscfg->BSS && !SCB_WDS(scb) && !SCB_ASSOCIATED(scb)) ||
+			(bsscfg->BSS && SCB_WDS(scb) && !SCB_AUTHORIZED(scb))) &&
 			(bsscfg->WPA_auth != WPA_AUTH_DISABLED) &&
 			(bsscfg->WPA_auth != WPA_AUTH_NONE)) {
 		wlc_key_set_data(key, CRYPTO_ALGO_OFF, NULL, 0);

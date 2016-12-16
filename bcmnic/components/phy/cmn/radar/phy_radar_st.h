@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_radar_st.h 623220 2016-03-06 23:06:37Z chihap $
+ * $Id: phy_radar_st.h 656353 2016-08-26 06:50:51Z $
  */
 
 #ifndef _phy_radar_st_
@@ -48,7 +48,10 @@
 #define DFS_SW_SUB_VERSION	1
 #define DFS_SW_DATE_MONTH	1020
 #define DFS_SW_YEAR	2015
-#define RDR_LIST_SIZE (512/3 + 2)  /* Size of the list (rev 3 fifo size = 512) */
+
+#define MAX_FIFO_SIZE	512
+
+#define RDR_LIST_SIZE (MAX_FIFO_SIZE / 4 + 2)	/* 4 words per pulse */
 
 #ifdef BCMPHYCORENUM
 #  if BCMPHYCORENUM > 1
@@ -75,6 +78,7 @@
 typedef struct {
 	wl_radar_args_t radar_args;	/* radar detection parametners */
 	wl_radar_thr_t radar_thrs;	/* radar thresholds */
+	wl_radar_thr2_t radar_thrs2;	/* radar thresholds for subband and 3+1 */
 	int min_deltat_lp;
 	int max_deltat_lp;
 } radar_params_t;
@@ -83,6 +87,9 @@ typedef struct {
 	uint32 interval;	/* tstamp or interval (in 1/20 us) */
 	uint16 pw;		/* pulse-width in 1/20 us */
 	int16 fm;		/* autocorrelation */
+	int16 fc;
+	uint16 chirp;
+	uint16 notradar;
 } pulse_data_t;
 
 typedef struct {
@@ -97,7 +104,9 @@ typedef struct {
 	/* pulses (in intervals) to process for checking short-pulse Radar match */
 	uint16 length;
 	pulse_data_t pulses[RDR_LIST_SIZE];
+} radar_work_t;
 
+typedef struct {
 	/* various fields needed for checking FCC 5 long-pulse Radar */
 	uint8 lp_length;
 	uint32 lp_buffer[RDR_LP_BUFFER_SIZE];
@@ -118,16 +127,25 @@ typedef struct {
 	uint32 last_skipped_time;
 	uint8 lp_len_his[LP_LEN_HIS_SIZE];
 	uint8 lp_len_his_idx;
+	int16 min_detected_fc_bin5;
+	int16 max_detected_fc_bin5;
+	int16 avg_detected_fc_bin5;
 	pulse_data_t pulse_tail[RDR_NANTENNAS];
-} radar_work_t;
+} radar_lp_info_t;
 
 /* RADAR data structure */
 typedef struct {
-	radar_work_t	radar_work;	/* radar work area */
+	radar_work_t	radar_work;	/* current radar fifo sample info */
+	radar_lp_info_t	radar_lp_info;	/* radar persistent info */
 	radar_params_t	rparams;
 	phy_radar_detect_mode_t rdm;    /* current radar detect mode FCC/EU */
 	wl_radar_status_t radar_status;	/* dump/clear radar status */
 	bool first_radar_indicator;	/* first radar indicator */
+
+	radar_lp_info_t	*radar_work_lp_sc;	/* scan core radar persistent info */
+	wl_radar_status_t *radar_status_sc;	/* dump/clear radar status */
+	bool first_radar_indicator_sc;	/* first radar indicator */
+	uint16 subband_result;
 } phy_radar_st_t;
 
 /*

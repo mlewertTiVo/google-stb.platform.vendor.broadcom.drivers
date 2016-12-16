@@ -49,7 +49,7 @@ CONFIG_SAMBA=y
 # CONFIG_DLNA_DMS is not set
 # CONFIG_DLNA_DMR is not set
 CONFIG_MFP=y
-CONFIG_HSPOT=y
+# CONFIG_HSPOT is not set
 CONFIG_WNM=y
 CONFIG_NAS=y
 # CONFIG_WAPI is not set

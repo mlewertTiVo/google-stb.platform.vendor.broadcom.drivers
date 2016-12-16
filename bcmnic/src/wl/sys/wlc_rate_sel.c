@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rate_sel.c 636000 2016-05-06 04:05:27Z $
+ * $Id: wlc_rate_sel.c 660602 2016-09-21 07:14:16Z $
  */
 
 
@@ -163,10 +163,10 @@ enum {
 #endif /* WL11N */
 
 #define MCS_STREAM_MAX_UNDEF	0	/* not specified */
-#define MCS_STREAM_MAX_1       	1	/* pick mcs rates with one streams */
-#define MCS_STREAM_MAX_2       	2	/* pick mcs rates with up to two streams */
-#define MCS_STREAM_MAX_3       	3	/* pick mcs rates with up to three streams */
-#define MCS_STREAM_MAX_4       	4	/* pick mcs rates with up to four streams */
+#define MCS_STREAM_MAX_1	1	/* pick mcs rates with one streams */
+#define MCS_STREAM_MAX_2	2	/* pick mcs rates with up to two streams */
+#define MCS_STREAM_MAX_3	3	/* pick mcs rates with up to three streams */
+#define MCS_STREAM_MAX_4	4	/* pick mcs rates with up to four streams */
 
 #ifndef MCS_STREAM_MAX
 #define MCS_STREAM_MAX MCS_STREAM_MAX_4
@@ -266,7 +266,9 @@ enum {
 #endif /* WL11N */
 
 #define RATES_NUM_ALL           (RATES_NUM_CCKOFDM + RATES_NUM_MCS)
-#define MAX_RATESEL_NUM		(RATES_NUM_CCK + RATES_NUM_MCS) /* we use at most this many rates */
+#define MAX_RATESEL_NUM_OLD	(RATES_NUM_CCK + RATES_NUM_MCS)	/* max # rates to use */
+#define MAX_RATESEL_NUM		(RATES_NUM_CCK + RATES_NUM_MCS + 6+4-2-RATES_NUM_CCK) /* add 4 */
+#define PAD_RATESEL_NUM		(MAX_RATESEL_NUM_OLD - sizeof(uint8 *))
 
 #ifdef WL11AC
 #define SPMASK_IN_MCS		0xf0
@@ -299,9 +301,9 @@ const uint8 mcs256q_map[MCS_STREAM_MAX_3][2] = {
 #define RSSI_PRI_ON 0
 
 #if RSSI_PRI_ON
-#define RSSI_PRI_LMT		10  /* for no mfbr case */
-#define RSSI_PRI_LMT_MFBR	20  /* for mfbr */
-#define RSSI_STEP		6   /* step size to lower primary */
+#define RSSI_PRI_LMT		10	/* for no mfbr case */
+#define RSSI_PRI_LMT_MFBR	20	/* for mfbr */
+#define RSSI_STEP		6	/* step size to lower primary */
 #endif
 
 #ifdef WL11N
@@ -446,7 +448,7 @@ struct ratesel_info {
 	int16  rssi_pri;		/* rssi drop threshold to trigger primary rate drop */
 	uint16 idle_lmt;		/* maximum idle time to trigger rfbr */
 #endif /* WL11N */
-	uint8   ncf_lmt;
+	uint8	ncf_lmt;
 #ifdef WL11N
 	uint8   sgi_tmin;		/* mininum time-out */
 	uint8   sgi_tmax;		/* maximum time-out */
@@ -458,11 +460,11 @@ struct rcb {
 	struct scb	*scb;	/* back pointer to scb */
 	ratesel_info_t	*rsi;	/* back pointer to ratesel module local structure */
 	wlc_txc_info_t	*txc;	/* pointer to txc structure for efficient reference */
-	uint8   select_rates[MAX_RATESEL_NUM];	/* the rateset in use */
-	uint8   fbrid[MAX_RATESEL_NUM];	/* corresponding fallback rateid (prev_rate - 2) */
-	uint8   uprid[MAX_RATESEL_NUM]; /* next up rateid (prev_rate + 1) */
-	uint8   dnrid[MAX_RATESEL_NUM]; /* next down rateid (prev_rate - 1) */
-	uint8   bw[MAX_RATESEL_NUM];    /* bw for each rate in select_rates */
+	uint8   *select_rates;	/* the rateset in use */
+	uint8   *fbrid;		/* corresponding fallback rateid (prev_rate - 2) */
+	uint8   *uprid;		/* next up rateid (prev_rate + 1) */
+	uint8   *dnrid;		/* next down rateid (prev_rate - 1) */
+	uint8   *bw;		/* bw for each rate in select_rates */
 	uint8	active_rates_num;	/* total active rates */
 	uint32	nskip;		/* number of txstatus skipped due to epoch mismatch */
 	uint32	nupd;		/* number of txstatus used since last rate change */
@@ -548,6 +550,7 @@ struct rcb {
 	uint8   sgi_timer;	/* timer */
 	bool    sgi_lastprobe_ok; /* last sgi probe result : 0 -- failure, 1 -- succ */
 	uint8   max_mcs[MCS_STREAM_MAX_4]; /* per-stream max mcs */
+	uint16  mcs_bitarray[MCSSET_LEN];
 #endif /* WL11N */
 	bool	txc_inv_reqd;	/* keep track of whether TXC invalidation is required */
 	uint8	txaggthreshold;	/* rate id threshold for enabling tx aggregation */
@@ -662,6 +665,33 @@ static const ratespec_t known_rspec[RATES_NUM_ALL] = {
 #endif /* WL11AC */
 #endif /* WL11N */
 };
+
+/* Define special fallback rate table for 2040in80
+ * -- in pair of (primary, fallback) rspec
+ */
+#ifdef WL11N
+#define FBRSPEC_NUM		12
+static const ratespec_t fbr_rspec[FBRSPEC_NUM][2] = {
+	/* for nss1 bw40 */
+	{ VHT_RSPEC_BW(2, 1, BW_40MHZ), VHT_RSPEC_BW(1, 1, BW_20MHZ) },
+	{ VHT_RSPEC_BW(1, 1, BW_40MHZ), VHT_RSPEC_BW(0, 1, BW_20MHZ) },
+	/* for nss1 bw80 */
+	{ VHT_RSPEC_BW(2, 1, BW_80MHZ), VHT_RSPEC_BW(2, 1, BW_40MHZ) },
+	{ VHT_RSPEC_BW(1, 1, BW_80MHZ), VHT_RSPEC_BW(1, 1, BW_40MHZ) },
+	/* for nss1 bw160 */
+	{ VHT_RSPEC_BW(2, 1, BW_160MHZ), VHT_RSPEC_BW(2, 1, BW_80MHZ) },
+	{ VHT_RSPEC_BW(1, 1, BW_160MHZ), VHT_RSPEC_BW(1, 1, BW_80MHZ) },
+	/* for nss2 bw40 */
+	{ VHT_RSPEC_BW(2, 2, BW_40MHZ), VHT_RSPEC_BW(2, 2, BW_20MHZ) },
+	{ VHT_RSPEC_BW(1, 2, BW_40MHZ), VHT_RSPEC_BW(1, 2, BW_20MHZ) },
+	/* for nss2 bw80 */
+	{ VHT_RSPEC_BW(2, 2, BW_80MHZ), VHT_RSPEC_BW(3, 2, BW_40MHZ) },
+	{ VHT_RSPEC_BW(1, 2, BW_80MHZ), VHT_RSPEC_BW(2, 2, BW_40MHZ) },
+	/* for nss2 bw160 */
+	{ VHT_RSPEC_BW(2, 2, BW_160MHZ), VHT_RSPEC_BW(2, 2, BW_80MHZ) },
+	{ VHT_RSPEC_BW(1, 2, BW_160MHZ), VHT_RSPEC_BW(1, 2, BW_80MHZ) },
+};
+#endif /* WL11N */
 
 #ifndef WL11N
 static uint8 M_params[RATE_UDSZ][RATES_NUM_ALL] = {
@@ -893,6 +923,9 @@ enum {
 
 #endif /* WL11N */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_ratesel_dump(ratesel_info_t *rsi, struct bcmstrbuf *b);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static int wlc_ratesel_doiovar(void *hdl, uint32 actionid,
 	void *p, uint plen, void *a, uint alen, uint val_size, struct wlc_if *wlcif);
@@ -927,7 +960,7 @@ static bool wlc_ratesel_next_rate(rcb_t *state, int8 incdec, uint8 *next_rateid,
 
 static uint8 wlc_ratesel_get_ncflmt(rcb_t *state);
 static bool wlc_ratesel_upd_spstat(rcb_t *state, bool blockack, uint8 sp_mcs,
-	uint ntx_succ, uint ntx);
+	uint ntx_succ, uint ntx, uint16 txbw);
 static bool wlc_ratesel_upd_extspstat(rcb_t *state, bool blockack,
 	uint8 sp_mcs, uint8 antselid, uint ntx_succ, uint ntx);
 
@@ -1005,6 +1038,9 @@ BCMATTACHFN(wlc_ratesel_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(rsi->pub, "ratesel", (dump_fn_t)wlc_ratesel_dump, (void *)rsi);
+#endif
 
 #ifdef WL11N
 	rsi->nss_lmt = wlc->stf->txstreams;
@@ -1093,7 +1129,90 @@ wlc_ratesel_doiovar(void *hdl, uint32 actionid,
 	return err;
 }
 
+#ifdef BCMDBG
+/** avoid adding too much for default rcb dumping */
+extern void
+wlc_ratesel_dump_rcb(rcb_t *rcb, int32 ac, struct bcmstrbuf *b)
+{
+	uint8 rateid;
+	ratespec_t cur_rspec = 0;
 
+	if (!rcb)
+		return;
+
+	bcm_bprintf(b, "\tAC[%d]: ", ac);
+
+	rateid = rcb->rateid;
+	if (rateid < rcb->active_rates_num)
+		cur_rspec = RATESPEC_OF_I(rcb, rateid);
+#ifndef WL11N
+	if (rcb->rateid < rcb->active_rates_num) {
+		bcm_bprintf(b,  "%s 0x%x bw %d epoch %d skips %u nupds %u\n",
+		IS_MCS(cur_rspec) ? "mcs" : "rate",
+		RSPEC_RATE_MASK & cur_rspec, (RSPEC_BW_MASK & cur_rspec) >> RSPEC_BW_SHIFT,
+		rcb->epoch, rcb->nskip, rcb->nupd);
+	} else {
+		/* if current rateid is not in current select_rate_set */
+		bcm_bprintf(b,  "rate NA epoch %d skips %u nupds %u\n",
+		    rcb->epoch, rcb->nskip, rcb->nupd);
+	}
+#else
+	bcm_bprintf(b, "spmode %d ", rcb->spmode);
+	if (rcb->rateid < rcb->active_rates_num) {
+		bcm_bprintf(b,  "%s 0x%x sgi %d epoch %d ncf %u skips %u nupds %u\n",
+		IS_MCS(cur_rspec) ? "mcs" : "rate", RSPEC_RATE_MASK & cur_rspec,
+		rcb->sgi_state, rcb->epoch, rcb->ncfails, rcb->nskip, rcb->nupd);
+	} else {
+		/* if current rateid is not in current select_rate_set */
+		bcm_bprintf(b,  "rate NA sgi %d epoch %d ncf %u skips %u nupds %u\n",
+		   rcb->sgi_state, rcb->epoch, rcb->ncfails, rcb->nskip, rcb->nupd);
+	}
+#endif /* WL11N */
+
+	return;
+}
+#endif /* BCMDBG */
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_ratesel_dump(ratesel_info_t *rsi, struct bcmstrbuf *b)
+{
+
+#ifdef WL11N
+	uint8 i;
+
+	if (rsi->measure_mode)
+		bcm_bprintf(b, "In the measure mode. Ref_rateid %d\n", rsi->ref_rateid);
+
+	bcm_bprintf(b, "EMA parameters: NF = %d alpha0 = %d alpha %d\n",
+		RATESEL_EMA_NF, rsi->psr_ema_alpha0, rsi->psr_ema_alpha);
+
+	if (rsi->txant_sel) {
+		bcm_bprintf(b, "txant_stats = [");
+		for (i = 0; i < rsi->txant_stats_num; i++) {
+			bcm_bprintf(b, " %d", rsi->txant_stats[i]);
+		}
+		bcm_bprintf(b, "]\n");
+		bcm_bprintf(b, "txant_max_idx = %d\n", rsi->txant_max_idx);
+	}
+
+	if (rsi->rxant_sel) {
+		bcm_bprintf(b, "rxant: cnt_rx/tx %d %d id_main/probe %d %d "
+			    "stats_main/probe %d %d\n", rsi->rxant_rxcnt,
+			    rsi->rxant_txcnt, rsi->rxant_id, rsi->rxant_probe_id,
+			    rsi->rxant_stats, rsi->rxant_probe_stats);
+		if (rsi->rxant_rate_en) {
+			for (i = 0; i < ANT_SELCFG_MAX_NUM; i++) {
+				bcm_bprintf(b, "\nantid %d: cnt %d hist_rxrate %d",
+					i, rsi->rxant_rate_cnt[i], rsi->rxant_rate[i]);
+			}
+		}
+	}
+#endif /* WL11N */
+	return 0;
+}
+
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 
 void
@@ -1209,9 +1328,16 @@ static uint8
 wlc_ratesel_getfbrateid(rcb_t *state, uint8 rateid)
 {
 
+#if defined(BCMDBG_DUMP)
+	if (state->fixrate != DUMMY_UINT8 && !(state->fixrate & FIXPRI_FLAG))
+		return state->rateid;
+#endif
 
+#if defined(D11AC_TXD)
+	return state->fbrid[rateid];
+#else
 	return ((state->gotpkts & GOTPKTS_INIT) ? state->fbrid[rateid] : 0);
-
+#endif /* D11AC_TXD */
 }
 
 #ifdef WL_FRAGDUR
@@ -1281,15 +1407,42 @@ wlc_ratesel_calc_txaggthreshold(wlc_info_t *wlc, rcb_t *state)
 /**
  * init and tool functions for WL11N
  */
-/* return <mcs>'s offset in select_rates[] whose's bw is >= bw in input */
+/* return <mcs>'s offset in select_rates[] whose's bw is >= bw in input
+ * Input: <mcs> = [nss, mcs], <bw> -- targetting probing (nss, mcs, bw)
+ */
 static int
 wlc_ratesel_mcsbw2id(rcb_t *state, uint8 mcs, uint8 bw)
 {
-	uint8 i;
+	uint8 i, k, nss0, nss1;
+	uint32 rate500kbps;
 	for (i = state->mcs_baseid; i < state->active_rates_num; i++) {
-		if (state->bw[i] >= bw &&
-		   (RSPEC_RATE_MASK & known_rspec[state->select_rates[i]]) == mcs)
-			return i;
+		if ((RSPEC_RATE_MASK & known_rspec[state->select_rates[i]]) == mcs) {
+			if (state->bw[i] == bw) {
+				return i;
+			}
+		}
+	}
+
+	/* Probing rate has higher BW:
+	 * go search the rate id in the same nss family
+	 * whose phyrate is <= (1.2 * current primary phyrate)
+	 */
+	/* primary rate in 500kbps including bw excluding sgi */
+	rate500kbps = (90 * RSPEC2RATE500K(CUR_RATESPEC(state))) / 100;
+	nss0 = SPMASK_IN_MCS & mcs;
+	for (k = state->mcs_baseid; k < state->active_rates_num; k++) {
+		nss1 = (SPMASK_IN_MCS & (RATESPEC_OF_I(state, k)));
+		if (nss1 > nss0) {
+			break;
+		} else if (nss1 < nss0) {
+			continue;
+		} else {
+			/* nss1 == nss0 */
+			uint32 tmp = (uint32)RSPEC2RATE500K(RATESPEC_OF_I(state, k));
+			if (tmp >= rate500kbps) {
+				return k;
+			}
+		}
 	}
 	return -1;
 }
@@ -1538,6 +1691,183 @@ wlc_ratesel_next_rate(rcb_t *state, int8 incdec, uint8 *next_rateid, ratespec_t 
 	return TRUE;
 
 }
+
+/*
+ * Add a new rate described by (mcs, nss, bw)
+ * Return: next rate_id in rate set, -1 if not able to add
+ * Input:
+ *   max_rate = 0 : don't check range
+ *   mcs: 0-11 in case of WL11AC; otherwise is the HT mcs0-31 enumeration
+ *   nss: # of streams. index-1 based.
+ *   bw : bw in enum BW_xxMHZ space
+ * This function is not applicable to legacy rate, for which call wlc_ratesel_addrate()
+ */
+static int
+wlc_ratesel_addmcs(rcb_t *state, uint16 *mcs_filter,
+	uint32 min_rate, uint32 max_rate, uint8 mcs, uint8 nss, uint8 bw)
+{
+	ratespec_t new_rspec;
+
+#ifdef WL11AC
+	if ((mcs_filter[nss-1] & (1 << mcs)) == 0) {
+		/* if mcs is not allowed, then skip */
+		return -1;
+	}
+	new_rspec = VHT_RSPEC(mcs, nss);
+#else
+	if (!(isset(mcs_filter, mcs))) {
+		return -1;
+	}
+	new_rspec = HT_RSPEC(mcs);
+#endif
+
+	/* if need to check range, return -1 if fall out of range */
+	if (max_rate > 0) {
+		if (wlc_ratesel_chklmt(state, new_rspec | (bw << RSPEC_BW_SHIFT),
+				max_rate, min_rate) == FALSE) {
+			return -1;
+		}
+	}
+
+	state->bw[state->active_rates_num] = bw;
+	state->select_rates[state->active_rates_num++] =
+		wlc_ratesel_rspec2idx(state, new_rspec);
+	state->max_mcs[nss-1] = mcs;
+
+	return state->active_rates_num;
+}
+
+/*
+ * Add nss-1 rates into rate set based on
+ * -- allowed mcs at nss-1
+ * -- min/max rate
+ * -- bw_auto
+ */
+static void
+wlc_ratesel_init_nss1(rcb_t *state, uint16 *mcs_filter, bool bw_auto, uint32 minrt, uint32 maxrt)
+{
+	uint k;
+	const uint8 nss = 1;
+
+	if (bw_auto) {
+		uint8 rid = state->active_rates_num;
+
+		/* add c0s1/c1s1 @bw20 in replace of c0s1/bw40 */
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt,
+				   0, nss, BW_20MHZ); /* c0s1_b20 */
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt,
+				   1, nss, BW_20MHZ); /* c1s1_b20 */
+
+		if (state->bwcap >= BW_80MHZ) {
+			/* add c1s1/c2s1 @bw40 */
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt,
+					   1, nss, BW_40MHZ); /* c1s1_b40 */
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt,
+					   2, nss, BW_40MHZ); /* c2s1_b40 */
+		}
+		if (state->bwcap >= BW_160MHZ) {
+			/* add c1s1/c2s1 @bw80 */
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt,
+					   1, nss, BW_80MHZ); /* c1s1_b80 */
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt,
+					   2, nss, BW_80MHZ); /* c2s1_b80 */
+		}
+		/* add remaining mcs rates in nss-1 rate family */
+		if (rid != state->active_rates_num) {
+			/* we have appended rate with lower bw. remove mcs0 at primary bw. */
+			mcs_filter[0] &= ~1;
+		}
+	}
+
+	for (k = 0; k < 16; k++) {
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt,
+				(uint8)k, nss, state->bwcap);
+	}
+	WL_RATE(("%s: max_mcs[%d] = %d\n", __FUNCTION__, nss-1, state->max_mcs[nss-1]));
+}
+
+/*
+ * Add nss-2 rates into rate set based on
+ * -- allowed mcs at nss-2
+ * -- min/max rate
+ * -- bw_auto: bw has to be > 20 to be true
+ */
+static void
+wlc_ratesel_init_nss2(rcb_t *state, uint16 *mcs_filter, bool bw_auto, uint32 minrt, uint32 maxrt)
+{
+	uint k;
+	const uint8 nss = 2;
+
+	if (bw_auto) {
+		uint8 rid;
+
+		rid = state->active_rates_num;
+		/* for all bw's, add c0-2 s2_b20 (13/26/39 Mbps) */
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, 0, nss, BW_20MHZ);
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, 1, nss, BW_20MHZ);
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, 2, nss, BW_20MHZ);
+
+		/* for bw80, add: c1-3s2_b40 (54/81/108 Mbps) */
+		if (state->bwcap >= BW_80MHZ) {
+			/* c1s2@40(54), c4s2@20(78), c5s2@20(104) */
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, 3, nss, BW_20MHZ);
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, 4, nss, BW_20MHZ);
+		}
+
+		/* for bw160, add: c1-2s2_b80 (117/175.5 Mbps) */
+		if (state->bwcap >= BW_160MHZ) {
+			rid = state->active_rates_num;
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, 1, nss, BW_80MHZ);
+			wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, 2, nss, BW_80MHZ);
+		}
+		if (rid != state->active_rates_num) {
+			/* remove c0s2_xx from mcs_filter */
+#ifdef WL11AC
+			mcs_filter[nss-1] &= ~1; /* clear bit-0 */
+#else
+			clrbit(mcs_filter, 8);
+#endif
+		}
+	}
+	for (k = 0; k < 16; k++) {
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, (uint8)k, nss, state->bwcap);
+	}
+	WL_RATE(("%s: max_mcs[%d] = %d\n", __FUNCTION__, nss-1, state->max_mcs[nss-1]));
+}
+
+static void
+wlc_ratesel_init_nss3(rcb_t *state, uint16 *mcs_filter, bool bw_auto, uint32 minrt, uint32 maxrt)
+{
+	uint k;
+	const uint8 nss = 3;
+	for (k = 0; k < 16; k++) {
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, (uint8)k, nss, state->bwcap);
+	}
+	WL_RATE(("%s: max_mcs[%d] = %d\n", __FUNCTION__, nss-1, state->max_mcs[nss-1]));
+}
+
+static void
+wlc_ratesel_init_nss4(rcb_t *state, uint16 *mcs_filter, bool bw_auto, uint32 minrt, uint32 maxrt)
+{
+	uint k;
+	const uint8 nss = 4;
+	for (k = 0; k < 16; k++) {
+		wlc_ratesel_addmcs(state, mcs_filter, minrt, maxrt, (uint8)k, nss, state->bwcap);
+	}
+	WL_RATE(("%s: max_mcs[%d] = %d\n", __FUNCTION__, nss-1, state->max_mcs[nss-1]));
+}
+
+static ratespec_t
+wlc_ratesel_find_fbrspec(ratespec_t cur_rspec)
+{
+	uint k;
+	for (k = 0; k < FBRSPEC_NUM; k++) {
+		if (fbr_rspec[k][0] == cur_rspec) {
+			return fbr_rspec[k][1];
+		}
+	}
+	return 0;
+}
 #endif /* WL11N init functions */
 
 /**
@@ -1603,10 +1933,15 @@ wlc_ratesel_filter(rcb_t *state, /* [in/out] */
 	state->vht = wlc_ratesel_filter_mcsset(rateset, txstreams, TRUE, state->bwcap,
 		state->vht_ldpc, state->vht_ratemask, filter_mcs_bitarray, &state->mcs_streams);
 
+	/* capture mcs bitmap for link rate cabalities */
+	for (i = 0; i < MCSSET_LEN; i++) {
+		state->mcs_bitarray[i] = filter_mcs_bitarray[i];
+	}
+
 	if (state->mcs_streams > 0) {
 		uint8 tbl_legacy_withMcs_20Mhz[] = {2, 4, 11};
 		uint8 tbl_legacy_withMcs_40Mhz[] = {2, 4, 11, 22};
-		ratespec_t cur_rspec;
+		bool bw_auto;
 
 		if ((found_11mbps) && IS_20BW(state)) {
 			tbl_size = ARRAYSIZE(tbl_legacy_withMcs_20Mhz);
@@ -1647,77 +1982,27 @@ wlc_ratesel_filter(rcb_t *state, /* [in/out] */
 
 		/* convert max/min rate to KBps */
 		max_rate *= 500; min_rate *= 500;
-		if (state->bwcap != BW_20MHZ &&
-			WLC_HT_GET_MIMO_40TXBW(state->rsi->wlc->hti) == AUTO &&
-		    state->mcs_baseid == 0) {
-			/* Add MCS 0 and 1 in bw20 in replace of mcs0/bw40 */
-			for (i = 0; i <= 1; i++) {
-				if (filter_mcs_bitarray[0] & (1 << i)) {
-					state->bw[state->active_rates_num] = BW_20MHZ;
-#ifdef WL11AC
-					cur_rspec = VHT_RSPEC(i, 1);
-#else
-					cur_rspec = HT_RSPEC(i);
-#endif
-					if (wlc_ratesel_chklmt(state,
-						cur_rspec | RSPEC_BW_20MHZ, max_rate, min_rate)) {
-						state->select_rates[state->active_rates_num++] =
-							wlc_ratesel_rspec2idx(state, cur_rspec);
-					}
-				}
+		bw_auto = (state->mcs_baseid == 0) && (state->bwcap != BW_20MHZ) &&
+			(WLC_HT_GET_MIMO_40TXBW(state->rsi->wlc->hti) == AUTO);
+
+		wlc_ratesel_init_nss1(state, filter_mcs_bitarray, bw_auto, min_rate, max_rate);
+		if (SP_MODE(state) == SP_NORMAL) {
+			wlc_ratesel_init_nss2(state, filter_mcs_bitarray,
+					(bw_auto && (state->mcs_streams == 2)) ? TRUE : FALSE,
+					min_rate, max_rate);
+			if (state->mcs_streams >= 3) {
+				wlc_ratesel_init_nss3(state, filter_mcs_bitarray, bw_auto,
+						min_rate, max_rate);
 			}
-#ifdef WL11AC
-			if (state->bwcap != BW_40MHZ) {
-				/* Add MCS 1 and 2 in bw40 in replace of mcs0/bw40 */
-				for (i = 1; i <= 2; i++) {
-					if (filter_mcs_bitarray[0] & (1 << i)) {
-						cur_rspec = VHT_RSPEC(i, 1);
-						if (!wlc_ratesel_chklmt(state,
-							cur_rspec | RSPEC_BW_40MHZ,
-							max_rate, min_rate))
-							continue;
-						state->bw[state->active_rates_num] = BW_40MHZ;
-						state->select_rates[state->active_rates_num++] =
-							wlc_ratesel_rspec2idx(state, cur_rspec);
-					}
-				}
+			if (state->mcs_streams >= 4) {
+				wlc_ratesel_init_nss4(state, filter_mcs_bitarray, bw_auto,
+						min_rate, max_rate);
 			}
-#endif /* WL11AC */
 		}
 
-		if (state->mcs_baseid != state->active_rates_num) {
-			/* we have appended rate with lower bw. remove mcs0 at primary bw. */
-			filter_mcs_bitarray[0] &= ~1;
-		}
-		for (i = 1; i <= state->mcs_streams; i++) {
-			for (k = 0; k < MCSSET_LEN; k++) {
-				if (filter_mcs_bitarray[i-1] & (1 << k)) {
-#ifdef WL11AC
-					cur_rspec = VHT_RSPEC(k, i);
-#else
-#ifdef WL11N_256QAM
-					if (k >= 8) cur_rspec = HT_RSPEC(mcs256q_map[i-1][k-8]);
-					else
-#endif
-						cur_rspec = HT_RSPEC(8 * (i-1) + k);
-#endif /* WL11AC */
-					if (!wlc_ratesel_chklmt(state,
-						cur_rspec | (state->bwcap << RSPEC_BW_SHIFT),
-						max_rate, min_rate))
-						continue;
-					state->bw[state->active_rates_num] = state->bwcap;
-					state->select_rates[state->active_rates_num++] =
-						wlc_ratesel_rspec2idx(state, cur_rspec);
-#ifdef WL11AC
-					state->max_mcs[i-1] = (uint8)k;
-#else
-					state->max_mcs[i-1] = (uint8)(cur_rspec & RSPEC_RATE_MASK);
-#endif
-				}
-			}
-		}
-		if (state->active_rates_num == 0)
+		if (state->active_rates_num == state->mcs_baseid) {
 			state->mcs_streams = 0;
+		}
 
 		max_rate /= 500; min_rate /= 500;
 	}
@@ -1779,17 +2064,13 @@ wlc_ratesel_init_fbrates(rcb_t *state)
 		/* default fallback rate is two rate id down */
 		fbr_id = LIMSUB(i, 0, 2);
 #ifdef WL11N
-		cur_rspec = known_rspec[state->select_rates[i]];
+		cur_rspec = RATESPEC_OF_I(state, i);
 		if (IS_MCS(cur_rspec)) {
 			int mcs, fbr_mcs;
 			int nss, fbr_nss;
 			int bw, k;
-			bool bw_auto = FALSE;
+			bool bw_auto;
 
-			if (WLC_HT_GET_MIMO_40TXBW(state->rsi->wlc->hti) == AUTO &&
-				state->mcs_baseid == 0) {
-				bw_auto = TRUE;
-			}
 			mcs = wlc_ratespec_mcs(cur_rspec);
 #if !defined(WL11AC) && defined(WL11N_256QAM)
 			if (mcs == 87) mcs = 8;
@@ -1797,9 +2078,12 @@ wlc_ratesel_init_fbrates(rcb_t *state)
 #endif
 			nss = wlc_ratespec_nss(cur_rspec);
 			bw = state->bw[i];
+			bw_auto = (state->mcs_baseid == 0) && (state->bwcap != BW_20MHZ) &&
+				(WLC_HT_GET_MIMO_40TXBW(state->rsi->wlc->hti) == AUTO);
 
 			if (i > 0 && (nss > 1 || mcs >= 1)) {
 				uint32 fbr_rate, tmp_rate;
+				ratespec_t fbr_ratespec = 0;
 
 				/* General rule of fbr */
 				if (mcs == 7)
@@ -1814,22 +2098,22 @@ wlc_ratesel_init_fbrates(rcb_t *state)
 				if (mcs == 0) {
 					fbr_mcs = mcs;
 					fbr_nss = 1;
-				} else if (bw_auto && nss == 1 && mcs <= 2) {
+				} else if (bw_auto) {
 					/* special handling due to using 20/40 in 80 */
-					if (bw == BW_80MHZ && mcs == 2) {
-						fbr_mcs = 2;
-						bw = BW_40MHZ;
-					} else if (bw == BW_40MHZ && mcs == 1) {
-						fbr_mcs = 1;
-						bw = BW_20MHZ;
-					}
+					fbr_ratespec = wlc_ratesel_find_fbrspec(cur_rspec);
 				}
 
 				/* search the largest index whose corresponding mcs/rate
 				 * is lower than fbr_mcs/rate
 				 */
-				fbr_rate = wlc_rate_mcs2rate(fbr_mcs, fbr_nss,
-					bw << RSPEC_BW_SHIFT, FALSE);
+				if (fbr_ratespec == 0) {
+					fbr_rate = wlc_rate_mcs2rate(fbr_mcs, fbr_nss,
+							bw << RSPEC_BW_SHIFT, FALSE);
+				} else {
+					/* fbr is from lookup table */
+					fbr_rate = wlc_rate_rspec2rate(fbr_ratespec);
+				}
+
 				fbr_id = 0;
 				for (k = i-1; k >= 0; k--) {
 					tmp_rate = RATEKBPS_OF_I(state, k);
@@ -1929,6 +2213,7 @@ wlc_ratesel_init(ratesel_info_t *rsi, rcb_t *state, void *scb, wlc_rateset_t *ra
 	uint32 max_rate, uint32 min_rate)
 {
 	uint init_rate = 0;
+	int rcb_sz = wlc_ratesel_rcb_sz();
 
 	BCM_REFERENCE(ldpc_tx);
 
@@ -1937,12 +2222,18 @@ wlc_ratesel_init(ratesel_info_t *rsi, rcb_t *state, void *scb, wlc_rateset_t *ra
 		return;
 	}
 
-	bzero((char *)state, sizeof(rcb_t));
+	bzero((char *)state, rcb_sz);
 
 	/* store pointer to ratesel module */
 	state->rsi = rsi;
 	state->scb = scb;
 	state->txc = rsi->wlc->txc;
+
+	state->select_rates = (uint8 *)state + sizeof(rcb_t);
+	state->fbrid = state->select_rates + MAX_RATESEL_NUM;
+	state->uprid = state->fbrid + MAX_RATESEL_NUM;
+	state->dnrid = state->uprid + MAX_RATESEL_NUM;
+	state->bw = state->dnrid + MAX_RATESEL_NUM;
 
 	INVALIDATE_TXH_CACHE(state);
 
@@ -1950,6 +2241,7 @@ wlc_ratesel_init(ratesel_info_t *rsi, rcb_t *state, void *scb, wlc_rateset_t *ra
 	state->bwcap = bw;
 	state->sgi_bwen = (sgi_tx << BW_20MHZ);
 #endif /* WL11N */
+	state->link_bw = bw;
 
 #ifdef WL11AC
 	/* LDPC,  distinguish between the VHT and not-VHT STA */
@@ -2100,12 +2392,20 @@ wlc_ratesel_load_params(rcb_t *state)
 	if (SP_MODE(state) == SP_NORMAL) {
 		int mcs_sp = -1, mcs_sp_id = -1, nss_sp = -1;
 		uint8 tmp_col = state->mcs_sp_col;
+		bool flag_allowsw = TRUE;
 		if (mcs != -1) {
-			bool flag = TRUE;
 			ASSERT(state->mcs_sp_col == SPATIAL_MCS_COL1 ||
 			       state->mcs_sp_col == SPATIAL_MCS_COL2);
 			/* switch only if the current one is not valid */
 			mcs_sp = mcs_sp_params[tblidx][state->mcs_sp_col];
+			if (mcs_sp == -1) {
+				tmp_col = (state->mcs_sp_col == SPATIAL_MCS_COL1) ?
+					SPATIAL_MCS_COL2 : SPATIAL_MCS_COL1;
+				mcs_sp = mcs_sp_params[tblidx][tmp_col];
+				flag_allowsw = FALSE;
+			}
+		}
+		if (mcs_sp != -1) {
 #ifdef WL11AC
 			/* WL11AC uses VHT format */
 			nss_sp = (mcs_sp & RSPEC_VHT_NSS_MASK) >> RSPEC_VHT_NSS_SHIFT;
@@ -2114,11 +2414,11 @@ wlc_ratesel_load_params(rcb_t *state)
 			nss_sp = 1 + ((mcs_sp & RSPEC_HT_NSS_MASK) >> RSPEC_HT_NSS_SHIFT);
 #endif
 			/* 1. locate right column to start from */
-			if (nss_sp > state->mcs_streams) {
+			if (flag_allowsw && nss_sp > state->mcs_streams) {
 				tmp_col = (state->mcs_sp_col == SPATIAL_MCS_COL1) ?
 					SPATIAL_MCS_COL2 : SPATIAL_MCS_COL1;
 				mcs_sp = mcs_sp_params[tblidx][tmp_col];
-				flag = FALSE;
+				flag_allowsw = FALSE;
 			}
 #ifdef WL11AC
 			/* 2. adjust probing mcs in case c10 doesn't exist */
@@ -2127,11 +2427,15 @@ wlc_ratesel_load_params(rcb_t *state)
 			}
 #endif
 			/* 3. if probing mcs exceeds max mcs, then switch column */
-			if (flag && ((mcs_sp & RSPEC_VHT_MCS_MASK) > state->max_mcs[nss_sp-1])) {
+			if (flag_allowsw &&
+			    ((mcs_sp & RSPEC_VHT_MCS_MASK) > state->max_mcs[nss_sp-1])) {
 				tmp_col = (state->mcs_sp_col == SPATIAL_MCS_COL1) ?
 					SPATIAL_MCS_COL2 : SPATIAL_MCS_COL1;
 				mcs_sp = mcs_sp_params[tblidx][tmp_col];
 			}
+		} else {
+			RL_SP0(("%s mcs %d mcs_sp %d mcs_sp_id %d tblidx %d mcs_sp_col %d\n",
+				__FUNCTION__, mcs, mcs_sp, mcs_sp_id, tblidx, state->mcs_sp_col));
 		}
 		if (mcs_sp != -1) {
 			mcs_sp_id = wlc_ratesel_mcsbw2id(state, (uint8) mcs_sp,
@@ -2149,6 +2453,7 @@ wlc_ratesel_load_params(rcb_t *state)
 		}
 		state->mcs_sp_flgs = 0; /* clear all the flags */
 		if (mcs_sp_id >= 0) {
+			mcs_sp = RATESPEC_OF_I(state, mcs_sp_id) & RSPEC_RATE_MASK;
 			/* if the mcs stream family being probed has changed, clear stats */
 			if ((mcs_sp & SPMASK_IN_MCS) != (state->mcs_sp & SPMASK_IN_MCS)) {
 				RL_SP0(("%s: switching probing stream family: 0x%x --> 0x%x\n",
@@ -2181,6 +2486,9 @@ wlc_ratesel_load_params(rcb_t *state)
 		if (mcs_extsp_xpr > 0)
 			mcs_extsp_xpr_sel = wlc_ratesel_mcsbw2id(state,
 				(uint8) mcs_extsp_xpr, state->bw[state->rateid]);
+		if (mcs_extsp_xpr_sel > 0) {
+			mcs_extsp_xpr = RATESPEC_OF_I(state, mcs_extsp_xpr_sel) & RSPEC_RATE_MASK;
+		}
 
 		state->extsp_flgs = 0; /* clear all the flags */
 
@@ -2389,7 +2697,8 @@ wlc_ratesel_clear_extspstat(rcb_t *state)
  * Try to discard false feedback from case 2.
  */
 static bool
-wlc_ratesel_upd_spstat(rcb_t *state, bool blockack, uint8 sp_mcs, uint ntx_succ, uint ntx)
+wlc_ratesel_upd_spstat(rcb_t *state, bool blockack, uint8 sp_mcs,
+	uint ntx_succ, uint ntx, uint16 txbw)
 {
 	BCM_REFERENCE(blockack);
 
@@ -2412,7 +2721,12 @@ wlc_ratesel_upd_spstat(rcb_t *state, bool blockack, uint8 sp_mcs, uint ntx_succ,
 #else
 		sp_rspec = HT_RSPEC(sp_mcs);
 #endif
-		sp_rspec |= (state->bwcap << RSPEC_BW_SHIFT);
+		if (txbw == 0) {
+			sp_rspec |= (state->bwcap << RSPEC_BW_SHIFT);
+		} else {
+			sp_rspec |= (txbw << RSPEC_BW_SHIFT);
+		}
+
 		sp_rate = RSPEC2RATE500K(sp_rspec);
 		cu_rate = RSPEC2RATE500K(RATESPEC_OF_I(state, state->rateid));
 
@@ -2766,6 +3080,30 @@ wlc_ratesel_checksgi(rcb_t *state, bool is_sgi)
 	if (clr_cache)
 		state->txc_inv_reqd = TRUE;
 
+#ifdef BCMDBG
+	if (WL_RATE_ON() && state->sgi_state != sgi_prev) {
+		if (state->sgi_state == SGI_DISABLED || state->sgi_state == SGI_ENABLED)
+			RL_SGI0(("%s: state %2d->%2d nupd %d is_sgi %d psr_sgi/cur %d %d "
+				 "ncfails %d timeout %d now %d timer %d\n", __FUNCTION__,
+				 sgi_prev, state->sgi_state, state->nupd, is_sgi,
+				 state->psr_sgi, state->psri[PSR_CUR_IDX].psr, state->ncfails,
+				 state->sgi_timeout, NOW(state), state->sgi_timer));
+		else if (SGI_PROBING(state))
+			RL_SGI0(("%s: state %2d->%2d nupd %d is_sgi %d psr_sgi/cur %d %d "
+				 "ncfails %d hold_rate %d\n", __FUNCTION__, sgi_prev,
+				 state->sgi_state, state->nupd, is_sgi, state->psr_sgi,
+				 state->psri[PSR_CUR_IDX].psr, state->ncfails, hold_rate));
+		else
+			RL_SGI0(("%s: state %2d->%2d timeout %d now %d\n", __FUNCTION__,
+				sgi_prev, state->sgi_state, state->sgi_timeout, NOW(state)));
+	}
+	if (SGI_PROBING(state))
+		RL_SGI1(("%s: sgi %d state %d nupd %d clr %d hold %d psr_sgi/cur %d %d "
+			 "timer %d timeout %d now %d\n", __FUNCTION__,
+			 is_sgi, state->sgi_state, state->nupd, clr_cache, hold_rate,
+			 state->psr_sgi, state->psri[PSR_CUR_IDX].psr,
+			 state->sgi_timer, state->sgi_timeout, NOW(state)));
+#endif /* BCMDBG */
 
 	return hold_rate;
 }
@@ -3236,6 +3574,36 @@ wlc_ratesel_change_sp(rcb_t *state)
 		/* switch */
 		state->rateid = state->mcs_sp_id;
 
+#ifdef BCMDBG
+		/* below is debug info */
+		if (WL_RATE_ON()) {
+			ratespec_t prv_rspec = cur_rspec;
+			cur_rspec = RATESPEC_OF_I(state, state->rateid);
+			if (state->rsi->ratesel_sp_algo) {
+				WL_RATE(("rate_changed(spatially): mx%02xb%d to mx%02xb%d (%d %d) "
+				         "after %2u (%u) txs with %u (%u) skipped."
+				         "nthrt_pri/sp 0x%x 0x%x\n",
+				         RSPEC_RATE_MASK & prv_rspec, RSPEC2BW(prv_rspec),
+				         RSPEC_RATE_MASK & cur_rspec, RSPEC2BW(cur_rspec),
+				         state->rateid, RSPEC2RATE500K(cur_rspec),
+				         state->nupd, state->sp_nupd, state->nskip,
+				         state->sp_nskip,
+				         state->mcs_sp_thrt1, state->mcs_sp_thrt0));
+			} else {
+				WL_RATE(("rate_changed(spatially): mx%02xb%d to mx%02xb%d (%d %d) "
+				         "after %2u (%u) txs with %u (%u) skipped."
+				         "mcs_sp_statc %d M %d K %d\n",
+				         RSPEC_RATE_MASK & prv_rspec, RSPEC2BW(prv_rspec),
+				         RSPEC_RATE_MASK & cur_rspec, RSPEC2BW(cur_rspec),
+				         state->rateid, RSPEC2RATE500K(cur_rspec),
+				         state->nupd, state->sp_nupd, state->nskip,
+				         state->sp_nskip, state->mcs_sp_statc,
+				         SPATIAL_M, state->mcs_sp_K));
+			}
+			/* please compiler */
+			BCM_REFERENCE(prv_rspec);
+		}
+#endif /* BCMDBG */
 		return TRUE;
 	} else {
 		/* check whether we need to switch probing stream */
@@ -3278,6 +3646,7 @@ wlc_ratesel_change_sp(rcb_t *state)
 			/* switch */
 			RL_SP0(("%s: switching probing stream family: 0x%x --> 0x%x\n",
 				__FUNCTION__, state->mcs_sp, mcs_sp));
+			mcs_sp = RATESPEC_OF_I(state, mcs_sp_id) & RSPEC_RATE_MASK;
 			state->mcs_sp_col = tmp_col;
 			state->mcs_sp = (uint8)mcs_sp;
 			state->mcs_sp_id = (uint8) mcs_sp_id;
@@ -3469,6 +3838,10 @@ wlc_ratesel_pick_rate(rcb_t *state, bool is_probe, bool is_sgi)
 	ratespec_t cur_rspec, prv_rspec;
 	bool change_epoch = FALSE, change_rate = FALSE;
 
+#if defined(BCMDBG_DUMP)
+	if (state->fixrate != DUMMY_UINT8)
+		return;
+#endif
 
 	/* sanity check */
 	ASSERT(state->rateid < state->active_rates_num);
@@ -3669,6 +4042,9 @@ wlc_ratesel_alert(rcb_t *state, bool mfbr)
 	bool flag_pri;
 #endif
 
+#if defined(BCMDBG)
+	uint8 gotpkts_old = state->gotpkts;
+#endif
 
 	/* do nothing if feature is off or in init mode already */
 	rsi = state->rsi;
@@ -3756,6 +4132,13 @@ wlc_ratesel_alert(rcb_t *state, bool mfbr)
 	}
 #endif /* RSSI_PRI_ON */
 
+#if defined(BCMDBG)
+	if (WL_RATE_ON() && gotpkts_old != state->gotpkts) {
+		WL_RATE(("%s gotpkts %d -> %d\n", __FUNCTION__, gotpkts_old, state->gotpkts));
+		RL_MORE(("time: %d -> %d rssi: %d -> %d\n", state->lastxs_time, NOW(state),
+			state->lastxs_rssi, rssi_cur));
+	}
+#endif
 }
 #else
 static void BCMFASTPATH
@@ -3828,7 +4211,7 @@ wlc_ratesel_use_txs(rcb_t *state, tx_status_t *txs, uint16 SFBL, uint16 LFBL,
 		uint8 ntx_succ;
 		ntx_mrt = MIN(nftx, ntx_start_fb); /* can be 0 */
 		ntx_succ = (acked && nftx <= ntx_start_fb) ? 1 : 0;
-		if (wlc_ratesel_upd_spstat(state, FALSE, tx_mcs, ntx_succ, ntx_mrt))
+		if (wlc_ratesel_upd_spstat(state, FALSE, tx_mcs, ntx_succ, ntx_mrt, 0))
 			ret_val = TXS_PROBE;
 		RL_SP1(("fid 0x%x spatial probe rcvd: mx%02x (pri: mx%02x) [nrtx nftx ack] = "
 			"[%d %d %d] Upd: %c\n", txs->frameid, tx_mcs, cur_mcs,
@@ -4034,7 +4417,7 @@ wlc_ratesel_use_txs_blockack(rcb_t *state, tx_status_t *txs, uint8 suc_mpdu, uin
 		if (retry >= fb_lim) {
 			LIMINC_UINT32(state->sp_nskip);
 		} else {
-			if (wlc_ratesel_upd_spstat(state, TRUE, tx_mcs, suc_mpdu, tot_mpdu))
+			if (wlc_ratesel_upd_spstat(state, TRUE, tx_mcs, suc_mpdu, tot_mpdu, 0))
 				ret_val = TXS_PROBE;
 		}
 		return ret_val;
@@ -4175,6 +4558,13 @@ wlc_ratesel_upd_txs_blockack(rcb_t *state, tx_status_t *txs,
 	epoch = (txs->frameid & TXFID_RATE_MASK) >> TXFID_RATE_SHIFT;
 	txs_res = TXS_DISC;
 	if (epoch == state->epoch) {
+#ifdef BCMDBG
+		/* to accommodate the discrepancy due to "wl nrate" in the debug driver */
+		if (!IS_MCS(CUR_RATESPEC(state))) {
+			WL_RATE(("%s: blockack received for non-MCS rate.\n", __FUNCTION__));
+			return;
+		}
+#endif
 
 		/* always update antenna histogram */
 		if (WLANTSEL_ENAB(rsi->wlc))
@@ -4245,7 +4635,8 @@ wlc_ratesel_use_txs_ampdu(rcb_t *state, uint16 frameid, uint mrt, uint mrt_succ,
 		if (mrt == 0) {
 			LIMINC_UINT32(state->sp_nskip);
 		} else {
-			if (wlc_ratesel_upd_spstat(state, TRUE, tx_mcs, mrt_succ, mrt))
+			uint16 txbw = frameid >> 13;
+			if (wlc_ratesel_upd_spstat(state, TRUE, tx_mcs, mrt_succ, mrt, txbw))
 				ret_val = TXS_PROBE;
 		}
 		return ret_val;
@@ -4338,6 +4729,14 @@ wlc_ratesel_use_txs_ampdu(rcb_t *state, uint16 frameid, uint mrt, uint mrt_succ,
 		state->psri[PSR_FBR_IDX].timestamp = NOW(state);
 	}
 
+#ifdef BCMDBG
+	if (state->psri[PSR_CUR_IDX].psr > PSR_MAX || state->psri[PSR_FBR_IDX].psr > PSR_MAX) {
+		WL_ERROR(("%s line %d: gotpkts %d fid 0x%04x [mrt succ fbr succ e] "
+			  "= [%d %d %d %d %d] nupd %d\n", __FUNCTION__, __LINE__,
+			  state->gotpkts, frameid, mrt, mrt_succ, fbr, fbr_succ,
+			  state->epoch, state->nupd));
+	}
+#endif
 	/* update the count of updates at primary rate since the last state flush
 	 * which saturates at max word val
 	 */
@@ -4407,11 +4806,20 @@ wlc_ratesel_upd_txs_ampdu(rcb_t *state,
 	epoch = (frameid & TXFID_RATE_MASK) >> TXFID_RATE_SHIFT;
 	txs_res = TXS_DISC;
 	if (epoch == state->epoch) {
+#ifdef BCMDBG
+		/* to accommodate the discrepancy due to "wl nrate" in the debug driver */
+		if (!IS_MCS(CUR_RATESPEC(state))) {
+			WL_RATE(("%s: blockack received for non-MCS rate.\n", __FUNCTION__));
+			return;
+		}
+#endif
 
 		/* always update antenna histogram */
 		if (WLANTSEL_ENAB(rsi->wlc))
 			wlc_ratesel_upd_deftxant(state, state->antselid);
 
+		frameid = frameid & 0x1fff;
+		frameid |= (RSPEC2BW(rs_txs->txrspec[0]) << 13);
 		txs_res = wlc_ratesel_use_txs_ampdu(state, frameid, mrt, mrt_succ, fbr, fbr_succ,
 			tx_error, tx_mcs, sgi, antselid);
 		if (txs_res != TXS_DISC)
@@ -4900,7 +5308,8 @@ wlc_ratesel_gettxrate(rcb_t *state, uint16 *frameid,
 
 int wlc_ratesel_rcb_sz(void)
 {
-	return (sizeof(rcb_t));
+	/* size of the rcb struct plus the arrays of select_rates/bfrid/uprid/dnrid/bw */
+	return (sizeof(rcb_t) + sizeof(uint8) * MAX_RATESEL_NUM * 5);
 }
 
 #ifdef WL_LPC
@@ -4936,6 +5345,13 @@ wlc_ratesel_upd_la(rcb_t *state, uint32 curr_psr, uint32 old_psr)
 }
 
 /* External functions */
+void
+wlc_ratesel_lpc_update(ratesel_info_t *rsi, rcb_t *state)
+{
+	state->rsi = rsi;
+	return;
+}
+
 void
 wlc_ratesel_lpc_init(rcb_t *state)
 {
@@ -5010,6 +5426,26 @@ wlc_ratesel_filter_minrateset(wlc_rateset_t *rateset, wlc_rateset_t *new_rateset
 		}
 	}
 #endif /* WL11N */
+	return;
+}
+
+void
+wlc_ratesel_get_ratecap(rcb_t *state, uint8 *sgi, uint16 mcs_bitmap[])
+{
+	wlc_ht_info_t *hti = state->rsi->wlc->hti;
+	int i;
+
+	memset(mcs_bitmap, 0x0, MCSSET_LEN * sizeof(uint16));
+
+	if (WLC_HT_GET_SGI_TX(hti) == AUTO)
+		*sgi = 2; /* 2 = AUTO */
+	else
+		*sgi = WLC_HT_GET_SGI_TX(hti);
+
+	for (i = 0; i < MCSSET_LEN; i++) {
+		mcs_bitmap[i] = state->mcs_bitarray[i];
+	}
+
 	return;
 }
 

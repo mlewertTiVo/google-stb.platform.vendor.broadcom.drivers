@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_msgbuf.c 599063 2015-11-12 07:11:53Z $
+ * $Id: dhd_msgbuf.c 644551 2016-06-20 23:29:37Z $
  */
 
 
@@ -102,6 +102,9 @@
 /* flags for ioctl pending status */
 #define MSGBUF_IOCTL_ACK_PENDING	(1<<0)
 #define MSGBUF_IOCTL_RESP_PENDING	(1<<1)
+
+#define DHD_IOCTL_REQ_PKTBUFSZ		2048
+#define MSGBUF_IOCTL_MAX_RQSTLEN	(DHD_IOCTL_REQ_PKTBUFSZ - H2DRING_CTRL_SUB_ITEMSIZE)
 
 #define DMA_ALIGN_LEN		4
 
@@ -2868,6 +2871,17 @@ dhd_prot_rxbuf_post(dhd_pub_t *dhd, uint16 count, bool use_rsv_pktid)
 	dhd_prot_t *prot = dhd->prot;
 	msgbuf_ring_t *ring = &prot->h2dring_rxp_subn;
 
+#ifdef BCM_SECURE_DMA
+	if (SECURE_DMA_ENAB(dhd->osh)) {
+		if(!SECURE_DMA_BUFFS_IS_AVAIL(dhd->osh))
+		{
+			DHD_INFO(("%s:%d: SECDMA Buffers Not available \n",
+				__FUNCTION__, __LINE__));
+			return -1;
+		}
+	}
+#endif /* BCM_SECURE_DMA */
+
 	DHD_GENERAL_LOCK(dhd, flags);
 
 	/* Claim space for exactly 'count' no of messages, for mitigation purpose */
@@ -2909,18 +2923,18 @@ dhd_prot_rxbuf_post(dhd_pub_t *dhd, uint16 count, bool use_rsv_pktid)
 #endif /* BCM_SECURE_DMA */
 
 		if (PHYSADDRISZERO(pa)) {
-			if (SECURE_DMA_ENAB(dhd->osh)) {
-				DHD_GENERAL_LOCK(dhd, flags);
-				SECURE_DMA_UNMAP(dhd->osh, pa, pktlen, DMA_RX, 0, DHD_DMAH_NULL,
-				    ring->dma_buf.secdma, 0);
-				DHD_GENERAL_UNLOCK(dhd, flags);
-			} else {
-				DMA_UNMAP(dhd->osh, pa, pktlen, DMA_RX, p, DHD_DMAH_NULL);
-			}
-
+#ifndef BCM_SECURE_DMA
+			DMA_UNMAP(dhd->osh, pa, pktlen, DMA_RX, p, DHD_DMAH_NULL);
+#endif /* BCM_SECURE_DMA */
 			PKTFREE(dhd->osh, p, FALSE);
-			DHD_ERROR(("Invalid phyaddr 0\n"));
+#ifndef BCM_SECURE_DMA
+			DHD_ERROR(("Invalid phyaddr 0 \n"));
 			ASSERT(0);
+#else
+			/* For SECDMA phyaddr zero is possible when SECDMA buffers are full */
+			DHD_INFO(("%s:%d: SECDMA Buffers Not available \n",
+				__FUNCTION__, __LINE__));
+#endif /* BCM_SECURE_DMA */
 			break;
 		}
 
@@ -3089,6 +3103,17 @@ dhd_prot_rxbufpost_ctrl(dhd_pub_t *dhd, bool event_buf)
 		return -1;
 	}
 
+#ifdef BCM_SECURE_DMA
+	if (SECURE_DMA_ENAB(dhd->osh)) {
+		if(!SECURE_DMA_BUFFS_IS_AVAIL(dhd->osh))
+		{
+			DHD_INFO(("%s:%d: SECDMA Buffers Not available \n",
+				__FUNCTION__, __LINE__));
+			return -1;
+		}
+	}
+#endif /* BCM_SECURE_DMA */
+
 	memset(&retbuf, 0, sizeof(dhd_dma_buf_t));
 
 	if (event_buf) {
@@ -3140,7 +3165,9 @@ dhd_prot_rxbufpost_ctrl(dhd_pub_t *dhd, bool event_buf)
 #endif /* #ifndef BCM_SECURE_DMA */
 
 		if (PHYSADDRISZERO(pa)) {
-			DHD_ERROR(("Invalid physaddr 0\n"));
+#ifndef BCM_SECURE_DMA
+			DHD_ERROR(("Invalid phyaddr 0 \n"));
+#endif /* BCM_SECURE_DMA */
 			ASSERT(0);
 			goto free_pkt_return;
 		}
@@ -4029,6 +4056,9 @@ dhd_prot_txdata(dhd_pub_t *dhd, void *PKTBUF, uint8 ifidx)
 	flow_ring_table_t *flow_ring_table;
 	flow_ring_node_t *flow_ring_node;
 
+	void *dmah;
+	void *secdma;
+
 	if (dhd->flow_ring_table == NULL) {
 		return BCME_NORESOURCE;
 	}
@@ -4058,13 +4088,26 @@ dhd_prot_txdata(dhd_pub_t *dhd, void *PKTBUF, uint8 ifidx)
 	}
 #endif /* DHD_PCIE_PKTID */
 
+#ifdef BCM_SECURE_DMA
+	if (SECURE_DMA_ENAB(dhd->osh)) {
+		if(!SECURE_DMA_BUFFS_IS_AVAIL(dhd->osh)) {
+#if defined(DHD_PCIE_PKTID)
+			/* Free up the PKTID. physaddr and pktlen will be garbage. */
+			DHD_PKTID_TO_NATIVE(dhd, dhd->prot->pktid_map_handle, pktid,
+				pa, pktlen, dmah, secdma, PKTTYPE_NO_CHECK);
+#endif /* DHD_PCIE_PKTID */
+			DHD_INFO(("%s:%d: SECDMA Buffers Not available \n",
+				__FUNCTION__, __LINE__));
+			goto err_no_res_pktfree;
+		}
+	}
+#endif /* BCM_SECURE_DMA */
+
 	/* Reserve space in the circular buffer */
 	txdesc = (host_txbuf_post_t *)
 		dhd_prot_alloc_ring_space(dhd, ring, 1, &alloced, FALSE);
 	if (txdesc == NULL) {
 #if defined(DHD_PCIE_PKTID)
-		void *dmah;
-		void *secdma;
 		/* Free up the PKTID. physaddr and pktlen will be garbage. */
 		DHD_PKTID_TO_NATIVE(dhd, dhd->prot->pktid_map_handle, pktid,
 			pa, pktlen, dmah, secdma, PKTTYPE_NO_CHECK);
@@ -4105,10 +4148,12 @@ dhd_prot_txdata(dhd_pub_t *dhd, void *PKTBUF, uint8 ifidx)
 		pa = DMA_MAP(dhd->osh, PKTDATA(dhd->osh, PKTBUF), pktlen, DMA_TX, PKTBUF, 0);
 #endif /* #ifndef BCM_SECURE_DMA */
 
+#ifndef BCM_SECURE_DMA
 	if ((PHYSADDRHI(pa) == 0) && (PHYSADDRLO(pa) == 0)) {
 		DHD_ERROR(("Something really bad, unless 0 is a valid phyaddr\n"));
 		ASSERT(0);
 	}
+#endif /* BCM_SECURE_DMA */
 
 	/* No need to lock. Save the rest of the packet's metadata */
 	DHD_NATIVE_TO_PKTID_SAVE(dhd, dhd->prot->pktid_map_handle, PKTBUF, pktid,
@@ -4891,8 +4936,8 @@ dhd_fillup_ioct_reqst(dhd_pub_t *dhd, uint16 len, uint cmd, void* buf, int ifidx
 	/* Limit ioct request to MSGBUF_MAX_MSG_SIZE bytes including hdrs */
 	/* 8K allocation of dongle buffer fails */
 	/* dhd doesnt give separate input & output buf lens */
-	/* so making the assumption that input length can never be more than 1.5k */
-	rqstlen = MIN(rqstlen, MSGBUF_MAX_MSG_SIZE);
+	/* so making the assumption that input length can never be more than 2k */
+	rqstlen = MIN(rqstlen, MSGBUF_IOCTL_MAX_RQSTLEN);
 
 	DHD_GENERAL_LOCK(dhd, flags);
 

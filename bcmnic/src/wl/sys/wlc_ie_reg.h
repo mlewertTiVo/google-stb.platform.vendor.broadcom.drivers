@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_reg.h 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_ie_reg.h 665073 2016-10-14 20:33:29Z $
  */
 
 #ifndef _wlc_ie_reg_h_
@@ -35,6 +35,11 @@
 #include <typedefs.h>
 #include <wlc_types.h>
 #include <wlc_ie_mgmt_types.h>
+
+/*
+ * Frame Type for IE registry
+ */
+#define WLC_IEM_FC_IER 0xffff
 
 /*
  * module attach/detach
@@ -69,7 +74,7 @@ extern void wlc_ier_destroy_registry(wlc_ier_reg_t *reg);
  * Return:
  * - BRCM_XXXX
  */
-extern int wlc_ier_sort_cbtbl(wlc_ier_reg_t *reg, const uint8 *ie_tags, uint16 ie_cnt);
+extern int wlc_ier_sort_cbtbl(wlc_ier_reg_t *reg, const wlc_iem_tag_t *ie_tags, uint16 ie_cnt);
 
 /*
  * Register a pair of 'calc_len'/'build' callbacks for an non Vendor Specific IE.
@@ -80,7 +85,7 @@ extern int wlc_ier_sort_cbtbl(wlc_ier_reg_t *reg, const uint8 *ie_tags, uint16 i
  * Return:
  * - A negative return value indicates an error.
  */
-extern int wlc_ier_add_build_fn(wlc_ier_reg_t *reg, uint8 tag,
+extern int wlc_ier_add_build_fn(wlc_ier_reg_t *reg, wlc_iem_tag_t tag,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx);
 
 /*
@@ -97,7 +102,7 @@ extern int wlc_ier_add_build_fn(wlc_ier_reg_t *reg, uint8 tag,
  * Return:
  * - A negative return value indicates an error.
  */
-extern int wlc_ier_vs_add_build_fn(wlc_ier_reg_t *reg, uint8 prio,
+extern int wlc_ier_vs_add_build_fn(wlc_ier_reg_t *reg, wlc_iem_tag_t prio,
 	wlc_iem_calc_fn_t calc_fn, wlc_iem_build_fn_t build_fn, void *ctx);
 
 /*
@@ -110,7 +115,7 @@ extern int wlc_ier_vs_add_build_fn(wlc_ier_reg_t *reg, uint8 prio,
  * Return:
  * - IEs' total length in bytes
  */
-extern uint wlc_ier_calc_len(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
+extern uint wlc_ier_calc_len(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_cbparm_t *cbparm);
 
 /*
@@ -128,7 +133,7 @@ extern uint wlc_ier_calc_len(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
  * Return:
  * - A negative return value indicates an error (BCME_XXXX).
  */
-extern int wlc_ier_build_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
+extern int wlc_ier_build_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_cbparm_t *cbparm, uint8 *buf, uint buf_len);
 
 /*
@@ -142,7 +147,7 @@ extern int wlc_ier_build_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
  * Return:
  * - A negative return value indicates an error.
  */
-extern int wlc_ier_add_parse_fn(wlc_ier_reg_t *reg, uint8 tag,
+extern int wlc_ier_add_parse_fn(wlc_ier_reg_t *reg, wlc_iem_tag_t tag,
 	wlc_iem_parse_fn_t parse_fn, void *ctx);
 
 /*
@@ -158,7 +163,7 @@ extern int wlc_ier_add_parse_fn(wlc_ier_reg_t *reg, uint8 tag,
  * Return:
  * - A negative return value indicates an error.
  */
-extern int wlc_ier_vs_add_parse_fn(wlc_ier_reg_t *reg, uint8 id,
+extern int wlc_ier_vs_add_parse_fn(wlc_ier_reg_t *reg, wlc_iem_tag_t id,
 	wlc_iem_parse_fn_t parse_fn, void *ctx);
 
 /*
@@ -178,7 +183,7 @@ extern int wlc_ier_vs_add_parse_fn(wlc_ier_reg_t *reg, uint8 id,
  * Return:
  * - A negative return value indicates an error (BCME_XXXX).
  */
-extern int wlc_ier_parse_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, uint16 ft,
+extern int wlc_ier_parse_frame(wlc_ier_reg_t *reg, wlc_bsscfg_t *cfg, wlc_iem_ft_t ft,
 	wlc_iem_upp_t *upp, wlc_iem_pparm_t *pparm, uint8 *buf, uint buf_len);
 
 #endif /* _wlc_ie_reg_h_ */

@@ -275,6 +275,7 @@ wlc_phy_radio20696_pll_tune(phy_info_t *pi, uint32 chan_freq)
 
 	/* Write computed values to PLL registers */
 	phy_ac_radio20696_write_pll_config(pi, pll);
+
 }
 
 void

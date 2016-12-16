@@ -279,6 +279,9 @@ BCMATTACHFN(wlc_wet_attach)(wlc_info_t *wlc)
 		return NULL;
 	}
 
+#ifdef BCMDBG
+	wlc_dump_register(pub, "wet", (dump_fn_t)wlc_wet_dump, (void *)weth);
+#endif
 
 	return weth;
 }
@@ -454,6 +457,9 @@ wet_ip_proc(wlc_wet_info_t *weth, void *sdu,
 	uint8 *iaddr;
 	struct ether_addr *ea = NULL;
 	int ret, ea_off = 0;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	/* IPv4 only */
 	if (length < 1 || (IP_VER(iph) != IP_VER_4)) {
@@ -561,6 +567,9 @@ wet_arp_proc(wlc_wet_info_t *weth, void *sdu,
 {
 	wet_sta_t *sta;
 	uint8 *iaddr;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 
 	/*
@@ -692,6 +701,9 @@ wet_dhcpc_proc(wlc_wet_info_t *weth,
 {
 	wet_sta_t *sta;
 	uint16 flags;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 	uint16 port;
 	uint8 *ipv4;
 	const struct ether_addr *ether;
@@ -835,6 +847,9 @@ wet_dhcps_proc(wlc_wet_info_t *weth,
 	uint8 *eh, uint8 *iph, uint8 *udph, uint8 *dhcp, int length, int send)
 {
 	wet_sta_t *sta;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 
 	/* only interested in replies when receiving from server */
@@ -905,6 +920,9 @@ wet_sta_update_all(wlc_wet_info_t *weth, uint8 *iaddr, struct ether_addr *eaddr,
 {
 	wet_sta_t *sta;
 	int i;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 	/* find the existing one and remove it from the old IP hash link */
 	if (!wet_sta_find_mac(weth, eaddr, &sta)) {
 		i = WET_STA_HASH_IP(sta->ip);
@@ -985,6 +1003,9 @@ wet_sta_update_mac(wlc_wet_info_t *weth, struct ether_addr *eaddr, wet_sta_t **s
 {
 	wet_sta_t *sta;
 	int i;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	/* find the existing one */
 	if (!wet_sta_find_mac(weth, eaddr, &sta))
@@ -1018,6 +1039,9 @@ wet_sta_remove_mac_entry(wlc_wet_info_t *weth, struct ether_addr *eaddr)
 {
 	wet_sta_t *sta, *prev;
 	int i = WET_STA_HASH_MAC(eaddr->octet);
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 	int found = 0;
 
 	/* find the existing one */
@@ -1074,6 +1098,9 @@ wet_sta_find_mac(wlc_wet_info_t *weth, struct ether_addr *eaddr, wet_sta_t **sad
 {
 	int i = WET_STA_HASH_MAC(eaddr->octet);
 	wet_sta_t *sta;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	/* find the existing one by MAC */
 	for (sta = weth->stahash_mac[i]; sta; sta = sta->next_mac) {
@@ -1194,3 +1221,90 @@ wlc_wet_recv_proc(wlc_wet_info_t *weth, void *sdu)
 	return wet_eth_proc(weth, sdu, PKTDATA(WLCOSH(weth), sdu),
 		PKTLEN(WLCOSH(weth), sdu), 0) < 0 ? -1 : 0;
 }
+
+#ifdef BCMDBG
+#define WET_STA_TEST	0 /* Control for the debug code for STA_TEST */
+#if WET_STA_TEST
+void
+wet_sta_dump(wlc_wet_info_t *weth, struct bcmstrbuf *b)
+{
+	wet_sta_t *sta;
+	int i;
+
+	/* dump MAC hash */
+	for (i = 0; i < WET_STA_HASH_SIZE; i ++) {
+		for (sta = weth->stahash_mac[i]; sta; sta = sta->next_mac) {
+			bcm_bprintf(b, "sta %x mh %d next_mac %x\n",
+				(uint)sta, i, (uint)sta->next_mac);
+		}
+	}
+
+	/* dump IP hash */
+	for (i = 0; i < WET_STA_HASH_SIZE; i ++) {
+		for (sta = weth->stahash_ip[i]; sta; sta = sta->next_ip) {
+			bcm_bprintf(b, "sta %x ih %d next_ip %x\n",
+				(uint)sta, i, (uint)sta->next_ip);
+		}
+	}
+}
+
+void
+wet_sta_test(wlc_wet_info_t *weth, struct bcmstrbuf *b)
+{
+	char mac1[] = {0x0, 0x1, 0x2, 0x3, 0x4, 0x5};
+	char mac2[] = {0x0, 0x2, 0x2, 0x3, 0x4, 0x5};
+	char mac3[] = {0x0, 0x3, 0x2, 0x3, 0x4, 0x5};
+	char ip1[] = {0x0, 0x1, 0x2, 0x1};
+	char ip2[] = {0x0, 0x2, 0x2, 0x1};
+	char ip3[] = {0x0, 0x3, 0x2, 0x1};
+	char IP1[] = {0x0, 0x1, 0x2, 0xb};
+	char IP2[] = {0x0, 0x2, 0x2, 0xb};
+	char IP3[] = {0x0, 0x3, 0x2, 0xb};
+	wet_sta_t *sta;
+
+	wet_sta_update_all(weth, ip1, mac1, &sta);
+	wet_sta_dump(weth, b);
+	wet_sta_update_all(weth, ip2, mac2, &sta);
+	wet_sta_dump(weth, b);
+	wet_sta_update_all(weth, ip3, mac3, &sta);
+	wet_sta_dump(weth, b);
+	wet_sta_update_all(weth, IP2, mac2, &sta);
+	wet_sta_dump(weth, b);
+	wet_sta_update_all(weth, IP1, mac1, &sta);
+	wet_sta_dump(weth, b);
+	wet_sta_update_all(weth, IP3, mac3, &sta);
+	wet_sta_dump(weth, b);
+
+}
+#endif	/* #if WET_STA_TEST */
+
+int
+wlc_wet_dump(wlc_wet_info_t *weth, struct bcmstrbuf *b)
+{
+	char eabuf[ETHER_ADDR_STR_LEN];
+	wet_sta_t *sta;
+	int i;
+
+	if (weth == NULL)
+		return BCME_OK;
+
+	bcm_bprintf(b, "Host MAC: %s\n", bcm_ether_ntoa(&weth->mac, eabuf));
+	bcm_bprintf(b, "Host IP: %u.%u.%u.%u\n",
+		weth->ip[0], weth->ip[1], weth->ip[2], weth->ip[3]);
+	bcm_bprintf(b, "Entry\tEnetAddr\t\tInetAddr\n");
+	for (i = 0; i < WET_NUMSTAS; i ++) {
+		if (weth->sta[i].next)
+			continue;
+		/* format the entry dump */
+		sta = &weth->sta[i];
+		bcm_bprintf(b, "%u\t%s\t%u.%u.%u.%u\n",
+			i, bcm_ether_ntoa(&sta->mac, eabuf),
+			sta->ip[0], sta->ip[1], sta->ip[2], sta->ip[3]);
+	}
+#if WET_STA_TEST
+	wet_sta_test(weth, b);
+#endif /* WET_STA_TEST */
+
+	return 0;
+}
+#endif	/* #ifdef BCMDBG */

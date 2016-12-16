@@ -1,3 +1,4 @@
+
 /*
  * Basic unit test for PHY Radar module
  *
@@ -12,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:.*>>
  *
- * $Id: test_phy_radar.c 634430 2016-04-28 00:05:30Z chihap $
+ * $Id: test_phy_radar.c 655652 2016-08-23 00:11:26Z $
  */
 
 /***************************************************************************************************
@@ -50,6 +51,17 @@ uint32 phyhal_msg_level = 0;
 */
 
 #include <check.h> /* Includes Check framework */
+
+/*
+ * Hardcode the following ACPHY register addresses to avoid
+ * "case label does not reduce to an integer constant" compile error
+ */
+#undef  ACPHY_RadarBlankCtrl_SC
+#define ACPHY_RadarBlankCtrl_SC(rev)           0x1160
+#undef  ACPHY_Antenna0_radarFifoCtrl_SC
+#define ACPHY_Antenna0_radarFifoCtrl_SC(rev)   0x1161
+#undef  ACPHY_Antenna0_radarFifoData_SC
+#define ACPHY_Antenna0_radarFifoData_SC(rev)   0x1163
 
 /*
  * In order to run unit tests with Check, we must create some test cases,
@@ -94,12 +106,10 @@ static phy_ac_info_t aci;
 static phy_type_radar_fns_t radar_fns;
 
 /* PHY Data */
-#define MAX_NUM_PULSES	128
-#define FIFO_ENTRIES	(MAX_NUM_PULSES * 4)	// 4 * uint16 entries contain info for each pulse
 
 typedef struct {
 	uint16 num_fifo_entries;
-	uint16 buffer[FIFO_ENTRIES];
+	uint16 buffer[MAX_FIFO_SIZE];
 	uint16 idx;
 } radar_fifo_t;
 
@@ -177,6 +187,7 @@ phy_utils_read_phyreg(phy_info_t *pi, uint16 addr)
 
 	switch (addr) {
 	case ACPHY_Antenna0_radarFifoCtrl(pi->pubpi->phy_rev):
+	case ACPHY_Antenna0_radarFifoCtrl_SC(pi->pubpi->phy_rev):
 		value = phy_fifo[0].num_fifo_entries;
 		break;
 	case ACPHY_Antenna1_radarFifoCtrl(pi->pubpi->phy_rev):
@@ -184,15 +195,21 @@ phy_utils_read_phyreg(phy_info_t *pi, uint16 addr)
 		value = phy_fifo[1].num_fifo_entries;
 		break;
 	case ACPHY_Antenna0_radarFifoData(pi->pubpi->phy_rev):
-		ASSERT(phy_fifo[0].idx < FIFO_ENTRIES);
+	case ACPHY_Antenna0_radarFifoData_SC(pi->pubpi->phy_rev):
+		ASSERT(phy_fifo[0].idx < MAX_FIFO_SIZE);
 		value = phy_fifo[0].buffer[phy_fifo[0].idx++];
 		break;
 	case ACPHY_Antenna1_radarFifoData(pi->pubpi->phy_rev):
 		ASSERT(RDR_NANTENNAS > 1);
-		ASSERT(phy_fifo[1].idx < FIFO_ENTRIES);
+		ASSERT(phy_fifo[1].idx < MAX_FIFO_SIZE);
 		value = phy_fifo[1].buffer[phy_fifo[1].idx++];
 		break;
+	case ACPHY_RadarBlankCtrl(pi->pubpi->phy_rev):
+	case ACPHY_RadarBlankCtrl_SC(pi->pubpi->phy_rev):
+		value = 25;
+		break;
 	default:
+		printf("acphy addr 0x%04x is currently unsupported\n", addr);
 		ASSERT(0);	// the radar code should only read the radar-specific registers
 	}
 
@@ -222,6 +239,26 @@ phy_radar_unregister_impl(phy_radar_info_t *ri)
 	}
 }
 
+#define PHY_FIFO_FORMAT_4WORDS_PER_PULSE	4
+#define PHY_FIFO_FORMAT_6WORDS_PER_PULSE	6
+#define MAIN_CORE	FALSE
+#define SCAN_CORE	TRUE
+#define ONE_SEGMENT FALSE
+#define TWO_SEGMENT TRUE
+
+static void
+set_phy_fifo_format(wlc_phy_t *pubpi, uint8 num_words_per_pulse)
+{
+	/* acphyrev 32 onwards uses 6 16-bit words/pulse; older revs use 4 words/pulse */
+	if (num_words_per_pulse == PHY_FIFO_FORMAT_6WORDS_PER_PULSE) {
+		pubpi->phy_rev = 32;
+		pubpi->radioid = BCM20693_ID;
+	} else {
+		pubpi->phy_rev = 13;
+		pubpi->radioid = BCM20691_ID;
+	}
+}
+
 /* ------------- Startup and Teardown - Fixtures ---------------
  * Setting up objects for each unit test,
  * it may be convenient to add some setup that is constant across all the tests in a test case
@@ -233,13 +270,21 @@ setup(void)
 {
 	/* allocate and initialise all structures required for phy_radar_run_nphy() */
 	phy_info.pubpi = (wlc_phy_t *)MALLOCZ(osh, sizeof(*phy_info.pubpi));
+	phy_info.pubpi->phy_type = PHY_TYPE_AC;	/* phy_rev and radioid are setup per test */
 	phy_info.sh = (shared_phy_t *)MALLOCZ(osh, sizeof(*phy_info.sh));
 	phy_info.u.pi_acphy = (phy_info_acphy_t *)MALLOCZ(osh, sizeof(*phy_info.u.pi_acphy));
 	phy_info.radari = (phy_radar_info_t *)MALLOCZ(osh, sizeof(*phy_info.radari));
+
 	if (phy_info.radari != NULL) {
 		phy_info.radari->pi = &phy_info;
 		phy_info.radari->fns = &radar_fns;
 		aci.pi = &phy_info;
+
+		/*
+		 * phy_ac_radar_register_impl() mallocs some area for phyrev 32, so to
+		 * support all phy fifo formats we need this area malloced
+		 */
+		set_phy_fifo_format(phy_info.pubpi, PHY_FIFO_FORMAT_6WORDS_PER_PULSE);
 		aci.radari = phy_ac_radar_register_impl(&phy_info, &aci, phy_info.radari);
 
 #ifdef BCMDBG
@@ -267,6 +312,7 @@ teardown(void)
 	/* cleanup all created memory */
 	if (phy_info.radari != NULL) {
 		if (aci.radari != NULL) {
+			set_phy_fifo_format(phy_info.pubpi, PHY_FIFO_FORMAT_6WORDS_PER_PULSE);
 			phy_ac_radar_unregister_impl(aci.radari);
 			aci.radari = NULL;
 		}
@@ -316,14 +362,12 @@ read_fifo_from_file(const char *filename, uint8 ant_num)
 		ASSERT(radar_fifo->idx == 0);
 
 		/* fill phy_fifo[ant_num].buffer */
-		while (read(fd, &radar_fifo->buffer[idx++], 2) == 2);
+		while (idx < MAX_FIFO_SIZE && read(fd, &radar_fifo->buffer[idx++], 2) == 2);
 
-		ASSERT(idx - 1 <= FIFO_ENTRIES);
-
-		radar_fifo->num_fifo_entries = idx - 1;
+		radar_fifo->num_fifo_entries = idx;
 
 		/* pad remainder of buffer with zeros */
-		while (idx < FIFO_ENTRIES)
+		while (idx < MAX_FIFO_SIZE)
 			radar_fifo->buffer[idx++] = 0;
 
 		(void)close(fd);
@@ -351,33 +395,59 @@ static char *ant1_filename(const char *ant0_filename)
 }
 
 static void
-run_radar_test(const test_table_t radar[])
+run_radar_test(const test_table_t radar[], uint8 num_words_per_pulse, bool sec_core, bool mode_80p80)
 {
 	uint8 table_idx;
 	uint8 radar_type;
 	radar_detected_info_t radar_detected;
+	char filename[80];
+
+	ASSERT(num_words_per_pulse == PHY_FIFO_FORMAT_4WORDS_PER_PULSE ||
+	       num_words_per_pulse == PHY_FIFO_FORMAT_6WORDS_PER_PULSE);
 
 	for (table_idx = 0; radar[table_idx].filename != NULL; ++table_idx) {
 		phy_fifo[0].idx = 0;
 		phy_fifo[1].idx = 0;
 
-		ck_assert_int_ge(read_fifo_from_file(radar[table_idx].filename, 0), 0);
-		ck_assert_int_ge(read_fifo_from_file(ant1_filename(radar[table_idx].filename), 1),
+		/* set acphyrev appropriately so detection code knows how many words to read */
+		set_phy_fifo_format(phy_info.pubpi, num_words_per_pulse);
+
+		(void)strncpy(filename, radar[table_idx].filename, sizeof(filename));
+
+		if (num_words_per_pulse == PHY_FIFO_FORMAT_6WORDS_PER_PULSE) {
+			char *p;
+
+			/* replace radar_ with radar2_ */
+			p = strchr(filename, '_');
+			ASSERT(p != NULL);
+
+			(void)memmove(p + 1, p, strlen(p) + 1);
+
+			*p = '2';
+		}
+
+		ck_assert_int_ge(read_fifo_from_file(filename, 0), 0);
+		ck_assert_int_ge(read_fifo_from_file(ant1_filename(filename), 1),
 		                 0);
 		phy_info.bw = radar[table_idx].bw;
 
-		radar_type = phy_radar_run_nphy(&phy_info, &radar_detected);
+		radar_type = phy_radar_run_nphy(&phy_info, &radar_detected, sec_core, mode_80p80);
 
 		ASSERT(radar_type == radar_detected.radar_type);
 
 		printf("%s: radar_type=%d, pw=[%u,%u] interval=[%u,%u]\n",
-			radar[table_idx].filename,
+			filename,
 			radar_detected.radar_type,
 			radar_detected.min_pw, radar_detected.max_pw,
 			radar_detected.min_pri, radar_detected.max_pri);
 
 		ck_assert_uint_eq(radar_type, radar[table_idx].radar_type);
-		ck_assert_uint_eq(radar_detected.min_pw, radar[table_idx].min_pw);
+		if (radar[table_idx].min_pw == 0) {
+			ck_assert_uint_eq(radar_detected.min_pw, radar[table_idx].min_pw);
+		} else {
+			ck_assert_uint_ge(radar_detected.min_pw, radar[table_idx].min_pw - 1);
+			ck_assert_uint_le(radar_detected.min_pw, radar[table_idx].min_pw + 1);
+		}
 		ck_assert_uint_eq(radar_detected.min_pri, radar[table_idx].radar_interval);
 	}
 }
@@ -408,14 +478,14 @@ START_TEST(test_radar_none)
 		(RADAR_FEATURE_FCC_DETECT | RADAR_FEATURE_ETSI_DETECT);
 
 	/* these test cases have parameters just outside the radar types */
-	run_radar_test(radar_none);
+	run_radar_test(radar_none, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_captured_etsi0[] = {
 	{ "radcap_1us_1428us_0MHz_-25dBm_bw20_ant0.bin", 44, 1428,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_0 },
-	{ "radcap_1us_1428us_0MHz_-45dBm_bw20_ant0.bin", 27, 1428,
+	{ "radcap_1us_1428us_0MHz_-45dBm_bw20_ant0.bin", 43, 1428,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_0 },
 	{ "radcap_1us_1428us_1MHz_-25dBm_bw20_ant0.bin", 41, 1428,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_0 },
@@ -439,7 +509,7 @@ START_TEST(test_radar_captured_ETSI0)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_captured_etsi0);
+	run_radar_test(radar_captured_etsi0, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
@@ -468,17 +538,17 @@ START_TEST(test_radar_captured_ETSI1)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_captured_etsi1);
+	run_radar_test(radar_captured_etsi1, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_etsi1[] = {
 	{ "radar_etsi-1_bw20_ant0.bin", 19, 1666, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-1_bw40_ant0.bin", 19, 1666, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
+	{ "radar_etsi-1_bw40_ant0.bin", 20, 1666, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_etsi-1_bw80_ant0.bin", 19, 1666, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-1_bw20_ant0.bin", 99, 5000,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_zcorner-max-etsi-1_bw40_ant0.bin", 99, 5000,
+	{ "radar_zcorner-max-etsi-1_bw40_ant0.bin", 100, 5000,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-1_bw80_ant0.bin", 99, 5000,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
@@ -490,7 +560,19 @@ START_TEST(test_radar_ETSI1)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi1);
+	run_radar_test(radar_etsi1, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI1)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -519,17 +601,17 @@ START_TEST(test_radar_captured_ETSI2)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_captured_etsi2);
+	run_radar_test(radar_captured_etsi2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_etsi2[] = {
 	{ "radar_etsi-2_bw20_ant0.bin", 159, 1111, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_2 },
-	{ "radar_etsi-2_bw40_ant0.bin", 159, 1111, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_2 },
+	{ "radar_etsi-2_bw40_ant0.bin", 160, 1111, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_2 },
 	{ "radar_etsi-2_bw80_ant0.bin", 159, 1111, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_2 },
 	{ "radar_zcorner-max-etsi-2_bw20_ant0.bin", 299, 5000,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_2 },
-	{ "radar_zcorner-max-etsi-2_bw40_ant0.bin", 299, 5000,
+	{ "radar_zcorner-max-etsi-2_bw40_ant0.bin", 300, 5000,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_2 },
 	{ "radar_zcorner-max-etsi-2_bw80_ant0.bin", 299, 5000,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_2 },
@@ -541,7 +623,19 @@ START_TEST(test_radar_ETSI2)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi2);
+	run_radar_test(radar_etsi2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI2)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -564,17 +658,17 @@ START_TEST(test_radar_captured_ETSI3)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_captured_etsi3);
+	run_radar_test(radar_captured_etsi3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_etsi3[] = {
 	{ "radar_etsi-3_bw20_ant0.bin", 159, 317, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_3 },
-	{ "radar_etsi-3_bw40_ant0.bin", 159, 317, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_3 },
+	{ "radar_etsi-3_bw40_ant0.bin", 160, 317, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_3 },
 	{ "radar_etsi-3_bw80_ant0.bin", 159, 317, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_3 },
 	{ "radar_zcorner-max-etsi-3_bw20_ant0.bin", 299, 434,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_3 },
-	{ "radar_zcorner-max-etsi-3_bw40_ant0.bin", 299, 434,
+	{ "radar_zcorner-max-etsi-3_bw40_ant0.bin", 300, 434,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_3 },
 	{ "radar_zcorner-max-etsi-3_bw80_ant0.bin", 299, 434,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_3 },
@@ -586,7 +680,19 @@ START_TEST(test_radar_ETSI3)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi3);
+	run_radar_test(radar_etsi3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI3)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -611,7 +717,7 @@ START_TEST(test_radar_captured_ETSI4)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_captured_etsi4);
+	run_radar_test(radar_captured_etsi4, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
@@ -633,7 +739,19 @@ START_TEST(test_radar_ETSI4)
 	/* enable ETSI radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi4);
+	run_radar_test(radar_etsi4, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI4)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -643,34 +761,34 @@ END_TEST
  */
 static test_table_t radar_etsi5_stg2[] = {
 	{ "radar_etsi-5-2aabb_bw20_ant0.bin", 27, 2941, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-5-2aabb_bw40_ant0.bin", 27, 2941, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
+	{ "radar_etsi-5-2aabb_bw40_ant0.bin", 28, 2941, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_etsi-5-2aabb_bw80_ant0.bin", 27, 2941, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-min-etsi-5-2aabb_bw20_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_zcorner-min-etsi-5-2aabb_bw40_ant0.bin", 39, 2500,
+	{ "radar_zcorner-min-etsi-5-2aabb_bw40_ant0.bin", 40, 2500,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-min-etsi-5-2aabb_bw80_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-5-2aabb_bw20_ant0.bin", 39, 3333,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_zcorner-max-etsi-5-2aabb_bw40_ant0.bin", 39, 3333,
+	{ "radar_zcorner-max-etsi-5-2aabb_bw40_ant0.bin", 40, 3333,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-5-2aabb_bw80_ant0.bin", 39, 3333,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-5-2abab_bw20_ant0.bin", 27, 2941, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG2 },
+	{ "radar_etsi-5-2abab_bw20_ant0.bin", 28, 2941, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG2 },
 	{ "radar_etsi-5-2abab_bw40_ant0.bin", 28, 2941, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_5_STG2 },
-	{ "radar_etsi-5-2abab_bw80_ant0.bin", 28, 2941, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG2 },
-	{ "radar_zcorner-min-etsi-5-2abab_bw20_ant0.bin", 39, 2500,
+	{ "radar_etsi-5-2abab_bw80_ant0.bin", 27, 2941, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG2 },
+	{ "radar_zcorner-min-etsi-5-2abab_bw20_ant0.bin", 40, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG2 },
 	{ "radar_zcorner-min-etsi-5-2abab_bw40_ant0.bin", 40, 2500,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_5_STG2 },
-	{ "radar_zcorner-min-etsi-5-2abab_bw80_ant0.bin", 40, 2500,
+	{ "radar_zcorner-min-etsi-5-2abab_bw80_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG2 },
-	{ "radar_zcorner-max-etsi-5-2abab_bw20_ant0.bin", 39, 3333,
+	{ "radar_zcorner-max-etsi-5-2abab_bw20_ant0.bin", 40, 3333,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG2 },
 	{ "radar_zcorner-max-etsi-5-2abab_bw40_ant0.bin", 40, 3333,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_5_STG2 },
-	{ "radar_zcorner-max-etsi-5-2abab_bw80_ant0.bin", 40, 3333,
+	{ "radar_zcorner-max-etsi-5-2abab_bw80_ant0.bin", 39, 3333,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG2 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -680,7 +798,19 @@ START_TEST(test_radar_ETSI5_STG2)
 	/* enable ETSI staggered radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi5_stg2);
+	run_radar_test(radar_etsi5_stg2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI5_STG2)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi5_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi5_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi5_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi5_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -690,34 +820,34 @@ END_TEST
  */
 static test_table_t radar_etsi5_stg3[] = {
 	{ "radar_etsi-5-3aabb_bw20_ant0.bin", 27, 3030, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-5-3aabb_bw40_ant0.bin", 27, 2857, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
+	{ "radar_etsi-5-3aabb_bw40_ant0.bin", 28, 2857, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_etsi-5-3aabb_bw80_ant0.bin", 27, 2702, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-min-etsi-5-3aabb_bw20_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_zcorner-min-etsi-5-3aabb_bw40_ant0.bin", 39, 2564,
+	{ "radar_zcorner-min-etsi-5-3aabb_bw40_ant0.bin", 40, 2564,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-min-etsi-5-3aabb_bw80_ant0.bin", 39, 2631,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-5-3aabb_bw20_ant0.bin", 39, 3333,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_zcorner-max-etsi-5-3aabb_bw40_ant0.bin", 39, 3225,
+	{ "radar_zcorner-max-etsi-5-3aabb_bw40_ant0.bin", 40, 3225,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-5-3aabb_bw80_ant0.bin", 39, 3125,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-5-3abab_bw20_ant0.bin", 27, 3030, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG3 },
+	{ "radar_etsi-5-3abab_bw20_ant0.bin", 28, 3030, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG3 },
 	{ "radar_etsi-5-3abab_bw40_ant0.bin", 28, 2857, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_5_STG3 },
-	{ "radar_etsi-5-3abab_bw80_ant0.bin", 28, 2702, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG3 },
-	{ "radar_zcorner-min-etsi-5-3abab_bw20_ant0.bin", 39, 2500,
+	{ "radar_etsi-5-3abab_bw80_ant0.bin", 27, 2702, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG3 },
+	{ "radar_zcorner-min-etsi-5-3abab_bw20_ant0.bin", 40, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG3 },
 	{ "radar_zcorner-min-etsi-5-3abab_bw40_ant0.bin", 40, 2564,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_5_STG3 },
-	{ "radar_zcorner-min-etsi-5-3abab_bw80_ant0.bin", 40, 2631,
+	{ "radar_zcorner-min-etsi-5-3abab_bw80_ant0.bin", 39, 2631,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG3 },
-	{ "radar_zcorner-max-etsi-5-3abab_bw20_ant0.bin", 39, 3333,
+	{ "radar_zcorner-max-etsi-5-3abab_bw20_ant0.bin", 40, 3333,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_5_STG3 },
 	{ "radar_zcorner-max-etsi-5-3abab_bw40_ant0.bin", 40, 3225,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_5_STG3 },
-	{ "radar_zcorner-max-etsi-5-3abab_bw80_ant0.bin", 40, 3125,
+	{ "radar_zcorner-max-etsi-5-3abab_bw80_ant0.bin", 39, 3125,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_5_STG3 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -727,7 +857,19 @@ START_TEST(test_radar_ETSI5_STG3)
 	/* enable ETSI staggered radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi5_stg3);
+	run_radar_test(radar_etsi5_stg3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI5_STG3)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi5_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi5_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi5_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi5_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -737,34 +879,34 @@ END_TEST
  */
 static test_table_t radar_etsi6_stg2[] = {
 	{ "radar_etsi-6-2aabb_bw20_ant0.bin", 27, 1315, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-6-2aabb_bw40_ant0.bin", 27, 1190, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
+	{ "radar_etsi-6-2aabb_bw40_ant0.bin", 28, 1190, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_etsi-6-2aabb_bw80_ant0.bin", 27, 1190, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-min-etsi-6-2aabb_bw20_ant0.bin", 39, 833,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_2 },
-	{ "radar_zcorner-min-etsi-6-2aabb_bw40_ant0.bin", 39, 840,
+	{ "radar_zcorner-min-etsi-6-2aabb_bw40_ant0.bin", 40, 840,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_2 },
 	{ "radar_zcorner-min-etsi-6-2aabb_bw80_ant0.bin", 39, 840,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_2 },
 	{ "radar_zcorner-max-etsi-6-2aabb_bw20_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_zcorner-max-etsi-6-2aabb_bw40_ant0.bin", 39, 2439,
+	{ "radar_zcorner-max-etsi-6-2aabb_bw40_ant0.bin", 40, 2439,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-6-2aabb_bw80_ant0.bin", 39, 2439,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-6-2abab_bw20_ant0.bin", 27, 1315, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG2 },
+	{ "radar_etsi-6-2abab_bw20_ant0.bin", 28, 1315, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG2 },
 	{ "radar_etsi-6-2abab_bw40_ant0.bin", 28, 1190, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_6_STG2 },
-	{ "radar_etsi-6-2abab_bw80_ant0.bin", 28, 1190, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG2 },
-	{ "radar_zcorner-min-etsi-6-2abab_bw20_ant0.bin", 39, 833,
+	{ "radar_etsi-6-2abab_bw80_ant0.bin", 27, 1190, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG2 },
+	{ "radar_zcorner-min-etsi-6-2abab_bw20_ant0.bin", 40, 833,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG2 },
 	{ "radar_zcorner-min-etsi-6-2abab_bw40_ant0.bin", 40, 840,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_6_STG2 },
-	{ "radar_zcorner-min-etsi-6-2abab_bw80_ant0.bin", 40, 840,
+	{ "radar_zcorner-min-etsi-6-2abab_bw80_ant0.bin", 39, 840,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG2 },
-	{ "radar_zcorner-max-etsi-6-2abab_bw20_ant0.bin", 39, 2500,
+	{ "radar_zcorner-max-etsi-6-2abab_bw20_ant0.bin", 40, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG2 },
 	{ "radar_zcorner-max-etsi-6-2abab_bw40_ant0.bin", 40, 2439,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_6_STG2 },
-	{ "radar_zcorner-max-etsi-6-2abab_bw80_ant0.bin", 40, 2439,
+	{ "radar_zcorner-max-etsi-6-2abab_bw80_ant0.bin", 39, 2439,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG2 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -774,7 +916,19 @@ START_TEST(test_radar_ETSI6_STG2)
 	/* enable ETSI staggered radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi6_stg2);
+	run_radar_test(radar_etsi6_stg2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI6_STG2)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi6_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi6_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi6_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi6_stg2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -784,34 +938,34 @@ END_TEST
  */
 static test_table_t radar_etsi6_stg3[] = {
 	{ "radar_etsi-6-3aabb_bw20_ant0.bin", 27, 1388, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-6-3aabb_bw40_ant0.bin", 27, 1136, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
+	{ "radar_etsi-6-3aabb_bw40_ant0.bin", 28, 1136, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_etsi-6-3aabb_bw80_ant0.bin", 27, 1388, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-min-etsi-6-3aabb_bw20_ant0.bin", 39, 833,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_2 },
-	{ "radar_zcorner-min-etsi-6-3aabb_bw40_ant0.bin", 39, 847,
+	{ "radar_zcorner-min-etsi-6-3aabb_bw40_ant0.bin", 40, 847,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_2 },
 	{ "radar_zcorner-min-etsi-6-3aabb_bw80_ant0.bin", 39, 833,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_2 },
 	{ "radar_zcorner-max-etsi-6-3aabb_bw20_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_1 },
-	{ "radar_zcorner-max-etsi-6-3aabb_bw40_ant0.bin", 39, 2380,
+	{ "radar_zcorner-max-etsi-6-3aabb_bw40_ant0.bin", 40, 2380,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_1 },
 	{ "radar_zcorner-max-etsi-6-3aabb_bw80_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_1 },
-	{ "radar_etsi-6-3abab_bw20_ant0.bin", 27, 1388, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG3 },
+	{ "radar_etsi-6-3abab_bw20_ant0.bin", 28, 1388, WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG3 },
 	{ "radar_etsi-6-3abab_bw40_ant0.bin", 28, 1136, WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_6_STG3 },
-	{ "radar_etsi-6-3abab_bw80_ant0.bin", 28, 1388, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG3 },
-	{ "radar_zcorner-min-etsi-6-3abab_bw20_ant0.bin", 39, 833,
+	{ "radar_etsi-6-3abab_bw80_ant0.bin", 27, 1388, WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG3 },
+	{ "radar_zcorner-min-etsi-6-3abab_bw20_ant0.bin", 40, 833,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG3 },
 	{ "radar_zcorner-min-etsi-6-3abab_bw40_ant0.bin", 40, 847,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_6_STG3 },
-	{ "radar_zcorner-min-etsi-6-3abab_bw80_ant0.bin", 40, 833,
+	{ "radar_zcorner-min-etsi-6-3abab_bw80_ant0.bin", 39, 833,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG3 },
-	{ "radar_zcorner-max-etsi-6-3abab_bw20_ant0.bin", 39, 2500,
+	{ "radar_zcorner-max-etsi-6-3abab_bw20_ant0.bin", 40, 2500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_ETSI_6_STG3 },
 	{ "radar_zcorner-max-etsi-6-3abab_bw40_ant0.bin", 40, 2380,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_ETSI_6_STG3 },
-	{ "radar_zcorner-max-etsi-6-3abab_bw80_ant0.bin", 40, 2500,
+	{ "radar_zcorner-max-etsi-6-3abab_bw80_ant0.bin", 39, 2500,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_ETSI_6_STG3 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -821,43 +975,55 @@ START_TEST(test_radar_ETSI6_STG3)
 	/* enable ETSI staggered radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
 
-	run_radar_test(radar_etsi6_stg3);
+	run_radar_test(radar_etsi6_stg3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_ETSI6_STG3)
+{
+	/* enable ETSI radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_ETSI_DETECT;
+
+	run_radar_test(radar_etsi6_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi6_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_etsi6_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_etsi6_stg3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_unclassified[] = {
 	{ "radar_fcc-0_bw20_ant0.bin", 19, 1428, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_0 },
-	{ "radar_fcc-0_bw40_ant0.bin", 19, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
+	{ "radar_fcc-0_bw40_ant0.bin", 20, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
 	{ "radar_fcc-0_bw80_ant0.bin", 19, 1428, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_0 },
 	{ "radar_fcc-1_bw20_ant0.bin", 19, 738, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_1 },
-	{ "radar_fcc-1_bw40_ant0.bin", 19, 738, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_1 },
+	{ "radar_fcc-1_bw40_ant0.bin", 20, 738, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_1 },
 	{ "radar_fcc-1_bw80_ant0.bin", 19, 738, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_1 },
 	{ "radar_fcc-2_bw20_ant0.bin", 59, 190, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_2 },
-	{ "radar_fcc-2_bw40_ant0.bin", 59, 190, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
+	{ "radar_fcc-2_bw40_ant0.bin", 60, 190, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
 	{ "radar_fcc-2_bw80_ant0.bin", 59, 190, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-min-fcc-2_bw20_ant0.bin", 99, 230, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_2 },
-	{ "radar_zcorner-min-fcc-2_bw40_ant0.bin", 99, 230, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
+	{ "radar_zcorner-min-fcc-2_bw40_ant0.bin", 100, 230, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-min-fcc-2_bw80_ant0.bin", 99, 230, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-max-fcc-2_bw20_ant0.bin", 99, 150, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_2 },
-	{ "radar_zcorner-max-fcc-2_bw40_ant0.bin", 99, 150, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
+	{ "radar_zcorner-max-fcc-2_bw40_ant0.bin", 100, 150, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-max-fcc-2_bw80_ant0.bin", 99, 150, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_2 },
 	{ "radar_fcc-3_bw20_ant0.bin", 159, 350, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_3 },
-	{ "radar_fcc-3_bw40_ant0.bin", 159, 350, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
+	{ "radar_fcc-3_bw40_ant0.bin", 160, 350, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
 	{ "radar_fcc-3_bw80_ant0.bin", 159, 350, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-min-fcc-3_bw20_ant0.bin", 199, 500, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_3 },
-	{ "radar_zcorner-min-fcc-3_bw40_ant0.bin", 199, 500, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
+	{ "radar_zcorner-min-fcc-3_bw40_ant0.bin", 200, 500, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-min-fcc-3_bw80_ant0.bin", 199, 500, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-max-fcc-3_bw20_ant0.bin", 199, 200, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_3 },
-	{ "radar_zcorner-max-fcc-3_bw40_ant0.bin", 199, 200, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
+	{ "radar_zcorner-max-fcc-3_bw40_ant0.bin", 200, 200, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-max-fcc-3_bw80_ant0.bin", 199, 200, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_3 },
 	{ "radar_fcc-4_bw20_ant0.bin", 319, 350, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_4 },
-	{ "radar_fcc-4_bw40_ant0.bin", 319, 350, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
+	{ "radar_fcc-4_bw40_ant0.bin", 320, 350, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
 	{ "radar_fcc-4_bw80_ant0.bin", 319, 350, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-min-fcc-4_bw20_ant0.bin", 399, 500, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_4 },
-	{ "radar_zcorner-min-fcc-4_bw40_ant0.bin", 399, 500, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
+	{ "radar_zcorner-min-fcc-4_bw40_ant0.bin", 400, 500, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-min-fcc-4_bw80_ant0.bin", 399, 500, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-max-fcc-4_bw20_ant0.bin", 399, 200, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_4 },
-	{ "radar_zcorner-max-fcc-4_bw40_ant0.bin", 399, 200, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
+	{ "radar_zcorner-max-fcc-4_bw40_ant0.bin", 400, 200, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-max-fcc-4_bw80_ant0.bin", 399, 200, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_4 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -867,7 +1033,19 @@ START_TEST(test_radar_unclassified)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_unclassified);
+	run_radar_test(radar_unclassified, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_unclassified)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_unclassified, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_unclassified, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_unclassified, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_unclassified, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -883,7 +1061,19 @@ START_TEST(test_radar_FCC5)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_fcc5);
+	run_radar_test(radar_fcc5, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_FCC5)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -899,7 +1089,19 @@ START_TEST(test_radar_min_FCC5)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_min_fcc5);
+	run_radar_test(radar_min_fcc5, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_min_FCC5)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_min_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_min_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_min_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_min_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -915,7 +1117,19 @@ START_TEST(test_radar_max_FCC5)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_max_fcc5);
+	run_radar_test(radar_max_fcc5, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_max_FCC5)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_max_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_max_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_max_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_max_fcc5, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -925,10 +1139,10 @@ END_TEST
  */
 static test_table_t radar_jp1[] = {
 	{ "radar_jp-1-1_bw20_ant0.bin", 19, 1428, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_0 },
-	{ "radar_jp-1-1_bw40_ant0.bin", 19, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
+	{ "radar_jp-1-1_bw40_ant0.bin", 20, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
 	{ "radar_jp-1-1_bw80_ant0.bin", 19, 1428, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_0 },
 	{ "radar_jp-1-2_bw20_ant0.bin", 49, 3846, WL_CHANSPEC_BW_20, RADAR_TYPE_JP1_2 },
-	{ "radar_jp-1-2_bw40_ant0.bin", 49, 3846, WL_CHANSPEC_BW_40, RADAR_TYPE_JP1_2 },
+	{ "radar_jp-1-2_bw40_ant0.bin", 50, 3846, WL_CHANSPEC_BW_40, RADAR_TYPE_JP1_2 },
 	{ "radar_jp-1-2_bw80_ant0.bin", 49, 3846, WL_CHANSPEC_BW_80, RADAR_TYPE_JP1_2 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -938,7 +1152,19 @@ START_TEST(test_radar_JP1)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_jp1);
+	run_radar_test(radar_jp1, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_JP1)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_jp1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_jp1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -959,7 +1185,7 @@ START_TEST(test_radar_captured_FCC2)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_captured_fcc2);
+	run_radar_test(radar_captured_fcc2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
@@ -988,7 +1214,7 @@ START_TEST(test_radar_captured_FCC3)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_captured_fcc3);
+	run_radar_test(radar_captured_fcc3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
@@ -1021,7 +1247,7 @@ START_TEST(test_radar_captured_FCC4)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_captured_fcc4);
+	run_radar_test(radar_captured_fcc4, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
@@ -1030,56 +1256,56 @@ END_TEST
  */
 static test_table_t radar_jp2[] = {
 	{ "radar_jp-2-1-1_bw20_ant0.bin", 9, 1388, WL_CHANSPEC_BW_20, RADAR_TYPE_JP2_1_1 },
-	{ "radar_jp-2-1-1_bw40_ant0.bin", 9, 1388, WL_CHANSPEC_BW_40, RADAR_TYPE_JP2_1_1 },
+	{ "radar_jp-2-1-1_bw40_ant0.bin", 10, 1388, WL_CHANSPEC_BW_40, RADAR_TYPE_JP2_1_1 },
 	{ "radar_jp-2-1-1_bw80_ant0.bin", 9, 1388, WL_CHANSPEC_BW_80, RADAR_TYPE_JP2_1_1 },
 	{ "radar_jp-2-1-2_bw20_ant0.bin", 39, 4000, WL_CHANSPEC_BW_20, RADAR_TYPE_JP2_1_2 },
-	{ "radar_jp-2-1-2_bw40_ant0.bin", 39, 4000, WL_CHANSPEC_BW_40, RADAR_TYPE_JP2_1_2 },
+	{ "radar_jp-2-1-2_bw40_ant0.bin", 40, 4000, WL_CHANSPEC_BW_40, RADAR_TYPE_JP2_1_2 },
 	{ "radar_jp-2-1-2_bw80_ant0.bin", 39, 4000, WL_CHANSPEC_BW_80, RADAR_TYPE_JP2_1_2 },
 	{ "radar_jp-2-2-1_bw20_ant0.bin", 19, 1428, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_0 },
-	{ "radar_jp-2-2-1_bw40_ant0.bin", 19, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
+	{ "radar_jp-2-2-1_bw40_ant0.bin", 20, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
 	{ "radar_jp-2-2-1_bw80_ant0.bin", 19, 1428, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_0 },
 	{ "radar_jp-2-2-2_bw20_ant0.bin", 59, 200, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_2 },
-	{ "radar_jp-2-2-2_bw40_ant0.bin", 59, 200, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
+	{ "radar_jp-2-2-2_bw40_ant0.bin", 60, 200, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
 	{ "radar_jp-2-2-2_bw80_ant0.bin", 59, 200, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-min-jp-2-2-2_bw20_ant0.bin", 99, 229,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_2 },
-	{ "radar_zcorner-min-jp-2-2-2_bw40_ant0.bin", 99, 229,
+	{ "radar_zcorner-min-jp-2-2-2_bw40_ant0.bin", 100, 229,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-min-jp-2-2-2_bw80_ant0.bin", 99, 229,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-max-jp-2-2-2_bw20_ant0.bin", 99, 150,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_2 },
-	{ "radar_zcorner-max-jp-2-2-2_bw40_ant0.bin", 99, 150,
+	{ "radar_zcorner-max-jp-2-2-2_bw40_ant0.bin", 100, 150,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_2 },
 	{ "radar_zcorner-max-jp-2-2-2_bw80_ant0.bin", 99, 150,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_2 },
 	{ "radar_jp-2-2-3_bw20_ant0.bin", 159, 333, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_3 },
-	{ "radar_jp-2-2-3_bw40_ant0.bin", 159, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
+	{ "radar_jp-2-2-3_bw40_ant0.bin", 160, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
 	{ "radar_jp-2-2-3_bw80_ant0.bin", 159, 333, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-min-jp-2-2-3_bw20_ant0.bin", 199, 500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_3 },
-	{ "radar_zcorner-min-jp-2-2-3_bw40_ant0.bin", 199, 500,
+	{ "radar_zcorner-min-jp-2-2-3_bw40_ant0.bin", 200, 500,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-min-jp-2-2-3_bw80_ant0.bin", 199, 500,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-max-jp-2-2-3_bw20_ant0.bin", 199, 250,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_3 },
-	{ "radar_zcorner-max-jp-2-2-3_bw40_ant0.bin", 199, 250,
+	{ "radar_zcorner-max-jp-2-2-3_bw40_ant0.bin", 200, 250,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_3 },
 	{ "radar_zcorner-max-jp-2-2-3_bw80_ant0.bin", 199, 250,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_3 },
 	{ "radar_jp-2-2-4_bw20_ant0.bin", 309, 333, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_4 },
-	{ "radar_jp-2-2-4_bw40_ant0.bin", 309, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
+	{ "radar_jp-2-2-4_bw40_ant0.bin", 310, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
 	{ "radar_jp-2-2-4_bw80_ant0.bin", 309, 333, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-min-jp-2-2-4_bw20_ant0.bin", 399, 500,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_4 },
-	{ "radar_zcorner-min-jp-2-2-4_bw40_ant0.bin", 399, 500,
+	{ "radar_zcorner-min-jp-2-2-4_bw40_ant0.bin", 400, 500,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-min-jp-2-2-4_bw80_ant0.bin", 399, 500,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-max-jp-2-2-4_bw20_ant0.bin", 399, 250,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_4 },
-	{ "radar_zcorner-max-jp-2-2-4_bw40_ant0.bin", 399, 250,
+	{ "radar_zcorner-max-jp-2-2-4_bw40_ant0.bin", 400, 250,
 	WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_4 },
 	{ "radar_zcorner-max-jp-2-2-4_bw80_ant0.bin", 399, 250,
 	WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_4 },
@@ -1091,7 +1317,19 @@ START_TEST(test_radar_JP2)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_jp2);
+	run_radar_test(radar_jp2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_JP2)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_jp2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_jp2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -1110,7 +1348,19 @@ START_TEST(test_radar_JP3)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_jp3);
+	run_radar_test(radar_jp3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_JP3)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -1126,7 +1376,19 @@ START_TEST(test_radar_min_JP3)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_min_jp3);
+	run_radar_test(radar_min_jp3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_min_JP3)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_min_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_min_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_min_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_min_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -1142,13 +1404,25 @@ START_TEST(test_radar_max_JP3)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_max_jp3);
+	run_radar_test(radar_max_jp3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_max_JP3)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_max_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_max_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_max_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_max_jp3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_jp4[] = {
 	{ "radar_jp-4-1_bw20_ant0.bin", 19, 333, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_6 },
-	{ "radar_jp-4-1_bw40_ant0.bin", 19, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_6 },
+	{ "radar_jp-4-1_bw40_ant0.bin", 20, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_6 },
 	{ "radar_jp-4-1_bw80_ant0.bin", 19, 333, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_6 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -1158,7 +1432,19 @@ START_TEST(test_radar_JP4)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_jp4);
+	run_radar_test(radar_jp4, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_JP4)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_jp4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_jp4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_jp4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -1167,7 +1453,7 @@ END_TEST
  */
 static test_table_t radar_korean1[] = {
 	{ "radar_kor-1_bw20_ant0.bin", 19, 1428, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_0 },
-	{ "radar_kor-1_bw40_ant0.bin", 19, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
+	{ "radar_kor-1_bw40_ant0.bin", 20, 1428, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_0 },
 	{ "radar_kor-1_bw80_ant0.bin", 19, 1428, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_0 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -1177,7 +1463,19 @@ START_TEST(test_radar_KOREAN1)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_korean1);
+	run_radar_test(radar_korean1, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_KOREAN1)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_korean1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_korean1, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -1206,13 +1504,13 @@ START_TEST(test_radar_captured_KOREAN2)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_captured_korean2);
+	run_radar_test(radar_captured_korean2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_korean2[] = {
 	{ "radar_kor-2_bw20_ant0.bin", 19, 556, WL_CHANSPEC_BW_20, RADAR_TYPE_KN2 },
-	{ "radar_kor-2_bw40_ant0.bin", 19, 556, WL_CHANSPEC_BW_40, RADAR_TYPE_KN2 },
+	{ "radar_kor-2_bw40_ant0.bin", 20, 556, WL_CHANSPEC_BW_40, RADAR_TYPE_KN2 },
 	{ "radar_kor-2_bw80_ant0.bin", 19, 556, WL_CHANSPEC_BW_80, RADAR_TYPE_KN2 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -1222,12 +1520,24 @@ START_TEST(test_radar_KOREAN2)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_korean2);
+	run_radar_test(radar_korean2, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_KOREAN2)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_korean2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_korean2, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_captured_korean3[] = {
-	{ "radcap_2us_3030us_0MHz_-45dBm_bw20_ant0.bin", 47, 3023,
+	{ "radcap_2us_3030us_0MHz_-45dBm_bw20_ant0.bin", 55, 3023,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_KN3 },
 	{ "radcap_2us_3030us_0MHz_-65dBm_bw20_ant0.bin", 47, 3023,
 	WL_CHANSPEC_BW_20, RADAR_TYPE_KN3 },
@@ -1251,13 +1561,13 @@ START_TEST(test_radar_captured_KOREAN3)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_captured_korean3);
+	run_radar_test(radar_captured_korean3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_korean3[] = {
 	{ "radar_kor-3_bw20_ant0.bin", 39, 3030, WL_CHANSPEC_BW_20, RADAR_TYPE_KN3 },
-	{ "radar_kor-3_bw40_ant0.bin", 39, 3030, WL_CHANSPEC_BW_40, RADAR_TYPE_KN3 },
+	{ "radar_kor-3_bw40_ant0.bin", 40, 3030, WL_CHANSPEC_BW_40, RADAR_TYPE_KN3 },
 	{ "radar_kor-3_bw80_ant0.bin", 39, 3030, WL_CHANSPEC_BW_80, RADAR_TYPE_KN3 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -1267,7 +1577,19 @@ START_TEST(test_radar_KOREAN3)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_korean3);
+	run_radar_test(radar_korean3, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_KOREAN3)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_korean3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_korean3, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -1294,13 +1616,13 @@ START_TEST(test_radar_captured_KOREAN4)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_captured_korean4);
+	run_radar_test(radar_captured_korean4, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
 }
 END_TEST
 
 static test_table_t radar_korean4[] = {
 	{ "radar_kor-4_bw20_ant0.bin", 19, 333, WL_CHANSPEC_BW_20, RADAR_TYPE_FCC_6 },
-	{ "radar_kor-4_bw40_ant0.bin", 19, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_6 },
+	{ "radar_kor-4_bw40_ant0.bin", 20, 333, WL_CHANSPEC_BW_40, RADAR_TYPE_FCC_6 },
 	{ "radar_kor-4_bw80_ant0.bin", 19, 333, WL_CHANSPEC_BW_80, RADAR_TYPE_FCC_6 },
 	{ NULL, 0, 0, 0, 0 }
 };
@@ -1310,7 +1632,19 @@ START_TEST(test_radar_KOREAN4)
 	/* enable FCC radar detection algorithm */
 	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
 
-	run_radar_test(radar_korean4);
+	run_radar_test(radar_korean4, PHY_FIFO_FORMAT_4WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+}
+END_TEST
+
+START_TEST(test_radar2_KOREAN4)
+{
+	/* enable FCC radar detection algorithm */
+	phy_info.radari->st->rparams.radar_args.feature_mask |= RADAR_FEATURE_FCC_DETECT;
+
+	run_radar_test(radar_korean4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, ONE_SEGMENT);
+	run_radar_test(radar_korean4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, MAIN_CORE, TWO_SEGMENT);
+	run_radar_test(radar_korean4, PHY_FIFO_FORMAT_6WORDS_PER_PULSE, SCAN_CORE, TWO_SEGMENT);
 }
 END_TEST
 
@@ -1335,6 +1669,8 @@ Suite *phy_radar_suite(void)
 	tcase_add_checked_fixture(tc, setup, teardown);
 
 	/* Adding unit tests to test case */
+
+	/* old phy format (4 words per pulse) */
 	tcase_add_test(tc, test_radar_none);
 	tcase_add_test(tc, test_radar_captured_ETSI0);
 	tcase_add_test(tc, test_radar_captured_ETSI1);
@@ -1369,6 +1705,30 @@ Suite *phy_radar_suite(void)
 	tcase_add_test(tc, test_radar_KOREAN2);
 	tcase_add_test(tc, test_radar_KOREAN3);
 	tcase_add_test(tc, test_radar_KOREAN4);
+
+	/* new phy format (6 words per pulse) */
+	tcase_add_test(tc, test_radar2_ETSI1);
+	tcase_add_test(tc, test_radar2_ETSI2);
+	tcase_add_test(tc, test_radar2_ETSI3);
+	tcase_add_test(tc, test_radar2_ETSI4);
+	tcase_add_test(tc, test_radar2_ETSI5_STG2);
+	tcase_add_test(tc, test_radar2_ETSI5_STG3);
+	tcase_add_test(tc, test_radar2_ETSI6_STG2);
+	tcase_add_test(tc, test_radar2_ETSI6_STG3);
+	tcase_add_test(tc, test_radar2_unclassified);
+	tcase_add_test(tc, test_radar2_FCC5);
+	tcase_add_test(tc, test_radar2_min_FCC5);
+	tcase_add_test(tc, test_radar2_max_FCC5);
+	tcase_add_test(tc, test_radar2_JP1);
+	tcase_add_test(tc, test_radar2_JP2);
+	tcase_add_test(tc, test_radar2_JP3);
+	tcase_add_test(tc, test_radar2_min_JP3);
+	tcase_add_test(tc, test_radar2_max_JP3);
+	tcase_add_test(tc, test_radar2_JP4);
+	tcase_add_test(tc, test_radar2_KOREAN1);
+	tcase_add_test(tc, test_radar2_KOREAN2);
+	tcase_add_test(tc, test_radar2_KOREAN3);
+	tcase_add_test(tc, test_radar2_KOREAN4);
 
 	/* Adding test case to the Suite */
 	suite_add_tcase(s, tc);

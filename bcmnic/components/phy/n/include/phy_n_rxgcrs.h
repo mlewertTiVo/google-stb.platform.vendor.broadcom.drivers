@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_rxgcrs.h 632569 2016-04-19 20:52:56Z vyass $
+ * $Id: phy_n_rxgcrs.h 657373 2016-09-01 01:08:38Z $
  */
 
 #ifndef _phy_n_rxgcrs_h_
@@ -30,9 +30,6 @@ typedef struct phy_n_rxgcrs_info phy_n_rxgcrs_info_t;
 phy_n_rxgcrs_info_t *phy_n_rxgcrs_register_impl(phy_info_t *pi,
 	phy_n_info_t *ni, phy_rxgcrs_info_t *cmn_info);
 void phy_n_rxgcrs_unregister_impl(phy_n_rxgcrs_info_t *n_info);
-#if defined(RXDESENS_EN)
-int wlc_nphy_set_rxdesens(phy_type_rxgcrs_ctx_t *ctx, int32 int_val);
-#endif
 /* ************************************************************************* */
 /* ************************************************************************* */
 /* ************************************************************************* */

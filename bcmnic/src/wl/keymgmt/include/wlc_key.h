@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: wlc_key.h 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_key.h 658437 2016-09-08 00:54:45Z $
  */
 
 #ifndef _wlc_key_h_
@@ -100,12 +100,13 @@ enum {
 	WLC_KEY_FLAG_AP				= 0x00000800,	/* key belongs to an AP bsscfg */
 
 	WLC_KEY_FLAG_NO_REPLAY_CHECK	= 0x00001000,
-	WLC_KEY_FLAG_NO_HW_UPDATE 		= 0x00002000,
+	WLC_KEY_FLAG_NO_HW_UPDATE		= 0x00002000,
 	WLC_KEY_FLAG_ARM_TX_ENABLED		= 0x00004000,
 	WLC_KEY_FLAG_USE_AC_TXD			= 0x00008000,
 	WLC_KEY_FLAG_USE_IVTW			= 0x00010000,
+	WLC_KEY_FLAG_USE_REV80_TXD		= 0x00020000,
 
-	/* 3 bits 0x000e0000 available */
+	/* 2 bits 0x00060000 available */
 
 	/* bits 0x00f00000 are designated for algo specific use. */
 	WLC_KEY_FLAG_ALGO_1 = 0x00100000,
@@ -152,7 +153,17 @@ typedef uint32 wlc_key_flags_t;
 #define WLC_KEY_FLAG_PRIMARY WLC_KEY_FLAG_TX
 
 /* externally settable flags */
+#ifdef BCMDBG
+#define WLC_KEY_DBG_SETTABLE_FLAGS (\
+	WLC_KEY_FLAG_GEN_MIC_ERR|\
+	WLC_KEY_FLAG_GEN_REPLAY|\
+	WLC_KEY_FLAG_GEN_ICV_ERR|\
+	WLC_KEY_FLAG_GEN_MFP_ACT_ERR|\
+	WLC_KEY_FLAG_GEN_MFP_DISASSOC_ERR|\
+	WLC_KEY_FLAG_GEN_MFP_DEAUTH_ERR)
+#else
 #define WLC_KEY_DBG_SETTABLE_FLAGS 0
+#endif /* BCMDBG */
 
 #define WLC_KEY_CCX_SETTABLE_FLAGS 0
 
@@ -201,7 +212,8 @@ struct wlc_key_info {
 	(WLC_KEY_FLAG_GROUP | WLC_KEY_FLAG_MGMT_GROUP)) == 0) && \
 	!(WLC_KEY_IS_IBSS_PEER_GROUP(ki)))
 
-#define WLC_KEY_IS_LINUX_CRYPTO(ki) (((ki)->flags & WLC_KEY_FLAG_LINUX_CRYPTO) != 0)
+#define WLC_KEY_IS_LINUX_CRYPTO(ki) ((((ki)->flags & WLC_KEY_FLAG_LINUX_CRYPTO) != 0) && \
+	((ki)->algo == CRYPTO_ALGO_TKIP))
 #define WLC_KEY_IS_MGMT_GROUP(ki) (((ki)->flags & WLC_KEY_FLAG_MGMT_GROUP) != 0)
 #define WLC_KEY_IS_IGTK(ki) WLC_KEY_IS_MGMT_GROUP(ki)
 #define WLC_KEY_IS_GROUP(ki) (((ki)->flags & WLC_KEY_FLAG_GROUP) != 0)
@@ -437,10 +449,10 @@ wlc_key_expiration_t wlc_key_get_expiration(wlc_key_t *key);
 wlc_key_expiration_t wlc_key_set_expiration(wlc_key_t *key,
 	wlc_key_expiration_t exp);
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLMSG_WSEC)
 /* get names for debug */
 const char *wlc_key_get_data_type_name(wlc_key_data_type_t data_type);
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || WLMSG_WSEC */
 
 wlc_key_hw_index_t wlc_key_get_hw_idx(wlc_key_t *key);
 #else

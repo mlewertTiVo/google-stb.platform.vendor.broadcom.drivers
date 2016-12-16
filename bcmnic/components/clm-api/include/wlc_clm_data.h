@@ -951,7 +951,7 @@ typedef struct clm_data_registry {
 	const unsigned char *locales[CLM_LOC_IDX_NUM];
 
 	/** Address of region definitions set descriptor */
-	const struct clm_country_rev_definition_set	 *countries;
+	const struct clm_country_rev_definition_set *countries;
 
 	/** Address of alias definitions set descriptor */
 	const struct clm_advertised_cc_set *advertised_ccs;

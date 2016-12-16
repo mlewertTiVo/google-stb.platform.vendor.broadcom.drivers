@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_chanmgr_notif.c 612466 2016-01-14 02:49:29Z jqliu $
+ * $Id: phy_chanmgr_notif.c 656063 2016-08-25 03:56:25Z $
  */
 
 #include <phy_cfg.h>
@@ -120,6 +120,7 @@ BCMATTACHFN(phy_chanmgr_notif_detach)(phy_chanmgr_notif_info_t *cmn_info)
 	phy_mfree(cmn_info->pi, mem, sizeof(phy_chanmgr_notif_mem_t));
 }
 
+#ifdef PHYCAL_CACHING
 int
 BCMATTACHFN(phy_chanmgr_notif_add_interest)(phy_chanmgr_notif_info_t *cni,
 	phy_chanmgr_notif_fn_t fn, phy_chanmgr_notif_ctx_t *ctx,
@@ -127,7 +128,7 @@ BCMATTACHFN(phy_chanmgr_notif_add_interest)(phy_chanmgr_notif_info_t *cni,
 {
 	uint16 j;
 
-	PHY_TRACE(("%s\n", __FUNCTION__));
+	PHY_TRACE(("%s\n", "phy_chanmgr_notif_add_interest"));
 
 	ASSERT(fn != NULL);
 
@@ -170,6 +171,7 @@ BCMATTACHFN(phy_chanmgr_notif_add_interest)(phy_chanmgr_notif_info_t *cni,
 
 	return BCME_OK;
 }
+#endif /* PHYCAL_CACHING */
 
 /* notify the registered clients of the event */
 int
@@ -189,7 +191,7 @@ phy_chanmgr_notif_signal(phy_chanmgr_notif_info_t *cni, phy_chanmgr_notif_data_t
 		st = (cni->reg_tbl[j].fn)(cni->reg_tbl[j].ctx, data);
 		if (st == BCME_OK)
 			continue;
-		PHY_ERROR(("%s: interest %p status %d\n", __FUNCTION__, cni->reg_tbl[j].fn, st));
+		PHY_INFORM(("%s: interest %p status %d\n", __FUNCTION__, cni->reg_tbl[j].fn, st));
 		if (exit_on_err)
 			return st;
 	}

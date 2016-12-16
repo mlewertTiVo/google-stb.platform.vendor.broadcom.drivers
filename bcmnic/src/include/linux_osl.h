@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.h 648809 2016-07-13 19:50:41Z $
+ * $Id: linux_osl.h 656249 2016-08-25 19:58:19Z $
  */
 
 #ifndef _linux_osl_h_
@@ -33,30 +33,6 @@ extern int osl_os_get_image_block(char * buf, int len, void * image);
 extern void osl_os_close_image(void * image);
 extern int osl_os_image_size(void *image);
 /* Linux Kernel: File Operations: end */
-
-#ifdef WLCXO_IPC
-#ifdef WLCXO_SIM
-extern volatile void *g_c2d_ipc_ret_hdl;
-extern volatile void *g_d2c_ipc_hdl, *g_d2c_ipc_ret_hdl, *g_d2c_cxo_ctrl_wq;
-#endif /* WLCXO_SIM */
-#ifdef WLCXO_CTRL
-#define WLCXO_CTRL_TASK_CTX()	1
-#else /* WLCXO_CTRL */
-#define WLCXO_CTRL_TASK_CTX()	0
-#endif /* WLCXO_CTRL */
-#ifdef WLCXO_DATA
-#define WLCXO_DATA_TASK_CTX()	1
-#else /* WLCXO_DATA */
-#define WLCXO_DATA_TASK_CTX()	0
-#endif /* WLCXO_DATA */
-#endif /* WLCXO_IPC */
-
-#ifdef WLCXO_SIM
-extern volatile void *g_c2d_ipc_hdl;
-extern struct sk_buff *g_txhpktq_head, *g_txhpktq_tail;
-extern uint32 g_txhpktq_cnt;
-extern void *g_txhpktq_lock;
-#endif /* WLCXO_SIM */
 
 #ifdef BCMDRIVER
 
@@ -88,6 +64,11 @@ extern uint32 g_assert_type;
 #define PRI_FMT_d       "d"
 #endif /* CONFIG_PHYS_ADDR_T_64BIT */
 /* ASSERT */
+#if defined(BCMDBG_ASSERT) || defined(BCMASSERT_LOG)
+	#define ASSERT(exp) \
+	  do { if (!(exp)) osl_assert(#exp, __FILE__, __LINE__); } while (0)
+extern void osl_assert(const char *exp, const char *file, int line);
+#else
 	#ifdef __GNUC__
 		#define GCC_VERSION \
 			(__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
@@ -98,12 +79,11 @@ extern uint32 g_assert_type;
 			#define ASSERT(exp)
 		#endif /* GCC_VERSION > 30100 */
 	#endif /* __GNUC__ */
+#endif /* BCMDBG_ASSERT || BCMASSERT_LOG */
 
 /* bcm_prefetch_32B */
 static inline void bcm_prefetch_32B(const uint8 *addr, const int cachelines_32B)
 {
-#if defined(BCM7271)
-#else /* !BCM7271 */
 #if (defined(BCM47XX_CA9) || (defined(STB) && defined(__arm__))) && (__LINUX_ARM_ARCH__ \
 	>= 5)
 	switch (cachelines_32B) {
@@ -121,8 +101,6 @@ static inline void bcm_prefetch_32B(const uint8 *addr, const int cachelines_32B)
 		case 1: __asm__ __volatile__("pref %0, (%1)" :: "i"(0), "r"(addr +  0));
 	}
 #endif /* BCM47XX_CA9, __mips__ */
-#endif /* BCM7271 */
-
 }
 
 /* microsecond delay */
@@ -277,14 +255,14 @@ extern void osl_preempt_enable(osl_t *osh);
 
 #if defined(__mips__) || (!defined(DHD_USE_COHERENT_MEM_FOR_RING) && \
 	defined(__ARM_ARCH_7A__)) || (defined(STBLINUX) && defined(__ARM_ARCH_7A__)) || \
-	defined(BCM7271)
+	defined(STB_SOC_WIFI)
 	extern void osl_cache_flush(void *va, uint size);
 	extern void osl_cache_inv(void *va, uint size);
 	extern void osl_prefetch(const void *ptr);
 	#define OSL_CACHE_FLUSH(va, len)	osl_cache_flush((void *)(va), len)
 	#define OSL_CACHE_INV(va, len)		osl_cache_inv((void *)(va), len)
 	#define OSL_PREFETCH(ptr)			osl_prefetch(ptr)
-#if defined(__ARM_ARCH_7A__) || defined(BCM7271)
+#if defined(__ARM_ARCH_7A__) || defined(STB_SOC_WIFI)
 	extern int osl_arch_is_coherent(void);
 	#define OSL_ARCH_IS_COHERENT()		osl_arch_is_coherent()
 	extern int osl_acp_war_enab(void);
@@ -370,29 +348,6 @@ extern uint64 osl_sysuptime_us(void);
 #define	bcopy(src, dst, len)	memcpy((dst), (src), (len))
 #define	bcmp(b1, b2, len)	memcmp((b1), (b2), (len))
 #define	bzero(b, len)		memset((b), '\0', (len))
-#ifdef BCM7271
-#define R_REG(osh, r)\
-	({ \
-		__typeof(*(r)) __osl_v; \
-		BCM_REFERENCE(osh); \
-		switch (sizeof(*(r))) { \
-			case sizeof(uint8):	 __osl_v = *((volatile uint8*) (r)); break; \
-			case sizeof(uint16): __osl_v = *((volatile uint16*)(r)); break; \
-			case sizeof(uint32): __osl_v = *((volatile uint32*)(r)); break; \
-		} \
-		__osl_v; \
-	})
-
-#define W_REG(osh, r, v) \
-	do { \
-		BCM_REFERENCE(osh); \
-		switch (sizeof(*(r))) { \
-			case sizeof(uint8):  *((volatile uint8*)  (r)) = (uint8)(v);  break; \
-			case sizeof(uint16): *((volatile uint16*) (r)) = (uint16)(v); break; \
-			case sizeof(uint32): *((volatile uint32*) (r)) = (uint32)(v); break; \
-		} \
-	} while (0)
-#else /* !BCM7271 */
 
 /* register access macros */
 #if defined(OSLREGOPS)
@@ -503,8 +458,8 @@ extern void osl_writel(osl_t *osh, volatile uint32 *r, uint32 v);
 		(OSL_WRITE_REG(osh, r, v))); \
 	} while (0)
 #endif /* IL_BIGENDIAN */
+
 #endif /* OSLREGOPS */
-#endif /* BCM7271 */
 
 #define	AND_REG(osh, r, v)		W_REG(osh, (r), R_REG(osh, r) & (v))
 #define	OR_REG(osh, r, v)		W_REG(osh, (r), R_REG(osh, r) | (v))
@@ -587,7 +542,12 @@ extern uint32 osl_rand(void);
 
 
 /* ASSERT */
+#ifdef BCMDBG_ASSERT
+	#include <assert.h>
+	#define ASSERT assert
+#else /* BCMDBG_ASSERT */
 	#define ASSERT(exp)	do {} while (0)
+#endif /* BCMDBG_ASSERT */
 
 /* MALLOC and MFREE */
 #define MALLOC(o, l) malloc(l)
@@ -612,7 +572,7 @@ extern void bzero(void *b, size_t len);
  */
 #if defined(STBLINUX)
 
-#if defined(__ARM_ARCH_7A__) || defined(BCM7271)
+#if defined(__ARM_ARCH_7A__) || defined(STB_SOC_WIFI)
 #define ACP_WAR_ENAB() 0
 #define ACP_WIN_LIMIT 1
 #define arch_is_coherent() 0

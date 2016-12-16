@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_bmac_iocv.c 644052 2016-06-17 03:04:30Z $
+ * $Id: wlc_bmac_iocv.c 665208 2016-10-16 23:44:23Z $
  */
 
 
@@ -46,6 +46,7 @@
 #include <bcmnvram.h>
 #include <bcmdevs.h>
 #include <phy_btcx_api.h>
+#include <phy_misc_api.h>
 
 #ifdef WLDIAG
 #include <wlc_diag.h>
@@ -56,6 +57,10 @@
 #include <hndjtagdefs.h>
 #endif
 #include <hndpmu.h>
+
+#ifdef SAVERESTORE
+#include <saverestore.h>
+#endif
 
 /* iovar table */
 static const bcm_iovar_t wlc_bmac_iovt[] = {
@@ -74,13 +79,30 @@ static const bcm_iovar_t wlc_bmac_iovt[] = {
 	/* || defined (BCMINTERNAL)) */
 	{"aspm", IOV_BMAC_PCIEASPM, 0, 0, IOVT_INT16, 0},
 	{"correrrmask", IOV_BMAC_PCIEADVCORRMASK, 0, 0, IOVT_INT16, 0},
+#ifdef BCMDBG
+	{"pcieclkreq", IOV_BMAC_PCIECLKREQ, 0, 0, IOVT_INT8, 0},
+	{"pcielcreg", IOV_BMAC_PCIELCREG, 0, 0, IOVT_UINT32, 0},
+#endif /* BCMDBG */
 	{"pciereg", IOV_BMAC_PCIEREG, 0, 0, IOVT_BUFFER, 0},
 	{"pcieserdesreg", IOV_BMAC_PCIESERDESREG, 0, 0, IOVT_BUFFER, 0},
+#ifdef BCMDBG
+	{"dmalpbk", IOV_BMAC_DMALPBK, IOVF_SET_UP, 0, IOVT_UINT8, 0},
+#endif
 	{"srom", IOV_BMAC_SROM, 0, 0, IOVT_BUFFER, 0},
+#if defined(BCMDBG)
+	{"srcrc", IOV_BMAC_SRCRC, IOVF_MFG, 0, IOVT_BUFFER, 0},
+	{"nvram_source", IOV_BMAC_NVRAM_SOURCE, IOVF_MFG, 0, IOVT_UINT8, 0},
+#endif 
 	{"customvar1", IOV_BMAC_CUSTOMVAR1, 0, 0, IOVT_UINT32, 0},
 	{"generic_dload", IOV_BMAC_GENERIC_DLOAD, 0, 0, IOVT_BUFFER, 0},
 	{"noise_metric", IOV_BMAC_NOISE_METRIC, 0, 0, IOVT_UINT16, 0},
 	{"avoidance_cnt", IOV_BMAC_AVIODCNT, 0, 0, IOVT_UINT32, 0},
+#ifdef BCMDBG
+	{"filter_war", IOV_BMAC_FILT_WAR, 0, 0, IOVT_UINT8, 0},
+#endif /* BCMDBG */
+#if defined(BCMDBG)
+	{"rcvlazy", IOV_BMAC_RCVLAZY, 0, 0, IOVT_INT32, 0},
+#endif
 	{"btswitch", IOV_BMAC_BTSWITCH,	0, 0, IOVT_INT32, 0},
 	{"vcofreq_pcie2", IOV_BMAC_4360_PCIE2_WAR, IOVF_SET_DOWN, 0, IOVT_INT32, 0},
 	{"edcrs", IOV_BMAC_EDCRS, IOVF_SET_UP | IOVF_GET_UP, 0, IOVT_UINT8, 0},
@@ -88,6 +110,13 @@ static const bcm_iovar_t wlc_bmac_iovt[] = {
 #ifdef LDO3P3_MIN_RES_MASK
 	{"ldo_prot_ovrd", IOV_BMAC_LDO3P3_PROTECTION_OVERRIDE, (0), 0, IOVT_INT32, 0},
 #endif /* LDO3P3_MIN_RES_MASK */
+#ifdef GPIO_TXINHIBIT
+	{"tx_inhibit_tout", IOV_BMAC_TX_INHIBIT_TOUT, (IOVF_SET_UP), 0, IOVT_UINT16, 0},
+#endif
+	{"otp_pu", IOV_BMAC_OTP_PU, 0, 0, IOVT_UINT32, sizeof(uint32)},
+#ifdef BCMDBG_SR
+	{"sr_verify", IOV_BMAC_SR_VERIFY, IOVF_GET_UP, 0, IOVT_BUFFER, 0},
+#endif
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -107,20 +136,16 @@ The hardware clears this bit to 0 when the transfer completes.
 #define  STARTBUSY_BIT_POLL_MAX_TIME 50
 #define  INCREMENT_ADDRESS 4
 
-/* uCode download chunk varies depending on whether it is for
-* it for lcn & sslpn or for other chips
-*/
-#if LCNCONF
-#define DL_MAX_CHUNK_LEN 1456  /* 8 * 7 * 26 */
-#else
 #define DL_MAX_CHUNK_LEN 1408 /* 8 * 8 * 22 */
-#endif
 
 static uint wlc_bmac_dma_avoidance_cnt(wlc_hw_info_t *wlc_hw);
 static int wlc_bmac_bt_regs_read(wlc_hw_info_t *wlc_hw, uint32 stAdd, uint32 dump_size, uint32 *b);
 
 
 
+#if defined(STA) && defined(BCMDBG)
+static void wlc_bmac_dma_lpbk(wlc_hw_info_t *wlc_hw, bool enable);
+#endif
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -129,6 +154,24 @@ static int wlc_bmac_bt_regs_read(wlc_hw_info_t *wlc_hw, uint32 stAdd, uint32 dum
 #include <wlc_patch.h>
 
 
+#if defined(STA) && defined(BCMDBG)
+static void
+wlc_bmac_dma_lpbk(wlc_hw_info_t *wlc_hw, bool enable)
+{
+	if (BUSTYPE(wlc_hw->sih->bustype) != PCI_BUS ||
+	    wlc_bmac_pio_enab_check(wlc_hw))
+		return;
+
+	if (enable) {
+		wlc_bmac_suspend_mac_and_wait(wlc_hw);
+		dma_fifoloopbackenable(wlc_hw->di[TX_DATA_FIFO]);
+	} else {
+		dma_txreset(wlc_hw->di[TX_DATA_FIFO]);
+		wlc_upd_suspended_fifos_clear(wlc_hw, TX_DATA_FIFO);
+		wlc_bmac_enable_mac(wlc_hw);
+	}
+}
+#endif /* defined(STA) && defined(BCMDBG) */
 
 /** DMA segment list related */
 static uint
@@ -347,6 +390,48 @@ wlc_bmac_doiovar(void *hw, uint32 actionid,
 		si_pcieclkreq(wlc_hw->sih, 1, ((int_val & 0x100) >> 8));
 		break;
 	}
+#ifdef BCMDBG
+	case IOV_GVAL(IOV_BMAC_PCIECLKREQ):
+		*ret_int_ptr = si_pcieclkreq(wlc_hw->sih, 0, 0);
+		break;
+
+	case IOV_SVAL(IOV_BMAC_PCIECLKREQ):
+		if (int_val < AUTO || int_val > ON) {
+			err = BCME_RANGE;
+			break;
+		}
+
+		/* For AUTO, disable clkreq and then rest of the
+		 * state machine will take care of it
+		 */
+		if (int_val == AUTO)
+			si_pcieclkreq(wlc_hw->sih, 1, 0);
+		else
+			si_pcieclkreq(wlc_hw->sih, 1, (uint)int_val);
+		break;
+
+	case IOV_GVAL(IOV_BMAC_PCIELCREG):
+		*ret_int_ptr = si_pcielcreg(wlc_hw->sih, 0, 0);
+		break;
+
+	case IOV_SVAL(IOV_BMAC_PCIELCREG):
+		si_pcielcreg(wlc_hw->sih, 3, (uint)int_val);
+		break;
+
+#ifdef STA
+	case IOV_SVAL(IOV_BMAC_DMALPBK):
+		if (BUSTYPE(wlc_hw->sih->bustype) == PCI_BUS &&
+		    !wlc_bmac_pio_enab_check(wlc_hw)) {
+			if (wlc_hw->dma_lpbk == bool_val)
+				break;
+			wlc_bmac_dma_lpbk(wlc_hw, bool_val);
+			wlc_hw->dma_lpbk = bool_val;
+		} else
+			err = BCME_UNSUPPORTED;
+
+		break;
+#endif /* STA */
+#endif /* BCMDBG */
 
 	case IOV_SVAL(IOV_BMAC_PCIEREG):
 		if (p_len < (int)sizeof(int_val) * 2) {
@@ -473,6 +558,100 @@ wlc_bmac_doiovar(void *hw, uint32 actionid,
 		break;
 	}
 
+#if defined(BCMDBG)
+	case IOV_SVAL(IOV_BMAC_SROM): {
+		srom_rw_t *s = (srom_rw_t *)params;
+		uint32 macintmask;
+
+		/* intrs off */
+		macintmask = wl_intrsoff(wlc_hw->wlc->wl);
+
+		if (si_is_sprom_available(wlc_hw->sih)) {
+			if (srom_write(wlc_hw->sih, wlc_hw->sih->bustype,
+			               (void *)(uintptr)wlc_hw->regs, wlc_hw->osh,
+			               s->byteoff, s->nbytes, s->buf))
+				err = BCME_ERROR;
+		} else if (!si_is_otp_disabled(wlc_hw->sih)) {
+			/* srwrite to SROM format OTP */
+			err = srom_otp_write_region_crc(wlc_hw->sih, s->nbytes, s->buf,
+			                                TRUE);
+		} else
+			err = BCME_NOTFOUND;
+
+		/* restore intrs */
+		wl_intrsrestore(wlc_hw->wlc->wl, macintmask);
+		break;
+	}
+
+	case IOV_GVAL(IOV_BMAC_SRCRC): {
+		srom_rw_t *s = (srom_rw_t *)params;
+
+		*ret_int_ptr = (uint8)srom_otp_write_region_crc(wlc_hw->sih, s->nbytes,
+		                                                s->buf, FALSE);
+		break;
+	}
+
+	case IOV_GVAL(IOV_BMAC_NVRAM_SOURCE): {
+		uint32 macintmask;
+		uint16 buffer[65];
+		int i;
+		uint16 buffer1;
+		int err1;
+
+		/* intrs off */
+		macintmask = wl_intrsoff(wlc_hw->wlc->wl);
+		/* 0 for SROM; 1 for OTP; 2 for NVRAM */
+
+		if (si_is_sprom_available(wlc_hw->sih)) {
+			err = srom_read(wlc_hw->sih, wlc_hw->sih->bustype,
+			                (void *)(uintptr)wlc_hw->regs, wlc_hw->osh,
+			                0, sizeof(buffer), buffer, FALSE);
+
+
+			*ret_int_ptr = 2; /* NVRAM */
+
+			if (!err)
+				for (i = 0; i < (int)sizeof(buffer)/2; i++) {
+					if ((buffer[i] != 0) && (buffer[i] != 0xffff)) {
+						*ret_int_ptr = 0; /* SROM */
+						break;
+					}
+				}
+#ifdef BCMPCIEDEV
+			if ((BUSTYPE(wlc_hw->sih->bustype) == SI_BUS) &&
+			    BCM43602_CHIP(wlc_hw->sih->chip))
+#else
+			if (BUSTYPE(wlc_hw->sih->bustype) == PCI_BUS)
+#endif /* BCMPCIEDEV */
+			{
+				/* If we still think its nvram try a test write */
+				if (*ret_int_ptr == 2) {
+					err1 = srom_read(wlc_hw->sih, wlc_hw->sih->bustype,
+					                (void *)(uintptr)wlc_hw->regs, wlc_hw->osh,
+					                8, sizeof(unsigned short), buffer, FALSE);
+					buffer1 = buffer[0];
+					srom_write_short(wlc_hw->sih, wlc_hw->sih->bustype,
+					                 (void *)(uintptr)wlc_hw->regs, wlc_hw->osh,
+					                 8, 0x1234);
+					err = srom_read(wlc_hw->sih, wlc_hw->sih->bustype,
+					                (void *)(uintptr)wlc_hw->regs, wlc_hw->osh,
+					                8, sizeof(unsigned short), buffer, FALSE);
+					if (!err1 && !err && buffer[0] == 0x1234) {
+						*ret_int_ptr = 0; /* SROM */
+						srom_write_short(wlc_hw->sih, wlc_hw->sih->bustype,
+							(void *)(uintptr)wlc_hw->regs, wlc_hw->osh,
+							8, buffer1);
+					}
+				}
+			}
+		} else
+			*ret_int_ptr = 1; /* OTP */
+
+		/* restore intrs */
+		wl_intrsrestore(wlc_hw->wlc->wl, macintmask);
+		break;
+	}
+#endif 
 
 
 
@@ -550,7 +729,32 @@ wlc_bmac_doiovar(void *hw, uint32 actionid,
 		*ret_int_ptr = wlc_bmac_dma_avoidance_cnt(wlc_hw);
 		break;
 
+#ifdef BCMDBG
+	case IOV_SVAL(IOV_BMAC_FILT_WAR):
+		phy_misc_set_filt_war(wlc_hw->band->pi, bool_val);
+		break;
 
+	case IOV_GVAL(IOV_BMAC_FILT_WAR):
+		*ret_int_ptr = phy_misc_get_filt_war(wlc_hw->band->pi);
+		break;
+#endif /* BCMDBG */
+
+#if defined(BCMDBG)
+	case IOV_SVAL(IOV_BMAC_RCVLAZY):
+		/* Fix up the disable value if needed */
+		if (int_val == 0) {
+			int_val = IRL_DISABLE;
+		}
+		wlc_hw->intrcvlazy = (uint)int_val;
+		if (wlc_hw->up) {
+			wlc_bmac_rcvlazy_update(wlc_hw, wlc_hw->intrcvlazy);
+		}
+		break;
+
+	case IOV_GVAL(IOV_BMAC_RCVLAZY):
+		*ret_int_ptr = (int)wlc_hw->intrcvlazy;
+		break;
+#endif 
 
 	case IOV_SVAL(IOV_BMAC_BTSWITCH):
 		if ((int_val != OFF) && (int_val != ON) && (int_val != AUTO)) {
@@ -588,6 +792,15 @@ wlc_bmac_doiovar(void *hw, uint32 actionid,
 		*ret_int_ptr = wlc_hw->btswitch_ovrd_state;
 		break;
 
+#ifdef BCMDBG
+	case IOV_GVAL(IOV_BMAC_PCIESSID):
+		*ret_int_ptr = si_pcie_get_ssid(wlc_hw->sih);
+		break;
+
+	case IOV_GVAL(IOV_BMAC_PCIEBAR0):
+		*ret_int_ptr = si_pcie_get_bar0(wlc_hw->sih);
+		break;
+#endif /* BCMDBG */
 
 	case IOV_SVAL(IOV_BMAC_4360_PCIE2_WAR):
 		wlc_hw->vcoFreq_4360_pcie2_war = (uint)int_val;
@@ -603,17 +816,37 @@ wlc_bmac_doiovar(void *hw, uint32 actionid,
 		struct bcmstrbuf b;
 		bcm_binit(&b, (char *)arg, len);
 
-		if (SR_ENAB())
+		if (SR_ENAB()) {
 			wlc_bmac_sr_verify(wlc_hw, &b);
+		}
 		break;
 	}
-#endif
+	case IOV_SVAL(IOV_BMAC_SR_VERIFY): {
+		if (SR_ENAB()) {
+			wlc_bmac_sr_testmode(wlc_hw, int_val);
+		}
+		break;
+	}
+#endif /* defined(SAVERESTORE) && defined(BCMDBG_SR) */
 
 	case IOV_SVAL(IOV_BMAC_MACFREQ):
 	{
 		wlc_bmac_switch_macfreq_dynamic(wlc_hw, (uint8)int_val);
 		break;
 	}
+#ifdef GPIO_TXINHIBIT
+	case IOV_GVAL(IOV_BMAC_TX_INHIBIT_TOUT):
+		{
+			*ret_int_ptr = (int) wlc_hw->tx_inhibit_tout;
+			break;
+		}
+	case IOV_SVAL(IOV_BMAC_TX_INHIBIT_TOUT):
+		{
+			wlc_hw->tx_inhibit_tout = int_val;
+			wlc_bmac_gpio_set_tx_inhibit_tout(wlc_hw);
+			break;
+		}
+#endif
 
 
 #ifdef LDO3P3_MIN_RES_MASK
@@ -624,6 +857,16 @@ wlc_bmac_doiovar(void *hw, uint32 actionid,
 		err = si_pmu_min_res_ldo3p3_get(wlc_hw->sih, wlc_hw->osh, ret_int_ptr);
 		break;
 #endif /* LDO3P3_MIN_RES_MASK */
+	case IOV_GVAL(IOV_BMAC_OTP_PU):
+			{
+				*ret_int_ptr = (int)si_is_otp_powered(wlc_hw->sih);
+				break;
+			}
+	case IOV_SVAL(IOV_BMAC_OTP_PU):
+			{
+				err = si_pmu_min_res_otp_pu_set(wlc_hw->sih, wlc_hw->osh, bool_val);
+				break;
+			}
 
 	default:
 		WL_ERROR(("%s(): undefined BMAC IOVAR: %d\n", __FUNCTION__, actionid));

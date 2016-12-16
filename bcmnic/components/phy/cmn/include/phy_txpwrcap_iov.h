@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_txpwrcap_iov.h 629423 2016-04-05 11:12:48Z pieterpg $
+ * $Id: phy_txpwrcap_iov.h 629423 2016-04-05 11:12:48Z $
  */
 
 #ifndef _phy_txpwrcap_iov_h_

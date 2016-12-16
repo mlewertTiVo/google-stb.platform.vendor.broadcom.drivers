@@ -189,6 +189,12 @@ wep_rx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 	KM_ASSERT(WEP_KEY_VALID(key));
 	KM_DBG_ASSERT(pkt_info != NULL);
 
+#ifdef BCMDBG
+	if (body[KEY_ID_BODY_OFFSET] & DOT11_EXT_IV_FLAG) {
+		KEY_LOG(("wl%d: %s: EXT IV is set for pkt, key idx %d\n",
+			KEY_WLUNIT(key), __FUNCTION__, key->info.key_idx));
+	}
+#endif /* BCMDBG */
 
 	if (pkt_info->flags & KEY_PKT_HWDEC) {
 		err = pkt_info->status;
@@ -282,6 +288,12 @@ wep_tx_mpdu(wlc_key_t *key, void *pkt, struct dot11_header *hdr,
 
 	wep_key = (wep_key_t *)key->algo_impl.ctx;
 
+#ifdef BCMDBG
+	/* wep does not have replay checks, but ... */
+	if (key->info.flags & WLC_KEY_FLAG_GEN_REPLAY) {
+		key->info.flags &= ~WLC_KEY_FLAG_GEN_REPLAY;
+	} else
+#endif /* BCMDBG */
 	/* check weak wep seq/ivs and update tx seq */
 	{
 		uint32 tx_seq;
@@ -325,7 +337,33 @@ done:
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wep_dump(const wlc_key_t *key, struct bcmstrbuf *b)
+{
+	wep_key_t *wep_key;
+	size_t i;
+
+	KM_DBG_ASSERT(WEP_KEY_VALID(key));
+
+	wep_key = (wep_key_t *)key->algo_impl.ctx;
+
+	bcm_bprintf(b, "\twep key: ");
+	for (i = 0; i < key->info.key_len; ++i)
+		bcm_bprintf(b, "%02x", wep_key->key[i]);
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "\twep iv: ");
+	for (i = 0; i < key->info.iv_len; ++i)
+		bcm_bprintf(b, "%02x", wep_key->tx_seq[i]);
+	bcm_bprintf(b, "\n");
+
+	return BCME_OK;
+}
+#define WEP_DUMP wep_dump
+#else
 #define WEP_DUMP NULL
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* ccx supports mic checks for wep */
 #define WEP_RX_MSDU NULL

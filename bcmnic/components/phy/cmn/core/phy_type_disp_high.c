@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_disp_high.c 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_type_disp_high.c 661662 2016-09-27 00:14:43Z $
  */
 
 #include <typedefs.h>
@@ -31,10 +31,6 @@
 #if HTCONF
 #include "phy_type_ht_iovt_high.h"
 #include "phy_type_ht_ioct_high.h"
-#endif
-#if LCN40CONF
-#include "phy_type_lcn40_iovt_high.h"
-#include "phy_type_lcn40_ioct_high.h"
 #endif
 #if LCN20CONF
 #include "phy_type_lcn20_iovt_high.h"
@@ -60,9 +56,6 @@ static phy_type_reg_tbl_t BCMATTACHDATA(phy_type_reg_tbl)[] = {
 #endif
 #if HTCONF
 	{PHY_TYPE_HT, phy_ht_high_register_iovt, phy_ht_high_register_ioct},
-#endif
-#if LCN40CONF
-	{PHY_TYPE_LCN40, phy_lcn40_high_register_iovt, phy_lcn40_high_register_ioct},
 #endif
 #if LCN20CONF
 	{PHY_TYPE_LCN20, phy_lcn20_high_register_iovt, phy_lcn20_high_register_ioct},

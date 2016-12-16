@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: osl.h 650258 2016-07-20 22:39:09Z $
+ * $Id: osl.h 663318 2016-10-04 19:02:16Z $
  */
 
 #ifndef _osl_h_
@@ -31,11 +31,6 @@ enum {
 	TAIL_BYTES_TYPE_ICV = 2,
 	TAIL_BYTES_TYPE_MIC = 3
 };
-
-#ifdef WLCXO
-#define CXO_PKTPOOL_MAX	6	/* Max number of pools for CXO */
-typedef struct cx_pktpool cx_pktpool_t;
-#endif
 
 #define OSL_PKTTAG_SZ	32 /* Size of PktTag */
 
@@ -93,21 +88,6 @@ MAKE_PREFETCH_RANGE_FN(PREF_STORE_RETAINED)
 
 #if defined(WL_UNITTEST)
 #include <utest_osl.h>
-#elif defined(WLCXO)
-#ifdef WLCXO_CXO_OSL
-#include <cxo_osl.h>
-#elif defined(WLCXO_LX_OSL)
-#include <linux_osl.h>
-#elif defined(WLCXO_RTE_OSL)
-#include <rte_osl.h>
-#endif /* WLCXO_CXO_OSL */
-#ifdef WLCXO_CXO_PKT
-#include <cxo_pkt.h>
-#elif defined(WLCXO_LX_PKT)
-#include <linux_pkt.h>
-#elif defined(WLCXO_HND_PKT)
-#include <hnd_pkt.h>
-#endif /* WLCXO_CXO_PKT */
 #else
 #include <linux_osl.h>
 #include <linux_pkt.h>
@@ -174,7 +154,7 @@ MAKE_PREFETCH_RANGE_FN(PREF_STORE_RETAINED)
 #define OSL_OBFUSCATE_BUF(x) (x)
 #endif /* OSL_OBFUSCATE_BUF */
 
-#if !(defined(PKTC) || defined(PKTC_DONGLE) || (defined(WLCXO) && defined(PKTC)))
+#if !(defined(PKTC) || defined(PKTC_DONGLE))
 
 #define	PKTCGETATTR(skb)	(0)
 #define	PKTCSETATTR(skb, f, p, b) BCM_REFERENCE(skb)
@@ -324,6 +304,26 @@ do { \
 #define PKTRESETFRWDPKT(osh, lb)	BCM_REFERENCE(osh)
 #endif
 
+/* SFD Frame */
+#ifndef PKTISSFDFRAME
+#define PKTISSFDFRAME(osh, lb)		(0)
+#endif
+#ifndef PKTSETSFDFRAME
+#define PKTSETSFDFRAME(osh, lb)		BCM_REFERENCE(osh)
+#endif
+#ifndef PKTRESETSFDFRAME
+#define PKTRESETSFDFRAME(osh, lb)	BCM_REFERENCE(osh)
+#endif
+#ifndef PKTISSFDTXC
+#define PKTISSFDTXC(osh, lb)		(0)
+#endif
+#ifndef PKTSETSFDTXC
+#define PKTSETSFDTXC(osh, lb)		BCM_REFERENCE(osh)
+#endif
+#ifndef PKTRESETSFDTXC
+#define PKTRESETSFDTXC(osh, lb)		BCM_REFERENCE(osh)
+#endif
+
 #ifdef BCM_SECURE_DMA
 #define SECURE_DMA_ENAB(osh) (1)
 #else
@@ -389,5 +389,11 @@ do { \
 #ifndef MALLOC_CLEAR_NOPERSIST
 	#define MALLOC_CLEAR_NOPERSIST(osh)	do { } while (0)
 #endif /* !MALLOC_CLEAR_NOPERSIST */
+
+#if defined(OSL_MEMCHECK)
+#define MEMCHECK(f, l)	osl_memcheck(f, l)
+#else
+#define MEMCHECK(f, l)
+#endif /* OSL_MEMCHECK */
 
 #endif	/* _osl_h_ */

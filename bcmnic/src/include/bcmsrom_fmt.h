@@ -18,13 +18,13 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsrom_fmt.h 635194 2016-05-03 04:35:31Z $
+ * $Id: bcmsrom_fmt.h 657898 2016-09-03 00:25:48Z $
  */
 
 #ifndef	_bcmsrom_fmt_h_
 #define	_bcmsrom_fmt_h_
 
-#define SROM_MAXREV		13	/* max revision supported by driver */
+#define SROM_MAXREV		15	/* max revision supported by driver */
 
 /* Maximum srom: 16 Kilobits == 2048 bytes */
 
@@ -939,6 +939,20 @@
 #define SROM13_RXGAINERRCORE3_1         587
 
 #define SROM13_PDOFF_2G_CCK_20M		167
+
+#define SROM15_CAL_OFFSET_LOC	68
+#define MAX_IOCTL_TXCHUNK_SIZE	1500
+#define SROM15_MAX_CAL_SIZE	1662
+#define SROM15_SIGNATURE	0x110c
+#define SROM15_WORDS	1024
+#define SROM15_MACHI	65
+
+#define SROM16_SIGN			128
+#define SROM16_WORDS			1024
+#define SROM16_SIGNATURE		0x4357
+#define SROM16_CRCREV			1023
+
+#define SROM16_CAL_DATA_OFFSET		288
 
 typedef struct {
 	uint8 tssipos;		/* TSSI positive slope, 1: positive, 0: negative */

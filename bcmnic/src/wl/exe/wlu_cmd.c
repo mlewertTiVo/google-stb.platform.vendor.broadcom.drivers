@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_cmd.c 601272 2015-11-20 21:12:22Z $
+ * $Id: wlu_cmd.c 663318 2016-10-04 19:02:16Z $
  *
  */
 

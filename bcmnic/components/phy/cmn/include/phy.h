@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy.h 650795 2016-07-22 13:03:38Z mvermeid $
+ * $Id: phy.h 659938 2016-09-16 16:47:54Z $
  */
 
 #ifndef _phy_h_
@@ -36,7 +36,7 @@
 	#elif defined(WL_WBPAPD_DISABLED)
 		#define WBPAPD_ENAB(pi)		(0)
 	#else
-		#define WBPAPD_ENAB(pi)		(1)
+		#define WBPAPD_ENAB(pi)		((pi)->ff->_wbpapd)
 	#endif
 #else
 	#define WBPAPD_ENAB(pi)			(0)
@@ -76,5 +76,18 @@
 #else
 	#define PHY_BAND5G_ENAB(pi)   (0)
 #endif
+
+#ifdef BCMPHYCOREMASK
+#define PHYCOREMASK(cm)	(BCMPHYCOREMASK)
+#else
+#define PHYCOREMASK(cm)	(cm)
+#endif
+
+#define PHY_INVALID_RSSI (-127)
+#define DUAL_MAC_SLICES 2
+
+#define PHY_COREMASK_SISO(cm) ((cm == 1 || cm == 2 || cm == 4 || cm == 8) ? 1 : 0)
+
+#define DUAL_PHY_NUM_CORE_MAX 4
 
 #endif /* _phy_h_ */

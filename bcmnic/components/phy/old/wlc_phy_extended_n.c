@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_extended_n.c 627205 2016-03-24 01:27:52Z dboyce $
+ * $Id: wlc_phy_extended_n.c 660552 2016-09-21 01:45:12Z $
  */
 
 #ifndef _wlc_phy_extended_n_
@@ -39,10 +39,12 @@
 #include <wlc_phy_hal.h>
 #include <wlc_phy_int.h>
 #include <phy_utils_reg.h>
+#include <phy_utils_pmu.h>
 #include <wlc_phyreg_n.h>
 #include <wlc_phytbl_n.h>
 #include <wlc_phy_radio.h>
 #include <wlc_phy_n.h>
+#include <phy_stf.h>
 
 #include "wlc_phy_extended_n.h"
 
@@ -8622,8 +8624,7 @@ nphy_gaintable nphy_gaintbl_5GHz[]=
 bool
 wlc_phy_chan2freq_nphy(phy_info_t *pi, uint channel, int *f,
 	chan_info_nphy_radio2057_t **t0, chan_info_nphy_radio205x_t **t1,
-	chan_info_nphy_radio2057_rev5_t **t2, chan_info_nphy_2055_t **t3,
-	chan_info_nphy_radio20671_t **t4)
+	chan_info_nphy_radio2057_rev5_t **t2, chan_info_nphy_radio20671_t **t4)
 {
 	uint i;
 	chan_info_nphy_radio2057_t      *chan_info_tbl_p_0 = NULL;
@@ -8787,20 +8788,6 @@ wlc_phy_chan2freq_nphy(phy_info_t *pi, uint channel, int *f,
 		}
 
 		for (i = 0; i < tbl_len; i++) {
-#if defined(EFI) && defined(EFI_WINBLD)
-			/* EFI Windows toolchain does very strict static analysis
-			 * and errors out on the radiorev test
-			 */
-			if (chan_info_tbl_p_2) {
-				/* 2057 rev5 is 2.4G only */
-				if (chan_info_tbl_p_2[i].chan == channel)
-					break;
-			} else if (chan_info_tbl_p_0) {
-				/* other 2057 revs are dual-band */
-				if (chan_info_tbl_p_0[i].chan == channel)
-					break;
-			}
-#else /* EFI && EFI_WINBLD */
 			if ((RADIOREV(pi->pubpi->radiorev) == 5) ||
 			    (RADIOREV(pi->pubpi->radiorev) == 13) ||
 			    (RADIOREV(pi->pubpi->radiorev) == 14)) {
@@ -8814,7 +8801,6 @@ wlc_phy_chan2freq_nphy(phy_info_t *pi, uint channel, int *f,
 				if (chan_info_tbl_p_0[i].chan == channel)
 					break;
 			}
-#endif /* EFI && EFI_WINBLD */
 		}
 
 		if (i >= tbl_len) {
@@ -8823,18 +8809,6 @@ wlc_phy_chan2freq_nphy(phy_info_t *pi, uint channel, int *f,
 			ASSERT(i < tbl_len);
 			goto fail;
 		}
-#if defined(EFI) && defined(EFI_WINBLD)
-		/* EFI Windows toolchain does very strict static analysis
-		 * and errors out on the radiorev test
-		 */
-		if (chan_info_tbl_p_2) {
-			*t2 = &chan_info_tbl_p_2[i];
-			freq = chan_info_tbl_p_2[i].freq;
-		} else if (chan_info_tbl_p_0) {
-			*t0 = &chan_info_tbl_p_0[i];
-			freq = chan_info_tbl_p_0[i].freq;
-		}
-#else /* EFI && EFI_WINBLD */
 		if ((RADIOREV(pi->pubpi->radiorev) == 5) ||
 		    (RADIOREV(pi->pubpi->radiorev) == 13) ||
 		    (RADIOREV(pi->pubpi->radiorev) == 14)) {
@@ -8844,7 +8818,6 @@ wlc_phy_chan2freq_nphy(phy_info_t *pi, uint channel, int *f,
 			*t0 = &chan_info_tbl_p_0[i];
 			freq = chan_info_tbl_p_0[i].freq;
 		}
-#endif /* EFI && EFI_WINBLD */
 
 	}
 
@@ -10801,6 +10774,9 @@ wlc_phy_temp_from_rawtemp(phy_info_t *pi, int32 raw_temp_c0, int32 raw_temp_c1)
 	uint8 core, num_cores;
 	int32 return_temp;
 	int32 measured_temp[NPHY_CORE_NUM];
+	uint8 phyrxchain;
+
+	BCM_REFERENCE(phyrxchain);
 
 	if (CHIPID_4324X_MEDIA_FAMILY(pi)) {
 		/* See http://confluence.broadcom.com/display/WLAN/43242A0+Lab+Notebook+229 */
@@ -10820,7 +10796,8 @@ wlc_phy_temp_from_rawtemp(phy_info_t *pi, int32 raw_temp_c0, int32 raw_temp_c1)
 	/* Finally taking the avg of the measured temp on the active core(s) */
 	num_cores = 0;
 	return_temp = 0;
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+	FOREACH_ACTV_CORE(pi, phyrxchain, core) {
 		return_temp += measured_temp[core];
 		num_cores++;
 	}
@@ -10854,7 +10831,7 @@ wlc_phy_tempsense_nphy_rev19(phy_info_t *pi)
 		wlc_phy_ocl_enable_disable_nphy(pi, 0);
 
 	/* beDeaf */
-	wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	forceClk_flg = (phy_utils_read_phyreg(pi, NPHY_forceClk) & 0x3ff);
 	phy_utils_write_phyreg(pi, NPHY_forceClk, 0x1f);
@@ -11084,7 +11061,7 @@ wlc_phy_tempsense_nphy_rev19(phy_info_t *pi)
 		wlc_phy_ocl_enable_disable_nphy(pi, 1);
 
 	/* returnFromDeaf */
-	wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	if (!suspend)
 		wlapi_enable_mac(pi->sh->physhim);
@@ -11163,7 +11140,7 @@ wlc_phy_tempsense_from_statusbyte_nphy_rev19(phy_info_t *pi)
 
 		num_cores = 0;
 		avg_temp = 0;
-		core_mask = pi->sh->phytxchain;
+		core_mask = phy_stf_get_data(pi->stfi)->phytxchain;
 		avg_temp = ((core_mask & 0x1) && (valid_flag[0] != 0))? measured_temp[0]: 0;
 		avg_temp += ((core_mask & 0x2) && (valid_flag[1] != 0))? measured_temp[1]: 0;
 		num_cores = (valid_flag[0] & (core_mask & 0x1))
@@ -12377,7 +12354,7 @@ phy_n_sample_collect(phy_info_t *pi, wl_samplecollect_args_t *collect, uint32 *b
 	/* be deaf if requested (e.g. for spur measurement) */
 	if (collect->be_deaf) {
 		wlapi_suspend_mac_and_wait(pi->sh->physhim);
-		wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 	}
 
 	/* set Tx-FIFO collect start pointer to 0 */
@@ -12486,7 +12463,7 @@ phy_n_sample_collect(phy_info_t *pi, wl_samplecollect_args_t *collect, uint32 *b
 	/* clean up */
 	/* return from deaf if requested */
 	if (collect->be_deaf) {
-		wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 		wlapi_enable_mac(pi->sh->physhim);
 	}
 
@@ -13265,7 +13242,7 @@ int wlc_nphy_tssi_read_iovar(phy_info_t *pi)
 	return tmp;
 }
 
-#if (defined(BCMDBG) && defined(BCMINTERNAL)) || defined(ACI_DBG_PRINTS_EN)
+#if defined(ACI_DBG_PRINTS_EN)
 void
 wlc_phy_aci_noise_print_values_nphy(phy_info_t *pi)
 {
@@ -13423,7 +13400,7 @@ wlc_phy_aci_noise_print_values_nphy(phy_info_t *pi)
 		wlapi_enable_mac(pi->sh->physhim);
 	}
 }
-#endif	/* defined(BCMDBG) && defined(BCMINTERNAL) */
+#endif	
 
 /**
  * IMP (RTL design preferred) settings required to avoid Rx/Tx Stalls during spur mode or non-spur
@@ -13434,7 +13411,6 @@ wlc_phy_rxfe_ctrl_nphy(phy_info_t *pi)
 {
 	uint8 bilge_cnt;
 
-	/* JIRA:SWWLAN-29547 */
 	if (CHSPEC_IS20(pi->radio_chanspec)) {
 		if (!CHIPID_4324X_MEDIA_FAMILY(pi) &&
 		((CHSPEC_CHANNEL(pi->radio_chanspec) == 56) ||
@@ -13538,12 +13514,12 @@ wlc_phy_rx_clipiq_est_nphy(phy_info_t *pi, uint8 num_samps, uint8 mux_idx, bool 
 		0x1 << 2, 0x0 << 2);
 
 	/* save ccreg4 and forceClk */
-	wlc_si_pmu_chipcontrol_access(pi, 4, &temp, 0);
+	phy_utils_pmu_chipcontrol_access(pi, 4, &temp, 0);
 	forceClk = phy_utils_read_phyreg(pi, NPHY_forceClk);
 
 	/* modify & program */
 	temp1 = (temp | 0x200000);
-	wlc_si_pmu_chipcontrol_access(pi, 4, &temp1, 1);
+	phy_utils_pmu_chipcontrol_access(pi, 4, &temp1, 1);
 	phy_utils_write_phyreg(pi, NPHY_forceClk, 0x3f);
 
 	/* NumSampToCol */
@@ -13601,7 +13577,7 @@ wlc_phy_rx_clipiq_est_nphy(phy_info_t *pi, uint8 num_samps, uint8 mux_idx, bool 
 
 	/* restore ccreg4 and forceClk */
 	phy_utils_write_phyreg(pi, NPHY_forceClk, forceClk);
-	wlc_si_pmu_chipcontrol_access(pi, 4, &temp, 1);
+	phy_utils_pmu_chipcontrol_access(pi, 4, &temp, 1);
 
 	/* restore lna1 rout ovr */
 	phy_utils_write_radioreg(pi, RADIO_20671_OVR3, lna1_rout[0]);
@@ -13634,14 +13610,14 @@ wlc_phy_lnldo2_war_nphy(phy_info_t *pi, bool override, uint8 override_val)
 	}
 
 	/* READ */
-	wlc_si_pmu_regcontrol_access(pi, 5, &val, 0);
+	phy_utils_pmu_regcontrol_access(pi, 5, &val, 0);
 
 	/* MODIFY */
 	val &= 0xfffffff1;
 	val |= (uint32)((uint32)(lnldo2_val << 1) & 0xe);
 
 	/* WRITE */
-	wlc_si_pmu_regcontrol_access(pi, 5, &val, 1);
+	phy_utils_pmu_regcontrol_access(pi, 5, &val, 1);
 
 	val >>= 1;
 	val &= 0x7;
@@ -13663,14 +13639,14 @@ wlc_phy_lnldo1_war_nphy(phy_info_t *pi, bool override, uint8 override_val)
 
 
 	/* READ */
-	wlc_si_pmu_regcontrol_access(pi, 4, &val, 0);
+	phy_utils_pmu_regcontrol_access(pi, 4, &val, 0);
 
 	/* MODIFY */
 	val &= 0xfffff8ff;
 	val |= (uint32)(((uint32)(lnldo1_val << 8)) & (0x7 << 8));
 
 	/* WRITE */
-	wlc_si_pmu_regcontrol_access(pi, 4, &val, 1);
+	phy_utils_pmu_regcontrol_access(pi, 4, &val, 1);
 
 	val >>= 8;
 	val &= 0x7;
@@ -13691,7 +13667,7 @@ wlc_phy_cbuck_war_nphy(phy_info_t *pi, bool override, uint8 override_val)
 	}
 
 	/* READ */
-	wlc_si_pmu_regcontrol_access(pi, 5, &val, 0);
+	phy_utils_pmu_regcontrol_access(pi, 5, &val, 0);
 
 	/* MODIFY */
 	val &= 0x0fffffff;
@@ -13700,7 +13676,7 @@ wlc_phy_cbuck_war_nphy(phy_info_t *pi, bool override, uint8 override_val)
 	val |= (uint32)(((uint32)(cbuck_val << 24)) & (0xf << 24));
 
 	/* WRITE */
-	wlc_si_pmu_regcontrol_access(pi, 5, &val, 1);
+	phy_utils_pmu_regcontrol_access(pi, 5, &val, 1);
 
 	val >>= 24;
 	val &= 0xff;

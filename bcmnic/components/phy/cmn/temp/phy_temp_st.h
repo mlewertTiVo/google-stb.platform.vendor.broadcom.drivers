@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_temp_st.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_temp_st.h 653133 2016-08-05 04:40:58Z $
  */
 
 #ifndef _phy_temp_st_
@@ -32,6 +32,10 @@ typedef struct {
 	uint8	duty_cycle; /* Current DutyCycle RSDB mode only */
 	uint8	duty_cycle_throttle_depth;
 	uint8	duty_cycle_throttle_state;
+	uint8	phycal_tempdelta; /* temperature delta below which
+							* phy calibrations will not run
+							*/
+	uint8	phycal_tempdelta_default;
 } phy_txcore_temp_t;
 
 /*

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_radio.c 616117 2016-01-29 19:41:50Z vyass $
+ * $Id: phy_radio.c 659961 2016-09-16 18:46:01Z $
  */
 
 #include <phy_cfg.h>
@@ -26,11 +26,15 @@
 #include <phy_radio_api.h>
 #include <phy_radio.h>
 #include "phy_utils_reg.h"
+#include <phy_utils_var.h>
+#include <phy_rstr.h>
+
 
 /* module private states */
 struct phy_radio_info {
 	phy_info_t *pi;
 	phy_type_radio_fns_t *fns;
+	uint8 bandcap;
 };
 
 /* module private states memory layout */
@@ -42,10 +46,10 @@ typedef struct {
 
 /* local function declaration */
 static int phy_radio_on(phy_init_ctx_t *ctx);
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 static int phy_radio_dump(void *ctx, struct bcmstrbuf *b);
-#endif /* ((BCMDBG || BCMDBG_DUMP) && (BCMINTERNAL || DBG_PHY_IOV)) || BCMDBG_PHYDUMP */
+#endif 
 
 /* attach/detach */
 phy_radio_info_t *
@@ -53,6 +57,7 @@ BCMATTACHFN(phy_radio_attach)(phy_info_t *pi)
 {
 	phy_radio_info_t *info;
 	phy_type_radio_fns_t *fns;
+	uint8 bandcap;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
@@ -66,17 +71,30 @@ BCMATTACHFN(phy_radio_attach)(phy_info_t *pi)
 	fns = &((phy_radio_mem_t *)info)->fns;
 	info->fns = fns;
 
+	/* RF Band Capability Indicator */
+	/* 0 --> Invalid */
+	/* bit0 --> 2G */
+	/* bit1 --> 5G */
+	/* bit2 --> xx */
+	/* bit3 --> xx */
+	bandcap = (uint8)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_bandcap, 0x3);
+	info->bandcap = bandcap;
+
+	PHY_PRINT(("wl%d: %s: RF Band Cap: 2G:%d 5G:%d\n",
+		pi->sh->unit, __FUNCTION__, (bandcap & 0x1), ((bandcap & 0x2)>>1)));
+	ASSERT((info->bandcap != 0));
+
 	/* register radio on fn */
 	if (phy_init_add_init_fn(pi->initi, phy_radio_on, info, PHY_INIT_RADIO) != BCME_OK) {
 		PHY_ERROR(("%s: phy_init_add_init_fn failed\n", __FUNCTION__));
 		goto fail;
 	}
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 	/* register dump callback */
 	phy_dbg_add_dump_fn(pi, "radioreg", phy_radio_dump, info);
-#endif /* ((BCMDBG || BCMDBG_DUMP) && (BCMINTERNAL || DBG_PHY_IOV)) || BCMDBG_PHYDUMP */
+#endif 
 
 	return info;
 
@@ -189,39 +207,35 @@ phy_radio_init(phy_info_t *pi)
 	(fns->init)(fns->ctx);
 }
 
+/* get board FEM band capability */
+uint8
+phy_get_board_bandcap(phy_info_t *pi)
+{
+	uint8 bandcap;
+	bandcap = pi->radioi->bandcap;
+
+	PHY_TRACE(("%s\n", __FUNCTION__));
+	return bandcap;
+}
+
 /* query the radio idcode */
 uint32
 phy_radio_query_idcode(phy_radio_info_t *ri)
 {
 	phy_type_radio_fns_t *fns = ri->fns;
-#ifdef BCMRADIOREV
-	phy_info_t *pi = ri->pi;
-#endif
 	uint32 idcode;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	ASSERT(fns->id != NULL);
-	idcode = (fns->id)(fns->ctx);
 
-#ifdef BCMRADIOREV
-	/*
+	/* NOTE:
 	 * Override the radiorev to a fixed value if running in QT/Sim.  This is to avoid needing
 	 * a different QTDB build for each radio rev build (for the same chip).
 	 * Note: if BCMRADIOREV is not known, then use whatever is read from the chip (i.e. no
-	 *       override).
+	 *	 override).
 	 */
-	(void)pi;
-	if (ISSIM_ENAB(pi->sh->sih)) {
-		if (ISACPHY(pi)) {
-			idcode = (idcode & ~IDCODE_ACPHY_REV_MASK) |
-			        (BCMRADIOREV << IDCODE_ACPHY_REV_SHIFT);
-		} else {
-			idcode = (idcode & ~IDCODE_REV_MASK) |
-			        (BCMRADIOREV << IDCODE_REV_SHIFT);
-		}
-	}
-#endif	/* BCMRADIOREV */
+	idcode = (fns->id)(fns->ctx);
 
 	return idcode;
 }
@@ -245,8 +259,8 @@ BCMATTACHFN(phy_radio_unregister_impl)(phy_radio_info_t *ri)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 }
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 static int
 phy_radio_dump(void *ctx, struct bcmstrbuf *b)
 {
@@ -270,7 +284,7 @@ phy_radio_dump(void *ctx, struct bcmstrbuf *b)
 
 	return ret;
 }
-#endif /* ((BCMDBG || BCMDBG_DUMP) && (BCMINTERNAL || DBG_PHY_IOV)) || BCMDBG_PHYDUMP */
+#endif 
 
 #ifdef PHY_DUMP_BINARY
 int
@@ -287,3 +301,48 @@ phy_radio_getlistandsize(phy_info_t *pi, phyradregs_list_t **radreglist, uint16 
 	}
 }
 #endif /* PHY_DUMP_BINARY */
+
+#ifdef RADIO_HEALTH_CHECK
+bool
+phy_radio_pll_lock(phy_radio_info_t *radioi)
+{
+	bool ret = TRUE;
+	phy_type_radio_fns_t *fns = radioi->fns;
+
+	if (fns->pll_lock)
+		return (fns->pll_lock)(fns->ctx);
+	else
+		return ret;
+}
+#endif /* RADIO_HEALTH_CHECK */
+
+void
+WLBANDINITFN(phy_radio_por_inform)(wlc_phy_t *ppi)
+{
+	phy_info_t *pi = (phy_info_t *)ppi;
+
+	pi->phy_init_por = TRUE;
+}
+
+void
+phy_radio_runbist_config(wlc_phy_t *ppi, bool start_end)
+{
+	if (start_end == OFF) {
+		phy_radio_por_inform(ppi);
+	}
+}
+
+uint
+phy_radio_init_radio_regs_allbands(phy_info_t *pi, const radio_20xx_regs_t *radioregs)
+{
+	uint i;
+
+	for (i = 0; radioregs[i].address != 0xffff; i++) {
+		if (radioregs[i].do_init) {
+			phy_utils_write_radioreg(pi, radioregs[i].address,
+			                (uint16)radioregs[i].init);
+		}
+	}
+
+	return i;
+}

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_temp.h 630449 2016-04-09 00:27:18Z vyass $
+ * $Id: phy_ac_temp.h 656741 2016-08-29 23:22:11Z $
  */
 
 #ifndef _phy_ac_temp_h_
@@ -88,11 +88,30 @@ typedef struct _tempsense_radioregs_tiny {
 	uint16 tia_cfg7[PHY_CORE_MAX];
 } tempsense_radioregs_tiny_t;
 
+typedef struct _tempsense_radioregs_20694 {
+	uint16 tempsense_cfg[PHY_CORE_MAX];
+	uint16 testbuf_cfg1[PHY_CORE_MAX];
+	uint16 auxpga_cfg1[PHY_CORE_MAX];
+	uint16 auxpga_vmid[PHY_CORE_MAX];
+	uint16 tempsense_ovr1[PHY_CORE_MAX];
+	uint16 testbuf_ovr1[PHY_CORE_MAX];
+	uint16 auxpga_ovr1[PHY_CORE_MAX];
+	uint16 tia_cfg1_ovr[PHY_CORE_MAX];
+	uint16 tia_reg7[PHY_CORE_MAX];
+	uint16 lpf_ovr1[PHY_CORE_MAX];
+	uint16 lpf_ovr2[PHY_CORE_MAX];
+	uint16 lpf_reg7[PHY_CORE_MAX];
+	uint16 iqcal_cfg4[PHY_CORE_MAX];
+	uint16 iqcal_cfg5[PHY_CORE_MAX];
+	uint16 iqcal_ovr1[PHY_CORE_MAX];
+} tempsense_radioregs_20694_t;
+
 typedef struct _acphy_tempsense_radioregs
 {
 	union {
 		tempsense_radioregs_t acphy_tempsense_radioregs;
 		tempsense_radioregs_tiny_t acphy_tempsense_radioregs_tiny;
+		tempsense_radioregs_20694_t acphy_tempsense_radioregs_20694;
 	} u;
 } acphy_tempsense_radioregs_t;
 

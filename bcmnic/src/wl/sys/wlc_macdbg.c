@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_macdbg.c 663666 2016-10-06 11:05:01Z $
+ * $Id: wlc_macdbg.c 660640 2016-09-21 09:43:56Z $
  */
 
 #include <wlc_cfg.h>
@@ -46,11 +46,12 @@
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
 
-#ifdef VASIP_HW_SUPPORT
-#include <phy_misc_api.h>
+#ifdef WLVASIP
+#include <phy_vasip_api.h>
 #include <wlc_hw_priv.h>
+#include <d11vasip_code.h>
 #define SVMP_ACCESS_VIA_PHYTBL
-#endif	/* VASIP_HW_SUPPORT */
+#endif	/* WLVASIP */
 
 #define SC_NUM_OPTNS_GE50	4
 #define SC_OPTN_LT50NA		0
@@ -146,6 +147,10 @@ static int wlc_macdbg_smpl_capture_get(wlc_info_t *wlc,
 #else
 #define wlc_write_d11reg(a, b, c, d, e) 0
 #endif /* WL_MACDBG */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_dump_dma(wlc_info_t *wlc, struct bcmstrbuf *b);
+static int wlc_dump_stats(wlc_info_t *wlc, struct bcmstrbuf *b);
+#endif
 
 #ifdef WLC_MACDBG_FRAMEID_TRACE
 static int wlc_macdbg_frameid_trace_attach(wlc_macdbg_info_t *macdbg, wlc_info_t *wlc);
@@ -153,6 +158,8 @@ static void wlc_macdbg_frameid_trace_detach(wlc_macdbg_info_t *macdbg, wlc_info_
 #endif
 
 static void wlc_suspend_mac_debug(wlc_info_t *wlc, uint32 phydebug);
+
+void check_ta(wlc_info_t* wlc, bool ta_ok);
 
 /** iovar table */
 enum {
@@ -166,8 +173,12 @@ enum {
 };
 
 static const bcm_iovar_t macdbg_iovars[] = {
-	{"pmac", IOV_MACDBG_PMAC, (IOVF_SET_UP|IOVF_GET_UP), 0, IOVT_BUFFER, 0},
+	{"pmac", IOV_MACDBG_PMAC, (0), 0, IOVT_BUFFER, 0},
 	{"mac_capture", IOV_MACDBG_CAPTURE, (0), 0, IOVT_BUFFER, 0},
+#if defined(BCMDBG) && defined(MBSS)
+	{"srchmem", IOV_SRCHMEM,
+	(IOVF_SET_UP | IOVF_GET_UP), 0, IOVT_BUFFER, DOT11_MAX_SSID_LEN + 2 * sizeof(uint32)},
+#endif	/* BCMDBG && MBSS */
 	{"shmemx", IOV_MACDBG_SHMX, (IOVF_SET_CLK | IOVF_GET_CLK), 0, IOVT_BUFFER, 0},
 	{"macregx", IOV_MACDBG_REGX, (IOVF_SET_CLK | IOVF_GET_CLK), 0, IOVT_BUFFER, 0},
 	{NULL, 0, 0, 0, 0, 0}
@@ -262,6 +273,10 @@ BCMATTACHFN(wlc_macdbg_attach)(wlc_info_t *wlc)
 	wlc_dump_register(pub, "bcntpl", (dump_fn_t)wlc_dump_bcntpls, (void *)wlc);
 	wlc_dump_register(pub, "pio", (dump_fn_t)wlc_dump_pio, (void *)wlc);
 #endif /* WL_MACDBG */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(pub, "dma", (dump_fn_t)wlc_dump_dma, (void *)wlc);
+	wlc_dump_register(pub, "stats", (dump_fn_t)wlc_dump_stats, (void *)wlc);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	return macdbg;
 fail:
@@ -389,6 +404,39 @@ wlc_macdbg_doiovar(void *hdl, uint32 actionid,
 #endif	/* WL_PSMX */
 #endif /* WL_MACDBG */
 
+#if defined(BCMDBG) && defined(MBSS)
+	case IOV_GVAL(IOV_SRCHMEM): {
+		uint reg = (uint)int_val;
+
+		if (reg > 15) {
+			err = BCME_BADADDR;
+			break;
+		}
+
+		wlc_bmac_copyfrom_objmem(wlc->hw, reg * SHM_MBSS_SSIDSE_BLKSZ(wlc),
+			arg, SHM_MBSS_SSIDSE_BLKSZ(wlc), OBJADDR_SRCHM_SEL);
+		break;
+	}
+	case IOV_SVAL(IOV_SRCHMEM): {
+		uint reg = (uint)int_val;
+		int *parg = (int *)arg;
+
+		/* srchmem set params:
+		 *	uint32		register num
+		 *	uint32		ssid len
+		 *	int8[32]	ssid name
+		 */
+
+		if (reg > 15) {
+			err = BCME_BADADDR;
+			break;
+		}
+
+		wlc_bmac_copyto_objmem(wlc->hw, reg * SHM_MBSS_SSIDSE_BLKSZ(wlc),
+			(parg + 1), SHM_MBSS_SSIDSE_BLKSZ(wlc), OBJADDR_SRCHM_SEL);
+		break;
+	}
+#endif	/* BCMDBG && MBSS */
 
 
 	default:
@@ -403,18 +451,225 @@ static int
 wlc_macdbg_doioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlcif)
 {
 	int bcmerror = BCME_OK;
+	wlc_macdbg_info_t *macdbg = ctx;
+	wlc_info_t *wlc = macdbg->wlc;
+	int val, *pval;
+	d11regs_t *regs = wlc->regs;
+	uint band = 0;
+	osl_t *osh = wlc->osh;
+	uint i;
+	bool ta_ok = FALSE;
+
+	BCM_REFERENCE(ta_ok);
+	BCM_REFERENCE(macdbg);
+	BCM_REFERENCE(regs);
+	BCM_REFERENCE(i);
+	BCM_REFERENCE(band);
+	BCM_REFERENCE(osh);
+
+	/* default argument is generic integer */
+	pval = (int *) arg;
+
+	/* This will prevent the misaligned access */
+	if ((uint32)len >= sizeof(val))
+		bcopy(pval, &val, sizeof(val));
+	else
+		val = 0;
 
 	switch (cmd) {
 
+#if defined(BCMDBG)
+	case WLC_GET_UCFLAGS:
+		if (!wlc->pub->up) {
+			bcmerror = BCME_NOTUP;
+			break;
+		}
+
+		/* optional band is stored in the second integer of incoming buffer */
+		band = (len < (int)(2 * sizeof(int))) ? WLC_BAND_AUTO : ((int *)arg)[1];
+
+		/* bcmerror checking */
+		if ((bcmerror = wlc_iocregchk(wlc, band)))
+			break;
+#ifdef WL_PSMX
+		if (PSMX_HWCAP(wlc->pub) && (val >= MXHF0)) {
+			if (val >= MXHF0+MXHFMAX) {
+				bcmerror = BCME_RANGE;
+				break;
+			}
+		} else
+#endif /* WL_PSMX  */
+		if (val >= MHFMAX) {
+			bcmerror = BCME_RANGE;
+			break;
+		}
+
+		*pval = wlc_bmac_mhf_get(wlc->hw, (uint8)val, WLC_BAND_AUTO);
+		break;
+
+	case WLC_SET_UCFLAGS:
+		if (!wlc->pub->up) {
+			bcmerror = BCME_NOTUP;
+			break;
+		}
+
+		/* optional band is stored in the second integer of incoming buffer */
+		band = (len < (int)(2 * sizeof(int))) ? WLC_BAND_AUTO : ((int *)arg)[1];
+
+		/* bcmerror checking */
+		if ((bcmerror = wlc_iocregchk(wlc, band)))
+			break;
+		i = (uint16)val;
+#ifdef WL_PSMX
+		if (PSMX_HWCAP(wlc->pub) && (i >= MXHF0)) {
+			if (i >= MXHF0+MXHFMAX) {
+				bcmerror = BCME_RANGE;
+				break;
+			}
+		} else
+#endif /* WL_PSMX  */
+		if (i >= MHFMAX) {
+			bcmerror = BCME_RANGE;
+			break;
+		}
+
+		wlc_mhf(wlc, (uint8)i, 0xffff, (uint16)(val >> NBITS(uint16)), WLC_BAND_AUTO);
+		break;
+
+	case WLC_GET_SHMEM:
+		ta_ok = TRUE;
+
+		/* optional band is stored in the second integer of incoming buffer */
+		band = (len < (int)(2 * sizeof(int))) ? WLC_BAND_AUTO : ((int *)arg)[1];
+
+		/* bcmerror checking */
+		if ((bcmerror = wlc_iocregchk(wlc, band)))
+			break;
+
+		if (val & 1) {
+			bcmerror = BCME_BADADDR;
+			break;
+		}
+
+		*pval = wlc_read_shm(wlc, (uint16)val);
+		break;
+
+	case WLC_SET_SHMEM:
+		ta_ok = TRUE;
+
+		/* optional band is stored in the second integer of incoming buffer */
+		band = (len < (int)(2 * sizeof(int))) ? WLC_BAND_AUTO : ((int *)arg)[1];
+
+		/* bcmerror checking */
+		if ((bcmerror = wlc_iocregchk(wlc, band)))
+			break;
+
+		if (val & 1) {
+			bcmerror = BCME_BADADDR;
+			break;
+		}
+
+		wlc_write_shm(wlc, (uint16)val, (uint16)(val >> NBITS(uint16)));
+		break;
+
+	case WLC_W_REG:
+	{
+		rw_reg_t *r;
+		ta_ok = TRUE;
+		r = (rw_reg_t*)arg;
+		band = WLC_BAND_AUTO;
+
+		if (len < (int)(sizeof(rw_reg_t) - sizeof(uint))) {
+			bcmerror = BCME_BUFTOOSHORT;
+			break;
+		}
+
+		if (len >= (int)sizeof(rw_reg_t))
+			band = r->band;
+
+		/* bcmerror checking */
+		if ((bcmerror = wlc_iocregchk(wlc, band)))
+			break;
+
+		if (r->byteoff + r->size > sizeof(d11regs_t)) {
+			bcmerror = BCME_BADADDR;
+			break;
+		}
+		if (r->size == sizeof(uint32))
+			W_REG(osh, (uint32 *)((uchar *)(uintptr)regs + r->byteoff), r->val);
+		else if (r->size == sizeof(uint16))
+			W_REG(osh, (uint16 *)((uchar *)(uintptr)regs + r->byteoff), r->val);
+		else
+			bcmerror = BCME_BADADDR;
+		break;
+	}
+#endif 
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	case WLC_R_REG:	/* MAC registers */
+	{
+		rw_reg_t *r;
+#if defined(BCMDBG)
+		ta_ok = TRUE;
+#endif 
+		r = (rw_reg_t*)arg;
+		band = WLC_BAND_AUTO;
+
+		if (len < (int)(sizeof(rw_reg_t) - sizeof(uint))) {
+			bcmerror = BCME_BUFTOOSHORT;
+			break;
+		}
+
+		if (len >= (int)sizeof(rw_reg_t))
+			band = r->band;
+
+		/* HW is turned off so don't try to access it */
+		if (wlc->pub->hw_off) {
+			bcmerror = BCME_RADIOOFF;
+			break;
+		}
+
+		/* bcmerror checking */
+		if ((bcmerror = wlc_iocregchk(wlc, band)))
+			break;
+
+		if ((r->byteoff + r->size) > sizeof(d11regs_t)) {
+			bcmerror = BCME_BADADDR;
+			break;
+		}
+		if (r->size == sizeof(uint32))
+			r->val = R_REG(osh, (uint32 *)((uchar *)(uintptr)regs + r->byteoff));
+		else if (r->size == sizeof(uint16))
+			r->val = R_REG(osh, (uint16 *)((uchar *)(uintptr)regs + r->byteoff));
+		else
+			bcmerror = BCME_BADADDR;
+		break;
+	}
+#endif 
 	default:
 		bcmerror = BCME_UNSUPPORTED;
 		break;
 	}
 
+	check_ta(wlc, ta_ok);
 
 	return bcmerror;
 } /* wlc_macdbg_doioctl */
 
+void
+check_ta(wlc_info_t* wlc, bool ta_ok)
+{
+#if defined(BCMDBG)
+	/* The sequence is significant.
+	 *   Only if sbclk is TRUE, we can proceed with register access.
+	 *   Even though ta_ok is TRUE, we still want to check(and clear) target abort
+	 *   si_taclear returns TRUE if there was a target abort, In this case, ta_ok must be TRUE
+	 *   to avoid assert
+	 *   ASSERT and si_taclear are both under ifdef BCMDBG
+	 */
+	if (!(wlc->pub->hw_off))
+		ASSERT(wlc_bmac_taclear(wlc->hw, ta_ok) || !ta_ok);
+#endif 
+}
 
 static int
 wlc_macdbg_up(void *hdl)
@@ -1140,11 +1395,211 @@ wlc_dump_pio(wlc_info_t *wlc, struct bcmstrbuf *b)
 }
 #endif /* WL_MACDBG */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_dump_dma(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	int i;
+	wl_cnt_wlc_t *cnt = wlc->pub->_cnt;
+
+	if (!wlc->clk)
+		return BCME_NOCLK;
+
+	for (i = 0; i < NFIFO; i++) {
+		PRREG_INDEX(intstatus, wlc->regs->intctrlregs[i].intstatus);
+		PRREG_INDEX(intmask, wlc->regs->intctrlregs[i].intmask);
+		bcm_bprintf(b, "\n");
+		if (!PIO_ENAB(wlc->pub)) {
+			hnddma_t *di;
+			di = WLC_HW_DI(wlc, i);
+			bcm_bprintf(b, "DMA %d: ", i);
+			if (di != NULL) {
+				dma_dumptx(di, b, TRUE);
+				if (i == RX_FIFO) {
+					dma_dumprx(di, b, TRUE);
+					PRVAL(rxuflo[i]);
+				} else
+					PRVAL(txuflo);
+				PRNL();
+			}
+		}
+		bcm_bprintf(b, "\n");
+	}
+
+	PRVAL(dmada); PRVAL(dmade); PRVAL(rxoflo); PRVAL(dmape);
+	bcm_bprintf(b, "\n");
+
+	return 0;
+}
+
+#ifdef WLCNT
+#define PRCNT_MACSTAT_TX							\
+do {										\
+	/* UCODE SHM counters */						\
+	/* tx start and those that do not end well */					\
+	PRVAL(txallfrm); PRVAL(txbcnfrm); PRVAL(txrtsfrm); PRVAL(txctsfrm);	\
+	PRVAL(txackfrm); PRVAL(txback); PRVAL(txdnlfrm); PRNL();		\
+	PRVAL(txampdu); PRVAL(txmpdu); PRVAL(txucast);				\
+	PRVAL(rxrsptmout); PRVAL(txinrtstxop); PRVAL(txrtsfail); PRNL();	\
+	bcm_bprintf(b, "txper_ucastdt %d%% txper_rts %d%%\n",			\
+		cnt->txucast > 0 ?						\
+		(100 - ((cnt->rxackucast + cnt->rxback) * 100			\
+		 / cnt->txucast)) : 0,						\
+		cnt->txrtsfrm > 0 ?						\
+		(100 - (cnt->rxctsucast * 100 / cnt->txrtsfrm)) : 0);		\
+	bcm_bprintf(b, "txfunfl: ");						\
+	for (i = 0; i < NFIFO; i++)						\
+		bcm_bprintf(b, "%d ", cnt->txfunfl[i]);				\
+	PRVAL(txtplunfl); PRVAL(txphyerror); PRNL(); PRNL();			\
+} while (0)
+
+#define PRCNT_MACSTAT_RX							\
+do {										\
+	/* rx with goodfcs */							\
+	PRVAL(rxctlucast); PRVAL(rxrtsucast); PRVAL(rxctsucast);		\
+	PRVAL(rxackucast); PRVAL(rxback); PRNL();				\
+	PRVAL(rxbeaconmbss); PRVAL(rxdtucastmbss);				\
+	PRVAL(rxmgucastmbss); PRNL();						\
+	PRVAL(rxbeaconobss); PRVAL(rxdtucastobss); PRVAL(rxdtocast);		\
+	PRVAL(rxmgocast); PRNL();						\
+	PRVAL(rxctlocast); PRVAL(rxrtsocast); PRVAL(rxctsocast); PRNL();	\
+	PRVAL(rxctlmcast); PRVAL(rxdtmcast); PRVAL(rxmgmcast); PRNL(); PRNL();	\
+										\
+	PRVAL(rxcgprqfrm); PRVAL(rxcgprsqovfl); PRVAL(txcgprsfail);		\
+	PRVAL(txcgprssuc); PRVAL(prs_timeout); PRNL();				\
+	PRVAL(pktengrxducast); PRVAL(pktengrxdmcast);				\
+	PRVAL(bcntxcancl);							\
+} while (0)
+
+static INLINE void
+wlc_dump_macstat(wlc_info_t *wlc, struct bcmstrbuf * b)
+{
+	int i;
+	if (D11REV_GE(wlc->pub->corerev, 40)) {
+		wl_cnt_ge40mcst_v1_t *cnt = wlc->pub->_mcst_cnt;
+		PRCNT_MACSTAT_TX;
+		/* rx start and those that do not end well */
+		PRVAL(rxstrt); PRVAL(rxbadplcp); PRVAL(rxcrsglitch);
+		PRVAL(rxtoolate); PRVAL(rxnodelim); PRNL();
+		PRVAL(rxdrop20s); PRVAL(bphy_badplcp); PRVAL(bphy_rxcrsglitch); PRNL();
+		PRVAL(rxbadfcs); PRVAL(rxfrmtoolong); PRVAL(rxfrmtooshrt); PRVAL(rxanyerr); PRNL();
+		PRVAL(rxf0ovfl); PRVAL(rxf1ovfl); PRVAL(rxhlovfl); PRVAL(pmqovfl); PRNL();
+		PRCNT_MACSTAT_RX;
+		PRVAL(missbcn_dbg); PRNL();
+		PRNL();
+	} else {
+		wl_cnt_lt40mcst_v1_t *cnt = wlc->pub->_mcst_cnt;
+		PRCNT_MACSTAT_TX;
+		PRVAL(rxstrt); PRVAL(rxbadplcp); PRVAL(rxcrsglitch);
+		PRVAL(rxtoolate); PRVAL(rxnodelim); PRNL();
+		PRVAL(bphy_badplcp); PRVAL(bphy_rxcrsglitch); PRNL();
+		PRVAL(rxbadfcs); PRVAL(rxfrmtoolong); PRVAL(rxfrmtooshrt); PRVAL(rxanyerr); PRNL();
+		PRVAL(rxf0ovfl); PRVAL(pmqovfl); PRNL();
+		PRCNT_MACSTAT_RX;
+		PRNL();
+		PRVAL(dbgoff46); PRVAL(dbgoff47);
+		PRVAL(dbgoff48); PRVAL(phywatch);
+		PRNL();
+	}
+}
+#endif /* WLCNT */
+
+/** print aggregate (since driver load time) driver and macstat counter values */
+static int
+wlc_dump_stats(wlc_info_t *wlc, struct bcmstrbuf * b)
+{
+#ifdef WLCNT
+	int i;
+	wl_cnt_wlc_t *cnt = wlc->pub->_cnt;
+
+	if (WLC_UPDATE_STATS(wlc)) {
+		wlc_statsupd(wlc);
+	}
+
+	/* print UCODE MACSTATs */
+	wlc_dump_macstat(wlc, b);
+
+	/* Display reinit counters */
+	PRVAL(reinit);
+	bcm_bprintf(b, "reinitreason_counts: ");
+	for (i = 0; i < WL_REINIT_RC_LAST; i++) {
+		bcm_bprintf(b, "%d(%d) ", i, wlc->pub->reinitrsn->rsn[i]);
+	}
+	PRNL();
+	PRVAL(reset); PRVAL(pciereset); PRVAL(cfgrestore); PRVAL(dma_hang); PRNL();
+
+	/* summary stat counter line */
+	PRVAL(txframe); PRVAL(txbyte); PRVAL(txretrans); PRVAL(txfail);
+	PRVAL(txchanrej); PRVAL(tbtt); PRVAL(p2p_tbtt); PRVAL(p2p_tbtt_miss); PRNL();
+	PRVAL(rxframe); PRVAL(rxbyte); PRVAL(rxerror); PRNL();
+	PRVAL(txprshort); PRVAL(txdmawar); PRVAL(txnobuf); PRVAL(txnoassoc);
+	PRVAL(txchit); PRVAL(txcmiss); PRNL();
+	PRVAL(txserr); PRVAL(txphyerr); PRVAL(txphycrs); PRVAL(txerror); PRNL();
+
+	PRVAL_RENAME(txfrag, d11_txfrag); PRVAL_RENAME(txmulti, d11_txmulti);
+	PRVAL_RENAME(txretry, d11_txretry); PRVAL_RENAME(txretrie, d11_txretrie); PRNL();
+	PRVAL_RENAME(txrts, d11_txrts); PRVAL_RENAME(txnocts, d11_txnocts);
+	PRVAL_RENAME(txnoack, d11_txnoack); PRVAL_RENAME(txfrmsnt, d11_txfrmsnt); PRNL();
+
+	PRVAL(rxcrc); PRVAL(rxnobuf); PRVAL(rxnondata); PRVAL(rxbadds);
+	PRVAL(rxbadcm); PRVAL(rxdup); PRVAL(rxrtry); PRVAL(rxfragerr); PRNL();
+	PRVAL(rxrunt); PRVAL(rxgiant); PRVAL(rxnoscb); PRVAL(rxbadproto);
+	PRVAL(rxbadsrcmac); PRNL();
+
+	PRVAL_RENAME(rxfrag, d11_rxfrag); PRVAL_RENAME(rxmulti, d11_rxmulti);
+	PRVAL_RENAME(rxundec, d11_rxundec); PRVAL_RENAME(rxundec_mcst, d11_rxundec_mcst);
+	PRNL();
+
+	PRVAL(rxctl); PRVAL(rxbadda); PRVAL(rxfilter);
+	bcm_bprintf(b, "rxuflo: ");
+	for (i = 0; i < NFIFO; i++)
+		bcm_bprintf(b, "%d ", cnt->rxuflo[i]);
+	PRNL(); PRNL();
+
+	/* WPA2 counters */
+	PRVAL(tkipmicfaill); PRVAL(tkipicverr); PRVAL(tkipcntrmsr); PRNL();
+	PRVAL(tkipreplay); PRVAL(ccmpfmterr); PRVAL(ccmpreplay); PRNL();
+	PRVAL(ccmpundec); PRVAL(fourwayfail); PRVAL(wepundec); PRNL();
+	PRVAL(wepicverr); PRVAL(decsuccess); PRVAL(rxundec); PRNL();
+
+	PRVAL(tkipmicfaill_mcst); PRVAL(tkipicverr_mcst); PRVAL(tkipcntrmsr_mcst); PRNL();
+	PRVAL(tkipreplay_mcst); PRVAL(ccmpfmterr_mcst); PRVAL(ccmpreplay_mcst); PRNL();
+	PRVAL(ccmpundec_mcst); PRVAL(fourwayfail_mcst); PRVAL(wepundec_mcst); PRNL();
+	PRVAL(wepicverr_mcst); PRVAL(decsuccess_mcst); PRVAL(rxundec_mcst); PRNL();
+	PRNL();
+
+	PRVAL(rx1mbps); PRVAL(rx2mbps); PRVAL(rx5mbps5); PRVAL(rx11mbps); PRNL();
+	PRVAL(rx6mbps); PRVAL(rx9mbps); PRVAL(rx12mbps); PRVAL(rx18mbps); PRNL();
+	PRVAL(rx24mbps); PRVAL(rx36mbps); PRVAL(rx48mbps); PRVAL(rx54mbps); PRNL();
+
+	PRVAL(txmpdu_sgi); PRVAL(rxmpdu_sgi); PRVAL(txmpdu_stbc); PRVAL(rxmpdu_stbc);
+	PRVAL(rxmpdu_mu); PRNL();
+
+	PRVAL(cso_normal); PRVAL(cso_passthrough); PRNL();
+	PRVAL(chained); PRVAL(chainedsz1); PRVAL(unchained);
+	PRVAL(maxchainsz); PRVAL(currchainsz); PRNL();
+
+	/* detailed amangement and control frame counters */
+	PRVAL(txbar); PRVAL(txpspoll); PRVAL(rxbar);
+	PRVAL(rxpspoll); PRNL();
+	PRVAL(txnull); PRVAL(txqosnull); PRVAL(rxnull);
+	PRVAL(rxqosnull); PRNL();
+	PRVAL(txassocreq); PRVAL(txreassocreq); PRVAL(txdisassoc);
+	PRVAL(txassocrsp); PRVAL(txreassocrsp); PRNL();
+	PRVAL(txauth); PRVAL(txdeauth); PRVAL(txprobereq);
+	PRVAL(txprobersp); PRVAL(txaction); PRNL();
+	PRVAL(rxassocreq); PRVAL(rxreassocreq); PRVAL(rxdisassoc);
+	PRVAL(rxassocrsp); PRVAL(rxreassocrsp); PRNL();
+	PRVAL(rxauth); PRVAL(rxdeauth); PRVAL(rxprobereq);
+	PRVAL(rxprobersp); PRVAL(rxaction); PRNL();
+#endif /* WLCNT */
+	return 0;
+}
+#endif  /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 /* ************* end of dump_xxx function section *************************** */
 
 /* print upon critical or fatal error */
-
 static void
 wlc_suspend_mac_debug(wlc_info_t *wlc, uint32 phydebug)
 {
@@ -1243,8 +1698,6 @@ wlc_dump_ucode_fatal(wlc_info_t *wlc, uint reason)
 		{"rcv_frmcnt", 0x40a},
 		{"rxe_rxcnt", 0x418},
 		{"wepctl", 0x7c0},
-		{"psm_pcerr", 0x48c},
-		{"psm_ihrerr", 0x4ce},
 	};
 	/* reg specific to corerev < 40 */
 	d11print_list_t list_lt40[] = {
@@ -1258,11 +1711,6 @@ wlc_dump_ucode_fatal(wlc_info_t *wlc, uint reason)
 		{"wepstat", 0x7c2},
 		{"wep_ivloc", 0x7c4},
 		{"wep_psdulen", 0x7c6},
-		{"daggctl", 0x448},
-		{"daggctl2", 0x8c0},
-		{"dagg_bleft",  0x8c2},
-		{"dagglen", 0x8c8},
-		{"daggstat", 0x8c6}
 	};
 	d11print_list_t list_ge64[] = {
 		{"aqmfifordyL", 0xbbc},
@@ -1383,7 +1831,6 @@ wlc_dump_ucode_fatal(wlc_info_t *wlc, uint reason)
 				val32[0], val32[1], val32[2], val32[3]));
 		}
 		if (WLCISACPHY(wlc->band)) {
-			WL_PRINT(("acphyreg\n"));
 			plist[0] = acphyreg;
 			lsize[0] = ARRAYSIZE(acphyreg);
 		} else if (WLCISHTPHY(wlc->band) || WLCISNPHY(wlc->band)) {
@@ -1397,7 +1844,6 @@ wlc_dump_ucode_fatal(wlc_info_t *wlc, uint reason)
 
 		/* acphy2 debug info */
 		if (WLCISACPHY(wlc->band) && (ACREV_GE(wlc->band->phyrev, 32))) {
-			WL_PRINT(("acphy2 debug info\n"));
 			plist[1] = acphy2reg;
 			lsize[1] = ARRAYSIZE(acphy2reg);
 		}
@@ -1423,7 +1869,6 @@ wlc_dump_ucode_fatal(wlc_info_t *wlc, uint reason)
 				{"gpiohi", 0x13}
 			};
 
-			WL_PRINT(("acphy2 debug info2\n"));
 			for (i = 0; i < gpiosel; i ++) {
 				/* select gpio */
 				W_REG(osh, &regs->phyregaddr, acphy2_gpioregs[0].addr);
@@ -1504,7 +1949,7 @@ wlc_bmac_psmx_errors(wlc_info_t *wlc)
 	}
 }
 
-#ifdef VASIP_HW_SUPPORT
+#ifdef WLVASIP
 void
 wlc_dump_vasip_fatal(wlc_info_t *wlc)
 {
@@ -1540,14 +1985,14 @@ wlc_dump_vasip_fatal(wlc_info_t *wlc)
 	}
 
 #if defined(SVMP_ACCESS_VIA_PHYTBL)
-	WL_PRINT(("VASIP watchdog is triggered. VASIP code revision %d.%d \n", wlc->vasip_major,
-			wlc->vasip_minor));
+	WL_PRINT(("VASIP watchdog is triggered. VASIP code revision %d.%d \n",
+		d11vasipcode_major, d11vasipcode_minor));
 
 	n = 0;
 	for (i = 0; i < 18; i++) {
 		for (m = 0; m < size[i]; m++) {
-			counter[n++] = phy_misc_vasip_svmp_read((phy_info_t *)wlc_hw->band->pi,
-				address[i]+m);
+			phy_vasip_read_svmp((phy_info_t *)wlc_hw->band->pi,
+				address[i]+m, &counter[n++]);
 		}
 	}
 
@@ -1591,7 +2036,7 @@ wlc_dump_vasip_fatal(wlc_info_t *wlc)
 				address[8+i], counter[i+83]));
 #endif /* SVMP_ACCESS_VIA_PHYTBL */
 }
-#endif /* VASIP_HW_SUPPORT */
+#endif /* WLVASIP */
 
 void
 wlc_dump_psmx_fatal(wlc_info_t *wlc, uint reason)
@@ -1614,8 +2059,8 @@ wlc_dump_psmx_fatal(wlc_info_t *wlc, uint reason)
 	regs = wlc->regs;
 
 	k = (reason >= PSMX_FATAL_LAST) ? PSMX_FATAL_ANY : reason;
-	WL_PRINT(("wl%d: PSMx %s at %d seconds. corerev %d ",
-		pub->unit, reason_str[k], pub->now, pub->corerev));
+	WL_PRINT(("wl%d: PSMx dump at %d seconds. corerev %d reason:%s ",
+		pub->unit, pub->now, pub->corerev, reason_str[k]));
 
 	if (!wlc->clk) {
 		WL_PRINT(("%s: no clk\n", __FUNCTION__));
@@ -1667,17 +2112,29 @@ wlc_dump_psmx_fatal(wlc_info_t *wlc, uint reason)
 		WL_PRINT(("0x%04x\n", val16));
 	}
 
-#ifdef VASIP_HW_SUPPORT
+#ifdef WLVASIP
 	/* bit5 of txe_vasip_intsts indicates vasip watchdog is triggered */
 	val16 = wlc_read_macregx(wlc, 0x870);
 	WL_PRINT(("txe_vasip_intsts %#x\n", val16));
 	if (val16 & (1 << 5)) {
 		wlc_dump_vasip_fatal(wlc);
 	}
-#endif	/* VASIP_HW_SUPPORT */
+#endif	/* WLVASIP */
 }
 #endif /* WL_PSMX */
 
+
+void
+wlc_dump_mac_fatal(wlc_info_t *wlc, uint reason)
+{
+	wlc_dump_ucode_fatal(wlc, reason);
+#ifdef WL_PSMX
+	if (BCM_DMA_CT_ENAB(wlc)) {
+		wlc_dump_psmx_fatal(wlc, (reason == PSM_FATAL_TXSTUCK) ?
+			PSMX_FATAL_TXSTUCK : PSMX_FATAL_ANY);
+	}
+#endif /* WL_PSMX */
+}
 
 #if WL_MACDBG
 /* Depending CoreRev, some reggisters are 2B, some 4B */
@@ -2013,7 +2470,7 @@ print_values:
 }
 #endif /* WL_MACDBG */
 
-#if defined(PHYTXERR_DUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)|| defined(PHYTXERR_DUMP)
 void
 wlc_dump_phytxerr(wlc_info_t *wlc, uint16 PhyErr)
 {
@@ -2042,7 +2499,7 @@ wlc_dump_phytxerr(wlc_info_t *wlc, uint16 PhyErr)
 			wlc_write_shm(wlc, addr, 0);
 	}
 }
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || PHYTXERR_DUMP */
 
 #ifdef WLC_MACDBG_FRAMEID_TRACE
 /* tx pkt history entry */
@@ -2060,8 +2517,8 @@ struct pkt_hist {
 #define PKT_HIST_NUM_ENT 1024
 
 void
-wlc_macdbg_frameid_trace_pkt(wlc_macdbg_info_t *macdbg, void *pkt, wlc_txh_info_t *txh,
-	uint8 fifo)
+wlc_macdbg_frameid_trace_pkt(wlc_macdbg_info_t *macdbg, void *pkt, uint8 fifo,
+	uint16 txFrameID, uint8 epoch)
 {
 	wlc_info_t *wlc = macdbg->wlc;
 
@@ -2071,10 +2528,10 @@ wlc_macdbg_frameid_trace_pkt(wlc_macdbg_info_t *macdbg, void *pkt, wlc_txh_info_
 	macdbg->pkt_hist[macdbg->pkt_hist_cnt].pkt = pkt;
 	macdbg->pkt_hist[macdbg->pkt_hist_cnt].flags = WLPKTTAG(pkt)->flags;
 	macdbg->pkt_hist[macdbg->pkt_hist_cnt].flags3 = WLPKTTAG(pkt)->flags3;
-	macdbg->pkt_hist[macdbg->pkt_hist_cnt].frameid = txh->TxFrameID;
+	macdbg->pkt_hist[macdbg->pkt_hist_cnt].frameid = txFrameID;
 	macdbg->pkt_hist[macdbg->pkt_hist_cnt].seq = WLPKTTAG(pkt)->seq;
 	if (D11REV_GE(wlc->pub->corerev, 40)) {
-		macdbg->pkt_hist[macdbg->pkt_hist_cnt].epoch = wlc_txh_get_epoch(wlc, txh);
+		macdbg->pkt_hist[macdbg->pkt_hist_cnt].epoch = epoch;
 	}
 	macdbg->pkt_hist[macdbg->pkt_hist_cnt].fifo = fifo;
 

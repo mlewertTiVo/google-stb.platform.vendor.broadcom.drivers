@@ -345,6 +345,19 @@ static wl_tx_bw_t ppr_get_alloc_bw(uint32 hdr)
 }
 #endif
 
+#if (defined(BCMDBG_ASSERT) || defined(BCMASSERT_LOG)) && defined(BCMDRIVER)
+static bool ppr_is_valid_bw(wl_tx_bw_t bw)
+{
+	bool ret = FALSE;
+	if ((bw == WL_TX_BW_20) || (bw == WL_TX_BW_40) || (bw == WL_TX_BW_80) ||
+		(bw == WL_TX_BW_160) || (bw == WL_TX_BW_8080) || (bw == PPR_BW_MAX) ||
+		IS_ULB_BW(bw)) {
+		ret = TRUE;
+	}
+
+	return ret;
+}
+#endif
 
 /** Returns a flag of ppr conditions (chains, txbf etc.) */
 static uint32 ppr_get_flag(void)
@@ -3099,19 +3112,87 @@ static void wlc_phy_txpwr_cache_clear_entry(osl_t *osh, tx_pwr_cache_entry_t* en
  * Get a ppr_t struct of a given type from the cache for the specified chanspec.
  * Don't return the pointer if the cached data is invalid.
  */
-ppr_t* wlc_phy_get_cached_pwr(tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec, uint pwr_type)
+bool wlc_phy_get_cached_pwr(tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec, uint pwr_type,
+	ppr_t* pprptr)
 {
-	ppr_t* pwrptr = NULL;
-
+	bool ret = FALSE;
 	if (pwr_type < TXPWR_CACHE_NUM_TYPES) {
 		tx_pwr_cache_entry_t* entryptr = wlc_phy_txpwr_cache_get_entry(cacheptr, chanspec);
 
 		if ((entryptr != NULL) &&
-			((entryptr->data_invalid_flags & (0x01 << pwr_type)) == 0))
-			pwrptr = entryptr->cache_pwrs[pwr_type];
+			((entryptr->data_invalid_flags & (0x01 << pwr_type)) == 0)) {
+			ppr_copy_struct(entryptr->cache_pwrs[pwr_type], pprptr);
+			ret = TRUE;
+		}
 	}
 
-	return pwrptr;
+	return ret;
+}
+
+
+int wlc_phy_set_cached_pwr(osl_t* osh, tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec,
+	uint pwr_type, ppr_t* pwrptr)
+{
+	int result = BCME_NOTFOUND;
+
+	if (pwr_type < TXPWR_CACHE_NUM_TYPES) {
+		tx_pwr_cache_entry_t* entryptr = wlc_phy_txpwr_cache_get_entry(cacheptr, chanspec);
+
+		if (entryptr != NULL) {
+			ppr_copy_struct(pwrptr, entryptr->cache_pwrs[pwr_type]);
+			entryptr->data_invalid_flags &= ~(0x01 << pwr_type); /* now valid */
+			result = BCME_OK;
+		}
+	}
+	return result;
+}
+
+
+void wlc_phy_txpwr_cache_clear(osl_t* osh, tx_pwr_cache_entry_t* cacheptr,
+	chanspec_t chanspec)
+{
+	tx_pwr_cache_entry_t* entryptr = wlc_phy_txpwr_cache_get_entry(cacheptr, chanspec);
+	if (entryptr != NULL) {
+		entryptr->chanspec = 0;
+		entryptr->data_invalid_flags = TXPWR_ALL_INVALID;
+	}
+}
+
+
+void wlc_phy_txpwr_cache_close(osl_t* osh, tx_pwr_cache_entry_t* cacheptr)
+{
+	uint i;
+
+	for (i = 0; i < MAX_TXPWR_CACHE_ENTRIES; i++) {
+		tx_pwr_cache_entry_t* entryptr = tx_pwr_cache_get(cacheptr, i);
+		wlc_phy_txpwr_cache_clear_entry(osh, entryptr);
+	}
+	MFREE(osh, cacheptr, (uint)sizeof(*cacheptr) * MAX_TXPWR_CACHE_ENTRIES);
+}
+
+
+tx_pwr_cache_entry_t* wlc_phy_txpwr_cache_create(osl_t* osh)
+{
+	int i, j;
+	tx_pwr_cache_entry_t* cacheptr =
+		(tx_pwr_cache_entry_t*)MALLOC(osh,
+		(uint)sizeof(tx_pwr_cache_entry_t) * MAX_TXPWR_CACHE_ENTRIES);
+	if (cacheptr != NULL) {
+		memset(cacheptr, 0, (uint)sizeof(tx_pwr_cache_entry_t) * MAX_TXPWR_CACHE_ENTRIES);
+		/* Allocate memory for each entry */
+		for (i = 0; i < MAX_TXPWR_CACHE_ENTRIES; i++) {
+			tx_pwr_cache_entry_t* entryptr = tx_pwr_cache_get(cacheptr, i);
+			entryptr->data_invalid_flags = TXPWR_ALL_INVALID;
+			for (j = 0; j < TXPWR_CACHE_NUM_TYPES; j++) {
+				entryptr->cache_pwrs[j] = ppr_create(osh, ppr_get_max_bw());
+				if (!entryptr->cache_pwrs[j]) {
+					wlc_phy_txpwr_cache_close(osh, cacheptr);
+					return NULL;
+				}
+			}
+		}
+	}
+	return cacheptr;
 }
 
 
@@ -3134,28 +3215,6 @@ ppr_t* wlc_phy_get_cached_ppr_ptr(tx_pwr_cache_entry_t* cacheptr, chanspec_t cha
 	return pwrptr;
 }
 
-
-/** Add a ppr_t struct of a given type to the cache for the specified chanspec. */
-int wlc_phy_set_cached_pwr(osl_t *osh, tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec,
-	uint pwr_type, ppr_t* pwrptr)
-{
-	int result = BCME_NOTFOUND;
-
-	if (pwr_type < TXPWR_CACHE_NUM_TYPES) {
-		tx_pwr_cache_entry_t* entryptr = wlc_phy_txpwr_cache_get_entry(cacheptr, chanspec);
-
-		if (entryptr != NULL) {
-			if ((entryptr->cache_pwrs[pwr_type] != NULL) &&
-				(entryptr->cache_pwrs[pwr_type] != pwrptr)) {
-				ppr_delete(osh, entryptr->cache_pwrs[pwr_type]);
-			}
-			entryptr->cache_pwrs[pwr_type] = pwrptr;
-			entryptr->data_invalid_flags &= ~(0x01 << pwr_type); /* now valid */
-			result = BCME_OK;
-		}
-	}
-	return result;
-}
 
 /** Indicate if we have cached a particular ppr_t struct for any chanspec. */
 bool wlc_phy_is_pwr_cached(tx_pwr_cache_entry_t* cacheptr, uint pwr_type, ppr_t* pwrptr)
@@ -3336,16 +3395,6 @@ chanspec_t wlc_phy_txpwr_cache_find_other_cached_chanspec(tx_pwr_cache_entry_t* 
 }
 
 
-/** Find a specific cache entry and clear it. */
-void wlc_phy_txpwr_cache_clear(osl_t *osh, tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec)
-{
-	tx_pwr_cache_entry_t* entryptr = wlc_phy_txpwr_cache_get_entry(cacheptr, chanspec);
-	if (entryptr != NULL) {
-		wlc_phy_txpwr_cache_clear_entry(osh, entryptr);
-	}
-}
-
-
 /** Invalidate all cached data. */
 void wlc_phy_txpwr_cache_invalidate(tx_pwr_cache_entry_t* cacheptr)
 {
@@ -3367,34 +3416,6 @@ void wlc_phy_txpwr_cache_invalidate(tx_pwr_cache_entry_t* cacheptr)
 #endif
 		}
 	}
-}
-
-/** Clear all cache entries and return memory. */
-void wlc_phy_txpwr_cache_close(osl_t *osh, tx_pwr_cache_entry_t* cacheptr)
-{
-	uint i;
-
-	for (i = 0; i < MAX_TXPWR_CACHE_ENTRIES; i++) {
-		tx_pwr_cache_entry_t* entryptr = tx_pwr_cache_get(cacheptr, i);
-		if (entryptr->chanspec != 0) {
-			wlc_phy_txpwr_cache_clear_entry(osh, entryptr);
-		}
-	}
-	MFREE(osh, cacheptr, (uint)sizeof(*cacheptr) * MAX_TXPWR_CACHE_ENTRIES);
-}
-
-
-/** Allocate space for cache. Clear all cache entries. */
-tx_pwr_cache_entry_t* wlc_phy_txpwr_cache_create(osl_t *osh)
-{
-	/* can be freed after attach */
-	tx_pwr_cache_entry_t* cacheptr =
-		(tx_pwr_cache_entry_t*)MALLOC_NOPERSIST(osh,
-		(uint)sizeof(tx_pwr_cache_entry_t) * MAX_TXPWR_CACHE_ENTRIES);
-	if (cacheptr != NULL) {
-		memset(cacheptr, 0, (uint)sizeof(tx_pwr_cache_entry_t) * MAX_TXPWR_CACHE_ENTRIES);
-	}
-	return cacheptr;
 }
 
 

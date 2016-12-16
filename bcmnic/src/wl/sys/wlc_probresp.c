@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_probresp.c 631460 2016-04-14 14:44:11Z $
+ * $Id: wlc_probresp.c 658301 2016-09-07 11:19:12Z $
  */
 
 #include <wlc_cfg.h>
@@ -71,6 +71,12 @@ struct wlc_probresp_info {
 /* module */
 static int wlc_probresp_doiovar(void *ctx, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 wlc_probresp_info_t *
 BCMATTACHFN(wlc_probresp_attach)(wlc_info_t *wlc)
@@ -213,11 +219,6 @@ wlc_probresp_send_probe_resp(wlc_probresp_info_t *mprobresp, wlc_bsscfg_t *bsscf
 		/* Generate probe response body */
 		wlc_bcn_prb_body(wlc, FC_PROBE_RESP, bsscfg, pbody, &len, FALSE);
 		PKTSETLEN(wlc->osh, p, len + DOT11_MGMT_HDR_LEN);
-#ifdef BCMPCIEDEV
-		/* For full dongle operation, do not queue probe response packets into psq */
-		if (BCMPCIEDEV_ENAB())
-			WLPKTTAG(p)->flags |= WLF_PSDONTQ;
-#endif /* BCMPCIEDEV */
 
 		/* Set time of expiry over SCANOL_UNASSOC_TIME_MAX(ms) */
 		wlc_lifetime_set(wlc, p, (SCANOL_UNASSOC_TIME_MAX*2)*1000);

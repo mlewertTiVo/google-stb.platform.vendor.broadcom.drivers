@@ -16,7 +16,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_iovar.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: wlc_phy_iovar.h 657820 2016-09-02 18:26:33Z $
  */
 
 
@@ -25,5 +25,5 @@
 
 extern int  wlc_phy_iovar_attach(void *pub);
 extern void wlc_phy_iovar_detach(void *pub);
-
+extern int wlc_phy_iovar_txpwrindex_set(phy_info_t *pi, void *p);
 #endif  /* _wlc_phy_iovar_h_ */

@@ -17,7 +17,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_txc.c 643064 2016-06-13 07:04:03Z $
+ * $Id: wlc_txc.c 654730 2016-08-16 09:04:55Z $
  */
 
 #include <wlc_cfg.h>
@@ -41,17 +41,32 @@
 #ifdef WLTOEHW
 #include <wlc_tso.h>
 #endif
-#ifdef WLCXO
-#include <wlc_cxo_tsc.h>
-#include <wlc_cxo_ctrl.h>
-#include <wlc_ampdu.h>
-#include <wlc_key.h>
-#endif /* WLCXO */
 #include <wlc_hw.h>
 #include <wlc_tx.h>
 #include <wlc_dump.h>
 
+#ifdef BCM_SFD
+#include <wlc_sfd.h>
+#endif
+
+#ifdef BCMDBG
+/* iovar table */
+enum {
+	IOV_TXC,
+	IOV_TXC_POLICY,
+	IOV_TXC_STICKY,
+	IOV_LAST
+};
+
+static const bcm_iovar_t txc_iovars[] = {
+	{"txc", IOV_TXC, (0), 0, IOVT_BOOL, 0},
+	{"txc_policy", IOV_TXC_POLICY, (0), 0, IOVT_BOOL, 0},
+	{"txc_sticky", IOV_TXC_STICKY, (0), 0, IOVT_BOOL, 0},
+	{NULL, 0, 0, 0, 0, 0}
+};
+#else /* !BCMDBG */
 #define txc_iovars NULL
+#endif /* !BCMDBG */
 
 #ifndef WLC_MAX_UCODE_CACHE_ENTRIES
 #define WLC_MAX_UCODE_CACHE_ENTRIES 8
@@ -103,6 +118,13 @@ struct scb_txc_info {
 	uint8 ucache_idx;   /* cache index used by uCode. */
 	uint	gen;		/* generation number (compare to priv->gen) */
 	uint8	txh[TXOFF];	/* cached tx header */
+#ifdef BCMDBG
+	/* keep these debug stats at the end of the struct */
+	uint hit;
+	uint used;
+	uint added;
+	uint missed;
+#endif
 };
 
 #define SCB_TXC_CUBBY_LOC(txc, scb) ((scb_txc_info_t **) \
@@ -115,10 +137,17 @@ struct scb_txc_info {
 
 
 /* handy macros */
+#ifdef BCMDBG
+#define INCCNTHIT(sti) ((sti)->hit++)
+#define INCCNTUSED(sti) ((sti)->used++)
+#define INCCNTADDED(sti) ((sti)->added++)
+#define INCCNTMISSED(sti) ((sti)->missed++)
+#else
 #define INCCNTHIT(sti)
 #define INCCNTUSED(sti)
 #define INCCNTADDED(sti)
 #define INCCNTMISSED(sti)
+#endif
 
 /* WLF_ flags treated as miss when toggling */
 #define WLPKTF_TOGGLE_MASK	(WLF_EXEMPT_MASK | WLF_AMPDU_MPDU)
@@ -129,8 +158,16 @@ struct scb_txc_info {
 
 /* local function */
 /* module entries */
+#ifdef BCMDBG
+static int wlc_txc_doiovar(void *ctx, uint32 actionid,
+	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
+#else
 #define wlc_txc_doiovar NULL
+#endif
 static void wlc_txc_watchdog(void *ctx);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_txc_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 #if defined(WLC_UCODE_CACHE) && D11CONF_GE(42)
 static uint8 wlc_txc_get_free_ucode_cidx(wlc_txc_info_t *txc);
@@ -138,14 +175,11 @@ static uint8 wlc_txc_get_free_ucode_cidx(wlc_txc_info_t *txc);
 /* scb cubby */
 static int wlc_txc_scb_init(void *ctx, struct scb *scb);
 static void wlc_txc_scb_deinit(void *ctx, struct scb *scb);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_txc_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_txc_scb_dump NULL
-#ifdef WLCXO_CTRL
-static void
-wlc_txc_cxo_ctrl_tsc_init(wlc_info_t *wlc, void *p, struct scb *scb, scb_txc_info_t * sti);
-static void
-wlc_txc_cxo_ctrl_tsc_add(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb, void *pkt,
-	scb_txc_info_t * sti);
-#endif /* WLCXO_CTRL */
+#endif
 
 #define GET_TXHDRPTR(txc)	((d11txh_t*)(txc->txh + txc->align + txc->offset))
 
@@ -174,7 +208,11 @@ BCMATTACHFN(wlc_txc_attach)(wlc_info_t *wlc)
 	priv->policy = ON;
 	priv->gen = 0;
 	/* debug builds should not invalidate the txc per watchdog */
+#ifdef BCMDBG
+	priv->sticky = TRUE;
+#else
 	priv->sticky = FALSE;
+#endif
 
 	/* reserve a cubby in the scb */
 	if ((priv->scbh =
@@ -194,6 +232,9 @@ BCMATTACHFN(wlc_txc_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "txc", wlc_txc_dump, txc);
+#endif
 
 	return txc;
 
@@ -219,18 +260,101 @@ BCMATTACHFN(wlc_txc_detach)(wlc_txc_info_t *txc)
 	MFREE(wlc->osh, txc, WLC_TXC_INFO_SIZE);
 }
 
+#ifdef BCMDBG
+/* handle related iovars */
+static int
+wlc_txc_doiovar(void *ctx, uint32 actionid,
+	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
+{
+	wlc_txc_info_t *txc = (wlc_txc_info_t *)ctx;
+	wlc_txc_info_priv_t *priv = WLC_TXC_INFO_PRIV(txc);
+	int32 *ret_int_ptr;
+	bool bool_val;
+	int32 int_val = 0;
+	int err = BCME_OK;
+
+	BCM_REFERENCE(vsize);
+	BCM_REFERENCE(alen);
+	BCM_REFERENCE(wlcif);
+
+	/* convenience int ptr for 4-byte gets (requires int aligned arg) */
+	ret_int_ptr = (int32 *)a;
+
+	if (plen >= (int)sizeof(int_val))
+		bcopy(p, &int_val, sizeof(int_val));
+
+	bool_val = (int_val != 0) ? TRUE : FALSE;
+
+	/* all iovars require mcnx being enabled */
+	switch (actionid) {
+	case IOV_GVAL(IOV_TXC):
+		*ret_int_ptr = (int32)txc->_txc;
+		break;
+
+	case IOV_GVAL(IOV_TXC_POLICY):
+		*ret_int_ptr = (int32)priv->policy;
+		break;
+
+	case IOV_SVAL(IOV_TXC_POLICY):
+		priv->policy = bool_val;
+		if (!WLC_TXC_ENAB(priv->wlc))
+			break;
+		wlc_txc_upd(txc);
+		break;
+
+	case IOV_GVAL(IOV_TXC_STICKY):
+		*ret_int_ptr = (int32)priv->sticky;
+		break;
+
+	case IOV_SVAL(IOV_TXC_STICKY):
+		priv->sticky = bool_val;
+		break;
+	default:
+		err = BCME_UNSUPPORTED;
+		break;
+	}
+
+	if (!IOV_ISSET(actionid))
+		return err;
+
+	return err;
+}
+#endif /* BCMDBG */
 
 static void
 wlc_txc_watchdog(void *ctx)
 {
 	wlc_txc_info_t *txc = (wlc_txc_info_t *)ctx;
 	wlc_txc_info_priv_t *priv = WLC_TXC_INFO_PRIV(txc);
+#if defined(BCMDBG)
+	bool old;
+
+	/* check for missing call to wlc_txc_upd() */
+	old = txc->_txc;
+	if (WLC_TXC_ENAB(priv->wlc))
+		wlc_txc_upd(txc);
+	ASSERT(txc->_txc == old);
+#endif /* BCMDBG */
 
 	/* invalidate tx header cache once per second if not sticky */
 	if (!priv->sticky)
 		priv->gen++;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_txc_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_txc_info_t *txc = (wlc_txc_info_t *)ctx;
+	wlc_txc_info_priv_t *priv = WLC_TXC_INFO_PRIV(txc);
+
+	bcm_bprintf(b, "enab %d txc %d policy %d sticky %d gen %d\n",
+	            WLC_TXC_ENAB(priv->wlc),
+	            txc->_txc, priv->policy, priv->sticky, priv->gen);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 uint16
 wlc_txc_get_txh_offset(wlc_txc_info_t *txc, struct scb *scb)
@@ -264,7 +388,7 @@ void wlc_txc_prep_sdu(wlc_txc_info_t *txc, struct scb *scb, wlc_key_t *key,
 	scb_txc_info_t *sti;
 	wlc_info_t *wlc;
 	wlc_txd_t *txd;
-	int d11_off;
+	int d11_off, d11TxdLen;
 	BCM_REFERENCE(key_info);
 
 	ASSERT(txc != NULL && scb != NULL && key != NULL);
@@ -277,7 +401,14 @@ void wlc_txc_prep_sdu(wlc_txc_info_t *txc, struct scb *scb, wlc_key_t *key,
 	/* prepare pkt for tx - this updates the txh */
 	WLPKTTAGSCBSET(p, scb);
 
-	d11_off = sti->offset + D11_TXH_LEN_EX(wlc);
+	/* Adjust d11TxdLen for shorter SFD */
+	if (SFD_ENAB(wlc->pub)) {
+		d11TxdLen = D11_TXH_LEN_SFD(wlc);
+	} else {
+		d11TxdLen = D11_TXH_LEN_EX(wlc);
+	}
+
+	d11_off = sti->offset + d11TxdLen;
 	txd = (wlc_txd_t *)((uint8 *)PKTDATA(wlc->osh, p) + sti->offset);
 	BCM_REFERENCE(txd);
 	PKTPULL(wlc->osh, p, d11_off);
@@ -285,6 +416,40 @@ void wlc_txc_prep_sdu(wlc_txc_info_t *txc, struct scb *scb, wlc_key_t *key,
 
 	PKTPUSH(wlc->osh, p, d11_off);
 }
+
+#if (defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7R__))
+#define TXHLEN_154 154
+
+static void
+bcopy_len_154(const uint32 *sw, uint32 *dw)
+{
+	uint32 t1, t2, t3, t4, t5, t6, t7, t8;
+	const uint32 *sfinal = (const uint32 *)((const uint8 *)sw + 128);
+
+	/* Copy 4 chunks of 32 bytes chunk (128 bytes) */
+	asm volatile("\n1:\t"
+	       "ldmia.w\t%0!, {%3, %4, %5, %6, %7, %8, %9, %10}\n\t"
+	       "stmia.w\t%1!, {%3, %4, %5, %6, %7, %8, %9, %10}\n\t"
+	       "cmp\t%2, %0\n\t"
+	       "bhi.n\t1b\n\t"
+	       : "=r" (sw), "=r" (dw), "=r" (sfinal), "=r" (t1), "=r" (t2),
+	       "=r" (t3), "=r" (t4), "=r" (t5), "=r" (t6), "=r" (t7),
+	       "=r" (t8)
+	       : "0" (sw), "1" (dw), "2" (sfinal));
+
+	/* Remain = 154 - 128 = 26 bytes = (6 words + 2 bytes) */
+	/* Copy the remaining 6 words */
+	asm volatile(
+	       "ldmia.w\t%0!, {%2, %3, %4, %5, %6, %7}\n\t"
+	       "stmia.w\t%1!, {%2, %3, %4, %5, %6, %7}\n\t"
+	       : "=r" (sw), "=r" (dw), "=r" (t1), "=r" (t2),
+	       "=r" (t3), "=r" (t4), "=r" (t5), "=r" (t6)
+	       : "0" (sw), "1" (dw));
+
+	/* Copy the remaining 2 bytes */
+	*(uint16*)dw = *(uint16*)sw;
+}
+#endif 
 
 /* retrieve tx header from the cache and copy it to the packet.
  * return d11txh pointer in the packet where the copy started.
@@ -317,7 +482,25 @@ wlc_txc_cp(wlc_txc_info_t *txc, struct scb *scb, void *pkt, uint *flags)
 
 	txh = SCB_TXC_TXH_NO_OFFST(sti);
 	cp = PKTPUSH(wlc->osh, pkt, txhlen);
-	bcopy((uint8 *)txh, cp, txhlen);
+#if (defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7R__))
+	if ((txhlen == TXHLEN_154) && ((((uint)txh | (uint)cp) & 3) == 0)) {
+		bcopy_len_154((const uint32 *)txh, (uint32 *)cp);
+	} else
+#endif 
+	{
+		bcopy((uint8 *)txh, cp, txhlen);
+	}
+
+#ifdef BCM_SFD
+	if (SFD_ENAB(wlc->pub)) {
+		osl_t *osh = wlc->osh;
+
+		WLC_SFD_SET_SFDID((((d11actxh_t *)cp)->PktInfo.MacTxControlLow), sti->ucache_idx);
+		PKTSETSFDFRAME(osh, pkt);
+		PKTSETSFDTXC(osh, pkt);
+		wlc_sfd_inc_refcnt(wlc->sfd, sti->ucache_idx);
+	}
+#endif
 
 	/* return the saved pkttag flags */
 	*flags = sti->flags;
@@ -355,24 +538,13 @@ wlc_txc_hit(wlc_txc_info_t *txc, struct scb *scb, void *sdu, uint pktlen, uint f
 	miss |= (fifo != sti->fifo);
 	miss |= (prio != sti->prio);
 	miss |= (sti->gen != priv->gen);
-	miss |= (!SCB_CXO_ENABLED(scb) &&
-		((sti->flags & WLPKTF_TOGGLE_MASK) != (WLPKTTAG(sdu)->flags & WLPKTF_TOGGLE_MASK)));
+	miss |= ((sti->flags & WLPKTF_TOGGLE_MASK) != (WLPKTTAG(sdu)->flags & WLPKTF_TOGGLE_MASK));
 	miss |= ((pktlen >= wlc->fragthresh[WME_PRIO2AC(prio)]) &&
 		((WLPKTTAG(sdu)->flags & WLF_AMSDU) == 0));
 	if (BSSCFG_AP(cfg) || BSS_TDLS_ENAB(wlc, cfg)) {
 		miss |= (sti->ps_on != SCB_PS(scb));
 	}
-	if (!PIO_ENAB(wlc->pub)) {
-		/* calc the number of descriptors needed to queue this frame */
-		uint ndesc = pktsegcnt(wlc->osh, sdu);
-		if (BCM4331_CHIP_ID == CHIPID(wlc->pub->sih->chip))
-			ndesc *= 2;
-		miss |= (TXAVAIL(wlc, fifo) < ndesc);
-	} else {
-		miss |= !wlc_pio_txavailable(WLC_HW_PIO(wlc, fifo),
-			(pktlen + D11_TXH_LEN_EX(wlc) + DOT11_A3_HDR_LEN), 1);
-	}
-#if defined(WLMSG_PRPKT)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT)
 	if (miss && WL_PRPKT_ON()) {
 		printf("txc missed: scb %p gen %d txcgen %d hdr_len %d body len %d, pkt_len %d\n",
 		        OSL_OBFUSCATE_BUF(scb), sti->gen, priv->gen,
@@ -389,189 +561,6 @@ wlc_txc_hit(wlc_txc_info_t *txc, struct scb *scb, void *sdu, uint pktlen, uint f
 	return FALSE;
 }
 
-#ifdef WLCXO_CTRL
-static void
-wlc_txc_cxo_ctrl_tsc_init(wlc_info_t *wlc, void *p, struct scb *scb, scb_txc_info_t * sti)
-{
-	int32 ret;
-	wlc_cx_tsc_t *tsc, *cx_tsc;
-	struct dot11_header *h;
-	wlc_cx_scb_msdu_t cx_scb_msdu;
-	cx_wsec_iv_t txiv;
-	wlc_key_t *key;
-	wlc_key_info_t key_info;
-
-	UNUSED_PARAMETER(ret);
-
-	tsc = MALLOC(wlc->osh, sizeof(wlc_cx_tsc_t));
-	if (tsc == NULL)
-		return;
-
-	bzero(tsc, sizeof(wlc_cx_tsc_t));
-	tsc->scb = WLC_SCB_C2D(scb);
-
-	/* Allocate a dummy virtual packet and copy the txhdr cache
-	 * information.
-	 */
-	tsc->virt_p = PKTGET(wlc->osh, TXOFF + D11_COMMON_HDR, FALSE);
-	if (tsc->virt_p != NULL) {
-		wlc_cx_txc_t *cx_txc;
-		d11actxh_t *txh;
-		wlc_d11txh_cache_info_u d11_cache_info;
-
-		/* Initialize txc of cache */
-		cx_txc = &tsc->txc;
-		cx_txc->txhlen = sti->txhlen;
-		cx_txc->align = sti->align;
-		cx_txc->offset = sti->offset;
-		cx_txc->fifo = sti->fifo;
-		cx_txc->ac = WME_PRIO2AC(PKTPRIO(p));
-		cx_txc->flags = sti->flags;
-		bcopy(sti->txh, cx_txc->txh, sizeof(cx_txc->txh));
-
-		bcopy(sti->txh + sti->align, PKTDATA(wlc->osh, tsc->virt_p), sti->txhlen);
-		txh = (d11actxh_t *)(cx_txc->txh + cx_txc->align + cx_txc->offset);
-
-		d11_cache_info.d11actxh_CacheInfo =
-			WLC_TXD_CACHE_INFO_GET(txh, wlc->pub->corerev);
-
-		/* Fill per cache info */
-		wlc_ampdu_fill_percache_info(wlc->ampdu_tx, scb, PKTPRIO(p), d11_cache_info);
-
-
-		wlc_cxo_ctrl_tsc_init(wlc, scb, PKTPRIO(p), scb->bsscfg, tsc);
-	} else {
-		MFREE(wlc->osh, tsc, sizeof(wlc_cx_tsc_t));
-		return;
-	}
-
-	/* Unique ID for this snapshot of TSC */
-	tsc->tsc_gen = wlc_txc_get_gen_info(wlc->txc);
-
-	tsc->wlcif_idx = scb->bsscfg->wlcif->index;
-
-#ifdef WLTOEHW
-	if (!wlc->toe_bypass) {
-		tsc->tso_hlen = wlc_tso_hdr_length((d11ac_tso_t *)PKTDATA(wlc->osh, p));
-	}
-#endif
-
-	h = (struct dot11_header *)(PKTDATA(wlc->osh, p) + sti->offset + D11_TXH_LEN_EX(wlc));
-
-	if (SCB_A4_DATA(scb)) {
-		/* WDS */
-		eacopy(&h->a3, &tsc->da);
-		eacopy(&h->a4, &tsc->sa);
-	} else if (BSSCFG_STA(scb->bsscfg)) {
-		/* STA to AP */
-		eacopy(&h->a3, &tsc->da);
-		eacopy(&h->a2, &tsc->sa);
-	} else if (BSSCFG_AP(scb->bsscfg)) {
-		/* AP to STA */
-		eacopy(&h->a1, &tsc->da);
-		eacopy(&h->a3, &tsc->sa);
-	} else
-		ASSERT(0);
-
-	WL_CXO(("%s: TSC size %d scb_msdu %d scb_ampdu %d\n", __FUNCTION__,
-	        (int)sizeof(wlc_cx_tsc_t), (int)OFFSETOF(wlc_cx_tsc_t, scb_msdu),
-	        (int)OFFSETOF(wlc_cx_tsc_t, scb_ampdu)));
-
-	WL_CXO(("%s: Adding TSC entry, bssidx %d aid %d tid %d\n",
-		__FUNCTION__, WLC_BSSCFG_IDX(scb->bsscfg), scb->aid, PKTPRIO(p)));
-
-	/* Add TSC entry */
-	tsc->scb_ctrl = scb;
-
-	bzero(&txiv, sizeof(txiv));
-	key = wlc_keymgmt_get_scb_key(wlc->keymgmt, scb,
-		WLC_KEY_ID_PAIRWISE, WLC_KEY_FLAG_NONE, &key_info);
-	if ((key != NULL) && (key_info.algo == CRYPTO_ALGO_AES_CCM)) {
-		if ((ret = wlc_key_get_seq(key, (uint8 *)&txiv, sizeof(txiv), 0, TRUE)) < 0) {
-			WL_ERROR(("%s: Error getting key seq: %d", __FUNCTION__, ret));
-		}
-	}
-
-	ret = __wlc_cxo_c2d_tsc_add(wlc->ipc, wlc, tsc, &cx_tsc, &txiv);
-	ASSERT(ret == BCME_OK);
-	tsc->cx_tsc = cx_tsc;
-#ifdef WLCXO_IPC
-	wlc_cxo_ctrl_tsc_add(wlc, tsc);
-#endif
-	if (wlc_cxo_ctrl_tsc_ini_add(wlc, scb, PKTPRIO(p)) != BCME_OK) {
-		MFREE(wlc->osh, tsc, sizeof(wlc_cx_tsc_t));
-		return;
-	}
-
-
-	/* Add txpq for current priority */
-	cx_scb_msdu.release = 4;
-	cx_scb_msdu.max_release = 64;
-	__wlc_cxo_c2d_tsc_add_txpq(wlc->ipc, wlc, scb->bsscfg->_idx, scb->aid, PKTPRIO(p),
-	                       &cx_scb_msdu);
-
-	MFREE(wlc->osh, tsc, sizeof(wlc_cx_tsc_t));
-}
-
-/* Add TSC entry for STA. Only cacheable STAs are considered for
- * addition. TSC entry is populated with AMPDU and AMSDU information
- * if it is capable.
- */
-static void BCMFASTPATH
-wlc_txc_cxo_ctrl_tsc_add(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb, void *pkt,
-	scb_txc_info_t * sti)
-{
-	wlc_cx_tsc_t *tsc;
-	wlc_cx_txc_t *cx_txc;
-	wlc_cx_scb_msdu_t cx_scb_msdu;
-	d11actxh_t *txh;
-	wlc_d11txh_cache_info_u d11_cache_info;
-
-	ASSERT(WLCXO_ENAB(wlc->pub) && SCB_CXO_ENABLED(scb));
-
-#ifdef WLCXO_IPC
-	tsc = wlc_cxo_ctrl_tsc_find_by_aid(wlc, cfg->_idx, scb->aid);
-#else
-	tsc = wlc_cxo_tsc_find_by_aid(wlc->wlc_cx, cfg->_idx, scb->aid);
-#endif
-	if (tsc == NULL) {
-		WL_CXO(("%s: Adding TSC, pkt prio:%d\n", __FUNCTION__, PKTPRIO(pkt)));
-		wlc_txc_cxo_ctrl_tsc_init(wlc, pkt, scb, sti);
-		return;
-	}
-
-	/* Update cached header in tsc */
-	cx_txc = &tsc->txc;
-
-	cx_txc->flags = sti->flags;
-	bcopy(sti->txh + sti->align, cx_txc->txh + cx_txc->align,
-	      cx_txc->txhlen);
-
-	/* Add ini at ofld if not already */
-	if (wlc_cxo_ctrl_tsc_ini_add(wlc, scb, PKTPRIO(pkt)) != BCME_OK)
-		return;
-	txh = (d11actxh_t *)(cx_txc->txh + cx_txc->align + cx_txc->offset);
-
-	d11_cache_info.d11actxh_CacheInfo =
-		WLC_TXD_CACHE_INFO_GET(txh, wlc->pub->corerev);
-
-	/* Fill per cache info */
-	wlc_ampdu_fill_percache_info(wlc->ampdu_tx, scb, PKTPRIO(pkt), d11_cache_info);
-
-
-	WL_CXO(("%s: Updating txc contents of TSC, pkt prio:%d\n",
-		__FUNCTION__, PKTPRIO(pkt)));
-	__wlc_cxo_c2d_tsc_update_txc(wlc->ipc, wlc, cfg->_idx,
-			scb->aid, WLCNTSCBVAL(scb->scb_stats.tx_rate), cx_txc, TRUE);
-
-	/* Add txpq for current priority */
-	cx_scb_msdu.release = 4;
-	cx_scb_msdu.max_release = 64;
-	__wlc_cxo_c2d_tsc_add_txpq(wlc->ipc, wlc, cfg->_idx,
-	                       scb->aid, PKTPRIO(pkt), &cx_scb_msdu);
-}
-#endif /* WLCXO_CTRL */
-
 /* install tx header from the packet into the cache */
 void BCMFASTPATH
 wlc_txc_add(wlc_txc_info_t *txc, struct scb *scb, void *pkt, uint txhlen, uint fifo, uint8 prio,
@@ -585,6 +574,8 @@ wlc_txc_add(wlc_txc_info_t *txc, struct scb *scb, void *pkt, uint txhlen, uint f
 	osl_t *osh;
 #if defined(WLC_UCODE_CACHE) && D11CONF_GE(42)
 	uint8 ucidx;
+	d11actxh_t* vhtHdr;
+#elif defined(BCM_SFD)
 	d11actxh_t* vhtHdr;
 #endif
 
@@ -676,6 +667,19 @@ wlc_txc_add(wlc_txc_info_t *txc, struct scb *scb, void *pkt, uint txhlen, uint f
 	sti->prio = prio;
 	sti->gen = priv->gen;
 
+#ifdef BCM_SFD
+	if (SFD_ENAB(wlc->pub)) {
+		wlc_pkt_get_vht_hdr(wlc, pkt, &vhtHdr);
+		if (sti->ucache_idx) {
+			wlc_sfd_entry_free(wlc->sfd, sti->ucache_idx);
+		}
+
+		sti->ucache_idx = WLC_SFD_GET_SFDID(vhtHdr->PktInfo.MacTxControlLow);
+		PKTSETSFDFRAME(osh, pkt);
+		PKTSETSFDTXC(osh, pkt);
+	}
+#endif
+
 	if (BSSCFG_AP(cfg) || BSS_TDLS_ENAB(wlc, cfg)) {
 		sti->ps_on = SCB_PS(scb);
 	}
@@ -686,7 +690,7 @@ wlc_txc_add(wlc_txc_info_t *txc, struct scb *scb, void *pkt, uint txhlen, uint f
 	/* Clear pkt exptime from the txheader cache */
 	wlc_txh_set_aging(wlc, txh, FALSE);
 
-#if defined(WLMSG_PRPKT)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT)
 	if (WL_PRPKT_ON()) {
 		printf("install txc: scb %p gen %d hdr_len %d, body len %d\n",
 		       OSL_OBFUSCATE_BUF(scb), sti->gen, sti->txhlen, sti->pktlen);
@@ -694,12 +698,6 @@ wlc_txc_add(wlc_txc_info_t *txc, struct scb *scb, void *pkt, uint txhlen, uint f
 #endif
 
 	INCCNTADDED(sti);
-
-#ifdef WLCXO_CTRL
-	if (SCB_CXO_ENABLED(scb)) {
-		wlc_txc_cxo_ctrl_tsc_add(wlc, cfg, scb, pkt, sti);
-	}
-#endif /* WLCXO_CTRL */
 }
 
 #if defined(WLC_UCODE_CACHE) && D11CONF_GE(42)
@@ -734,23 +732,6 @@ wlc_txc_upd(wlc_txc_info_t *txc)
 	BCM_REFERENCE(wlc);
 
 	txc->_txc = (priv->policy == ON) ? TRUE : FALSE;
-
-#ifdef WLCXO_CTRL
-	/* Update TSC for each associated STAs. When called from IOVAR
-	 * dispatcher/handler function, this might be redundant for
-	 * most IOVARs but chose to update the cache with out checking
-	 * for specific IOVAR or BSS or SCB to keep the implementation
-	 * simple. Since this is not expected to be a frequent case there
-	 * shouldn't be any thru'put impact.
-	 */
-	if (WLCXO_ENAB(wlc->pub) && txc->_txc && (wlc->scbstate != NULL)) {
-		struct scb *scb;
-		struct scb_iter scbiter;
-		FOREACHSCB(wlc->scbstate, &scbiter, scb) {
-			wlc_cxo_ctrl_tsc_update_txc(scb, FALSE);
-		}
-	}
-#endif
 }
 
 /* scb cubby */
@@ -802,6 +783,30 @@ wlc_txc_scb_deinit(void *ctx, struct scb *scb)
 	*psti = NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_txc_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_txc_info_t *txc = (wlc_txc_info_t *)ctx;
+	scb_txc_info_t *sti;
+
+	ASSERT(scb != NULL);
+
+	sti = SCB_TXC_INFO(txc, scb);
+	if (sti == NULL)
+		return;
+
+	bcm_bprintf(b, "     txc %d\n", txc->_txc);
+	bcm_bprintf(b, "\toffset %u length %u\n", sti->offset, sti->txhlen);
+	bcm_bprhex(b, "\ttxh ", TRUE, sti->txh, TXOFF);
+	bcm_bprintf(b, "\tpktlen %u gen %u flags 0x%x fifo %u prio %u ps %u\n",
+	            sti->pktlen, sti->gen, sti->flags, sti->fifo, sti->prio, sti->ps_on);
+#ifdef BCMDBG
+	bcm_bprintf(b, "\thit %u used %u added %u missed %u\n",
+	            sti->hit, sti->used, sti->added, sti->missed);
+#endif
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* invalidate the cache entry */
 void
@@ -814,12 +819,6 @@ wlc_txc_inv(wlc_txc_info_t *txc, struct scb *scb)
 	sti = SCB_TXC_INFO(txc, scb);
 	if (sti == NULL)
 		return;
-
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(SCB_WLC(scb)->pub)) {
-		wlc_cxo_ctrl_tsc_update_txc(scb, TRUE);
-	}
-#endif
 
 	sti->txhlen = 0;
 }

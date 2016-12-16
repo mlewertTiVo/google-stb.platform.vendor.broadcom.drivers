@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_chanctxt.h 640285 2016-05-27 01:20:44Z $
+ * $Id: wlc_chanctxt.h 661459 2016-09-26 06:52:29Z $
  */
 #ifndef _WLC_CHANCTXT_H_
 #define _WLC_CHANCTXT_H_
@@ -26,6 +26,8 @@ typedef int (*wlc_chanctxt_backup_fn_t)(wlc_bsscfg_t *cfg, void *pkt, int prec);
 typedef void *(*wlc_chanctxt_restore_fn_t)(wlc_bsscfg_t *cfg, int *prec);
 
 extern void wlc_chanctxt_set_passive_use(wlc_info_t *wlc, wlc_bsscfg_t *cfg, bool value);
+extern void wlc_chanctxt_set_chan_num(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int num_chan);
+
 extern void wlc_txqueue_start(wlc_info_t *wlc, wlc_bsscfg_t *cfg, chanspec_t chanspec,
 	wlc_chanctxt_restore_fn_t restore_fn);
 extern void wlc_txqueue_end(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_chanctxt_backup_fn_t backup_fn);
@@ -35,6 +37,8 @@ extern chanspec_t wlc_get_chanspec(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 extern bool wlc_shared_chanctxt(wlc_info_t *wlc, wlc_bsscfg_t *cfg1, wlc_bsscfg_t *cfg2);
 extern bool _wlc_shared_chanctxt(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 	wlc_chanctxt_t *shared_chanctxt);
+/* Check if the channel is used by the given bsscfg */
+extern bool wlc_shared_chanctxt_on_chan(wlc_info_t *wlc, wlc_bsscfg_t *cfg, chanspec_t chan);
 extern bool wlc_shared_current_chanctxt(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 extern bool _wlc_ovlp_chanspec(wlc_info_t *wlc, wlc_bsscfg_t *cfg, chanspec_t chspec, uint chbw);
 extern bool wlc_ovlp_chanspec(wlc_info_t *wlc, wlc_bsscfg_t *cfg1, wlc_bsscfg_t *cfg2, uint chbw);

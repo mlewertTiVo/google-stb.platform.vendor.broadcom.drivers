@@ -58,6 +58,9 @@ static int wl_mimo_ps_status_dump(wl_mimo_ps_status_t *status);
 static int wl_mimo_ps_status_assoc_status_dump(uint8 assoc_status);
 static void wl_mimo_ps_status_hw_state_dump(uint16 hw_state);
 static cmd_func_t wl_temp_throttle_control;
+static cmd_func_t wl_ocl_status;
+static void wl_ocl_status_fw_dump(uint16 fw_state);
+static void wl_ocl_status_hw_dump(uint8 hw_state);
 
 static cmd_t wl_stf_cmds[] = {
 	{ "curppr", wl_get_current_txppr, WLC_GET_VAR, -1,
@@ -128,6 +131,15 @@ static cmd_t wl_stf_cmds[] = {
 	},
 	{ "temp_throttle_control", wl_temp_throttle_control, WLC_GET_VAR, WLC_SET_VAR,
 	"Usage: temp_throttle_control <enable/disable> <value>\n"
+	},
+	{ "ocl_status", wl_ocl_status, WLC_GET_VAR, -1,
+	"usage: ocl_status\n"
+	"Displays ocl fw/hw state/information"
+	},
+	{ "ocl_rssi_threshold", wl_varint, WLC_GET_VAR, WLC_SET_VAR,
+	"get/set ocl_rssi_threshold such that,\n "
+	"\twhen RSSI is below the specified ocl_rssi_threshold then \n"
+	"\tocl is disabled.\n"
 	},
 	{ NULL, NULL, 0, 0, NULL }
 };
@@ -1223,4 +1235,89 @@ wl_temp_throttle_control(void *wl, cmd_t *cmd, char **argv)
 
 		return err;
 	}
+}
+static int
+wl_ocl_status(void *wl, cmd_t *cmd, char **argv)
+{
+	int err = BCME_OK;
+	ocl_status_info_t ocl_status;
+
+	/* toss the command name */
+	argv++;
+
+	err = wlu_iovar_get(wl, cmd->name, &ocl_status, sizeof(ocl_status));
+	if (err < 0)
+		return err;
+	/* Check version */
+	if (ocl_status.version != WL_OCL_STATUS_VERSION) {
+		printf("Unexpected version: %u\n", ocl_status.version);
+		return BCME_VERSION;
+	}
+	/* validate length */
+	if (ocl_status.len < (uint8) sizeof(ocl_status)) {
+		fprintf(stderr, "OCL Status: short len %d < %d\n",
+		        ocl_status.len, (int)sizeof(ocl_status));
+		return BCME_ERROR;
+	}
+	/* dump fw/hw state */
+	wl_ocl_status_fw_dump(ocl_status.fw_status);
+	wl_ocl_status_hw_dump(ocl_status.hw_status);
+	printf("OCL Coremask      : 0x%02x   (Core-%d)\n",
+			ocl_status.coremask, ocl_status.coremask-1);
+
+	return err;
+}
+
+static const char *ocl_status_fw_state_str_tbl[] = {
+	"HOST",
+	"RSSI",
+	"LTEC",
+	"SISO",
+	"CAL",
+	"CHAN",
+	"ASPND"
+};
+static const char *ocl_status_hw_state_str_tbl[] = {
+	"OCL",
+	"MIMO",
+	"", "", "", "", "",
+	"Core Down"
+};
+
+static void
+wl_ocl_status_fw_dump(uint16 fw_state)
+{
+	uint i, n;
+	bool first = TRUE;
+
+	printf("FW Disable Reason : 0x%04x (", fw_state);
+	if (fw_state == 0) {
+		printf("%s)\n", "NONE");
+		return;
+	}
+	n = MIN(ARRAYSIZE(ocl_status_fw_state_str_tbl), NBITS(fw_state));
+	for (i = 0; i < n; i++) {
+		if (fw_state & (0x1 << (i))) {
+			printf("%s%s", first ? "": ", ", ocl_status_fw_state_str_tbl[i]);
+			first = FALSE;
+		}
+	}
+	printf(")\n");
+}
+
+static void
+wl_ocl_status_hw_dump(uint8 hw_state)
+{
+	uint i, n;
+	bool first = TRUE;
+
+	printf("HW Status Bits    : 0x%02x   ", hw_state);
+	n = MIN(ARRAYSIZE(ocl_status_hw_state_str_tbl), NBITS(hw_state));
+	for (i = 0; i < n; i++) {
+		if (hw_state & (0x1 << (i))) {
+			printf("%s%s", first ? "(": ", ", ocl_status_hw_state_str_tbl[i]);
+			first = FALSE;
+		}
+	}
+	printf("%s\n", hw_state ? ")" : "");
 }

@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_papdcal_data.h 619168 2016-02-15 12:36:40Z sudhirk $
+ * $Id: phy_ac_papdcal_data.h 648244 2016-07-11 14:33:08Z $
  */
 
 #ifndef _phy_ac_papdcal_data_h_
@@ -36,7 +36,6 @@ extern const int8 pga_gain_array_5g_epapd_0[SZ_PGA_GAIN_ARRAY];
 extern const int8 pga_gain_array_5g_epapd_1[SZ_PGA_GAIN_ARRAY];
 extern const int8 pga_gain_array_5g_epapd_2[SZ_PGA_GAIN_ARRAY];
 extern const int8 pga_gain_array_5g_epapd_3[SZ_PGA_GAIN_ARRAY];
-extern int8 const rfpwrlut_2g_epa_43012[128];
 extern const int8 lut_log20_bbmult[100];
 
 extern const uint32 acphy_papd_scaltbl_128[SZ_SCAL_TABLE_1];

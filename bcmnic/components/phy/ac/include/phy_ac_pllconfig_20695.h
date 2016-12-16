@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_pllconfig_20695.h 625800 2016-03-17 20:12:06Z lut $
+ * $Id: phy_ac_pllconfig_20695.h 648459 2016-07-12 12:29:59Z $
  */
 
 #ifndef _PHY_AC_20695_PLLCONFIG_H
@@ -121,8 +121,6 @@
 #define USE_DOUBLER					1
 #define LOGEN_MODE					0
 
-#define USE_5G_PLL_FOR_2G				0
-
 /* No of fraction bits */
 #define NF0	0
 #define NF6	6
@@ -153,7 +151,9 @@
 #define PLL_CONFIG_20695_VAL_ENTRY(pll_struct, offset, val) \
 	pll_struct->reg_field_val[IDX_20695_##offset] = val
 
+#if defined(DBAND) || defined(USE_5G_PLL_FOR_2G)
 #define PLL_CONFIG_20695_REG_INFO_ENTRY(pi, pll_str, offset, regpfx, reg2g, reg5g, fld2g, fld5g) \
+	do { \
 	pll_str->reg_addr_2g[IDX_20695_##offset] = RADIO_REG_20695(pi, RFP, reg2g, 0); \
 	pll_str->reg_addr_5g[IDX_20695_##offset] = RADIO_REG_20695(pi, RFP, reg5g, 0); \
 	pll_str->reg_field_mask_2g[IDX_20695_##offset] = \
@@ -163,7 +163,18 @@
 	pll_str->reg_field_shift_2g[IDX_20695_##offset] = \
 			RF_##20695##_##reg2g##_##fld2g##_SHIFT(pi->pubpi->radiorev); \
 	pll_str->reg_field_shift_5g[IDX_20695_##offset] = \
-			RF_##20695##_##reg5g##_##fld5g##_SHIFT(pi->pubpi->radiorev) \
+			RF_##20695##_##reg5g##_##fld5g##_SHIFT(pi->pubpi->radiorev); \
+	} while (0)
+#else
+#define PLL_CONFIG_20695_REG_INFO_ENTRY(pi, pll_str, offset, regpfx, reg2g, reg5g, fld2g, fld5g) \
+	do { \
+	pll_str->reg_addr_2g[IDX_20695_##offset] = RADIO_REG_20695(pi, RFP, reg2g, 0); \
+	pll_str->reg_field_mask_2g[IDX_20695_##offset] = \
+			RF_##20695##_##reg2g##_##fld2g##_MASK(pi->pubpi->radiorev); \
+	pll_str->reg_field_shift_2g[IDX_20695_##offset] = \
+			RF_##20695##_##reg2g##_##fld2g##_SHIFT(pi->pubpi->radiorev); \
+	} while (0)
+#endif /* DBAND */
 
 /* structure to hold computed PLL config values */
 typedef struct {
@@ -241,9 +252,6 @@ typedef enum {
 	IDX_20695_RFPLL_CP_KPD_SCALE,
 	IDX_20695_RFPLL_RFVCO_KVCO_CODE,
 	IDX_20695_RFPLL_RFVCO_TEMP_CODE,
-	IDX_20695_OVR_RFPLL_RST_N,
-	IDX_20695_RFPLL_RST_N_1,
-	IDX_20695_RFPLL_RST_N_2,
 	PLL_CONFIG_20695_ARRAY_SIZE
 } pll_config_20695_offset_t;
 

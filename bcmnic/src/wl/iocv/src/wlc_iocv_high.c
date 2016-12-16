@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_iocv_high.c 626396 2016-03-21 18:23:15Z $
+ * $Id: wlc_iocv_high.c 660636 2016-09-21 08:58:16Z $
  */
 
 #include <typedefs.h>
@@ -64,6 +64,7 @@ typedef struct {
 	wlc_ioc_vld_fn_t vld_fn;	/* ioctl validation callback */
 	/* dispatch proc */
 	wlc_ioc_disp_fn_t fn;
+	wlc_ioc_disp_fn_t ioc_patch_fn;
 	void *ctx;
 } wlc_ioct_ent_t;
 
@@ -109,8 +110,13 @@ static wlc_iocv_high_t *g_iocv_high = NULL;
 #define WLC_IOCV_HIGH(ii) ((wlc_iocv_high_t *)(ii)->obj)
 
 /* debug macros */
+#ifdef BCMDBG
+#define WL_IOCV_ERR(x) printf x
+#define WL_IOCV_DBG(x)
+#else
 #define WL_IOCV_ERR(x)
 #define WL_IOCV_DBG(x)
+#endif
 
 /* local functions */
 static int wlc_iocv_high_reg_iovt(wlc_iocv_info_t *ii, wlc_iovt_desc_t *iovd);
@@ -307,7 +313,11 @@ BCMATTACHFN(wlc_iocv_high_register_iovt)(wlc_iocv_info_t *ii,
 /* register ioctl table (for WLC) */
 int
 BCMATTACHFN(wlc_iocv_high_register_ioct)(wlc_iocv_info_t *ii,
-	const wlc_ioctl_cmd_t *ioct, uint num_cmds, wlc_ioc_disp_fn_t disp_fn, void *ctx)
+	const wlc_ioctl_cmd_t *ioct, uint num_cmds, wlc_ioc_disp_fn_t disp_fn,
+#ifdef WLC_PATCH_IOCTL
+	wlc_ioc_disp_fn_t ioc_patch_fn,
+#endif
+	void *ctx)
 {
 	wlc_iocv_high_t *high;
 	uint16 idx;
@@ -328,6 +338,9 @@ BCMATTACHFN(wlc_iocv_high_register_ioct)(wlc_iocv_info_t *ii,
 	high->ioct[idx].ioct = ioct;
 	high->ioct[idx].num_cmds = num_cmds;
 	high->ioct[idx].fn = disp_fn;
+#ifdef WLC_PATCH_IOCTL
+	high->ioct[idx].ioc_patch_fn = ioc_patch_fn;
+#endif /* WLC_PATCH_IOCTL */
 	high->ioct[idx].ctx = ctx;
 
 	high->ioct_cnt ++;
@@ -429,9 +442,8 @@ wlc_iocv_high_fwd_iov(wlc_iocv_info_t *ii, uint16 tid, uint32 aid, const bcm_iov
 #ifdef WLC_PATCH_IOCTL
 		if (high->iovt[tid].patch_fn) {
 			if ((err = (high->iovt[tid].patch_fn)(high->iovt[tid].ctx, aid,
-					p, p_len, a, a_len, var_sz, wlcif)) != BCME_UNSUPPORTED) {
-				WL_IOCV_DBG(("%s: patch_fn %p failed, aid %u\n",
-				             __FUNCTION__, high->iovt[tid].patch_fn, aid));
+					p, p_len, a, a_len, var_sz, wlcif)) !=
+					BCME_IOCTL_PATCH_UNSUPPORTED) {
 				goto exit;
 			}
 		}
@@ -505,6 +517,14 @@ wlc_iocv_high_fwd_ioc(wlc_iocv_info_t *ii, uint16 tid, const wlc_ioctl_cmd_t *ci
 	}
 	/* forward to registered dispatch callback */
 	else {
+#ifdef WLC_PATCH_IOCTL
+		if (high->ioct[tid].ioc_patch_fn) {
+			if ((err = (high->ioct[tid].ioc_patch_fn)(high->ioct[tid].ctx, cid,
+					a, a_len, wlcif)) != BCME_IOCTL_PATCH_UNSUPPORTED) {
+				goto exit;
+			}
+		}
+#endif
 		if ((err = (high->ioct[tid].fn)(high->ioct[tid].ctx, cid,
 				a, a_len, wlcif)) != BCME_OK) {
 			WL_IOCV_DBG(("%s: fn %p failed err %d cid %u\n",
@@ -536,6 +556,14 @@ wlc_iocv_high_proc_ioc(wlc_iocv_info_t *ii, uint32 cid,
 			continue;
 		}
 
+#ifdef WLC_PATCH_IOCTL
+		if (high->ioct[i].ioc_patch_fn) {
+			if ((err = (high->ioct[i].ioc_patch_fn)(high->ioct[i].ctx, cid,
+					a, a_len, wlcif)) != BCME_IOCTL_PATCH_UNSUPPORTED) {
+				return err;
+			}
+		}
+#endif
 		if ((err = (high->ioct[i].fn)(high->ioct[i].ctx, cid,
 				a, a_len, wlcif)) == BCME_UNSUPPORTED) {
 			continue;

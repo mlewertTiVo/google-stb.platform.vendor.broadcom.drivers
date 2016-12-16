@@ -14,7 +14,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
  *
- * $Id: wlc_scb_ratesel.h 636000 2016-05-06 04:05:27Z $
+ * $Id: wlc_scb_ratesel.h 660124 2016-09-19 03:33:35Z $
  */
 
 
@@ -92,7 +92,7 @@ void wlc_scb_ratesel_clr_cache(wlc_ratesel_info_t *wrsi, struct scb *scb,  uint8
 #endif /* WL_LPC */
 
 /* Update CLM enabled rates bitmap if condition has changed (e.g. OLPC kicked in) */
-extern void wlc_scb_ratesel_ppr_upd(wlc_info_t *wlc);
+extern int wlc_scb_ratesel_ppr_upd(wlc_info_t *wlc);
 #ifdef WLMESH
 uint32 wlc_scb_ratesel_getcurpsr(wlc_info_t *wlc, struct scb *scb);
 #endif
@@ -108,6 +108,8 @@ extern void wlc_scb_ratesel_chanspec_clear(wlc_info_t *wlc);
 extern rcb_t *wlc_scb_ratesel_getrcb(wlc_info_t *wlc, struct scb *scb, uint ac);
 #endif /*  WLATF */
 
+extern void wlc_scb_ratesel_get_ratecap(wlc_ratesel_info_t * wrsi, struct scb *scb, uint8 *sgi,
+	uint16 mcs_bitmap[], uint8 ac);
 #ifdef WL_FRAGDUR
 extern ratespec_t wlc_scb_ratesel_getfbrspec_fragdur(wlc_info_t *wlc, struct scb *scb, uint8 ac);
 extern bool wlc_scb_ratesel_check_legacy_rspecs(wlc_info_t *wlc, struct scb *scb, uint8 ac);

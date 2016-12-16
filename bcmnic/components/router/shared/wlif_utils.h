@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlif_utils.h 625934 2016-03-18 06:37:10Z $
+ * $Id: wlif_utils.h 665302 2016-10-17 11:49:20Z $
  */
 
 #ifndef _wlif_utils_h_
@@ -77,6 +77,15 @@ typedef struct wsec_info_s {
 	char *nas_id;			/* nas mac address */
 } wsec_info_t;
 
+/* Struct for common bss-trans action frame data. */
+typedef struct wl_wlif_bss_trans_data {
+	uint8 rclass;			/* Rclass */
+	chanspec_t chanspec;		/* Channel */
+	struct ether_addr bssid;	/* Target bssid. */
+	struct ether_addr addr;		/* Sta addr. */
+	int timeout;			/* Timeout to clear mac from maclist. */
+} wl_wlif_bss_trans_data_t;
+
 #define WLIFU_WSEC_SUPPL			0x00000001	/* role is supplicant */
 #define WLIFU_WSEC_AUTH			0x00000002	/* role is authenticator */
 #define WLIFU_WSEC_WDS			0x00000004	/* WDS mode */
@@ -91,6 +100,14 @@ typedef struct wsec_info_s {
 #define WLIFU_ERR_WL_REMOTE_HWADDR	3
 #define WLIFU_ERR_WL_WPA_ROLE		5
 
+/* BSS transition return code */
+#define WLIFU_BSS_TRANS_RESP_ACCEPT	0
+#define WLIFU_BSS_TRANS_RESP_REJECT	1
+#define WLIFU_BSS_TRANS_RESP_UNKNOWN	2
+
+/* NVRAM names */
+#define WLIFU_NVRAM_BSS_TRANS_NO_DEAUTH	"bss_trans_no_deauth"
+
 extern int get_wlname_by_mac(unsigned char *mac, char *wlname);
 extern char *get_ifname_by_wlmac(unsigned char *mac, char *name);
 extern int get_wsec(wsec_info_t *info, unsigned char *mac, char *osifname);
@@ -101,8 +118,63 @@ extern int wl_wlif_get_chip_cap(char *ifname, char *cap);
 extern int wl_wlif_get_rsdb_mode();
 #endif /* __CONFIG_RSDB__ */
 
-extern int wl_wlif_do_bss_trans(char *ifname, uint8 rclass, chanspec_t chanspec,
-		struct ether_addr bssid, struct ether_addr addr, int timeout);
-extern int wl_wlif_block_mac(char *ifname, struct ether_addr addr, int timeout);
-extern int wl_wlif_unblock_mac(char *ifname, struct ether_addr addr, int flag);
+/* wlif lib handle. */
+typedef void wl_wlif_hdl;
+
+/* Callback handler for ioctl calls. */
+typedef int (*callback_hndlr)(char *ifname, int cmd, void *buf, int len, void *data);
+
+/*
+ * Init routine for wlif handle
+ * Which allocates and initializes memory for wlif handle.
+ * Params:
+ * @uschd_hdl: Uschd handle.
+ * @ifname: Interface name.
+ * @ioctl_hndlr: Module specific ioctl handler routine.
+ * @data: The data will be passed in ioctl_hndler callback function.
+ */
+extern wl_wlif_hdl* wl_wlif_init(void *uschd_hdl, char *ifname,
+	callback_hndlr ioctl_hndlr, void *data);
+
+/*
+ * Deinit routine to free memory for wlif handle.
+ * Params:
+ * @hdl: Wlif handle.
+ */
+extern void wl_wlif_deinit(wl_wlif_hdl *hdl);
+
+/*
+ * BSS-Trans routine for sending act frame and receiving bss-trans response
+ * if event_fd is invalid lib will not get the bss-trans response.
+ * Params:
+ * @hdl: wlif lib handle.
+ * @data: BSS-Trans action frame data.
+ * @event_fd: Socket descriptor to receive bss-trans resp.
+ */
+extern int wl_wlif_do_bss_trans(wl_wlif_hdl *hdl, wl_wlif_bss_trans_data_t *data,
+	int event_fd);
+
+/*
+ * Routine for setting macmode and maclist for valid timeout
+ * a timer will be registered to unblock the sta.
+ * Params:
+ * @hdl: Wlif lib handle.
+ * @addr: Sta mac address.
+ * @timeout: Timeout interval.
+ */
+extern int wl_wlif_block_mac(wl_wlif_hdl *hdl, struct ether_addr addr,
+	int timeout);
+
+/*
+ * Routine for removing sta entry from maclist.
+ * Params:
+ * @hdl: wlif lib handle.
+ * @addr: Sta mac address.
+ * @flag: Bitflag for sta count and macmode.
+ */
+extern int wl_wlif_unblock_mac(wl_wlif_hdl *hdl, struct ether_addr addr, int flag);
+
+
+extern int get_bridge_by_ifname(char *ifname, char **brname);
+extern int wl_wlif_wds_ap_ifname(char *ifname, char *apname);
 #endif /* _wlif_utils_h_ */

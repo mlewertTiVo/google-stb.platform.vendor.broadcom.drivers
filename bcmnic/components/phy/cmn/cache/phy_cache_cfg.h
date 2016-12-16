@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_cache_cfg.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_cache_cfg.h 656063 2016-08-25 03:56:25Z $
  */
 
 #ifndef _phy_cache_cfg_h_
@@ -23,14 +23,14 @@
 #define PHY_CACHE_REG_SZ 6
 #endif
 
-/* default cache capacity */
+/* default cache capacity : This is the max number of cache entries */
 #ifndef PHY_CACHE_SZ
-#define PHY_CACHE_SZ 2
+#define PHY_CACHE_SZ 6
 #endif
 
 /* default cache entry allocation method */
 #ifndef PHY_CACHE_PREALLOC
-#define PHY_CACHE_PREALLOC 1
+#define PHY_CACHE_PREALLOC 0
 #endif
 
 #endif /* _phy_cache_cfg_h_ */

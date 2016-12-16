@@ -127,11 +127,7 @@ BCMATTACHFN(wlc_phy_et_attach)(phy_ac_et_info_t *eti)
 int
 phy_ac_et(phy_info_t *pi)
 {
-	phy_info_acphy_t *pi_acphy = pi->u.pi_acphy;
 	uint8 stall_val = READ_PHYREGFLD(pi, RxFeCtrl1, disable_stalls);
-
-
-	uint8 saved_pwr_idx[3] = {0, 0, 0};
 	int err = BCME_OK;
 	bool suspend = FALSE;
 	uint8 core = 0;
@@ -154,11 +150,6 @@ phy_ac_et(phy_info_t *pi)
 	}
 
 	FOREACH_CORE(pi, core) {
-		if (CHSPEC_IS5G(pi->radio_chanspec)) {
-			pi_acphy->acphy_txpwr_idx_5G[core] = saved_pwr_idx[core];
-		} else {
-			pi_acphy->acphy_txpwr_idx_2G[core] = saved_pwr_idx[core];
-		}
 		MOD_PHYREGCE(pi, rf_pwr_cnvr_fctr, core, rf_pwr_cnvr_fctr, 26);
 		MOD_PHYREGCE(pi, V0, core, V0, 26);
 		MOD_PHYREGCE(pi, et_en, core, et_en, 1);
@@ -264,6 +255,10 @@ static void phy_ac_et_write_radioreg_cmn(phy_info_t *pi)
 {
 	WRITE_RADIO_REG_28NM(pi, RF, ET_SPARE0, 0, 0x0);
 	WRITE_RADIO_REG_28NM(pi, RF, ET_SPARE1, 0, 0x0);
+
+	if (RADIOMAJORREV(pi) >= 2) {
+		MOD_RADIO_REG_28NM(pi, RF, ET_LOCALVREF, 0, ET_localvref_res_MSB, 0xf);
+	}
 
 	ACPHY_REG_LIST_START
 	MOD_RADIO_REG_28NM_ENTRY(pi, RF, ET_RC_FILT_CFG, 0, ET_bypass_RC_linregin, 0x1)

@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_twt.c 632385 2016-04-19 04:53:03Z $
+ * $Id: wlc_twt.c 650798 2016-07-22 13:12:03Z $
  */
 
 #ifdef WLTWT
@@ -77,10 +77,18 @@ typedef struct {
 /* increment a counter by 1 */
 #define TWTCNTINC(twti, cntr)	do {(twti)->cntr ++;} while (0)
 #define WLUNIT(twti)	((twti)->wlc->pub->unit)
+
+#ifdef BCMDBG
+#define ERR_ONLY_VAR(x)	x
 #define WL_TWT_ERR(x)	WL_ERROR(x)
-#define ERR_ONLY_VAR(x)
+#define INFO_ONLY_VAR(x) x
 #define WL_TWT_INFO(x)	WL_ERROR(x)
+#else
+#define ERR_ONLY_VAR(x)
+#define WL_TWT_ERR(x)
 #define INFO_ONLY_VAR(x)
+#define WL_TWT_INFO(x)
+#endif
 
 /* ======== local function declarations ======== */
 
@@ -88,16 +96,27 @@ typedef struct {
 static int wlc_twt_wlc_init(void *ctx);
 static int wlc_twt_doiovar(void *ctx, uint32 actionid,
 	void *params, uint plen, void *arg, uint alen, uint vsize, struct wlc_if *wlcif);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_twt_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* bsscfg cubby */
 static int wlc_twt_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_twt_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_twt_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_twt_bss_dump NULL
+#endif
 
 /* scb cubby */
 static int wlc_twt_scb_init(void *ctx, struct scb *scb);
 static void wlc_twt_scb_deinit(void *ctx, struct scb *scb);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_twt_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_twt_scb_dump NULL
+#endif
 
 /* IE mgmt */
 static uint wlc_twt_calc_bcast_ie_len(void *ctx, wlc_iem_calc_data_t *data);
@@ -197,6 +216,10 @@ BCMATTACHFN(wlc_twt_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* debug dump */
+	wlc_dump_register(wlc->pub, "twt", wlc_twt_dump, twti);
+#endif
 
 	/* enable TWT by default if possible */
 	wlc->pub->_twt = wlc_twt_hw_cap(wlc) ? TRUE : FALSE;
@@ -265,6 +288,30 @@ wlc_twt_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	*pbt = NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_twt_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_twt_info_t *twti = ctx;
+	bss_twt_t *bt = BSS_TWT(twti, cfg);
+	uint16 i;
+
+	if (bt == NULL) {
+		return;
+	}
+
+	bcm_bprintf(b, "Broadcast TWT IE (%d):\n", bt->num_desc);
+	for (i = 0; i < bt->num_desc; i ++) {
+		bcm_bprintf(b, "  desc %u>\n", i);
+		bcm_bprintf(b, "    flow flags: 0x%x\n", bt->desc[i].flow_flags);
+		bcm_bprintf(b, "    flow id: %u\n", bt->desc[i].flow_id);
+		bcm_bprintf(b, "    target wake time: 0x%08x%08x\n",
+		            bt->desc[i].wake_time_h, bt->desc[i].wake_time_l);
+		bcm_bprintf(b, "    nominal min wake duration: 0x%x\n", bt->desc[i].wake_dur);
+		bcm_bprintf(b, "    wake interval: 0x%x\n", bt->desc[i].wake_int);
+	}
+}
+#endif /* BCMDBG) || BCMDBG_DUMP */
 
 
 /* ======== scb cubby ======== */
@@ -280,6 +327,16 @@ wlc_twt_scb_deinit(void *ctx, struct scb *scb)
 {
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_twt_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_twt_info_t *twti = ctx;
+	scb_twt_t *st = SCB_TWT(twti, scb);
+
+	bcm_bprintf(b, "     flow id alloc: 0x%x\n", st->fid_bmp);
+}
+#endif /* BCMDBG) || BCMDBG_DUMP */
 
 
 /* flow id manipulation */
@@ -462,6 +519,21 @@ wlc_twt_wlc_init(void *ctx)
 	return BCME_OK;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* debug dump */
+static int
+wlc_twt_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_twt_info_t *twti = ctx;
+	wlc_info_t *wlc = twti->wlc;
+
+	bcm_bprintf(b, "TWT Enab: %d\n", TWT_ENAB(wlc->pub));
+	bcm_bprintf(b, " rx_mf_ie_errs: %u\n", twti->rx_mf_ie_errs);
+	bcm_bprintf(b, " tx_short_bufs: %u\n", twti->tx_short_bufs);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* ======== IE mgmt hooks ======== */
 
@@ -503,6 +575,13 @@ wlc_twt_parse_bcast_ie(void *ctx, wlc_iem_parse_data_t *data)
 {
 	wlc_twt_info_t *twti = ctx;
 	wl_twt_sdesc_t desc;
+#ifdef BCMDBG
+	static struct {
+		twt_ie_top_t top;
+		twt_target_wake_time_t twt;
+		twt_ie_bottom_t bottom;
+	} last_bcast_twt_ie;
+#endif
 	int err;
 	bool req;
 
@@ -520,6 +599,9 @@ wlc_twt_parse_bcast_ie(void *ctx, wlc_iem_parse_data_t *data)
 
 	/* TODO: now it's just dump the broadcast TWT, need to program the HW. */
 
+#ifdef BCMDBG
+	if (memcmp(&last_bcast_twt_ie, data->ie, sizeof(last_bcast_twt_ie)) != 0) {
+#endif
 #ifdef BCAST_TWT_IE_DUMP
 	WL_PRINT(("Broadcast TWT IE:\n"));
 	WL_PRINT(("  request: %d\n", req));
@@ -529,6 +611,10 @@ wlc_twt_parse_bcast_ie(void *ctx, wlc_iem_parse_data_t *data)
 	WL_PRINT(("  target wake time: 0x%08x%08x\n", desc.wake_time_h, desc.wake_time_l));
 	WL_PRINT(("  nominal min wake duration: 0x%x\n", desc.wake_dur));
 	WL_PRINT(("  wake interval: 0x%x\n", desc.wake_int));
+#endif
+#ifdef BCMDBG
+	memcpy(&last_bcast_twt_ie, data->ie, sizeof(last_bcast_twt_ie));
+	}
 #endif
 
 	return BCME_OK;

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_papdcal.h 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_type_papdcal.h 639713 2016-05-24 18:02:57Z $
  */
 
 #ifndef _phy_type_papdcal_h_
@@ -32,8 +32,6 @@
 			(((pi)->papdcali->data->epacal2g_mask >> \
 			(CHSPEC_CHANNEL(pi->radio_chanspec) - 1)) & 1)) || \
 			((pi)->papdcali->data->epacal5g && CHSPEC_IS5G((pi)->radio_chanspec)))
-#elif defined(DONGLEBUILD)
-	#define PHY_EPAPD(pi)   0
 #else
 	#define PHY_EPAPD(pi)							\
 			(((pi)->papdcali->data->epacal2g && CHSPEC_IS2G((pi)->radio_chanspec) && \

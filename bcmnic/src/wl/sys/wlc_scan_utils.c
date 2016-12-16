@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scan_utils.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_scan_utils.c 665073 2016-10-14 20:33:29Z $
  */
 
 #include <wlc_cfg.h>
@@ -23,7 +23,7 @@
 #include <bcmutils.h>
 #include <bcmendian.h>
 #include <wlioctl.h>
-#include <d11.h>
+#include <hndd11.h>
 #include <wlc_rate.h>
 #include <wlc_pub.h>
 #include <wlc_bsscfg.h>
@@ -43,17 +43,18 @@
 #include <wlc_ie_mgmt.h>
 #include <wlc_ie_mgmt_ft.h>
 #include <wlc_ie_mgmt_vs.h>
+#include <wlc_ie_helper.h>
 #ifdef ANQPO
 #include <wl_anqpo.h>
 #endif
 #include <wlc_rx.h>
 #include <wlc_dbg.h>
-#include <wlc_ulb.h>
 #include <wlc_event_utils.h>
 #include <wl_dbg.h>
 #include <wlc_scan_utils.h>
 #include <wlc_11d.h>
 #include <wlc_iocv.h>
+#include <phy_noise_api.h>
 
 /* iovar table */
 enum {
@@ -100,11 +101,10 @@ static wlc_bss_info_t *wlc_BSSadd(wlc_info_t *wlc);
 static wlc_bss_info_t *wlc_BSSlookup(wlc_info_t *wlc, uchar *bssid, chanspec_t chanspec,
 	uchar ssid[], uint ssid_len);
 
-static void wlc_scan_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data);
-static uint8 wlc_scan_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data);
 #ifdef STA
 static void wlc_scan_utils_scan_data_notif(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 	struct dot11_management_header *hdr, uint8 *body, int body_len, wlc_bss_info_t *bi);
+static void wlc_scan_utils_scan_start_notif(wlc_info_t *wlc);
 #endif
 
 /* ignore list */
@@ -139,8 +139,9 @@ struct wlc_scan_utils {
 	uint	iscan_ignore_last;		/* iscan_ignore_list count from prev partial scan */
 	uint	iscan_ignore_count;		/**< cur number of elements in iscan_ignore_list */
 	chanspec_t iscan_chanspec_last;		/**< resume chan after prev partial scan */
-	uint   	iscan_result_last;		/**< scanresult index in last iscanresults */
+	uint	iscan_result_last;		/**< scanresult index in last iscanresults */
 	bcm_notif_h  scan_data_h; /* scan_data notifier handle. */
+	bcm_notif_h  scan_start_h; /* scan_start notifier handle. */
 };
 
 /* handy macros */
@@ -229,6 +230,13 @@ BCMATTACHFN(wlc_scan_utils_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+	/* create notification list for scan start */
+	if ((bcm_notif_create_list(wlc->notif, &sui->scan_start_h)) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: bcm_notif_create_list() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+
 	if (wlc_module_register(wlc->pub, scan_utils_iovars, "scan_utils", sui,
 			wlc_scan_utils_doiovar, NULL, NULL, wlc_scan_utils_wlc_down)) {
 		WL_ERROR(("wl%d: %s wlc_module_register() failed\n",
@@ -287,6 +295,9 @@ BCMATTACHFN(wlc_scan_utils_detach)(wlc_scan_utils_t *sui)
 
 	if (sui->scan_data_h) {
 		bcm_notif_delete_list(&sui->scan_data_h);
+	}
+	if (sui->scan_start_h) {
+		bcm_notif_delete_list(&sui->scan_start_h);
 	}
 
 	MFREE(wlc->osh, sui, sizeof(*sui));
@@ -372,13 +383,20 @@ wlc_scan_request_ex(
 		               scan_flags, cfg, usage, act_cb, act_cb_arg, sa_override);
 		/* wlc_scan() invokes 'fn' even in error cases */
 		cb = FALSE;
+
+#ifdef STA
+		if (err == BCME_OK) {
+			wlc_scan_utils_scan_start_notif(wlc);
+		}
+#endif /* STA */
+
 	} else {
 		WL_INFORM(("wl%d: scan is blocked by others\n", wlc->pub->unit));
 	}
 
 	/* make it consistent with wlc_scan() w.r.t. invoking callback */
 	if (cb && fn != NULL) {
-		WL_ERROR(("wl%d: %s, can not scan due to error %d\n",
+		WL_SCAN(("wl%d: %s, can not scan due to error %d\n",
 		          wlc->pub->unit, __FUNCTION__, err));
 		(fn)(arg, WLC_E_STATUS_ERROR, cfg);
 	}
@@ -572,26 +590,8 @@ wlc_custom_scan(wlc_info_t *wlc, char *arg, int arg_len,
 					goto done;
 				}
 
-#ifdef WL11ULB
-				/* When associated, we expect bandwidth of the items in the
-				 * custom channel list to match bandwidth of the bss, if either
-				 * is ULB BW.
-				 * In other words
-				 *  - ULB scan is blocked when associated in non-ULB and
-				 *  - non-ULB scan is blocked when associated in ULB
-				 */
-				if (ULB_ENAB(wlc->pub) && cfg->associated) {
-					bool cs_ulb = CHSPEC_BW_LT20(chanspec_list[i]);
-					bool bss_ulb = BW_LT20(WLC_ULB_GET_BSS_MIN_BW(wlc, cfg));
-					if (cs_ulb != bss_ulb) {
-						bcmerror = BCME_SCANREJECT;
-						goto done;
-					}
-				}
-#endif /* WL11ULB */
-
 				if (wf_chspec_malformed(chanspec_list[i])) {
-					chanspec_list[i] = BSSCFG_MINBW_CHSPEC(wlc, cfg, ch);
+					chanspec_list[i] = CH20MHZ_CHSPEC(ch);
 				}
 			}
 		}
@@ -762,6 +762,15 @@ wlc_scan_utils_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *
 	case WLC_SCAN:
 		WL_ASSOC(("wl%d.%d: SCAN: WLC_SCAN custom scan\n",
 		          WLCWLUNIT(wlc), WLC_BSSCFG_IDX(bsscfg)));
+#ifdef WL_MONITOR
+		if (MONITOR_ENAB(wlc)) {
+			bcmerror = BCME_EPERM;
+			WL_ERROR(("wl%d.%d: WLC_SCAN is not permitted if Monitor Mode is active\n",
+				WLCWLUNIT(wlc), WLC_BSSCFG_IDX(bsscfg)));
+			break;
+		}
+#endif /* WL_MONITOR */
+
 		bcmerror = wlc_custom_scan(wlc, arg, len, 0, WLC_ACTION_SCAN, bsscfg);
 		break;
 
@@ -858,7 +867,7 @@ wlc_scan_utils_doiovar(void *hdl, uint32 actionid,
 
 		bcopy(inbuf, &escanver, sizeof(escanver));
 		if (escanver != ESCAN_REQ_VERSION) {
-			WL_ERROR(("bad version %d\n", escanver));
+			WL_SCAN(("bad version %d\n", escanver));
 			err = BCME_VERSION;
 			break;
 		}
@@ -875,6 +884,10 @@ wlc_scan_utils_doiovar(void *hdl, uint32 actionid,
 		} else {
 			err = BCME_BADOPTION;
 			break;
+		}
+		if (ESCAN_IN_PROGRESS(wlc->scan)) {
+			WL_ERROR(("ESCAN request while ESCAN in progress, abort current scan\n"));
+			wlc_scan_abort(wlc->scan, WLC_E_STATUS_NEWSCAN);
 		}
 
 		sui->cmn->escan_sync_id = escan_sync_id;
@@ -894,7 +907,7 @@ wlc_scan_utils_doiovar(void *hdl, uint32 actionid,
 
 		bcopy(inbuf, &iscanver, sizeof(iscanver));
 		if (iscanver != ISCAN_REQ_VERSION) {
-			WL_ERROR(("bad version %d\n", iscanver));
+			WL_SCAN(("bad version %d\n", iscanver));
 			err = BCME_VERSION;
 			break;
 		}
@@ -1036,9 +1049,9 @@ static void
 wlc_iscan_timeout(void *arg)
 {
 	wlc_info_t *wlc = (wlc_info_t *)arg;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char chanbuf[CHANSPEC_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 	wlc_scan_utils_t *sui = wlc->sui;
 
 	if (ISCAN_IN_PROGRESS(wlc) &&
@@ -1259,6 +1272,50 @@ wlc_scan_utils_scan_complete(wlc_info_t *wlc, wlc_bsscfg_t *scan_cfg)
 }
 #endif /* WLRSDB */
 
+/* This function is used for finding the BSS among the scan results
+ * which has the RSSI value lesser than the BSS at hand. It finds the BSS,
+ * compares it to the rssi threshold provided and if RSSI < threshold
+ * then it frees beacon(Probe) and resets. This BSS container will be
+ * used to store the new incoming scan result.
+ */
+static wlc_bss_info_t *
+wlc_BSS_reuse_lowest_rssi(wlc_info_t *wlc, int16 rssi_thresh)
+{
+	uint idx = 0;
+	int16 min_rssi = 0;
+	wlc_bss_info_t *BSS = NULL;
+	wlc_bss_list_t *scan_results = wlc->scan_results;
+
+	/* Find the result among the scan_results which has the least
+	* RSSI value and return the BSS pointer
+	*/
+	for (idx = 0; idx < wlc->scan_results->count; idx++) {
+		if (idx == 0 || scan_results->ptrs[idx]->RSSI < min_rssi) {
+			BSS = wlc->scan_results->ptrs[idx];
+			min_rssi = BSS->RSSI;
+		}
+	}
+	/* If min_rssi is better than or equal to given rssi nothing to return */
+	if (min_rssi >= rssi_thresh) {
+		return NULL;
+	}
+	/* Free BSS->bcn_prb if allocated because it again gets allocated in the reused BSS */
+	if (BSS->bcn_prb) {
+		MFREE(wlc->osh, BSS->bcn_prb, BSS->bcn_prb_len);
+	}
+
+	/* Reset the values before returning the BSS pointer */
+	memset((char*)BSS, 0, sizeof(wlc_bss_info_t));
+	BSS->RSSI = WLC_RSSI_MINVAL;
+
+	WL_SCAN(("wl%d: %s: Scan results have increased beyond %d"
+		"Reusing the BSS with the lowset RSSI value for further storage\n",
+		WLCWLUNIT(wlc), __FUNCTION__, wlc->pub->tunables->max_assoc_scan_results));
+
+	return BSS;
+}
+
+
 /*
  * ==============================================
  * Note: these functions were moved from wlc_rx.c
@@ -1283,9 +1340,9 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 #endif
 	wlc_scan_info_t *scan = wlc->scan;
 	wlc_bsscfg_t *cfg = NULL;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char chanbuf1[CHANSPEC_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 #ifdef WLMESH
 	bcm_tlv_t *meshid_ie = NULL;
 	bool mesh_match = FALSE;
@@ -1330,6 +1387,7 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 		}
 	}
 #endif
+
 	/*
 	 * check for probe responses/beacons:
 	 * - must have the correct Infra mode
@@ -1358,7 +1416,7 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 	    (mesh_match) ||
 #endif
 	    FALSE) {
-#if defined(WLMSG_SCAN)
+#if defined(BCMDBG) || defined(WLMSG_SCAN)
 		char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 
@@ -1367,7 +1425,7 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 		         WLC_BAND_PI_RADIO_CHANSPEC));
 		WL_PRHDRS(wlc, beacon ? "rxpkt hdr (beacon)" : "rxpkt hdr (probersp)",
 		          (uint8*)hdr, NULL, wrxh, body_len);
-#if defined(WLMSG_PRPKT)
+#if defined(BCMDBG) || defined(WLMSG_PRPKT)
 		if (WL_PRPKT_ON()) {
 			printf(beacon?"\nrxpkt (beacon)\n":"\nrxpkt (probersp)\n");
 			wlc_print_bcn_prb((uint8*)plcp, body_len + D11_PHY_HDR_LEN);
@@ -1425,6 +1483,15 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 				/* fall througth - alwyas keep strong RSSI */
 			}
 		}
+		/* do not allow to update bcn/probe response if the RSSI is invalid */
+		if (bi.RSSI == WLC_RSSI_INVALID) {
+			return BCME_OK;         /* ignore invalid RSSI */
+		}
+		/* do not allow to update bcn/probe response if BT activity is enabled */
+		if (wrxh->rxhdr.lt80.RxStatus1 & RXS_GRANTBT) {
+			return BCME_OK;         /* ignore weaker RSSI in presence of BT activity */
+		}
+
 #ifdef STA
 		else if (sui->scanresults_minrssi &&
 		         bi.RSSI < (int16) (sui->scanresults_minrssi)) {
@@ -1442,8 +1509,10 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 		if (ANQPO_ENAB(wlc->pub) && scan->wlc_scan_cmn->is_hotspot_scan &&
 			(bi.flags2 & WLC_BSS_HS20) && !beacon) {
 			if (bi.flags & WLC_BSS_RSSI_ON_CHANNEL) {
+				ASSERT(cfg);
 				wl_anqpo_process_scan_result(wlc->anqpo, &bi,
-					body + DOT11_BCN_PRB_LEN, body_len - DOT11_BCN_PRB_LEN);
+					body + DOT11_BCN_PRB_LEN, body_len - DOT11_BCN_PRB_LEN,
+					cfg->_idx);
 			}
 		}
 #endif	/* ANQPO */
@@ -1492,7 +1561,8 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 			if (wlc_bss2wl_bss(wlc, &bi, &escan_result->bss_info[0],
 			                   sizeof(wl_bss_info_t) + bi.bcn_prb_len,
 			                   TRUE) != BCME_OK) {
-				WL_ERROR(("escan: results buffer too short %s()\n", __FUNCTION__));
+				WL_SCAN_ERROR(("escan: results buffer too"
+						"short %s()\n", __FUNCTION__));
 			}
 			else {
 				escan_result->sync_id = sui->cmn->escan_sync_id;
@@ -1560,7 +1630,21 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 
 		/* add it if it was not already in the list */
 		if (!BSS) {
-			BSS = wlc_BSSadd(wlc);
+			if (AS_IN_PROGRESS(wlc) &&
+				wlc->pub->tunables->max_assoc_scan_results != 0 &&
+				(wlc->scan_results->count >=
+				(uint)wlc->pub->tunables->max_assoc_scan_results)) {
+				if ((BSS = wlc_BSS_reuse_lowest_rssi(wlc, bi.RSSI)) == NULL) {
+					if (bcn_prb)
+						MFREE(wlc->osh, bcn_prb, body_len);
+					WL_INFORM(("%s: exceeded the limit of %d scan results"
+						"tossing the BSS\n", __FUNCTION__,
+						wlc->pub->tunables->max_assoc_scan_results));
+					return BCME_OK;
+				}
+			} else {
+				BSS = wlc_BSSadd(wlc);
+			}
 #ifdef STA
 			if (BSS && ISCAN_IN_PROGRESS(wlc)) {
 				wlc_BSSIgnoreAdd(wlc, (uchar *)&hdr->bssid, chanspec,
@@ -1600,7 +1684,7 @@ wlc_recv_scan_parse(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 			}
 
 			{
-			ratespec_t rspec = wlc_recv_compute_rspec(wrxh, plcp);
+			ratespec_t rspec = wlc_recv_compute_rspec(wlc->d11_info, wrxh, plcp);
 			BSS->rx_tsf_l = wlc_recover_tsf32(wlc, wrxh);
 			BSS->rx_tsf_l += wlc_compute_bcn_payloadtsfoff(wlc, rspec);
 			}
@@ -1848,16 +1932,18 @@ wlc_recv_scan_parse_bcn_prb(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh,
 	wlc_iem_upp_t upp;
 	wlc_iem_ft_pparm_t ftpparm;
 	wlc_iem_pparm_t pparm;
-#ifdef WL11ULB
-	chanspec_t chspec;
-	uint16 bw = WL_CHANSPEC_BW_20;
-#endif /* WL11ULB */
 	wlc_bsscfg_t *cfg = wlc_scan_bsscfg(wlc->scan);
 
 
 	if (body_len < sizeof(struct dot11_bcn_prb)) {
 		WL_INFORM(("wl%d: %s: invalid frame length\n", wlc->pub->unit, __FUNCTION__));
 		return (BCME_ERROR);
+	}
+
+	/* do not parse the beacon/probe response if BSSID is a NULL or a MULTI cast address */
+	if (ETHER_ISMULTI(bssid) || ETHER_ISNULLADDR(bssid)) {
+		WL_ERROR(("wl%d: %s: invalid BSSID\n", wlc->pub->unit, __FUNCTION__));
+		return BCME_BADARG;
 	}
 
 	body += DOT11_BCN_PRB_LEN;
@@ -1903,7 +1989,7 @@ wlc_recv_scan_parse_bcn_prb(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh,
 
 	/* parse rateset and pull out raw rateset */
 	if (wlc_scan_pre_parse_frame(wlc, NULL, ft, body, body_len, &ppf) != BCME_OK) {
-		WL_ERROR(("%s: wlc_pre_parse_frame failed\n", __FUNCTION__));
+
 		return (BCME_ERROR);
 	}
 	wlc_combine_rateset(wlc, &sup_rates, &ext_rates, &bi->rateset);
@@ -1912,22 +1998,9 @@ wlc_recv_scan_parse_bcn_prb(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh,
 	if (chan != 0xffff) {
 		/* other code should be restricting this value */
 		ASSERT(chan <= 0xff);
-#ifdef WL11ULB
-		chspec = CH20MHZ_CHSPEC(chan);
-
-		if ((cfg != NULL) && BSSCFG_ULB_ENAB(wlc, cfg)) {
-			chspec = BSSCFG_MINBW_CHSPEC(wlc, cfg, chan);
-			bw = WLC_ULB_GET_BSS_MIN_BW(wlc, cfg);
-		}
-		if (!CH_NUM_VALID_RANGE(chan) ||
-			(!WLC_CNTRY_DEFAULT_ENAB(wlc) &&
-			(!wlc_valid_chanspec_db(wlc->cmi, chspec) &&
-		    !(wlc->scan->state & SCAN_STATE_PROHIBIT)))) {
-#else /* WL11ULB */
 		if (!CH_NUM_VALID_RANGE(chan) ||
 			(!wlc_valid_chanspec_db(wlc->cmi, CH20MHZ_CHSPEC(chan)) &&
 		    !(wlc->scan->state & SCAN_STATE_PROHIBIT))) {
-#endif /* WL11ULB */
 
 			WL_INFORM(("%s: bad channel in beacon: %d\n", __FUNCTION__, chan));
 			return (BCME_BADCHAN);
@@ -1938,11 +2011,6 @@ wlc_recv_scan_parse_bcn_prb(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh,
 		 * Figure it out from the current mac channel.
 		 */
 		chan = rx_chan;
-
-#ifdef WL11ULB
-		if ((cfg != NULL) && BSSCFG_ULB_ENAB(wlc, cfg))
-			bw = WLC_ULB_GET_BSS_MIN_BW(wlc, cfg);
-#endif /* WL11ULB */
 
 		/* other code should be restricting this value */
 		ASSERT(chan <= 0xff);
@@ -1959,24 +2027,16 @@ wlc_recv_scan_parse_bcn_prb(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh,
 		bi->flags |= WLC_BSS_RSSI_ON_CHANNEL;
 
 	/* extract phy_noise from the phy */
-	bi->phy_noise = wlc_phy_noise_avg(WLC_PI(wlc));
+	bi->phy_noise = phy_noise_avg(WLC_PI(wlc));
 
 	/* extract SNR from rxh */
 	bi->SNR = (int16)wlc_lq_recv_snr_compute(wlc, wrxh, bi->phy_noise);
 
 	/* DS parameters */
-#ifdef WL11ULB
-	if ((cfg != NULL) && BSSCFG_ULB_ENAB(wlc, cfg))
-		bi->chanspec = CHBW_CHSPEC(bw, chan);
-	else
-#endif /* WL11ULB */
-		bi->chanspec = CH20MHZ_CHSPEC(chan);
+	bi->chanspec = CH20MHZ_CHSPEC(chan);
 
 	/* prepare IE mgmt calls */
-	bzero(&upp, sizeof(upp));
-	upp.notif_fn = wlc_scan_nhdlr_cb;
-	upp.vsie_fn = wlc_scan_vsie_cb;
-	upp.ctx = wlc;
+	wlc_iem_parse_upp_init(wlc->iemi, &upp);
 	bzero(&ftpparm, sizeof(ftpparm));
 	ftpparm.scan.result = bi;
 	ftpparm.scan.chan = (uint8)chan;
@@ -1998,23 +2058,6 @@ wlc_recv_scan_parse_bcn_prb(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh,
 		}
 	}
 	return err;
-}
-
-static void
-wlc_scan_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data)
-{
-	if (WL_INFORM_ON()) {
-		printf("%s: no parser\n", __FUNCTION__);
-		prhex("IE", data->ie, data->ie_len);
-	}
-}
-
-static uint8
-wlc_scan_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data)
-{
-	wlc_info_t *wlc = (wlc_info_t *)ctx;
-
-	return wlc_iem_vs_get_id(wlc->iemi, data->ie);
 }
 
 /* other interfaces... */
@@ -2076,4 +2119,29 @@ wlc_scan_utils_scan_data_notif(wlc_info_t *wlc, wlc_d11rxhdr_t *wrxh, uint8 *plc
 
 	bcm_notif_signal(hdl, &scan_data);
 }
+
+static void
+wlc_scan_utils_scan_start_notif(wlc_info_t *wlc)
+{
+	bcm_notif_h hdl = wlc->sui->scan_start_h;
+
+	bcm_notif_signal(hdl, NULL);
+}
+
+int
+wlc_scan_utils_scan_start_register(wlc_info_t *wlc, scan_utl_scan_start_fn_t fn, void *arg)
+{
+	bcm_notif_h hdl = wlc->sui->scan_start_h;
+
+	return bcm_notif_add_interest(hdl, (bcm_notif_client_callback)fn, arg);
+}
+
+int
+wlc_scan_utils_scan_start_unregister(wlc_info_t *wlc, scan_utl_scan_start_fn_t fn, void *arg)
+{
+	bcm_notif_h hdl = wlc->sui->scan_start_h;
+
+	return bcm_notif_remove_interest(hdl, (bcm_notif_client_callback)fn, arg);
+}
+
 #endif /* STA */

@@ -32,8 +32,45 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: packed_section_start.h 641797 2016-06-06 09:34:30Z $
+ * $Id: packed_section_start.h 660529 2016-09-20 23:01:03Z $
  */
+
+
+#ifndef _alignment_test_
+#define _alignment_test_
+
+/* ASSERT default packing */
+typedef struct T4 {
+	uint8  a;
+	uint32 b;
+	uint16 c;
+	uint8  d;
+} T4_t;
+
+/* 4 byte alignment support */
+/*
+* a . . .
+* b b b b
+* c c d .
+*/
+
+/*
+ * Below function is meant to verify that this file is compiled with the default alignment of 4.
+ * Function will fail to compile if the condition is not met.
+ */
+#ifdef __GNUC__
+#define VARIABLE_IS_NOT_USED __attribute__ ((unused))
+#else
+#define VARIABLE_IS_NOT_USED
+#endif
+static void alignment_test(void);
+static void
+VARIABLE_IS_NOT_USED alignment_test(void)
+{
+	/* verify 4 byte alignment support */
+	STATIC_ASSERT(sizeof(T4_t) == 12);
+}
+#endif /* _alignment_test_ */
 
 
 /* Error check - BWL_PACKED_SECTION is defined in packed_section_start.h
@@ -46,7 +83,10 @@
 	#define BWL_PACKED_SECTION
 #endif
 
-
+#if defined(BWL_DEFAULT_PACKING)
+	/* generate an error if BWL_DEFAULT_PACKING is defined */
+	#error "BWL_DEFAULT_PACKING not supported any more."
+#endif /* BWL_PACKED_SECTION */
 
 
 /* Declare compiler-specific directives for structure packing. */

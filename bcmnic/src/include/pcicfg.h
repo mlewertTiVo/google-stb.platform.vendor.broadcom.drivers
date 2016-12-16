@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: pcicfg.h 630761 2016-04-12 00:50:23Z $
+ * $Id: pcicfg.h 659712 2016-09-15 18:14:32Z $
  */
 
 #ifndef	_h_pcicfg_
@@ -560,7 +560,19 @@ typedef struct _pcie_enhanced_caphdr {
 #define PCI_PHY_DBG_CLKREG_3	0x1e1c
 
 #define	PCI_PMCR_REFUP		0x1814	/* Trefup time */
+#define PCI_PMCR_TREFUP_LO_MASK		0x3f
+#define PCI_PMCR_TREFUP_LO_SHIFT	24
+#define PCI_PMCR_TREFUP_LO_BITS		6
+#define PCI_PMCR_TREFUP_HI_SHIFT	5
+#define PCI_PMCR_TREFUP_MAX			0x400
+#define PCI_PMCR_TREFUP_MAX_SCALE	0x2000
+
 #define	PCI_PMCR_REFUP_EXT	0x1818	/* Trefup extend Max */
+#define PCI_PMCR_TREFUP_EXT_SHIFT	22
+#define PCI_PMCR_TREFUP_EXT_SCALE	3
+#define PCI_PMCR_TREFUP_EXT_ON		1
+#define PCI_PMCR_TREFUP_EXT_OFF		0
+
 #define PCI_TPOWER_SCALE_MASK 0x3
 #define PCI_TPOWER_SCALE_SHIFT 3 /* 0:1 is scale and 2 is rsvd */
 

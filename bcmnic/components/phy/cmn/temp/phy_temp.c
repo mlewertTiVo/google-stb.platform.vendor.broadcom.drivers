@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_temp.c 630449 2016-04-09 00:27:18Z vyass $
+ * $Id: phy_temp.c 670800 2016-11-17 16:00:05Z $
  */
 
 #include <phy_cfg.h>
@@ -26,6 +26,7 @@
 #include "phy_type_temp.h"
 #include "phy_temp_st.h"
 #include <phy_temp.h>
+#include <phy_hc.h>
 
 #include <phy_utils_var.h>
 
@@ -44,6 +45,8 @@ typedef struct {
 	phy_txcore_temp_t temp;
 /* add other variable size variables here at the end */
 } phy_temp_mem_t;
+
+static void wlc_phy_read_tempdelta_settings(phy_temp_info_t *tempi, int maxtempdelta);
 
 /* local function declaration */
 
@@ -72,28 +75,7 @@ BCMATTACHFN(phy_temp_attach)(phy_info_t *pi)
 	init_txrxchain = (1 << PHYCORENUM(pi->pubpi->phy_corenum)) - 1;
 
 	temp->disable_temp = (uint8)PHY_GETINTVAR(pi, rstr_tempthresh);
-	if ((temp->disable_temp == 0) || (temp->disable_temp == 0xff)) {
-		if (ISHTPHY(pi)) {
-			temp->disable_temp = HTPHY_CHAIN_TX_DISABLE_TEMP;
-		} else if (ISACPHY(pi)) {
-			temp->disable_temp = ACPHY_CHAIN_TX_DISABLE_TEMP;
-		} else {
-			temp->disable_temp = PHY_CHAIN_TX_DISABLE_TEMP;
-		}
-	}
-
-#if defined(BCM94360X51) && defined(BCM94360X52C)
-	if (ISACPHY(pi) &&
-	    (CHIPID(pi->sh->chip) == BCM4360_CHIP_ID) &&
-	    ((pi->sh->boardtype == BCM94360X51) ||
-	     (pi->sh->boardtype == BCM94360X51P3) ||
-	     (pi->sh->boardtype == BCM94360X52C))) {
-		temp->disable_temp = 120;
-	}
-#endif /* BCM94360X51 && BCM94360X52C */
-
 	temp->disable_temp_max_cap = temp->disable_temp;
-
 	temp->hysteresis = (uint8)PHY_GETINTVAR(pi, rstr_temps_hysteresis);
 	if ((temp->hysteresis == 0) || (temp->hysteresis == 0xf)) {
 		temp->hysteresis = PHY_HYSTERESIS_DELTATEMP;
@@ -117,6 +99,8 @@ BCMATTACHFN(phy_temp_attach)(phy_info_t *pi)
 	temp->duty_cycle_throttle_state = 0;
 
 	pi->phy_tempsense_offset = 0;
+
+	wlc_phy_read_tempdelta_settings(info, PHY_CAL_MAXTEMPDELTA);
 
 	/* Register callbacks */
 
@@ -161,7 +145,6 @@ phy_temp_throttle(phy_temp_info_t *ti)
 	phy_type_temp_fns_t *fns = ti->fns;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
-
 	if (fns->throt == NULL)
 		return 0;
 
@@ -187,7 +170,7 @@ BCMATTACHFN(phy_temp_unregister_impl)(phy_temp_info_t *ti)
 }
 
 #ifdef	WL_DYNAMIC_TEMPSENSE
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 int
 phy_temp_get_override(phy_temp_info_t *ti)
 {
@@ -195,7 +178,7 @@ phy_temp_get_override(phy_temp_info_t *ti)
 
 	return  pi->tempsense_override;
 }
-#endif /* BCMDBG || WLTEST */
+#endif 
 
 int
 phy_temp_get_thresh(phy_temp_info_t *ti)
@@ -262,3 +245,65 @@ wlc_phy_upd_gain_wrt_gain_cal_temp_phy(phy_info_t *pi, int16 *gain_err_temp_adj)
 		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
 	}
 }
+
+/*
+ * Read the phy calibration temperature delta parameters from NVRAM.
+ */
+static void
+BCMATTACHFN(wlc_phy_read_tempdelta_settings)(phy_temp_info_t *tempi, int maxtempdelta)
+{
+	phy_info_t *pi = tempi->pi;
+	phy_txcore_temp_t *temp = phy_temp_get_st(tempi);
+
+	/* Read the temperature delta from NVRAM */
+	temp->phycal_tempdelta = (uint8)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_phycal_tempdelta, 0);
+
+	/* Range check, disable if incorrect configuration parameter */
+	/* Preserve default, in case someone wants to use it. */
+	if (temp->phycal_tempdelta > maxtempdelta) {
+		temp->phycal_tempdelta = temp->phycal_tempdelta_default;
+	} else {
+		temp->phycal_tempdelta_default = temp->phycal_tempdelta;
+	}
+}
+
+bool
+phy_temp_get_tempsense_degree(phy_temp_info_t *tempi, int16 *pval)
+{
+	phy_type_temp_fns_t *fns = tempi->fns;
+	if (fns->do_tempsense)
+		*pval = (fns->do_tempsense)(fns->ctx);
+	else
+		return FALSE;
+	return TRUE;
+}
+
+#ifdef RADIO_HEALTH_CHECK
+
+#define PHY_INVALID_TEMPERATURE	-128
+
+int
+phy_temp_get_cur_temp_radio_health_check(phy_temp_info_t *ti)
+{
+	phy_type_temp_fns_t *fns = ti->fns;
+	phy_info_t *pi = ti->pi;
+	int ct = PHY_INVALID_TEMPERATURE;
+
+	if (fns->get != NULL)
+		ct = (fns->get)(fns->ctx);
+
+	if (ct >= phy_hc_get_rhc_tempthresh(pi->hci))
+		return BCME_RANGE;
+
+	return ct;
+}
+
+int
+phy_temp_current_temperature_check(phy_temp_info_t *tempi)
+{
+	int temperature;
+	if ((temperature = phy_temp_get_cur_temp_radio_health_check(tempi)) == BCME_RANGE)
+		return BCME_RANGE;
+	return BCME_OK;
+}
+#endif /* RADIO_HEALTH_CHECK */

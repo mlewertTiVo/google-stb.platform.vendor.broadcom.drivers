@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_sup_ccx.c 627012 2016-03-23 12:05:07Z $
+ * $Id: wlc_sup_ccx.c 660574 2016-09-21 05:59:00Z $
  */
 
 #include <wlc_cfg.h>
@@ -197,6 +197,12 @@ static int wlc_ccx_get_leap_list(bss_ccxsup_info_t *ccxsup_bss, wlc_bsscfg_t *cf
 
 static const uint8 ccx_rogue_snap[CCX_DDP_LLC_SNAP_LEN] =
 	{ 0xAA, 0xAA, 0x03, 0x00, 0x40, 0x96, 0x00, 0x00 };
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 wlc_ccxsup_info_t *
 BCMATTACHFN(wlc_ccxsup_attach)(wlc_info_t *wlc)
@@ -499,9 +505,9 @@ wlc_leap_ddp_rogue_rpt(bss_ccxsup_info_t *ccxsup_bss)
 	wlc_ccx_rogue_t *rogue;
 	ccx_ddp_pkt_t *ddp_hdr;
 	osl_t *osh, *p;
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 
 	WL_TRACE(("wl%d: wlc_leap_ddp_rogue_rpt: report rogue AP\n", UNIT(ccxsup_bss)));
 
@@ -1100,6 +1106,9 @@ wlc_leapsup_start(wlc_ccxsup_info_t *ccxsup_info, wlc_bsscfg_t *cfg)
 	bss_ccxsup_info_t *ccxsup_bss;
 	bool last_failed = FALSE;
 	uint delay_time;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	if (ccxsup_info == NULL)
 		return FALSE;
@@ -1308,6 +1317,9 @@ wlc_ccx_rogueap_update(wlc_ccxsup_info_t *ccxsup_info, wlc_bsscfg_t *cfg, uint16
 	bss_ccxsup_info_t *ccxsup_bss;
 	uint indx;
 	wlc_ccx_rogue_t *rogue = NULL;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	if (ccxsup_info == NULL)
 		return;
@@ -1334,11 +1346,15 @@ wlc_ccx_rogueap_update(wlc_ccxsup_info_t *ccxsup_info, wlc_bsscfg_t *cfg, uint16
 	if (indx >= LEAP_ROGUE_NUM)	/* out of space */
 		return;
 
-	if (!(rogue = (wlc_ccx_rogue_t *)MALLOC(OSH(ccxsup_bss), sizeof(wlc_ccx_rogue_t)))) {
+	if (!rogue &&
+		!(rogue = (wlc_ccx_rogue_t *)MALLOC(OSH(ccxsup_bss), sizeof(wlc_ccx_rogue_t)))) {
 		WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
 			UNIT(ccxsup_bss), __FUNCTION__, MALLOCED(OSH(ccxsup_bss))));
 		return;
 	}
+
+	/* clear the memory chunk to avoid any stale references */
+	bzero(rogue, sizeof(*rogue));
 
 	rogue->valid = TRUE;
 	bcopy(&ap_mac->octet, &rogue->ap_mac, ETHER_ADDR_LEN);
@@ -1347,6 +1363,9 @@ wlc_ccx_rogueap_update(wlc_ccxsup_info_t *ccxsup_info, wlc_bsscfg_t *cfg, uint16
 	/* AP name is undocumented in Cisco IE, set to NULL for now */
 	rogue->ap_name_len = 0;
 	rogue->ap_name[0] = '\0';
+
+	/* update the pointer in the list of the rogue APs */
+	ccxsup_bss->leap->rogue_ap[indx] = rogue;
 }
 
 /* Do the work for the WLC_SET_LEAP_LIST ioctl */
@@ -1482,11 +1501,11 @@ wlc_cckm_calc_krk_btk(bss_ccxsup_info_t *ccxsup_bss)
 	data_len += EAPOL_WPA_KEY_NONCE_LEN;
 	bcopy(&ccxsup_bss->wpa->anonce, &data[data_len], EAPOL_WPA_KEY_NONCE_LEN);
 	data_len += EAPOL_WPA_KEY_NONCE_LEN;
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	if (WL_WSEC_ON()) {
 		prhex("KRK/BTK gen input", data, data_len);
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 
 	/* generate the KRK/BTK */
 	ASSERT(strlen(prefix) + data_len + 1 <= PRF_MAX_I_D_LEN);
@@ -1495,12 +1514,12 @@ wlc_cckm_calc_krk_btk(bss_ccxsup_info_t *ccxsup_bss)
 		data, data_len, prf_buff, CCKM_KRK_LEN + CCKM_BTK_LEN);
 	bcopy(prf_buff, ccxsup_bss->key_refresh_key, CCKM_KRK_LEN);
 	bcopy(prf_buff + CCKM_KRK_LEN, ccxsup_bss->base_transient_key, CCKM_BTK_LEN);
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	if (WL_WSEC_ON()) {
 		prhex("KRK looks like", ccxsup_bss->key_refresh_key, CCKM_KRK_LEN);
 		prhex("BTK looks like", ccxsup_bss->base_transient_key, CCKM_BTK_LEN);
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 
 	MFREE(ccxsup_bss->osh, data, WPA_KEY_DATA_LEN_128);
 	MFREE(ccxsup_bss->osh, prf_buff, PRF_OUTBUF_LEN);
@@ -1530,22 +1549,22 @@ wlc_cckm_calc_ptk(bss_ccxsup_info_t *ccxsup_bss)
 	data_len += sizeof(ccxsup_bss->rn);
 	bcopy(&BSS_EA(ccxsup_bss), &data[data_len], ETHER_ADDR_LEN);
 	data_len += ETHER_ADDR_LEN;
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	if (WL_WSEC_ON()) {
 		prhex("PTK gen input", data, data_len);
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 	/* generate the PTK */
 	ASSERT(data_len + 1 <= PRF_MAX_I_D_LEN);
 	fPRF(ccxsup_bss->base_transient_key, CCKM_BTK_LEN, NULL, 0, data, data_len,
 		prf_buff, ccxsup_bss->wpa->ptk_len);
 	bcopy(prf_buff, ccxsup_bss->wpa->eapol_mic_key, ccxsup_bss->wpa->ptk_len);
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	if (WL_WSEC_ON()) {
 		prhex("PTK looks like", ccxsup_bss->wpa->eapol_mic_key,
 			ccxsup_bss->wpa->ptk_len);
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 	MFREE(ccxsup_bss->osh, data, WPA_KEY_DATA_LEN_128);
 	MFREE(ccxsup_bss->osh, prf_buff, PRF_OUTBUF_LEN);
 }
@@ -1611,11 +1630,11 @@ wlc_cckm_reassoc(bss_ccxsup_info_t *ccxsup_bss, cckm_reassoc_resp_ie_t *cckm_ie)
 	uint len;
 
 	len = (int)cckm_ie->len;
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 	if (WL_WSEC_ON()) {
 		prhex("CCKM IE?", (uchar *)cckm_ie, cckm_ie->len + TLV_HDR_LEN);
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_WSEC */
 	if (bcmp(cckm_ie->oui, CISCO_AIRONET_OUI, DOT11_OUI_LEN) ||
 	    (cckm_ie->oui_type != (uint8)CCKM_OUI_TYPE)) {
 		WL_WSEC(("wl%d: wlc_cckm_reassoc: OUI (%02x:%02x:%02x:%02x) mismatch in CCKM"

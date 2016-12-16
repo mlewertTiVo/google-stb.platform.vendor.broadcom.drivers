@@ -77,6 +77,10 @@ static int
 wlc_probresp_mac_filter_doiovar(void *ctx, uint32 actionid,
 	void *params, uint plen, void *arg, uint alen, uint vsize, struct wlc_if *wlcif);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* register dump routine */
+static int wlc_probresp_mac_filter_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* bss cubby */
 static int wlc_probresp_mac_filter_bss_init(void *ctx, wlc_bsscfg_t *cfg);
@@ -117,6 +121,10 @@ BCMATTACHFN(wlc_probresp_mac_filter_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "probresp_mac_filter", wlc_probresp_mac_filter_dump,
+		mprobresp_mac_filter);
+#endif
 	if (wlc_probresp_register(wlc->mprobresp, mprobresp_mac_filter,
 		wlc_probresp_mac_filter_check_probe_req, FALSE) != 0)
 		goto fail;
@@ -197,6 +205,18 @@ wlc_probresp_mac_filter_doiovar(void *ctx, uint32 actionid,
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_probresp_mac_filter_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_probresp_mac_filter_info_t *mprobresp_mac_filter =
+		(wlc_probresp_mac_filter_info_t *)ctx;
+
+	bcm_bprintf(b, "bsscfgh %d \n", mprobresp_mac_filter->bsscfgh);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static bool
 wlc_probresp_mac_filter_check_probe_req(void *handle, wlc_bsscfg_t *cfg,

@@ -10,15 +10,11 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_util.c 645630 2016-06-24 23:27:55Z $
+ * $Id: km_util.c 660248 2016-09-19 21:45:03Z $
  */
 
 #include "km_pvt.h"
 
-
-/* internal, public to keymgmt interface */
-
-#define KM_BTAMP_SNAP(pbody) 0
 
 /* 802.1X LLC header, * DSAP/SSAP/CTL = AA:AA:03
  * OUI = 00:00:00
@@ -317,7 +313,7 @@ km_allow_unencrypted(keymgmt_t *km, const wlc_key_info_t *key_info,
 			if (qc & QOS_AMSDU_MASK)
 				pbody += ETHER_HDR_LEN;
 
-			if (!KM_BTAMP_SNAP(pbody) && !KM_DOT1X_SNAP(pbody) &&
+			if (!KM_DOT1X_SNAP(pbody) &&
 				TRUE) {
 					break;
 			}
@@ -419,8 +415,11 @@ wlc_keymgmt_recvdata(keymgmt_t *km, wlc_frminfo_t *f)
 	/* fast path lookup */
 	{
 		wlc_key_hw_index_t hw_idx;
-		hw_idx = (f->rxh->lt80.RxStatus1 & RXS_SECKINDX_MASK) >> RXS_SECKINDX_SHIFT;
-		if ((f->rxh->lt80.RxStatus1 & RXS_DECATMPT) &&
+		uint16 RxStatus1 = D11RXHDR_ACCESS_VAL(f->rxh,
+			KM_COREREV(km), RxStatus1);
+
+		hw_idx = (RxStatus1 & RXS_SECKINDX_MASK) >> RXS_SECKINDX_SHIFT;
+		if ((RxStatus1 & RXS_DECATMPT) &&
 			(hw_idx == km->key_cache->hw_idx)) {
 			key = km->key_cache->key;
 			*key_info = *km->key_cache->key_info;
@@ -470,7 +469,7 @@ have_key:
 
 	KM_LOG(("wl%d.%d: %s: key_lookup: "
 		"key for %scast frame key id %d, key idx %d, algo %d\n",
-		KM_UNIT(km), bsscfg ? WLC_BSSCFG_IDX(bsscfg) : -1, __FUNCTION__,
+		KM_UNIT(km), WLC_BSSCFG_IDX(bsscfg), __FUNCTION__,
 		(f->ismulti ? "multi" : "uni"), key_info->key_id,
 		key_info->key_idx, key_info->algo));
 
@@ -480,7 +479,7 @@ have_key:
 	err = wlc_key_rx_mpdu(key, f->p, f->rxh);
 	if (err != BCME_OK) {
 		KM_LOG(("wl%d.%d: %s: error %d on receive\n",
-			KM_UNIT(km), bsscfg ? WLC_BSSCFG_IDX(bsscfg) : -1, __FUNCTION__, err));
+			KM_UNIT(km), WLC_BSSCFG_IDX(bsscfg), __FUNCTION__, err));
 		goto done;
 	}
 
@@ -614,6 +613,28 @@ km_init_pvt_key(keymgmt_t *km, km_pvt_key_t *km_pvt_key, wlc_key_algo_t algo,
         NULL /* bsscfg */, NULL /* scb */, key, NULL /* pkt */);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void
+km_get_hw_idx_key_info(keymgmt_t *km, wlc_key_hw_index_t hw_idx,
+    wlc_key_info_t *key_info)
+{
+	wlc_key_t *key;
+	int i;
+
+	KM_DBG_ASSERT(KM_VALID(km));
+	KM_DBG_ASSERT(key_info != NULL);
+
+	key = km->null_key;
+	for (i = 0; i < km->max_keys; ++i) {
+		if (hw_idx == km_get_hw_idx(km, (wlc_key_index_t)i)) {
+			key = km->keys[i].key;
+			break;
+		}
+	}
+
+	wlc_key_get_info(key, key_info);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 
 /* determine if default keys are valid for rx unicast */
@@ -791,7 +812,7 @@ km_wsec_allows_algo(keymgmt_t *km, uint32 wsec, wlc_key_algo_t algo)
 	return allows;
 }
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLMSG_WSEC)
 
 #define CASE(x) case WLC_KEYMGMT_NOTIF_##x: return #x
 const char*
@@ -919,8 +940,28 @@ wlc_keymgmt_get_hw_algo_name(keymgmt_t *km, wlc_key_hw_algo_t hw_algo, int mode)
 	}
 	return name;
 }
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || WLMSG_WSEC */
 
+#ifdef BCMDBG
+static unsigned
+__h2i(int c)
+{
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	else if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	else if (c >= '0' && c <= '9')
+		return c - '0';
+	else
+		return 0;
+}
+
+uint8
+km_hex2int(uchar lo, uchar hi)
+{
+	return (uint8)(__h2i(hi) << 4 | __h2i(lo));
+}
+#endif /* BCMDBG */
 
 #ifdef KM_SERIAL_SUPPORTED
 int
@@ -969,24 +1010,24 @@ wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg)
 	uint8 data[KM_KEY_MAX_DATA_LEN], i, id;
 	size_t data_len;
 	wlc_key_id_t key;
+	if (!BSSCFG_AP(from_cfg)) {
+		from_scb = wlc_scblookupband(from_cfg->wlc, from_cfg,
+			&to_cfg->current_bss->BSSID,
+			CHSPEC_WLCBANDUNIT(to_cfg->current_bss->chanspec));
 
-	from_scb = wlc_scblookupband(from_cfg->wlc, from_cfg,
-		&to_cfg->current_bss->BSSID,
-		CHSPEC_WLCBANDUNIT(to_cfg->current_bss->chanspec));
+		if (!from_scb) {
+			KM_ERR(("wlc%d: from_scb is not found \n", WLCWLUNIT(from_cfg->wlc)));
+			return BCME_NOTFOUND;
+		}
 
-	if (!from_scb) {
-		KM_ERR(("wlc%d: from_scb is not found \n", WLCWLUNIT(from_cfg->wlc)));
-		return BCME_NOTFOUND;
+		to_scb = wlc_scblookupband(to_cfg->wlc, to_cfg,
+		&from_cfg->current_bss->BSSID, CHSPEC_WLCBANDUNIT(to_cfg->current_bss->chanspec));
+
+		if (!to_scb) {
+			KM_ERR(("wlc%d: to_scb is not found \n", WLCWLUNIT(to_cfg->wlc)));
+			return BCME_NOTFOUND;
+		}
 	}
-
-	to_scb = wlc_scblookupband(to_cfg->wlc, to_cfg,
-	&from_cfg->current_bss->BSSID, CHSPEC_WLCBANDUNIT(to_cfg->current_bss->chanspec));
-
-	if (!to_scb) {
-		KM_ERR(("wlc%d: to_scb is not found \n", WLCWLUNIT(to_cfg->wlc)));
-		return BCME_NOTFOUND;
-	}
-
 	/* Copy all bss keys */
 	for (id = 0; id < WLC_KEYMGMT_NUM_GROUP_KEYS; id++) {
 		from_key = wlc_keymgmt_get_bss_key(from_km, from_cfg, id,
@@ -1026,64 +1067,68 @@ wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg)
 		key_info.key_idx, to_key_info.key_idx);
 #endif
 	}
+	/* For AP, the SCB cloning is handled in scb update function.
+	* STA Cfg does not enter the update functionality and therefore
+	* still needs the below from_scb -> to_scb data copy.
+	*/
+	if (!BSSCFG_AP(from_cfg)) {
+		/* Copy scb keys */
+		for (id = 0; id < WLC_KEYMGMT_NUM_GROUP_KEYS; id++) {
+			wlc_key_flags_t key_flags = WLC_KEY_FLAG_NONE;
 
-	/* Copy scb keys */
-	for (id = 0; id < WLC_KEYMGMT_NUM_GROUP_KEYS; id++) {
-		wlc_key_flags_t key_flags = WLC_KEY_FLAG_NONE;
+			if (WLC_KEY_ID_IS_STA_GROUP(id)) {
+				if (!from_cfg->BSS)
+					key_flags = WLC_KEY_FLAG_IBSS_PEER_GROUP;
+				else
+					key_flags = WLC_KEY_FLAG_GROUP;
+			}
 
-		if (WLC_KEY_ID_IS_STA_GROUP(id)) {
-			if (!from_cfg->BSS)
-				key_flags = WLC_KEY_FLAG_IBSS_PEER_GROUP;
-			else
-				key_flags = WLC_KEY_FLAG_GROUP;
-		}
+			from_key = wlc_keymgmt_get_scb_key(from_km, from_scb, id,
+				key_flags, &key_info);
+			if (!from_key)
+				continue;
 
-		from_key = wlc_keymgmt_get_scb_key(from_km, from_scb, id,
-			key_flags, &key_info);
-		if (!from_key)
-			continue;
+			err = wlc_key_get_data(from_key, data, sizeof(data), &data_len);
 
-		err = wlc_key_get_data(from_key, data, sizeof(data), &data_len);
+			if (err != BCME_OK)
+				continue;
 
-		if (err != BCME_OK)
-			continue;
+			to_key = wlc_keymgmt_get_scb_key(to_km, to_scb, id,
+				key_flags, &to_key_info);
+			if (!to_key)
+				continue;
 
-		to_key = wlc_keymgmt_get_scb_key(to_km, to_scb, id,
-			key_flags, &to_key_info);
-		if (!to_key)
-			continue;
+			/* Clone key data */
+			wlc_key_set_data(to_key, key_info.algo, data, data_len);
+			/* Clone key flags */
+			if (to_key_info.flags != key_info.flags) {
+				bool do_notify = KM_KEY_FLAGS_NOTIFY_MASK(to_key_info.flags) !=
+					KM_KEY_FLAGS_NOTIFY_MASK(key_info.flags);
+				to_key_info.flags = key_info.flags;
+				if (do_notify)
+					km_notify(to_km, WLC_KEYMGMT_NOTIF_KEY_UPDATE,
+						NULL /* bsscfg */, NULL /* scb */,
+						to_key, NULL /* pkt */);
+			}
 
-		/* Clone key data */
-		wlc_key_set_data(to_key, key_info.algo, data, data_len);
-		/* Clone key flags */
-		if (to_key_info.flags != key_info.flags) {
-			bool do_notify = KM_KEY_FLAGS_NOTIFY_MASK(to_key_info.flags) !=
-				KM_KEY_FLAGS_NOTIFY_MASK(key_info.flags);
-			to_key_info.flags = key_info.flags;
-			if (do_notify)
-				km_notify(to_km, WLC_KEYMGMT_NOTIF_KEY_UPDATE,
-					NULL /* bsscfg */, NULL /* scb */, to_key, NULL /* pkt */);
-		}
-
-
-		/* Clone tx seq number */
-		data_len = sizeof(data);
-		if (wlc_key_get_seq(from_key, data, data_len, 0, 1) >= 0)
-			wlc_key_set_seq(to_key, data, data_len, 0, 1);
-
-		/* Clone rx seq number */
-		for (i = 0; i < (size_t)WLC_KEY_NUM_RX_SEQ; i++) {
+			/* Clone tx seq number */
 			data_len = sizeof(data);
-			if (wlc_key_get_seq(from_key, data, data_len, i, 0) >= 0)
-				wlc_key_set_seq(to_key, data, data_len, i, 0);
-		}
+			if (wlc_key_get_seq(from_key, data, data_len, 0, 1) >= 0)
+				wlc_key_set_seq(to_key, data, data_len, 0, 1);
+
+			/* Clone rx seq number */
+			for (i = 0; i < (size_t)WLC_KEY_NUM_RX_SEQ; i++) {
+				data_len = sizeof(data);
+				if (wlc_key_get_seq(from_key, data, data_len, i, 0) >= 0)
+					wlc_key_set_seq(to_key, data, data_len, i, 0);
+			}
 
 #if defined(BRCMAPIVTW)
-		km_ivtw_clone(from_km->ivtw, to_km->ivtw,
-		key_info.key_idx, to_key_info.key_idx);
+			km_ivtw_clone(from_km->ivtw, to_km->ivtw,
+			key_info.key_idx, to_key_info.key_idx);
 #endif
+		}
 	}
-
 	key = wlc_keymgmt_get_bss_tx_key_id(from_km,
 		from_cfg, FALSE);
 	wlc_keymgmt_set_bss_tx_key_id(to_km, to_cfg,

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_assoc.c 645507 2016-06-24 10:41:23Z $
+ * $Id: wlc_assoc.c 668637 2016-11-04 08:47:37Z $
  */
 
 
@@ -42,6 +42,7 @@
 #include <wlc_bmac.h>
 #include <wlc_scb.h>
 #include <wlc_led.h>
+#include <phy_chanmgr_api.h>
 #include <phy_misc_api.h>
 #ifdef WLTDLS
 #include <wlc_tdls.h>
@@ -79,6 +80,7 @@
 #include <wlc_prot_n.h>
 #include <wlc_utils.h>
 #include <wlc_pcb.h>
+#include <wlc_he.h>
 #include <wlc_vht.h>
 #include <wlc_ht.h>
 #include <wlc_txbf.h>
@@ -101,6 +103,7 @@
 #include <wlc_ie_mgmt_ft.h>
 #include <wlc_ie_mgmt_vs.h>
 #include <wlc_ie_mgmt_lib.h>
+#include <wlc_ie_helper.h>
 #ifdef WLFBT
 #include <wlc_fbt.h>
 #endif /* WLFBT */
@@ -139,6 +142,7 @@
 #include <wlc_sta.h>
 
 #include <wlc_hs20.h>
+#include <wlc_dfs.h>
 
 #include <wlc_rx.h>
 
@@ -146,7 +150,6 @@
 #include <wlc_tpc.h>
 #endif
 #include <wlc_lq.h>
-#include <wlc_ulb.h>
 
 #ifdef WLC_SW_DIVERSITY
 #include <wlc_swdiv.h>
@@ -174,6 +177,13 @@
 #include <proto/802.11ax.h>
 #include <wlc_he.h>
 #endif
+#ifdef BCMULP
+#include <wlc_ulp.h>
+#endif /* BCMULP */
+#include <phy_radar_api.h>
+#include <phy_noise_api.h>
+#include <phy_calmgr_api.h>
+#include <phy_radio_api.h>
 
 /* shared wlc module info */
 typedef struct wlc_assoc_cmn {
@@ -191,8 +201,19 @@ struct wlc_assoc_info {
 	wlc_assoc_cmn_t *cmn;
 	bcm_notif_h as_st_notif_hdl;	/**< assoc state notifier handle. */
 	bcm_notif_h dis_st_notif_hdl;	/**< disassoc state notifier handle. */
-	int cfgh;
+	int cfgh;			/* bsscfg cubby offset */
 };
+
+typedef struct assoc_cfg_cubby {
+	uint32	timestamp_lastbcn; /* in miliseconds */
+	uint32	mschreg_errcnt;
+	uint32	mschunreg_errcnt;
+	wlc_msch_req_handle_t *msch_homech_req_hdl;
+} assoc_cfg_cubby_t;
+
+/* assoc cubby access macro */
+#define BSSCFG_ASSOC_CUBBY(assoc_info, cfg) \
+	(assoc_cfg_cubby_t *)BSSCFG_CUBBY((cfg), (assoc_info)->cfgh)
 
 #ifdef STA
 /* join targets sorting preference */
@@ -218,7 +239,7 @@ struct wlc_join_pref {
 
 /* join pref width in bits */
 #define WLC_JOIN_PREF_BITS_TRANS_PREF	8 /**< # of bits in weight for AP Transition Join Pref */
-#define WLC_JOIN_PREF_BITS_RSSI		8 /**< # of bits in weight for RSSI Join Pref */
+#define WLC_JOIN_PREF_BITS_RSSI		16 /**< # of bits in weight for RSSI Join Pref */
 #define WLC_JOIN_PREF_BITS_WPA		4 /**< # of bits in weight for WPA Join Pref */
 #define WLC_JOIN_PREF_BITS_BAND		1 /**< # of bits in weight for BAND Join Pref */
 #define WLC_JOIN_PREF_BITS_RSSI_DELTA	0 /**< # of bits in weight for RSSI Delta Join Pref */
@@ -260,6 +281,7 @@ struct wlc_join_pref {
 #define WLC_IE_WAIT_TIMEOUT	200	/**< assoc. ie waiting timeout in ms */
 
 #define WECA_AUTH_TIMEOUT	300	/**< authentication timeout in ms */
+#define DELAY_10MS		10	/* delay time in ms */
 
 #ifdef WLABT
 #define ABT_MIN_TIMEOUT		5
@@ -268,6 +290,11 @@ struct wlc_join_pref {
 
 #define WLC_ASSOC_TIME_US                   (5000 * 1000)
 #define WLC_MSCH_CHSPEC_CHNG_START_TIME_US  (2000)
+
+#define WLC_ASSOC_IS_PROHIBITED_CHANSPEC(wlc, chanspec) \
+	((WLC_CNTRY_DEFAULT_ENAB(wlc) && !WLC_AUTOCOUNTRY_ENAB(wlc) && \
+	(chanspec != INVCHANSPEC) && \
+	!wlc_valid_chanspec_cntry(wlc->cmi, wlc_channel_country_abbrev(wlc->cmi), chanspec)))
 
 /* local routine declarations */
 #if defined(WL_ASSOC_MGR)
@@ -335,7 +362,6 @@ static void wlc_join_BSS_sendauth(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi,
 static bool wlc_join_chanspec_filter(wlc_bsscfg_t *cfg, chanspec_t chanspec);
 static void wlc_cook_join_targets(wlc_bsscfg_t *cfg, bool roam, int cur_rssi);
 static void wlc_create_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
-static int _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type);
 static bool wlc_join_basicrate_supported(wlc_info_t *wlc, wlc_rateset_t *rs, int band);
 static void wlc_join_adopt_bss(wlc_bsscfg_t *cfg);
 static void wlc_join_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
@@ -372,7 +398,7 @@ static void wlc_check_adaptive_bcn_timeout(wlc_bsscfg_t *cfg);
 static void wlc_roam_period_update(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 static int wlc_assoc_chanspec_change_cb(void* handler_ctxt, wlc_msch_cb_info_t *cb_info);
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 static void wlc_print_roam_status(wlc_bsscfg_t *cfg, uint roam_reason, bool printcache);
 #endif
 
@@ -386,25 +412,32 @@ static bool wlc_roamprof_is_cu_enabled(wlc_info_t *wlc, int bandtype, int16 idx)
 static void wlc_bss_disassoc_notif(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 	uint type, uint state, const struct ether_addr *addr);
 
+#ifdef STA
 typedef struct join_pref {
 	uint32 score;
 	uint32 rssi;
 } join_pref_t;
 
-#ifdef STA
-#if defined(WLMSG_ASSOC)
+static void wlc_join_done(wlc_bsscfg_t *cfg, int status);
+static int wlc_assoc_homech_req_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info);
+static void wlc_assoc_homech_req_unregister(wlc_bsscfg_t *bsscfg);
+static int wlc_assoc_homech_req_register(wlc_bsscfg_t *bsscfg);
+static void wlc_assoc_on_rxbcn(void *ctx, bss_rx_bcn_notif_data_t *data);
+
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 static const char *join_pref_name[] = {"rsvd", "rssi", "wpa", "band", "band_rssi_delta"};
 #define WLCJOINPREFN(type)	join_pref_name[type]
-#endif	
+#endif	/* BCMDBG || WLMSG_ASSOC */
 
-#if defined(WLMSG_ASSOC) || defined(WLMSG_INFORM) || defined(WLMSG_ROAM)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLMSG_INFORM) || \
+	defined(WLMSG_ROAM)
 static const char *as_type_name[] = {
 	"NONE", "JOIN", "ROAM", "RECREATE", "VERIFY"
 };
 #define WLCASTYPEN(type)	as_type_name[type]
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC || WLMSG_INFORM || WLMSG_ROAM */
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 
 /* When an AS_ state is added, add a string translation to the table below */
 #if AS_LAST_STATE != 33 /* don't change this without adding to the table below!!! */
@@ -448,7 +481,7 @@ const char * as_st_names[] = {
 };
 
 static const char *
-wlc_as_st_name(uint state)
+BCMRAMFN(wlc_as_st_name)(uint state)
 {
 	const char * result;
 
@@ -461,7 +494,7 @@ wlc_as_st_name(uint state)
 	return result;
 }
 
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 
 /* state(s) that can yield to other association requests */
 #define AS_CAN_YIELD(bss, st)	((bss) && (st) == AS_SYNC_RCV_BCN)
@@ -475,7 +508,7 @@ wlc_as_st_name(uint state)
 static int
 wlc_assoc_req_add_entry(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint type, bool top)
 {
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char ssidbuf[SSID_FMT_BUF_LEN];
 #endif
 	int i, j;
@@ -511,7 +544,7 @@ wlc_assoc_req_add_entry(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint type, bool top)
 			(as->type == AS_ROAM && as->state == AS_WAIT_RCV_BCN)) {
 			continue;
 		}
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		wlc_format_ssid(ssidbuf, bc->SSID, bc->SSID_len);
 #endif
 		WL_ASSOC(("wl%d.%d: remove %s request in state %s for SSID '%s "
@@ -524,7 +557,7 @@ wlc_assoc_req_add_entry(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint type, bool top)
 
 find_entry:
 	/* find the first empty entry or entry with bsscfg in state AS_CAN_YIELD() */
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	wlc_format_ssid(ssidbuf, cfg->SSID, cfg->SSID_len);
 #endif
 
@@ -562,7 +595,7 @@ ins_entry:
 		if (bc == NULL || ++i >= WLC_MAXBSSCFG)
 			break;
 		as = bc->assoc;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		wlc_format_ssid(ssidbuf, bc->SSID, bc->SSID_len);
 #endif
 		WL_ASSOC(("wl%d.%d: move %s request in state %s for SSID '%s' "
@@ -585,7 +618,7 @@ static void
 wlc_assoc_req_process_next(wlc_info_t *wlc)
 {
 	wlc_bsscfg_t *cfg;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char ssidbuf[SSID_FMT_BUF_LEN];
 #endif
 	wlc_assoc_t *as;
@@ -597,7 +630,7 @@ wlc_assoc_req_process_next(wlc_info_t *wlc)
 		return;
 	}
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	wlc_format_ssid(ssidbuf, cfg->SSID, cfg->SSID_len);
 #endif
 
@@ -628,7 +661,7 @@ wlc_assoc_req_process_next(wlc_info_t *wlc)
 static int
 wlc_assoc_req_remove_entry(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 {
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char ssidbuf[SSID_FMT_BUF_LEN];
 #endif
 	int i;
@@ -642,7 +675,7 @@ wlc_assoc_req_remove_entry(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	for (i = 0; i < WLC_MAXBSSCFG; i ++) {
 		if (wlc->as->cmn->assoc_req[i] != cfg)
 			continue;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		wlc_format_ssid(ssidbuf, cfg->SSID, cfg->SSID_len);
 #endif
 		WL_ASSOC(("wl%d.%d: remove %s request in state %s in assoc_req list "
@@ -690,13 +723,12 @@ wlc_assoc_fixup_bsscfg_type(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bss_info_t *
 	}
 
 	if ((err = wlc_bsscfg_type_bi2cfg(wlc, cfg, bi, &type)) != BCME_OK) {
-		WL_ERROR(("wl%d.%d: %s: wlc_bsscfg_type_bi2cfg failed with err %d.\n",
+		WL_ASSOC_ERROR(("wl%d.%d: %s: wlc_bsscfg_type_bi2cfg failed with err %d.\n",
 		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__, err));
 		return err;
 	}
 	if ((err = wlc_bsscfg_type_fixup(wlc, cfg, &type, as_in_prog)) != BCME_OK) {
-		WL_ERROR(("wl%d.%d: %s: wlc_bsscfg_type_fixup failed with err %d.\n",
-		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__, err));
+
 		return err;
 	}
 
@@ -735,7 +767,7 @@ wlc_join(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, const uint8 *SSID, int len,
 		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), ret));
 		return BCME_OK;
 	} else if (ret < 0) {
-		WL_ERROR(("wl%d.%d: JOIN request failed, err = %d\n",
+		WL_ASSOC_ERROR(("wl%d.%d: JOIN request failed, err = %d\n",
 		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), ret));
 		return ret;
 	}
@@ -787,7 +819,7 @@ wlc_join_start_prep(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 {
 	wlc_bss_info_t *target_bss = cfg->target_bss;
 	int ret;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char *ssidbuf;
 	const char *ssidstr;
 
@@ -806,7 +838,7 @@ wlc_join_start_prep(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 		if (ssidbuf != NULL)
 			 MFREE(wlc->osh, (void *)ssidbuf, SSID_FMT_BUF_LEN);
 	}
-#endif 
+#endif /* #if defined(BCMDBG) || defined(WLMSG_ASSOC) */
 
 	/* adopt the default BSS params as the target's BSS params */
 	bcopy(wlc->default_bss, target_bss, sizeof(wlc_bss_info_t));
@@ -819,7 +851,7 @@ wlc_join_start_prep(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	/* this is STA only, no aps_associated issues */
 	ret = wlc_bsscfg_enable(wlc, cfg);
 	if (ret) {
-		WL_ERROR(("wl%d: %s: Can not enable bsscfg,err:%d\n", wlc->pub->unit,
+		WL_ASSOC_ERROR(("wl%d: %s: Can not enable bsscfg,err:%d\n", wlc->pub->unit,
 			__FUNCTION__, ret));
 		return ret;
 	}
@@ -839,10 +871,10 @@ wlc_join_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 {
 	wlc_info_t *wlc = cfg->wlc;
 	wlc_assoc_t *as = cfg->assoc;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -862,11 +894,14 @@ wlc_join_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 		wlc_bss_info_t *current_bss = cfg->current_bss;
 		wlc_assoc_init(cfg, AS_ASSOCIATION);
 		if (cfg->associated &&
-		    (cfg->SSID_len != current_bss->SSID_len ||
-		     bcmp(cfg->SSID, (char*)current_bss->SSID, cfg->SSID_len))) {
+			(cfg->SSID_len != current_bss->SSID_len ||
+			memcmp(cfg->SSID, (char*)current_bss->SSID, cfg->SSID_len) ||
+			(assoc_params &&
+			memcmp(&current_bss->BSSID, &assoc_params->bssid,
+			sizeof(assoc_params->bssid))))) {
 
 			WL_ASSOC(("wl%d: SCAN: wlc_join_start, Disassociating from %s first\n",
-			          WLCWLUNIT(wlc), bcm_ether_ntoa(&cfg->prev_BSSID, eabuf)));
+				WLCWLUNIT(wlc), bcm_ether_ntoa(&current_bss->BSSID, eabuf)));
 			wlc_assoc_change_state(cfg, AS_WAIT_DISASSOC);
 			wlc_setssid_disassociate_client(cfg);
 		} else {
@@ -929,7 +964,7 @@ wlc_setssid_disassoc_complete(wlc_info_t *wlc, uint txstatus, void *arg)
 	wl_join_assoc_params_t *assoc_params;
 	wlc_bsscfg_t *cfg = wlc_bsscfg_find_by_ID(wlc, (uint16)(uintptr)arg);
 	wlc_assoc_t *as;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -937,7 +972,7 @@ wlc_setssid_disassoc_complete(wlc_info_t *wlc, uint txstatus, void *arg)
 
 	/* in case bsscfg is freed before this callback is invoked */
 	if (cfg == NULL) {
-		WL_ERROR(("wl%d: %s: unable to find bsscfg by ID %p\n",
+		WL_NONE(("wl%d: %s: unable to find bsscfg by ID %p\n",
 		          wlc->pub->unit, __FUNCTION__,
 				OSL_OBFUSCATE_BUF(arg)));
 		return;
@@ -966,7 +1001,7 @@ wlc_setssid_disassoc_complete(wlc_info_t *wlc, uint txstatus, void *arg)
 	scan_params = wlc_bsscfg_scan_params(cfg);
 	if ((assoc_params = wlc_bsscfg_assoc_params(cfg)) != NULL) {
 		int bccnt;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 		bssid = &assoc_params->bssid;
@@ -1038,9 +1073,9 @@ wlc_bss_pref_score(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, bool band_rssi_boost, 
 	int16 rssi;
 	uint32 weight, value;
 	uint chband;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	(void)wlc;
 
 	/* clamp RSSI to the range 0 > rssi >= WLC_RSSI_MINVAL
@@ -1160,7 +1195,7 @@ wlc_bss_pref_score(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, bool band_rssi_boost, 
 	if (WBTEXT_ACTIVE(wlc->pub) &&
 		(band_rssi_boost || (bi == cfg->current_bss))) {
 
-		wlc_wnm_bsstrans_print_score(wlc->wnm_info, cfg, bi, weight);
+		wlc_wnm_bsstrans_print_score(wlc->wnm_info, cfg, bi, rssi, weight);
 	}
 #endif /* WLWNM */
 
@@ -1183,9 +1218,9 @@ wlc_populate_join_pref_score(wlc_bsscfg_t *cfg, bool for_roam, join_pref_t *join
 	wlc_roam_t *roam = cfg->roam;
 	wlc_bss_info_t **bip = wlc->as->cmn->join_targets->ptrs;
 	int i, j;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 
 	for (i = 0; i < (int)wlc->as->cmn->join_targets->count; i++) {
 		if ((roam->reason == WLC_E_REASON_BSSTRANS_REQ) &&
@@ -1301,6 +1336,39 @@ wlc_update_pref_score(void *join_pref_list, uint8 index, uint32 threshold, uint3
 	return ret;
 }
 
+#ifdef WNM_BSSTRANS_EXT
+static void
+wlc_dump_join_pref(wlc_bsscfg_t *cfg)
+{
+	wlc_join_pref_t *join_pref = cfg->join_pref;
+	uint32 delta = 0;
+	uint32 band = 0;
+	uint32 p = 0;
+	int i;
+
+	/* return if join_pref is not active */
+	if (!join_pref || !join_pref->fields) {
+		return;
+	}
+
+	for (i = 0; i < join_pref->fields; i ++) {
+		p |= WLCTYPEBMP(join_pref->field[i].type);
+	}
+
+	if (cfg->join_pref_rssi_delta.rssi != 0 &&
+		cfg->join_pref_rssi_delta.band != WLC_BAND_AUTO) {
+		delta = cfg->join_pref_rssi_delta.rssi,
+		band = cfg->join_pref_rssi_delta.band;
+		p |= WLCTYPEBMP(WL_JOIN_PREF_RSSI_DELTA);
+	}
+	BCM_REFERENCE(delta);
+	BCM_REFERENCE(band);
+
+	WBTEXT_INFO(("WBTEXT DBG: JOINPREF: type:%02X, RSSI Delta:%d:%d\n",
+		p, delta, band));
+}
+#endif /* WNM_BSSTRANS_EXT */
+
 /** Rates the candidate APs available to a STA, to subsequently make a join/roam decision */
 static void
 wlc_cook_join_targets(wlc_bsscfg_t *cfg, bool for_roam, int cur_rssi)
@@ -1310,12 +1378,15 @@ wlc_cook_join_targets(wlc_bsscfg_t *cfg, bool for_roam, int cur_rssi)
 	int i, j;
 	wlc_bss_info_t **bip, *tmp_bi;
 	uint roam_delta = 0;
-#if defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	join_pref_t *join_pref, tmp_join_pref;
 	uint32 join_pref_score_size = wlc->as->cmn->join_targets->count * sizeof(*join_pref);
 	uint32 cur_pref_score = 0, cur_pref_rssi = 0, score_delta = 0;
+#ifdef OPPORTUNISTIC_ROAM
+	int k, best_ap_idx;
+#endif /* OPPORTUNISTIC_ROAM */
 
 	WL_SRSCAN(("wl%d: RSSI is %d; %d roaming target[s]; Join preference fields "
 		"are 0x%x", WLCWLUNIT(wlc), cur_rssi, wlc->as->cmn->join_targets->count,
@@ -1341,6 +1412,11 @@ wlc_cook_join_targets(wlc_bsscfg_t *cfg, bool for_roam, int cur_rssi)
 			wlc->as->cmn->join_targets->count);
 	}
 #endif /* WLWNM */
+#ifdef WNM_BSSTRANS_EXT
+	if (WBTEXT_ACTIVE(wlc->pub)) {
+		wlc_dump_join_pref(cfg);
+	}
+#endif /* WNM_BSSTRANS_EXT */
 
 	wlc_populate_join_pref_score(cfg, for_roam, join_pref);
 
@@ -1542,9 +1618,8 @@ wlc_cook_join_targets(wlc_bsscfg_t *cfg, bool for_roam, int cur_rssi)
 					cur_pref_score, join_pref[i].score);
 
 				if (WBTEXT_ACTIVE(wlc->pub)) {
-					WBTEXT_INFO(("WBTEXT DBG: bssid:%02x:%02x:%02x:%02x:%02x:"
-						"%02x, score not met. cur:%d, trgt:%d(%d:%d)\n",
-						bip[i]->BSSID.octet[0],	bip[i]->BSSID.octet[1],
+					WBTEXT_INFO(("WBTEXT DBG: bssid:%02x:%02x:%02x:%02x, "
+						"score not met. cur:%d, trgt:%d(%d:%d)\n",
 						bip[i]->BSSID.octet[2],	bip[i]->BSSID.octet[3],
 						bip[i]->BSSID.octet[4], bip[i]->BSSID.octet[5],
 						join_pref[i].score, cur_pref_score + score_delta,
@@ -1614,23 +1689,67 @@ wlc_cook_join_targets(wlc_bsscfg_t *cfg, bool for_roam, int cur_rssi)
 		(void)wl_sort_bsslist(wlc->wl, bip, wlc->as->cmn->join_targets_last);
 
 #ifdef OPPORTUNISTIC_ROAM
+	if (!wlc->as->cmn->join_targets_last)
+		return;
+	best_ap_idx = (int)wlc->as->cmn->join_targets->count - 1;
+
+	/* As per requirement, place the join_bssid (if present) at the best AP spot */
 	if (memcmp(cfg->join_bssid.octet, BSSID_INVALID, sizeof(cfg->join_bssid.octet)) != 0) {
-		j = (int)wlc->as->cmn->join_targets->count - 1;
-		for (i = j; i >= 0; i--) {
-			int k;
+		for (i = best_ap_idx; i >= 0; i--) {
 			if (memcmp(cfg->join_bssid.octet, bip[i]->BSSID.octet,
 			           sizeof(bip[i]->BSSID.octet)) == 0) {
 				tmp_bi = bip[i];
-
-				for (k = i; k < j; k++)
+				for (k = i; k < best_ap_idx; k++)
 				{
 					bip[k] = bip[k+1];
 				}
-				bip[j] = tmp_bi;
+				bip[best_ap_idx] = tmp_bi;
 				break;
 			}
 		}
 		memcpy(cfg->join_bssid.octet, BSSID_INVALID, sizeof(cfg->join_bssid.octet));
+	}
+
+	/* At this point this is a sorted list of candidates that may include the curAP.
+	* No pruning was done for WLC_E_REASON_BETTER_AP.
+	* Driver should not reassociate to the same BSSID on the same channel it's already
+	* connected to.  check if the best result is the same BSSID and same chanspec.
+	* Nothing to be done if STA is not connected.
+	*/
+	if (for_roam && wlc_bss_connected(cfg) &&
+		(roam->reason == WLC_E_REASON_BETTER_AP)) {
+		for (i = best_ap_idx; i >= 0; i--) {
+			/* Test to see if the candidate is the curAP */
+			if (!memcmp(cfg->current_bss->BSSID.octet, bip[i]->BSSID.octet,
+				ETHER_ADDR_LEN) && (wf_chspec_ctlchan(cfg->current_bss->chanspec) ==
+				wf_chspec_ctlchan(bip[i]->chanspec))) {
+				wlc->as->cmn->join_targets_last = 0;
+				/* If the current AP is the best AP, end roam efforts */
+				if (i == best_ap_idx) {
+					WL_ASSOC(("wl%d.%d:%s(): Current BSSID is the best AP,"
+						" nothing more to do\n",
+						wlc->pub->unit, cfg->_idx, __FUNCTION__));
+				} else {
+					/* Cur AP is not the best AP, swap it out and
+					 * the other worse off APs from the candidate list and
+					 * update join_targets_last for wlc_join_attempt().
+					 * e.g. AP1 AP2 AP3 C AP4 AP5 --> AP4 AP5 AP3 C AP1 AP2
+					 * join_targets_last = 2, so wlc_join_attempt()
+					 * will consider AP4 and AP5, where C = cur AP
+					 */
+					for (k = i+1; k <= best_ap_idx; k++) {
+						/* Need to do a swap to avoid memory leaks
+						 *  and double free
+						 */
+						tmp_bi = bip[k-i-1];
+						bip[k-i-1] = bip[k];
+						bip[k] = tmp_bi;
+						wlc->as->cmn->join_targets_last++;
+					}
+				}
+				break;
+			}
+		}
 	}
 #endif /* OPPORTUNISTIC_ROAM */
 } /* wlc_cook_join_targets */
@@ -1643,14 +1762,14 @@ wlc_reassoc(wlc_bsscfg_t *cfg, wl_reassoc_params_t *reassoc_params)
 	chanspec_t* chanspec_list = NULL;
 	int channel_num = reassoc_params->chanspec_num;
 	struct ether_addr *bssid = &(reassoc_params->bssid);
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	wlc_assoc_t *as = cfg->assoc;
 	int ret;
 
 	if (!BSSCFG_STA(cfg) || !cfg->BSS) {
-		WL_ERROR(("wl%d: %s: bad argument STA %d BSS %d\n",
+		WL_ASSOC_ERROR(("wl%d: %s: bad argument STA %d BSS %d\n",
 		          wlc->pub->unit, __FUNCTION__, BSSCFG_STA(cfg), cfg->BSS));
 		return BCME_BADARG;
 	}
@@ -1663,7 +1782,7 @@ wlc_reassoc(wlc_bsscfg_t *cfg, wl_reassoc_params_t *reassoc_params)
 		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), ret));
 		return BCME_OK;
 	} else if (ret < 0) {
-		WL_ERROR(("wl%d.%d: REASSOC request failed\n",
+		WL_ASSOC_ERROR(("wl%d.%d: REASSOC request failed\n",
 		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg)));
 		return ret;
 	}
@@ -1732,6 +1851,96 @@ wlc_assoc_excursion_query_others(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	return bc == NULL;
 }
 
+#ifdef RSDB_APSCAN
+/* update the value of roam->prune_type on roamscan state. state transitions handled are
+ * ROAM_PRUNE_NONE-->ROAM_PRUNE_APBAND_CHANNELS. If no channels can be enumerated in state
+ * ROAM_PRUNE_APBAND_CHANNELS, the move to ROAM_PRUNE_NON_APBAND_CHANNELS.
+ */
+static int
+wlc_assoc_pruned_roamscan_prep(wlc_bsscfg_t *cfg, chanspec_t *chanspec_list, int channel_num)
+{
+	wlc_info_t *wlc = cfg->wlc;
+	wlc_roam_t *roam = cfg->roam;
+	int ret = channel_num;
+
+	if (roam->prune_type == ROAM_PRUNE_NONE) {
+		roam->prune_type = ROAM_PRUNE_APBAND_CHANNELS;
+
+		ret = wlc_scan_filter_channels(wlc->scan, chanspec_list, channel_num);
+
+		if (ret == channel_num) {
+			/* Feature not active or not required in the current scenario.
+			 * Set the prune state back to NONE.
+			 */
+			roam->prune_type = ROAM_PRUNE_NONE;
+
+		} else {
+			/* Do nothing */
+		}
+	} else if (roam->prune_type == ROAM_PRUNE_NON_APBAND_CHANNELS) {
+		/* Handling of the second pass when the non AP channels need to be scanned */
+		ret = wlc_scan_filter_channels(wlc->scan, chanspec_list, channel_num);
+		ASSERT(ret != channel_num);
+	}
+	return ret;
+}
+
+/* Handles prune scan states. state transition handled are
+ * ROAM_PRUNE_APBAND_CHANNELS --> ROAM_PRUNE_NON_APBAND_CHANNELS -> ROAM_PRUNE_NONE
+ * The function checks for valid channels in that state and proceed if channels got enumerated.
+ * return type:(int)
+ * BCME_BUSY: When next scan is already scheduled.
+ * BCME_OK: Done with prune scan or its not enalbed, Let the caller handle next full scan.
+ */
+static int
+wlc_assoc_handle_prune_scanstate(wlc_bsscfg_t *cfg)
+{
+	wlc_info_t *wlc = cfg->wlc;
+	wlc_roam_t *roam = cfg->roam;
+	int err = BCME_OK;
+
+	if (roam->prune_type == ROAM_PRUNE_APBAND_CHANNELS) {
+		/* Check if there is any channel that was left out in the first pass,
+		 * If so, then schedule the second pass of ROAM scan with the left out channels
+		 */
+		chanspec_t *chanspec_pruned = (chanspec_t *)MALLOCZ(wlc->pub->osh,
+			sizeof(*chanspec_pruned) * roam->n_rcc_channels);
+		int channel_num_pruned = roam->n_rcc_channels;
+		if (chanspec_pruned == NULL) {
+			WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
+				__FUNCTION__, (int)roam->n_rcc_channels, MALLOCED(wlc->pub->osh)));
+			err = BCME_NOMEM;
+			goto fail;
+		}
+		memcpy(chanspec_pruned, roam->rcc_channels,
+			roam->n_rcc_channels * sizeof(*chanspec_pruned));
+		channel_num_pruned = wlc_scan_filter_channels(wlc->scan,
+			chanspec_pruned, roam->n_rcc_channels);
+		if (channel_num_pruned == 0) {
+			/* all the channels are scanned in the previous pass itself */
+			roam->prune_type = ROAM_PRUNE_NONE;
+		} else {
+			WL_ROAM(("wl%d.%d %s second roam scan pass for pruned scan."
+				" ROAM_PRUNE_NON_APBAND_CHANNELS reason %d\n",
+				wlc->pub->unit, cfg->_idx, __FUNCTION__,
+				roam->reason));
+
+			roam->scan_block = 0;
+			roam->prune_type = ROAM_PRUNE_NON_APBAND_CHANNELS;
+			wlc_join_done(cfg, WLC_E_STATUS_NO_NETWORKS);
+			wlc_roamscan_start(cfg, roam->reason);
+			err = BCME_BUSY;
+		}
+		MFREE(wlc->osh, chanspec_pruned, sizeof(*chanspec_pruned) * roam->n_rcc_channels);
+	} else if (roam->prune_type == ROAM_PRUNE_NON_APBAND_CHANNELS) {
+		roam->prune_type = ROAM_PRUNE_NONE;
+	}
+
+fail:
+	return err;
+}
+#endif /* RSDB_APSCAN */
+
 /** chanspec_list being NULL/channel_num being 0 means all available chanspecs */
 static int
 wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
@@ -1747,9 +1956,9 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 	wlc_ssid_t ssid;
 	chanspec_t* chanspecs = NULL;
 	uint chanspecs_size = 0;
-#if defined(WLMSG_ASSOC) || defined(WLEXTLOG)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLEXTLOG)
 	char *ssidbuf;
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC || WLEXTLOG */
 	chanspec_t *target_list = NULL;
 	uint target_num = 0;
 	int active_time = -1;
@@ -1769,14 +1978,14 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 		}
 	}
 
-#if defined(WLMSG_ASSOC) || defined(WLEXTLOG)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLEXTLOG)
 	ssidbuf = (char *)MALLOCZ(wlc->osh, SSID_FMT_BUF_LEN);
 	if (ssidbuf == NULL) {
 		WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
 			__FUNCTION__, SSID_FMT_BUF_LEN, MALLOCED(wlc->osh)));
 		return BCME_NOMEM;
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC || WLEXTLOG */
 
 	if (assoc) {
 		/* standard association */
@@ -1807,6 +2016,7 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 		/* Roam scan only on selected channels */
 #ifdef WLRCC
 		if (WLRCC_ENAB(wlc->pub) && roam->rcc_valid) {
+			ASSERT(roam->n_rcc_channels);
 			/* Scan list will be overwritten later */
 			WL_SRSCAN(("starting RCC directed scan"));
 			WL_ASSOC(("starting RCC directed scan\n"));
@@ -1824,9 +2034,8 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 			chanspecs_size = roam->cache_numentries * sizeof(chanspec_t);
 			chanspecs = (chanspec_t *)MALLOCZ(wlc->pub->osh, chanspecs_size);
 			if (chanspecs == NULL) {
-				WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
-					__FUNCTION__, (int)chanspecs_size,
-					MALLOCED(wlc->pub->osh)));
+			WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
+				__FUNCTION__, (int)chanspecs_size, MALLOCED(wlc->pub->osh)));
 				err = BCME_NOMEM;
 				goto fail;
 			}
@@ -1899,9 +2108,8 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 			chanspecs_size = NBBY * sizeof(chanvec_t) * sizeof(chanspec_t);
 			chanspecs = (chanspec_t *)MALLOCZ(wlc->pub->osh, chanspecs_size);
 			if (chanspecs == NULL) {
-				WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
-					__FUNCTION__, (int)chanspecs_size,
-					MALLOCED(wlc->pub->osh)));
+			WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg),
+				__FUNCTION__, (int)chanspecs_size, MALLOCED(wlc->pub->osh)));
 				err = BCME_NOMEM;
 				goto fail;
 			}
@@ -1913,7 +2121,7 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 
 			/* Always include home channel as the first to be scanned */
 			count = 0;
-			chanspecs[count++] = BSSCFG_MINBW_CHSPEC(wlc, cfg,
+			chanspecs[count++] = CH20MHZ_CHSPEC(
 				wf_chspec_ctlchan(cfg->current_bss->chanspec));
 			hot_count = 1;
 
@@ -1923,11 +2131,11 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 				idx = i << 3;
 				for (j = 0; j < NBBY; j++, idx++, chn_list >>= 1) {
 					if (!wlc_valid_chanspec_db(wlc->cmi,
-						BSSCFG_MINBW_CHSPEC(wlc, cfg, idx)))
+						CH20MHZ_CHSPEC(idx)))
 						continue;
 
 					/* Home channel is already included */
-					if (chanspecs[0] == BSSCFG_MINBW_CHSPEC(wlc, cfg, idx))
+					if (chanspecs[0] == CH20MHZ_CHSPEC(idx))
 						continue;
 
 					if ((chn_list & 0x1) &&
@@ -1937,14 +2145,13 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 						/* Scan hot channels in phase 1 */
 						if (roam->split_roam_phase == 0) {
 							chanspecs[count++] =
-								BSSCFG_MINBW_CHSPEC(wlc, cfg, idx);
+								CH20MHZ_CHSPEC(idx);
 							WL_SRSCAN(("  channel %d", idx));
 							WL_ASSOC(("  channel %d\n", idx));
 						}
 					} else if (roam->split_roam_phase != 0) {
 						/* Scan all other channels in phase 2 */
-						chanspecs[count++] = BSSCFG_MINBW_CHSPEC(wlc,
-							cfg, idx);
+						chanspecs[count++] = CH20MHZ_CHSPEC(idx);
 						WL_SRSCAN(("  channel %d", idx));
 						WL_ASSOC(("  channel %d\n", idx));
 					}
@@ -1962,14 +2169,14 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 		}
 	}
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	wlc_format_ssid(ssidbuf, ssid.SSID, ssid.SSID_len);
 	WL_ASSOC(("wl%d: SCAN: wlc_assoc_scan_start, starting a %s%s scan for SSID %s\n",
 		WLCWLUNIT(wlc), !ETHER_ISMULTI(bssid) ? "Directed " : "", assoc ? "JOIN" : "ROAM",
 		ssidbuf));
 #endif
 
-#if defined(WLMSG_ASSOC) || defined(WLEXTLOG)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLEXTLOG)
 	/* DOT11_MAX_SSID_LEN check added so that we do not create ext logs for bogus
 	 * joins of garbage ssid issued on XP
 	 */
@@ -1978,11 +2185,20 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 		WLC_EXTLOG(wlc, LOG_MODULE_ASSOC, FMTSTR_JOIN_START_ID,
 			WL_LOG_LEVEL_ERR, 0, 0, ssidbuf);
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC || WLEXTLOG */
 
 	/* if driver is down due to mpc, turn it on, otherwise abort */
 	wlc->mpc_scan = TRUE;
 	wlc_radio_mpc_upd(wlc);
+
+	/* Re-init channels and locale to Country default, host programmed
+	 * country code
+	 */
+	if (WLC_CNTRY_DEFAULT_ENAB(wlc)) {
+		WL_ASSOC(("wl%d:%s(): Initialize country setting to host country code\n",
+		wlc->pub->unit, __FUNCTION__));
+		wlc_cntry_use_default(wlc->cntry);
+	}
 
 	if (!wlc->pub->up) {
 		WL_ASSOC(("wl%d: wlc_assoc_scan_start, can't scan while driver is down\n",
@@ -2012,8 +2228,8 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 		home_ctlchan = wf_chspec_ctlchan(wlc->home_chanspec);
 		for (idx = 0; idx < channel_num; idx ++) {
 			ctlchan = wf_chspec_ctlchan(chanspec_list[idx]);
-			if (BSSCFG_MINBW_CHSPEC(wlc, cfg, ctlchan) ==
-				BSSCFG_MINBW_CHSPEC(wlc, cfg, home_ctlchan))
+			if (CH20MHZ_CHSPEC(ctlchan) ==
+				CH20MHZ_CHSPEC(home_ctlchan))
 				break;
 		}
 		if (channel_num == 0 || idx < channel_num) {
@@ -2095,6 +2311,8 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 		int scan_type = 0;
 		int away_ch_limit = 0;
 		struct ether_addr *sa_override = NULL;
+		chanspec_t chanspec_pruned[MAXCHANNEL];
+		memset(chanspec_pruned, 0, sizeof(*chanspec_pruned) * MAXCHANNEL);
 		/* override default scan params */
 		if (scan_params != NULL) {
 			scan_type = scan_params->scan_type;
@@ -2171,6 +2389,24 @@ wlc_assoc_scan_start(wlc_bsscfg_t *cfg, wl_join_scan_params_t *scan_params,
 			/* override source MAC */
 			sa_override = wlc_scanmac_get_mac(wlc->scan, WLC_ACTION_ROAM, cfg);
 		}
+#ifdef RSDB_APSCAN
+		/* If pruned scan enabled only for roam scan */
+		if (RSDB_APSCAN_ENAB(wlc->pub)) {
+			/* Pruned scan is dependent on RCC in populating the channels for ROAM */
+			if (WLRCC_ENAB(wlc->pub) && roam->roam_scan_started &&
+				channel_num != 0 && chanspec_list != NULL) {
+				int channel_num_pruned;
+				memcpy(chanspec_pruned, chanspec_list,
+					channel_num * sizeof(*chanspec_pruned));
+				channel_num_pruned = wlc_assoc_pruned_roamscan_prep(cfg,
+					chanspec_pruned, channel_num);
+				if (channel_num_pruned != channel_num) {
+					channel_num = channel_num_pruned;
+					chanspec_list = chanspec_pruned;
+				}
+			}
+		}
+#endif /* RSDB_APSCAN */
 
 		/* kick off a scan for the requested SSID, possibly broadcast SSID. */
 		err = wlc_scan(wlc->scan, bss_type, bssid, 1, &ssid, scan_type, nprobes,
@@ -2213,7 +2449,7 @@ fail:
 		wlc_assoc_req_remove_entry(wlc, cfg);
 	}
 
-#if defined(WLMSG_ASSOC) || defined(WLEXTLOG)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLEXTLOG)
 	MFREE(wlc->osh, (void *)ssidbuf, SSID_FMT_BUF_LEN);
 #endif
 	return err;
@@ -2420,9 +2656,9 @@ wlc_pmkid_build_cand_list(wlc_bsscfg_t *cfg, bool check_SSID)
 
 	/* Merge scan results and pmkid cand list */
 	for (i = 0; i < wlc->scan_results->count; i++) {
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(WLMSG_WSEC)
 		char eabuf[ETHER_ADDR_STR_LEN];
-#endif	
+#endif	/* BCMDBG || WLMSG_WSEC */
 
 		bi = wlc->scan_results->ptrs[i];
 
@@ -2517,7 +2753,7 @@ wlc_join_done(wlc_bsscfg_t *cfg, int status)
 	/* assoc success, check if channel timeslot registered */
 	if (status == WLC_E_STATUS_SUCCESS &&
 		!wlc_sta_timeslot_registed(cfg)) {
-		WL_ERROR(("wl%d: %s: channel timeslot for connection not registered\n",
+		WL_ASSOC_ERROR(("wl%d: %s: channel timeslot for connection not registered\n",
 			WLCWLUNIT(wlc), __FUNCTION__));
 		ASSERT(0);
 	}
@@ -2537,12 +2773,12 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 	uint8 ap_24G = 0;
 	uint8 ap_5G = 0;
 	uint i;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char *ssidbuf = NULL;
 	const char *ssidstr;
 	const char *msg_name;
 	const char *msg_pref;
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 #ifdef WLRCC
 	bool cache_valid = cfg->roam->cache_valid;
 	bool roam_active = cfg->roam->active;
@@ -2562,7 +2798,7 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 		}
 	}
 	if (!cfg_ok) {
-		WL_ERROR(("wl%d: %s: no valid bsscfg matches cfg %p, exit\n",
+		WL_ASSOC(("wl%d: %s: no valid bsscfg matches cfg %p, exit\n",
 		          WLCWLUNIT(wlc), __FUNCTION__, OSL_OBFUSCATE_BUF(cfg)));
 		goto exit;
 	}
@@ -2571,7 +2807,7 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 	roam = cfg->roam;
 	target_bss = cfg->target_bss;
 	for_roam = (as->type != AS_ASSOCIATION);
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	msg_name = for_roam ? "ROAM" : "JOIN";
 	msg_pref = !(ETHER_ISMULTI(&wlc->scan->bssid)) ? "Directed " : "";
 	ssidbuf = (char *)MALLOCZ(wlc->osh, SSID_FMT_BUF_LEN);
@@ -2583,7 +2819,7 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 		WL_ERROR((WLC_MALLOC_ERR, WLCWLUNIT(wlc), __FUNCTION__, (int)SSID_FMT_BUF_LEN,
 			MALLOCED(wlc->osh)));
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 
 	WL_ASSOC(("wl%d: SCAN: wlc_assoc_scan_complete\n", WLCWLUNIT(wlc)));
 
@@ -2641,7 +2877,7 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 	/* copy scan results to join_targets for the reassociation process */
 	if (WLCAUTOWPA(cfg)) {
 		if (wlc_bss_list_expand(cfg, wlc->scan_results, wlc->as->cmn->join_targets)) {
-			WL_ERROR(("wl%d: wlc_bss_list_expand failed\n", WLCWLUNIT(wlc)));
+			WL_ASSOC_ERROR(("wl%d: wlc_bss_list_expand failed\n", WLCWLUNIT(wlc)));
 			wlc_join_done(cfg, WLC_E_STATUS_FAIL);
 			goto exit;
 		}
@@ -2734,6 +2970,15 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 #ifdef WLRCC
 	if (WLRCC_ENAB(wlc->pub)) {
 		if (roam->roam_scan_started) {
+#ifdef RSDB_APSCAN
+			if (RSDB_APSCAN_ENAB(wlc->pub) && wlc->as->cmn->join_targets_last == 0) {
+				int ret = wlc_assoc_handle_prune_scanstate(cfg);
+				if (ret == BCME_BUSY) {
+					/* Waiting for second roam pass to complete. */
+					goto exit;
+				}
+			}
+#endif /* RSDB_APSCAN */
 			roam->roam_scan_started = FALSE;
 			if (wlc->as->cmn->join_targets_last == 0 &&
 					(roam->rcc_mode != RCC_MODE_FORCE)) {
@@ -2770,8 +3015,8 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 	if (wlc->as->cmn->join_targets_last > 0) {
 		wlc_ap_mute(wlc, TRUE, cfg, -1);
 		if (for_roam &&
-		    (!WLFMC_ENAB(wlc->pub) ||
-		     cfg->roam->reason != WLC_E_REASON_INITIAL_ASSOC))
+			(!WLFMC_ENAB(wlc->pub) ||
+			cfg->roam->reason != WLC_E_REASON_INITIAL_ASSOC))
 			wlc_roam_set_env(cfg, wlc->as->cmn->join_targets->count);
 		wlc_join_attempt(cfg);
 	} else if (target_bss->bss_type != DOT11_BSSTYPE_INFRASTRUCTURE &&
@@ -2786,17 +3031,15 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 		 */
 		WL_ASSOC(("wl%d: JOIN: creating an IBSS with SSID \"%s\"\n",
 			WLCWLUNIT(wlc), ssidstr));
-
-		wlc_assoc_change_state(cfg, AS_IBSS_CREATE);
 		wlc_create_ibss(wlc, cfg);
 	} else {
 		/* no join targets */
 		/* see if the target channel information could be cached, if caching is desired */
 		if (for_roam && roam->active && roam->partialscan_period &&
 #ifdef WLRCC
-		    !force_rescan &&
+			!force_rescan &&
 #endif /* WLRCC */
-		    TRUE) {
+			TRUE) {
 			wlc_roamscan_complete(cfg);
 		}
 
@@ -2828,6 +3071,18 @@ wlc_assoc_scan_complete(void *arg, int status, wlc_bsscfg_t *cfg)
 				goto exit;
 			}
 #endif /* WLP2P */
+#ifdef SLAVE_RADAR
+			if (WL11H_STA_ENAB(wlc) &&
+				(roam->reason == WLC_E_REASON_RADAR_DETECTED) &&
+				(as->state != AS_DFS_CAC_START))
+			{
+				wlc_bss_list_free(wlc, wlc->as->cmn->join_targets);
+				WL_ASSOC(("radar detected, so roam untill we find the AP...\n"));
+				wlc_assoc_scan_prep(cfg, NULL, NULL, NULL, 0);
+				goto exit;
+			}
+#endif /* SLAVE_RADAR */
+
 
 			wlc_join_done(cfg, WLC_E_STATUS_NO_NETWORKS);
 #ifdef WLRCC
@@ -2849,7 +3104,8 @@ exit:
 #ifdef WLLED
 	wlc_led_event(wlc->ledh);
 #endif
-#if defined(WLMSG_ASSOC)
+
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	if (ssidbuf != NULL)
 		MFREE(wlc->osh, (void *)ssidbuf, SSID_FMT_BUF_LEN);
 #endif
@@ -2869,26 +3125,33 @@ wlc_roam_scan(wlc_bsscfg_t *cfg, uint reason, chanspec_t *list, uint32 channum)
 {
 	wlc_info_t *wlc = cfg->wlc;
 	wlc_roam_t *roam = cfg->roam;
-	int ret;
+	int ret = BCME_OK;
 	uint cur_roam_reason = roam->reason;
 
 
 	if (roam->off) {
 		WL_INFORM(("wl%d: roam scan is disabled\n", wlc->pub->unit));
-		return BCME_EPERM;
+		ret = BCME_EPERM;
+		goto fail;
 	}
 
 	if (!cfg->associated) {
-		WL_ERROR(("wl%d: %s: AP not associated\n", WLCWLUNIT(wlc), __FUNCTION__));
-		return BCME_NOTASSOCIATED;
+		WL_ASSOC_ERROR(("wl%d: %s: AP not associated \n", WLCWLUNIT(wlc), __FUNCTION__));
+#ifdef SLAVE_RADAR
+		if (reason != WLC_E_REASON_RADAR_DETECTED)
+#endif
+		{
+			ret = BCME_NOTASSOCIATED;
+			goto fail;
+		}
 	}
 
 	roam->reason = reason;
 	if ((ret = wlc_mac_request_entry(wlc, cfg, WLC_ACTION_ROAM)) != BCME_OK) {
-		WL_ERROR(("wl%d.%d: ROAM request failed\n",
+		WL_ASSOC_ERROR(("wl%d.%d: ROAM request failed\n",
 		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg)));
 		roam->reason = cur_roam_reason;
-		return ret;
+		goto fail;
 	}
 
 	if (roam->original_reason == WLC_E_REASON_INITIAL_ASSOC) {
@@ -2939,6 +3202,13 @@ wlc_roam_scan(wlc_bsscfg_t *cfg, uint reason, chanspec_t *list, uint32 channum)
 	}
 
 	return 0;
+
+fail:
+#ifdef OPPORTUNISTIC_ROAM
+	memcpy(cfg->join_bssid.octet, BSSID_INVALID, sizeof(cfg->join_bssid.octet));
+#endif /* OPPORTUNISTIC_ROAM */
+	return ret;
+
 }
 
 static uint32
@@ -2985,7 +3255,7 @@ wlc_join_wsec_filter(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bss_info_t *bi)
 {
 	struct rsn_parms *rsn;
 	bool prune = TRUE;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 	bool akm_match = TRUE;
@@ -3133,6 +3403,79 @@ wlc_join_chanspec_filter(wlc_bsscfg_t *bsscfg, chanspec_t chanspec)
 #define WL_ASSOC(args) printf args
 #endif /* WLMSG_ROAM && !WLMSG_ASSOC */
 
+#ifdef SLAVE_RADAR
+/*
+ * This function checks, if STA is going to associate in a DFS channel,
+ * should the DFS state machine begin CAC or ISM.
+ * For a non-DFS channel, it would simply continue with join.
+ */
+static void
+wlc_join_chkdfs_cac_ism(wlc_bsscfg_t *cfg)
+{
+	wlc_info_t *wlc = cfg->wlc;
+	wlc_assoc_t *as = cfg->assoc;
+	wlc_bss_info_t *bi;
+
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG || WLMSG_ASSOC */
+	as->bss_retries = 0;
+
+	bi = wlc->as->cmn->join_targets->ptrs[wlc->as->cmn->join_targets_last];
+
+	if (bi == NULL) {
+		WL_ASSOC(("wl%d: JOIN: BSS info == NULL skipping, join_targets_last[%d]\n",
+		WLCWLUNIT(wlc), wlc->as->cmn->join_targets_last));
+		return;
+	}
+
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
+	WL_ASSOC(("wl%d: JOIN: checking CAC or ISM  BSSID: %s\n", WLCWLUNIT(wlc),
+	            bcm_ether_ntoa(&bi->BSSID, eabuf)));
+#endif /* BCMDBG || WLMSG_ASSOC */
+	if (WL11H_STA_ENAB(wlc) && wlc_radar_chanspec(wlc->cmi, bi->chanspec)) {
+			wlc_suspend_mac_and_wait(wlc);
+			wlc_set_chanspec(wlc, bi->chanspec, CHANSW_ASSOC);
+			wlc_enable_mac(wlc);
+			phy_radar_detect_enable((phy_info_t *)WLC_PI(wlc), TRUE);
+
+			/* Check if we need to begin pre ISM CAC */
+			if (!(wlc_cac_is_clr_chanspec(wlc->dfs, bi->chanspec)))
+			{
+				/* Begin CAC */
+				WL_ASSOC(("%s: Setting AS_DFS_CAC_START\n", __FUNCTION__));
+				wlc_assoc_timer_del(wlc, cfg);
+				wl_add_timer(wlc->wl, as->timer,
+					(wlc_dfs_get_cactime_ms(wlc->dfs) + DELAY_10MS), FALSE);
+				wlc_assoc_change_state(cfg, AS_DFS_CAC_START);
+			}
+			else {
+				/* Begin ISM */
+				WL_ASSOC(("%s: Setting AS_DFS_ISM_INIT\n", __FUNCTION__));
+				wlc_assoc_timer_del(wlc, cfg);
+				wl_add_timer(wlc->wl, as->timer,
+					(WECA_ASSOC_TIMEOUT + DELAY_10MS), FALSE);
+				wlc_assoc_change_state(cfg, AS_DFS_ISM_INIT);
+			}
+	}
+	else
+	{
+		bool from_radar = (wlc_radar_chanspec(wlc->cmi,
+			cfg->current_bss->chanspec) == TRUE);
+		bool to_radar = wlc_radar_chanspec(wlc->cmi, bi->chanspec);
+
+		if (wlc_dfs_get_radar(wlc->dfs) && (from_radar && !to_radar)) {
+			cfg->pm->PMmodeChangeDisabled = FALSE;
+			wlc_set_pm_mode(wlc, cfg->pm->PM_oldvalue, cfg);
+			wlc->mpc = TRUE;
+			wlc_radio_mpc_upd(wlc);
+		}
+		wlc_assoc_change_state(cfg, AS_JOIN_START);
+		wlc_join_bss_start(cfg);
+	}
+}
+#endif /* SLAVE_RADAR */
+
 /**
  * scan finished with valid join_targets
  * loop through join targets and run all prune conditions
@@ -3147,13 +3490,13 @@ wlc_join_attempt(wlc_bsscfg_t *cfg)
 	wlc_bss_info_t *bi;
 	uint i;
 	wlcband_t *target_band;
-#if defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
 	char ssidbuf[SSID_FMT_BUF_LEN];
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	uint32 wsec, WPA_auth;
 	int addr_match;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 	bool ret;
@@ -3191,7 +3534,7 @@ wlc_join_attempt(wlc_bsscfg_t *cfg)
 		target_band = wlc->bandstate[CHSPEC_WLCBANDUNIT(bi->chanspec)];
 		WL_ROAM(("JOIN: checking [%d] %s\n", wlc->as->cmn->join_targets_last - 1,
 			bcm_ether_ntoa(&bi->BSSID, eabuf)));
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 		wlc_format_ssid(ssidbuf, bi->SSID, bi->SSID_len);
 #endif
 
@@ -3205,11 +3548,21 @@ wlc_join_attempt(wlc_bsscfg_t *cfg)
 
 		/* validate BSS channel */
 		if (!wlc_join_chanspec_filter(cfg,
-			BSSCFG_MINBW_CHSPEC(wlc, cfg, wf_chspec_ctlchan(bi->chanspec)))) {
+			CH20MHZ_CHSPEC(wf_chspec_ctlchan(bi->chanspec)))) {
 			WL_ASSOC(("wl%d: JOIN: Skipping BSS %s, mismatch chanspec %x\n",
 			          WLCWLUNIT(wlc), bcm_ether_ntoa(&bi->BSSID, eabuf),
 			          bi->chanspec));
 			continue;
+		}
+
+		/* Check if the chanspec still do not list in country setting after update to max
+		 * valid chanspec
+		 */
+		if (WLC_ASSOC_IS_PROHIBITED_CHANSPEC(wlc, chanspec) == TRUE) {
+			WL_ASSOC(("wl%d: JOIN: Found BSS %s,"
+				"on restricted chanspec 0x%x in country %s\n",
+				WLCWLUNIT(wlc), bcm_ether_ntoa(&bi->BSSID, eabuf), chanspec,
+				wlc_channel_country_abbrev(wlc->cmi)));
 		}
 
 		/* mSTA: Check here to make sure we don't end up with multiple bsscfgs
@@ -3247,7 +3600,7 @@ wlc_join_attempt(wlc_bsscfg_t *cfg)
 			/* WPA_auth */
 			ret = bcmwpa_akm2WPAauth(join_pref->wpa[bi->wpacfg].akm, &WPA_auth, FALSE);
 			if (ret == FALSE) {
-				WL_ERROR(("wl%d.%d: %s: Failed to set WPA Auth! WPA cfg:%d\n",
+				WL_ASSOC_ERROR(("wl%d.%d: %s: Failed to set WPA Auth! WPA cfg:%d\n",
 					WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg), __FUNCTION__,
 					bi->wpacfg));
 			}
@@ -3256,7 +3609,7 @@ wlc_join_attempt(wlc_bsscfg_t *cfg)
 			/* wsec - unicast */
 			ret = bcmwpa_cipher2wsec(join_pref->wpa[bi->wpacfg].ucipher, &wsec);
 			if (ret == FALSE) {
-				WL_ERROR(("wl%d.%d: %s: Failed to set WSEC! WPA cfg:%d\n",
+				WL_ASSOC_ERROR(("wl%d.%d: %s: Failed to set WSEC! WPA cfg:%d\n",
 					WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg), __FUNCTION__,
 					bi->wpacfg));
 			}
@@ -3494,6 +3847,13 @@ wlc_join_attempt(wlc_bsscfg_t *cfg)
 			}
 		}
 
+#ifdef WL_MBO
+		if (MBO_ENAB(wlc->pub)) {
+			if (bi->bcnflags & WLC_BSS_MBO_ASSOC_DISALLOWED) {
+				continue;
+			}
+		}
+#endif /* WL_MBO */
 		/* reach here means BSS passed all the pruning tests, so break the loop to join */
 		break;
 	}
@@ -3528,9 +3888,9 @@ wlc_join_attempt_select(wlc_bsscfg_t *cfg)
 	wlc_bss_info_t *bi;
 	wlc_bss_info_t *target_bss = cfg->target_bss;
 
-#if defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC) || defined(WLMSG_ROAM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 
 	if (wlc->as->cmn->join_targets_last > 0) {
 		as->bss_retries = 0;
@@ -3541,8 +3901,9 @@ wlc_join_attempt_select(wlc_bsscfg_t *cfg)
 #if defined(WLRSDB)
 		if (RSDB_ENAB(wlc->pub)) {
 			/* Try to see if a mode switch is required */
-			if (wlc_rsdb_assoc_mode_change(&cfg, bi) == BCME_NOTREADY)
+			if (wlc_rsdb_assoc_mode_change(&cfg, bi) == BCME_NOTREADY) {
 				return;
+			}
 			/* Replace the current WLC pointer with the probably new wlc */
 			wlc = cfg->wlc;
 			as = cfg->assoc;
@@ -3631,18 +3992,26 @@ wlc_join_attempt_select(wlc_bsscfg_t *cfg)
 void
 wlc_join_bss_prep(wlc_bsscfg_t *cfg)
 {
-	wlc_info_t *wlc = cfg->wlc;
+#ifdef SLAVE_RADAR
+	wlc_assoc_t *as = cfg->assoc;
+	if (as->state != AS_DFS_ISM_INIT)
+		wlc_join_chkdfs_cac_ism(cfg);
+	else
+#endif	/* SLAVE_RADAR */
+	{
+		wlc_info_t *wlc = cfg->wlc;
 
-	wlc_assoc_timer_del(wlc, cfg);
-	wlc_assoc_change_state(cfg, AS_JOIN_START);
-	wlc_bss_assoc_state_notif(wlc, cfg, cfg->assoc->type, AS_JOIN_START);
-	cfg->auth_atmptd = cfg->auth;
+		wlc_assoc_timer_del(wlc, cfg);
+		wlc_assoc_change_state(cfg, AS_JOIN_START);
+		wlc_bss_assoc_state_notif(wlc, cfg, cfg->assoc->type, AS_JOIN_START);
+		cfg->auth_atmptd = cfg->auth;
 
 #ifdef WLFBT
-	/* FBT will control state machine if successful */
-	if (!wlc_fbt_overds_attempt(cfg))
+		/* FBT will control state machine if successful */
+		if (!wlc_fbt_overds_attempt(cfg))
 #endif /* WLFBT */
-		wlc_join_bss_start(cfg);
+			wlc_join_bss_start(cfg);
+	}
 }
 
 void
@@ -3652,6 +4021,13 @@ wlc_join_bss_start(wlc_bsscfg_t *cfg)
 	wlc_assoc_t *as = cfg->assoc;
 	wlc_txq_info_t *qi = cfg->wlcif->qi;
 	struct pktq *q = WLC_GET_TXQ(qi);
+
+#ifdef SLAVE_RADAR
+	/* Delete the assoc timer, if we are done with CAC */
+	if (as->state == AS_DFS_ISM_INIT) {
+		wlc_assoc_timer_del(wlc, cfg);
+	}
+#endif	/* SLAVE_RADAR */
 
 	/* if roaming, make sure tx queue is drain out */
 	if (as->type == AS_ROAM && wlc_bss_connected(cfg) &&
@@ -3762,11 +4138,23 @@ wlc_join_ap_do_csa(wlc_info_t *wlc, chanspec_t tgt_chanspec)
 			if ((WLC_BAND_PI_RADIO_CHANSPEC == apcfg->current_bss->chanspec) &&
 #ifdef WLMCHAN
 				(!MCHAN_ENAB(wlc->pub) ||
-					wlc_mchan_stago_is_disabled(wlc->mchan))) {
+					wlc_mchan_stago_is_disabled(wlc->mchan) ||
+					!BSS_P2P_ENAB(wlc, apcfg)))
 #else
-				TRUE) {
+				TRUE)
+#endif
+			{
+#if defined(WL_RESTRICTED_APSTA)
+				if (RAPSTA_ENAB(wlc->pub) &&
+					wlc_channel_apsta_restriction(wlc->cmi,
+					apcfg->current_bss->chanspec, tgt_chanspec)) {
+					tgt_chanspec = wlc_default_chanspec_by_band(wlc->cmi,
+							BAND_2G_INDEX);
+				}
 #endif
 				wlc_csa_do_switch(wlc->csa, apcfg, tgt_chanspec);
+				wlc_11h_set_spect_state(wlc->m11h, apcfg,
+					NEED_TO_SWITCH_CHANNEL, NEED_TO_SWITCH_CHANNEL);
 				ap_do_csa = TRUE;
 				WL_ASSOC(("wl%d.%d: apply channel switch\n", wlc->pub->unit,
 					apidx));
@@ -3968,7 +4356,7 @@ wlc_join_BSS_limit_caps(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi)
 			}
 			bi->flags &= ~(WLC_BSS_HT | WLC_BSS_40INTOL | WLC_BSS_SGI_20 |
 				WLC_BSS_SGI_40 | WLC_BSS_40MHZ);
-			bi->chanspec = BSSCFG_MINBW_CHSPEC(wlc, cfg,
+			bi->chanspec = CH20MHZ_CHSPEC(
 				wf_chspec_ctlchan(bi->chanspec));
 
 			/* disable VHT and SGI80 also */
@@ -4067,6 +4455,20 @@ wlc_join_BSS_sendauth(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi,
 	if (!pkt)
 		wl_add_timer(wlc->wl, as->timer, WECA_ASSOC_TIMEOUT + 10, 0);
 
+#if defined(WLP2P) && defined(BCMDBG)
+	if (WL_P2P_ON()) {
+		int bss = wlc_mcnx_BSS_idx(wlc->mcnx, cfg);
+		uint16 state = wlc_mcnx_read_shm(wlc->mcnx, M_P2P_BSS_ST(wlc, bss));
+		uint16 next_noa = wlc_mcnx_read_shm(wlc->mcnx, M_P2P_BSS_N_NOA(wlc, bss));
+		uint16 hps = wlc_mcnx_read_shm(wlc->mcnx, M_P2P_HPS_OFFSET(wlc));
+
+		WL_P2P(("wl%d: %s: queue AUTH at tick 0x%x ST 0x%04X "
+		        "N_NOA 0x%X HPS 0x%04X\n",
+		        wlc->pub->unit, __FUNCTION__,
+		        R_REG(wlc->osh, &wlc->regs->tsf_timerlow),
+		        state, next_noa, hps));
+	}
+#endif /* WLP2P && BCMDBG */
 }
 
 #ifdef WL11AX
@@ -4101,7 +4503,7 @@ wlc_parse_assoc_resp(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint16 ft,
 	uint8 *ies, uint ies_len, wlc_parse_assoc_resp_t *parsp)
 {
 	/* tags must be sorted in ascending order */
-	uint8 parse_tag[] = {
+	wlc_iem_tag_t parse_tag[] = {
 		DOT11_MNG_HE_CAP_ID,
 		DOT11_MNG_HE_OP_ID,
 	};
@@ -4278,9 +4680,9 @@ wlc_join_bss(wlc_bsscfg_t *cfg)
 {
 	wlc_info_t *wlc = cfg->wlc;
 	wlc_assoc_t *as = cfg->assoc;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	chanspec_t chanspec;
 	wlcband_t *band;
 	wlc_roam_t *roam = cfg->roam;
@@ -4288,8 +4690,10 @@ wlc_join_bss(wlc_bsscfg_t *cfg)
 	uint64 start_time;
 	int err;
 	wlc_bss_info_t *bi;
+	bool force_chchange = FALSE;
 
 	BCM_REFERENCE(roam);
+	BCM_REFERENCE(force_chchange);
 	bi = wlc_assoc_get_join_target(wlc, 0);
 	if (bi == NULL) {
 		/* Validity check */
@@ -4321,6 +4725,26 @@ wlc_join_bss(wlc_bsscfg_t *cfg)
 		return;
 	}
 
+	/*
+	 * Based on requirement that is, if target channel is found restricted to
+	 * country setting, then update the internal country usage to auto_country_default.
+	 */
+	if (WLC_ASSOC_IS_PROHIBITED_CHANSPEC(wlc, chanspec) == TRUE) {
+		char country_abbrev[WLC_CNTRY_BUF_SZ];
+		memset(country_abbrev, 0, sizeof(country_abbrev));
+		memcpy(country_abbrev, wlc_11d_get_autocountry_default(wlc->m11d),
+			sizeof(country_abbrev));
+
+		WL_ASSOC(("wl%d: setting regulatory information from built-in "
+	           "country \"%s\" associating AP on restricted chanspec 0x%x\n",
+	           wlc->pub->unit, country_abbrev, chanspec));
+		wlc_set_countrycode(wlc->cmi, country_abbrev);
+		/* Force channel change update to PHY. This handles to clear the
+		 * quiet bit in the channel vector.
+		 */
+		force_chchange = TRUE;
+	}
+
 	wlc_block_datafifo(wlc, DATA_BLOCK_JOIN, DATA_BLOCK_JOIN);
 
 
@@ -4344,7 +4768,7 @@ wlc_join_bss(wlc_bsscfg_t *cfg)
 		wlc_msch_timeslot_unregister(wlc->msch_info, &as->req_msch_hdl);
 	}
 
-	if (wlc_quiet_chanspec(wlc->cmi, chanspec)) {
+	if (force_chchange || wlc_quiet_chanspec(wlc->cmi, chanspec)) {
 		/* clear the quiet bit on our channel and un-quiet */
 		wlc_clr_quiet_chanspec(wlc->cmi, chanspec);
 		wlc_mute(wlc, OFF, 0);
@@ -4361,7 +4785,7 @@ wlc_join_bss(wlc_bsscfg_t *cfg)
 	}
 }
 
-/* MSCH join register callback function for normal chanspec */
+/** MSCH join register callback function for normal chanspec */
 static int
 wlc_assoc_chanspec_change_cb(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 {
@@ -4374,7 +4798,7 @@ wlc_assoc_chanspec_change_cb(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 	bi = wlc_assoc_get_join_target(wlc, 0);
 	if (bi == NULL) {
 		/* Validity check */
-		WL_ERROR(("wl%d: %s: JOIN: BSS info == NULL, join_targets_last[%d]\n",
+		WL_ASSOC_ERROR(("wl%d: %s: JOIN: BSS info == NULL, join_targets_last[%d]\n",
 		          WLCWLUNIT(wlc), __FUNCTION__, wlc->as->cmn->join_targets_last));
 		return BCME_ERROR;
 	}
@@ -4385,6 +4809,7 @@ wlc_assoc_chanspec_change_cb(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 	if (cb_info->type & MSCH_CT_ON_CHAN) {
 		wlc_clr_quiet_chanspec(wlc->cmi, chanspec);
 		wlc_txqueue_start(wlc, cfg, cb_info->chanspec, NULL);
+		wlc_he_on_switch_bsscfg(wlc->hei, cfg, BSSCOLOR_EN);
 		wlc_join_BSS_post_ch_switch(cfg, bi, TRUE, chanspec);
 	}
 
@@ -4393,6 +4818,7 @@ wlc_assoc_chanspec_change_cb(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 		(cb_info->type & MSCH_CT_REQ_END)) {
 		wlc_txqueue_end(wlc, cfg, NULL);
 		as->req_msch_hdl = NULL;
+		wlc_he_on_switch_bsscfg(wlc->hei, cfg, BSSCOLOR_DIS);
 	}
 
 	return BCME_OK;
@@ -4432,8 +4858,7 @@ wlc_join_BSS_post_ch_switch(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, bool ch_chang
 
 	/* fixup bsscfg type based on chosen target_bss */
 	if ((err = wlc_assoc_fixup_bsscfg_type(wlc, cfg, bi, TRUE)) != BCME_OK) {
-		WL_ERROR(("wl%d.%d: %s: wlc_assoc_fixup_bsscfg_type failed with err %d.\n",
-		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__, err));
+
 		return;
 	}
 
@@ -4478,17 +4903,6 @@ wlc_join_BSS_post_ch_switch(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, bool ch_chang
 	                   FALSE, cck_only ? WLC_RATES_CCK : WLC_RATES_CCK_OFDM,
 	                   RATE_MASK_FULL, cck_only ? 0 : mcsallow);
 
-	if (CHIPID(wlc->pub->sih->chip) == BCM43142_CHIP_ID) {
-		uint i;
-		for (i = 0; i < target_bss->rateset.count; i++) {
-			uint8 rate;
-			rate = target_bss->rateset.rates[i] & RATE_MASK;
-			if ((rate == WLC_RATE_36M) || (rate == WLC_RATE_48M) ||
-				(rate == WLC_RATE_54M))
-				target_bss->rateset.rates[i] &= ~WLC_RATE_FLAG;
-		}
-	}
-
 	/* apply default rateset to invalid rateset */
 	if (!wlc_rate_hwrs_filter_sort_validate(&target_bss->rateset /* [in+out] */,
 		rs_hw /* [in] */, TRUE,
@@ -4496,6 +4910,9 @@ wlc_join_BSS_post_ch_switch(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, bool ch_chang
 		WL_RATE(("wl%d: %s: invalid rateset in target_bss. bandunit 0x%x phy_type 0x%x "
 			"gmode 0x%x\n", wlc->pub->unit, __FUNCTION__, band->bandunit,
 			band->phytype, band->gmode));
+#ifdef BCMDBG
+		wlc_rateset_show(wlc, &target_bss->rateset, &target_bss->BSSID);
+#endif
 
 		wlc_rateset_default(&target_bss->rateset, rs_hw, band->phytype,
 			band->bandtype, cck_only, RATE_MASK_FULL,
@@ -4510,6 +4927,9 @@ wlc_join_BSS_post_ch_switch(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, bool ch_chang
 	}
 #endif
 
+#ifdef BCMDBG
+	wlc_rateset_show(wlc, &target_bss->rateset, &target_bss->BSSID);
+#endif
 
 	wlc_rate_lookup_init(wlc, &target_bss->rateset);
 
@@ -4543,6 +4963,20 @@ wlc_join_BSS_post_ch_switch(wlc_bsscfg_t *cfg, wlc_bss_info_t *bi, bool ch_chang
 	as->bss_retries ++;
 } /* wlc_join_BSS_post_ch_switch */
 
+void
+wlc_assoc_unregister_pcb_on_timeout(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
+{
+	wlc_assoc_t *as = cfg->assoc;
+
+	if (as->state == AS_SENT_AUTH_1 ||
+		as->state == AS_SENT_AUTH_3 ||
+		as->state == AS_SENT_FTREQ) {
+		/* unregister for auth_tx_complete */
+		wlc_pcb_fn_find(wlc->pcb, wlc_auth_tx_complete, (void *)(uintptr)cfg->ID, TRUE);
+	}
+
+	/* Note: add any other callback to be unregistered here depending on as->state */
+}
 
 static void
 wlc_assoc_timeout(void *arg)
@@ -4565,6 +4999,13 @@ wlc_assoc_timeout(void *arg)
 		wl_down(wlc->wl);
 		return;
 	}
+
+	/*
+	* Timed out but no way to free up the Txd packet if waiting for
+	* txstatus. Un-register pkt callback instead and let the packet
+	* be silently freed without disturbing next course of assoc states
+	*/
+	wlc_assoc_unregister_pcb_on_timeout(wlc, cfg);
 
 	/* We need to unblock the datatfifo which was blocked in
 	 * wlc_join_recreate fucntion, even if there was not a successful
@@ -4625,7 +5066,7 @@ wlc_assoc_timeout(void *arg)
 #if defined(WLRSDB) && defined(WL_MODESW)
 	else if (WLC_MODESW_ENAB(wlc->pub) && RSDB_ENAB(wlc->pub) &&
 		(as->state == AS_MODE_SWITCH_START)) {
-		WL_ERROR(("wl:%d.%d MODE SWITCH FAILED. Timedout\n",
+		WL_ASSOC_ERROR(("wl:%d.%d MODE SWITCH FAILED. Timedout\n",
 			WLCWLUNIT(wlc), cfg->_idx));
 		wlc_assoc_change_state(cfg, AS_MODE_SWITCH_FAILED);
 	}
@@ -4645,7 +5086,7 @@ wlc_assoc_timeout(void *arg)
 
 	/* Check if channel timeslot exist */
 	if (recreate_success && !wlc_sta_timeslot_registed(cfg)) {
-		WL_ERROR(("wl%d: %s: channel timeslot for connection not registered\n",
+		WL_ASSOC_ERROR(("wl%d: %s: channel timeslot for connection not registered\n",
 			WLCWLUNIT(wlc), __FUNCTION__));
 		ASSERT(0);
 	}
@@ -4688,7 +5129,7 @@ wlc_join_recreate(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 	wlc_bss_info_t *bi = bsscfg->current_bss;
 	int beacon_wait_time;
 	wlc_roam_t *roam = bsscfg->roam;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
 	char ssidbuf[SSID_FMT_BUF_LEN];
 	char chanbuf[CHANSPEC_STR_LEN];
@@ -4702,7 +5143,7 @@ wlc_join_recreate(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 
 	/* these should already be set */
 	if (!wlc->pub->associated || wlc->stas_associated == 0) {
-		WL_ERROR(("wl%d: %s: both should have been TRUE: stas_assoc %d associated %d\n",
+		WL_ASSOC(("wl%d: %s: both should have been TRUE: stas_assoc %d associated %d\n",
 		          wlc->pub->unit, __FUNCTION__,
 		          wlc->stas_associated, wlc->pub->associated));
 	}
@@ -4751,10 +5192,10 @@ wlc_join_recreate(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 		/* 	wlc_scb_setstatebit(wlc, scb, AUTHENTICATED | ASSOCIATED); */
 
 		if (!(scb->flags & SCB_MYAP))
-			WL_ERROR(("wl%d: %s: SCB_MYAP 0x%x not set in flags 0x%x!\n",
+			WL_ASSOC(("wl%d: %s: SCB_MYAP 0x%x not set in flags 0x%x!\n",
 			          WLCWLUNIT(wlc), __FUNCTION__, SCB_MYAP, scb->flags));
 		if ((scb->state & (AUTHENTICATED | ASSOCIATED)) != (AUTHENTICATED | ASSOCIATED))
-			WL_ERROR(("wl%d: %s: (AUTHENTICATED | ASSOCIATED) 0x%x "
+			WL_ASSOC(("wl%d: %s: (AUTHENTICATED | ASSOCIATED) 0x%x "
 				"not set in scb->state 0x%x!\n",
 				WLCWLUNIT(wlc), __FUNCTION__,
 				(AUTHENTICATED | ASSOCIATED), scb->state));
@@ -4765,7 +5206,7 @@ wlc_join_recreate(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 		 * security setup
 		 */
 		if (scb->WPA_auth != bsscfg->WPA_auth)
-			WL_ERROR(("wl%d: %s: scb->WPA_auth 0x%x "
+			WL_ASSOC(("wl%d: %s: scb->WPA_auth 0x%x "
 				  "does not match bsscfg->WPA_auth 0x%x!",
 				  WLCWLUNIT(wlc), __FUNCTION__, scb->WPA_auth, bsscfg->WPA_auth));
 
@@ -4975,14 +5416,14 @@ void
 wlc_assoc_init(wlc_bsscfg_t *cfg, uint type)
 {
 	wlc_assoc_t *as = cfg->assoc;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	wlc_info_t *wlc = cfg->wlc;
 
 	ASSERT(type == AS_ROAM || type == AS_ASSOCIATION || type == AS_RECREATE);
 
 	WL_ASSOC(("wl%d.%d: %s: assoc state machine init to assoc->type %d %s\n",
 	          WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg), __FUNCTION__, type, WLCASTYPEN(type)));
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 
 	as->type = type;
 	as->flags = 0;
@@ -5014,15 +5455,17 @@ wlc_assoc_change_state(wlc_bsscfg_t *cfg, uint newstate)
 	wl_print_backtrace(__FUNCTION__, NULL, 0);
 
 #ifdef WL_PWRSTATS
-	/* Update connect time for primary infra sta only */
-	if ((cfg == wlc->cfg) &&
-		newstate == AS_JOIN_START)
-		wlc_pwrstats_connect_start(wlc->pwrstats);
+	 if (PWRSTATS_ENAB(wlc->pub)) {
+		/* Update connect time for primary infra sta only */
+		if ((cfg == wlc->cfg) &&
+			newstate == AS_JOIN_START)
+			wlc_pwrstats_connect_start(wlc->pwrstats);
 
-	/* Connection is over on port open and AS_IDLE OR assoc failed and AS_IDLE */
-	if ((cfg == wlc->cfg) && cfg->BSS &&
-		newstate == AS_IDLE && (wlc_portopen(cfg) || !cfg->associated))
-		wlc_connect_time_upd(wlc);
+		/* Connection is over on port open and AS_IDLE OR assoc failed and AS_IDLE */
+		if ((cfg == wlc->cfg) && cfg->BSS &&
+			newstate == AS_IDLE && (wlc_portopen(cfg) || !cfg->associated))
+			wlc_connect_time_upd(wlc);
+	}
 #endif /* WL_PWRSTATS */
 
 	if (newstate == AS_JOIN_START) {
@@ -5046,6 +5489,50 @@ wlc_assoc_change_state(wlc_bsscfg_t *cfg, uint newstate)
 		wlc_set_wake_ctrl(wlc);
 		return;
 	}
+#ifdef SLAVE_RADAR
+	if (WL11H_STA_ENAB(wlc)) {
+		bool from_radar = FALSE;
+		bool to_radar = FALSE;
+		wlc_bss_info_t *bi = NULL;
+		bi = wlc->as->cmn->join_targets->ptrs[wlc->as->cmn->join_targets_last];
+		/* Slave CAC begins */
+		if (newstate == AS_DFS_CAC_START) {
+			from_radar = (wlc_radar_chanspec(wlc->cmi,
+					cfg->current_bss->chanspec) == TRUE);
+			to_radar = wlc_radar_chanspec(wlc->cmi, bi->chanspec);
+			if (wlc_dfs_get_radar(wlc->dfs) && (!from_radar && to_radar)) {
+				cfg->pm->PM_oldvalue = cfg->pm->PM;
+				wlc_set_pm_mode(wlc, PM_OFF, cfg);
+				cfg->pm->PMmodeChangeDisabled = TRUE;
+				wlc->mpc = FALSE;
+				wlc_radio_mpc_upd(wlc);
+			}
+			wlc_set_dfs_cacstate(wlc->dfs, ON, wlc->cfg);
+		}
+
+		/* DFS state machine detected radar during CAC */
+		if (newstate == AS_DFS_CAC_FAIL) {
+			wlc_join_done(cfg, WLC_E_STATUS_FAIL);
+			wlc_roamscan_start(wlc->cfg, WLC_E_REASON_RADAR_DETECTED);
+		}
+
+		/* Notify DFS state machine to begin ISM */
+		if (newstate == AS_DFS_ISM_INIT) {
+			from_radar = (wlc_radar_chanspec(wlc->cmi,
+					cfg->current_bss->chanspec) == TRUE);
+			to_radar = wlc_radar_chanspec(wlc->cmi, bi->chanspec);
+			if (wlc_dfs_get_radar(wlc->dfs) && ((!from_radar && to_radar))) {
+				cfg->pm->PM_oldvalue = cfg->pm->PM;
+				wlc_set_pm_mode(wlc, PM_OFF, cfg);
+				cfg->pm->PMmodeChangeDisabled = TRUE;
+				wlc->mpc = FALSE;
+				wlc_radio_mpc_upd(wlc);
+			}
+			wlc_set_dfs_cacstate(wlc->dfs, ON, wlc->cfg);
+		}
+	}
+
+#endif /* SLAVE_RADAR */
 
 	/* transition from IDLE or from a state equavilent to IDLE. */
 	if (oldstate == AS_IDLE || AS_CAN_YIELD(cfg->BSS, oldstate)) {
@@ -5121,7 +5608,6 @@ wlc_sradar_ap_select_channel(wlc_info_t *wlc, chanspec_t curr_chanspec)
 	const char *abbrev = wlc_channel_country_abbrev(wlc->cmi);
 	wl_uint32_list_t *list, *noradar_list = NULL;
 	bool bw20 = FALSE, ch2g = FALSE;
-	uint16 ulb_bw = WL_CHANSPEC_BW_2P5;
 
 	/* if curr_chanspec is non-radar, just return it and do nothing */
 	if (!wlc_radar_chanspec(wlc->cmi, curr_chanspec)) {
@@ -5142,16 +5628,6 @@ wlc_sradar_ap_select_channel(wlc_info_t *wlc, chanspec_t curr_chanspec)
 	if (CHSPEC_IS40(curr_chanspec) || (curr_chanspec == 0)) {
 		bw20 = FALSE;
 	}
-#ifdef WL11ULB
-	if ((curr_chanspec != 0) && CHSPEC_IS_ULB(wlc, curr_chanspec)) {
-		if (CHSPEC_IS2P5(curr_chanspec))
-			ulb_bw = WL_CHANSPEC_BW_2P5;
-		else if (CHSPEC_IS5(curr_chanspec))
-			ulb_bw = WL_CHANSPEC_BW_5;
-		else
-			ulb_bw = WL_CHANSPEC_BW_10;
-	}
-#endif /* WL11ULB */
 
 	/* allocate memory for list */
 	listlen =
@@ -5165,8 +5641,7 @@ wlc_sradar_ap_select_channel(wlc_info_t *wlc, chanspec_t curr_chanspec)
 		/* get a list of valid channels */
 		list->count = 0;
 		wlc_get_valid_chanspecs(wlc->cmi, list,
-		(CHSPEC_IS_ULB(wlc, curr_chanspec) ? ulb_bw :
-			(bw20 ? WL_CHANSPEC_BW_20 : WL_CHANSPEC_BW_40)), ch2g, abbrev);
+		(bw20 ? WL_CHANSPEC_BW_20 : WL_CHANSPEC_BW_40), ch2g, abbrev);
 	}
 
 	/* This code builds a non-radar channel list out of the valid list */
@@ -5255,7 +5730,7 @@ wlc_sradar_ap_update(wlc_info_t *wlc)
 			} else {
 				/* can't find valid non-radar channel */
 				/* shutdown ap */
-				WL_ERROR(("%s: no radar channel found, disable ap\n",
+				WL_INFORM(("%s: no radar channel found, disable ap\n",
 				          __FUNCTION__));
 				wlc_bsscfg_disable(wlc, cfg);
 			}
@@ -5272,6 +5747,7 @@ wlc_sta_assoc_upd(wlc_bsscfg_t *cfg, bool state)
 	int idx;
 	wlc_bsscfg_t *bc;
 
+
 	WL_ASSOC(("wl%d.%d: %s: assoc state change %d>%d\n",
 	          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__, cfg->associated, state));
 
@@ -5279,11 +5755,6 @@ wlc_sta_assoc_upd(wlc_bsscfg_t *cfg, bool state)
 	 */
 	if (!state) {
 		wlc_reset_pmstate(cfg);
-#ifdef WLCAC
-		if (CCX_ENAB(wlc->pub) && CAC_ENAB(wlc->pub)) {
-			wlc_cac_update_cfg(wlc->cac, NULL);
-		}
-#endif
 	}
 	/* STA is assoicated, set related states that could have been
 	 * missing before cfg->associated is set...
@@ -5337,16 +5808,16 @@ wlc_sta_assoc_upd(wlc_bsscfg_t *cfg, bool state)
 	wlc_set_ps_ctrl(cfg);
 
 	/* change the watchdog driver */
-	wlc_watchdog_upd(cfg, PS_ALLOWED(cfg));
+	wlc_watchdog_upd(cfg, WLC_WATCHDOG_TBTT(wlc));
 
 	wlc_btc_set_ps_protection(wlc, cfg); /* enable if state = TRUE */
+
 
 	/* if no station associated and we have ap up, check channel */
 	/* if radar channel, move off to non-radar channel */
 	if (WL11H_ENAB(wlc) && AP_ACTIVE(wlc) && wlc->stas_associated == 0) {
 		wlc_sradar_ap_update(wlc);
 	}
-
 
 #ifdef WLRSDB
 	if (RSDB_ENAB(wlc->pub))
@@ -5362,11 +5833,11 @@ wlc_join_adopt_bss(wlc_bsscfg_t *cfg)
 	wlc_roam_t *roam = cfg->roam;
 	wlc_bss_info_t *target_bss = cfg->target_bss;
 	uint reason = 0;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char chanbuf[CHANSPEC_STR_LEN];
 	char ssidbuf[SSID_FMT_BUF_LEN];
 	wlc_format_ssid(ssidbuf, target_bss->SSID, target_bss->SSID_len);
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 
 	if (target_bss->bss_type == DOT11_BSSTYPE_INFRASTRUCTURE) {
 		WL_ASSOC(("wl%d: JOIN: join BSS \"%s\" on chanspec %s\n", WLCWLUNIT(wlc),
@@ -5453,7 +5924,6 @@ wlc_join_adopt_bss(wlc_bsscfg_t *cfg)
 
 	wlc_link(wlc, TRUE, &cfg->BSSID, cfg, reason);
 
-
 	wlc_assoc_change_state(cfg, AS_JOIN_ADOPT);
 	wlc_bss_assoc_state_notif(wlc, cfg, as->type, AS_JOIN_ADOPT);
 
@@ -5528,7 +5998,6 @@ wlc_join_basicrate_supported(wlc_info_t *wlc, wlc_rateset_t *rs, int band)
 	return (TRUE);
 }
 
-
 int
 wlc_join_recreate_complete(wlc_bsscfg_t *cfg, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 	struct dot11_bcn_prb *bcn, int bcn_len)
@@ -5593,6 +6062,34 @@ wlc_join_recreate_complete(wlc_bsscfg_t *cfg, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 	}
 
 
+#ifdef BCMULP
+	if (BCMULP_ENAB() && wlc_is_ulp_pending(wlc->ulp)) {
+		/* extracting information from bcn_prb to populate wl_status info */
+		current_bss->bcn_prb =
+			(struct dot11_bcn_prb *)MALLOCZ(wlc->osh, bcn_len);
+		if (current_bss->bcn_prb) {
+			memcpy((char*)current_bss->bcn_prb, (char*)bcn, bcn_len);
+			current_bss->bcn_prb_len = bcn_len;
+		} else {
+			WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			err = BCME_NOMEM;
+			/* Note that no return here because malloc/copy is done here
+			 * to print the status information ONLY, and below code
+			 * SHOULD be executed to complete recreate.
+			 */
+		}
+		current_bss->capability = ltoh16(bcn->capability);
+		as->type = AS_NONE;
+		wlc_assoc_change_state(cfg, AS_IDLE);
+		/* note: AS_ASSOC_VERIFY is sent for completion indication
+		* to esp. ulp
+		*/
+		wlc_bss_assoc_state_notif(wlc, cfg, cfg->assoc->type, AS_IDLE);
+		return err;
+	}
+#endif /* BCMULP */
+
 	if (cfg->BSS) {
 		/* when recreating an association, send a null data to the AP to verify
 		 * that we are still associated and wait a generous amount amount of time
@@ -5601,7 +6098,7 @@ wlc_join_recreate_complete(wlc_bsscfg_t *cfg, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 		 */
 		if (!wlc_sendnulldata(wlc, cfg, &cfg->current_bss->BSSID, 0, 0,
 			PRIO_8021D_BE, NULL, NULL))
-			WL_ERROR(("wl%d: %s: wlc_sendnulldata() failed\n",
+			WL_ASSOC_ERROR(("wl%d: %s: wlc_sendnulldata() failed\n",
 			          wlc->pub->unit, __FUNCTION__));
 
 		/* kill the beacon timeout timer and reset for association verification */
@@ -5615,26 +6112,6 @@ wlc_join_recreate_complete(wlc_bsscfg_t *cfg, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 		wlc_assoc_change_state(cfg, AS_IDLE);
 	}
 
-#if defined(BCMULP)
-	if (BCMULP_ENAB()) {
-		/* extracting information from bcn_prb to populate wl_status info */
-		current_bss->bcn_prb =
-		(struct dot11_bcn_prb *)MALLOCZ(wlc->osh, bcn_len);
-		if (current_bss->bcn_prb) {
-			memcpy((char*)current_bss->bcn_prb, (char*)bcn, bcn_len);
-			current_bss->bcn_prb_len = bcn_len;
-		} else {
-			WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
-				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
-			err = BCME_NOMEM;
-			/* Note that no return here because malloc/copy is done here to print
-			 * the status information ONLY, and below code SHOULD be executed to
-			 * complete recreate.
-			 */
-		}
-		current_bss->capability = ltoh16(bcn->capability);
-	}
-#endif /* BCMULP */
 	/* Send bss assoc notification */
 	wlc_bss_assoc_state_notif(wlc, cfg, type, as->state);
 	return err;
@@ -5926,10 +6403,6 @@ wlc_join_complete(wlc_bsscfg_t *cfg, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 	}
 
 
-	/* reset wd_run_flag */
-	if (BSSCFG_STA(cfg))
-		wlc->wd_run_flag = TRUE;
-
 	/* If the PM2 Receive Throttle Duty Cycle feature is active, reset it */
 	if (PM2_RCV_DUR_ENAB(cfg) && pm->PM == PM_FAST) {
 		WL_RTDC(wlc, "wlc_join_complete: PMep=%02u AW=%02u",
@@ -6007,13 +6480,13 @@ wlc_join_pref_tlv_len(wlc_info_t *wlc, uint8 *pref, int len)
 		return TLV_HDR_LEN + pref[TLV_LEN_OFF];
 	case WL_JOIN_PREF_WPA:
 		if (len < TLV_HDR_LEN + WLC_JOIN_PREF_LEN_FIXED) {
-			WL_ERROR(("wl%d: mulformed WPA cfg in join pref\n", WLCWLUNIT(wlc)));
+			WL_ASSOC_ERROR(("wl%d: mulformed WPA cfg in join pref\n", WLCWLUNIT(wlc)));
 			return -1;
 		}
 		return TLV_HDR_LEN + WLC_JOIN_PREF_LEN_FIXED +
 		        pref[TLV_HDR_LEN + WLC_JOIN_PREF_OFF_COUNT] * 12;
 	default:
-		WL_ERROR(("wl%d: unknown join pref type\n", WLCWLUNIT(wlc)));
+		WL_ASSOC_ERROR(("wl%d: unknown join pref type\n", WLCWLUNIT(wlc)));
 		return -1;
 	}
 
@@ -6065,7 +6538,8 @@ wlc_join_pref_parse(wlc_bsscfg_t *cfg, uint8 *pref, int len)
 	     tlv_pos += tlv_len) {
 		type = pref[tlv_pos + TLV_TAG_OFF];
 		if (p & WLCTYPEBMP(type)) {
-			WL_ERROR(("wl%d: multiple join pref type %d\n", WLCWLUNIT(wlc), type));
+			WL_ASSOC_ERROR(("wl%d: multiple join pref type %d\n",
+					WLCWLUNIT(wlc), type));
 			goto err;
 		}
 		switch (type) {
@@ -6082,7 +6556,7 @@ wlc_join_pref_parse(wlc_bsscfg_t *cfg, uint8 *pref, int len)
 			bits = WLC_JOIN_PREF_BITS_RSSI_DELTA;
 			break;
 		default:
-			WL_ERROR(("wl%d: invalid join pref type %d\n", WLCWLUNIT(wlc), type));
+			WL_ASSOC_ERROR(("wl%d: invalid join pref type %d\n", WLCWLUNIT(wlc), type));
 			goto err;
 		}
 		f++;
@@ -6091,7 +6565,7 @@ wlc_join_pref_parse(wlc_bsscfg_t *cfg, uint8 *pref, int len)
 	}
 	/* rssi field is mandatory! */
 	if (!(p & WLCTYPEBMP(WL_JOIN_PREF_RSSI))) {
-		WL_ERROR(("wl%d: WL_JOIN_PREF_RSSI (type %d) is not present\n",
+		WL_ASSOC_ERROR(("wl%d: WL_JOIN_PREF_RSSI (type %d) is not present\n",
 			WLCWLUNIT(wlc), WL_JOIN_PREF_RSSI));
 		goto err;
 	}
@@ -6101,13 +6575,13 @@ wlc_join_pref_parse(wlc_bsscfg_t *cfg, uint8 *pref, int len)
 		f--;
 
 	/* other sanity checks */
-	if (start > sizeof(wlc->as->cmn->join_targets->ptrs[0]->RSSI) * 8) {
-		WL_ERROR(("wl%d: too many bits %d max %u\n", WLCWLUNIT(wlc), start,
-			(uint)sizeof(wlc->as->cmn->join_targets->ptrs[0]->RSSI) * 8));
+	if (start > sizeof(uint32) * 8) {
+		WL_ASSOC_ERROR(("wl%d: too many bits %d max %u\n", WLCWLUNIT(wlc), start,
+			(uint)sizeof(uint32) * 8));
 		goto err;
 	}
 	if (f > MAXJOINPREFS) {
-		WL_ERROR(("wl%d: too many tlvs/prefs %d\n", WLCWLUNIT(wlc), f));
+		WL_ASSOC_ERROR(("wl%d: too many tlvs/prefs %d\n", WLCWLUNIT(wlc), f));
 		goto err;
 	}
 	WL_ASSOC(("wl%d: wlc_join_pref_parse: total %d fields %d bits\n", WLCWLUNIT(wlc), f,
@@ -6131,11 +6605,11 @@ wlc_join_pref_parse(wlc_bsscfg_t *cfg, uint8 *pref, int len)
 			bits = WLC_JOIN_PREF_BITS_WPA;
 			/* sanity check */
 			if (c > WLCMAXCNT(bits)) {
-				WL_ERROR(("wl%d: two many wpa configs %d max %d\n",
+				WL_ASSOC_ERROR(("wl%d: two many wpa configs %d max %d\n",
 					WLCWLUNIT(wlc), c, WLCMAXCNT(bits)));
 				goto err;
 			} else if (!c) {
-				WL_ERROR(("wl%d: no wpa config specified\n", WLCWLUNIT(wlc)));
+				WL_ASSOC_ERROR(("wl%d: no wpa config specified\n", WLCWLUNIT(wlc)));
 				goto err;
 			}
 			/* user-supplied list is from most favorable to least favorable */
@@ -6210,7 +6684,7 @@ wlc_join_pref_build(wlc_bsscfg_t *cfg, uint8 *pref, int len)
 		return BCME_ERROR;
 
 	if (!ISALIGNED(pref, sizeof(total))) {
-		WL_ERROR(("wl%d: %s: buffer not %d byte aligned\n",
+		WL_ASSOC_ERROR(("wl%d: %s: buffer not %d byte aligned\n",
 			WLCWLUNIT(wlc), __FUNCTION__, (int)sizeof(total)));
 		return BCME_BADARG;
 	}
@@ -6237,7 +6711,7 @@ wlc_join_pref_build(wlc_bsscfg_t *cfg, uint8 *pref, int len)
 		total += TLV_HDR_LEN + WLC_JOIN_PREF_LEN_FIXED;
 
 	if (len < total + (int)sizeof(total)) {
-		WL_ERROR(("wl%d: %s: buffer too small need %d bytes\n",
+		WL_ASSOC_ERROR(("wl%d: %s: buffer too small need %d bytes\n",
 			WLCWLUNIT(wlc), __FUNCTION__, (int)(total + sizeof(total))));
 		return BCME_BUFTOOSHORT;
 	}
@@ -6345,7 +6819,7 @@ wlc_join_pref_reset(wlc_bsscfg_t *cfg)
 	wlc_join_pref_t *join_pref = cfg->join_pref;
 
 	if (join_pref == NULL) {
-		WL_ERROR(("wl%d: %s: join pref NULL Error\n", WLCWLUNIT(cfg->wlc),
+		WL_ASSOC_ERROR(("wl%d: %s: join pref NULL Error\n", WLCWLUNIT(cfg->wlc),
 			__FUNCTION__));
 		return;
 	}
@@ -6363,9 +6837,14 @@ wlc_auth_tx_complete(wlc_info_t *wlc, uint txstatus, void *arg)
 	wlc_assoc_t *as;
 	wlc_bss_info_t *target_bss;
 
+	/* do not proceed with auth complete, if reinit is active */
+	if (wlc->cmn->reinit_active) {
+		return;
+	}
+
 	/* in case bsscfg is freed before this callback is invoked */
 	if (cfg == NULL) {
-		WL_ERROR(("wl%d: %s: unable to find bsscfg by ID %p\n",
+		WL_NONE(("wl%d: %s: unable to find bsscfg by ID %p\n",
 		          wlc->pub->unit, __FUNCTION__, OSL_OBFUSCATE_BUF(arg)));
 		return;
 	}
@@ -6395,7 +6874,7 @@ wlc_assocreq_complete(wlc_info_t *wlc, uint txstatus, void *arg)
 
 	/* in case bsscfg is freed before this callback is invoked */
 	if (cfg == NULL) {
-		WL_ERROR(("wl%d: %s: unable to find bsscfg by ID %p\n",
+		WL_NONE(("wl%d: %s: unable to find bsscfg by ID %p\n",
 		          wlc->pub->unit, __FUNCTION__, OSL_OBFUSCATE_BUF(arg)));
 		return;
 	}
@@ -6447,9 +6926,9 @@ wlc_bss_list_expand(wlc_bsscfg_t *cfg, wlc_bss_list_t *from, wlc_bss_list_t *to)
 	uint i, j, k, c;
 	wlc_bss_info_t *bi;
 	struct rsn_parms *rsn;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	wpa_suite_t *akm, *uc, *mc;
 
 	WL_ASSOC(("wl%d: wlc_bss_list_expand: scan results %d\n", WLCWLUNIT(wlc), from->count));
@@ -6501,12 +6980,16 @@ wlc_bss_list_expand(wlc_bsscfg_t *cfg, wlc_bss_list_t *from, wlc_bss_list_t *to)
 				* something has gone wrong, or need to add
 				* new code to handle the new akm here!
 				*/
-					WL_ERROR(("wl%d: unknown akm suite %02x%02x%02x%02x in WPA"
-						" cfg\n",
-						WLCWLUNIT(wlc),
-						akm->oui[0], akm->oui[1], akm->oui[2], akm->type));
+					WL_ASSOC_ERROR(("wl%d: unknown akm suite %02x%02x%02x%02x"
+							"in WPA	cfg\n",	WLCWLUNIT(wlc),	akm->oui[0],
+							akm->oui[1], akm->oui[2], akm->type));
 					continue;
 				}
+#ifdef BCMDBG
+				if (WL_ASSOC_ON()) {
+					prhex("rsn parms", (uint8 *)rsn, sizeof(*rsn));
+				}
+#endif /* BCMDBG */
 				/* check if the AP offers the akm */
 				for (k = 0; k < rsn->acount; k ++) {
 					if (akm->type == rsn->auth[k])
@@ -6540,7 +7023,7 @@ wlc_bss_list_expand(wlc_bsscfg_t *cfg, wlc_bss_list_t *from, wlc_bss_list_t *to)
 					to->ptrs[c] = bi = from->ptrs[i];
 					from->ptrs[i] = NULL;
 				} else if (!(to->ptrs[c] = wlc_bss_info_dup(wlc, bi))) {
-					WL_ERROR(("wl%d: failed to duplicate bss info\n",
+					WL_ASSOC_ERROR(("wl%d: failed to duplicate bss info\n",
 						WLCWLUNIT(wlc)));
 					goto err;
 				}
@@ -6569,13 +7052,13 @@ wlc_bss_list_expand(wlc_bsscfg_t *cfg, wlc_bss_list_t *from, wlc_bss_list_t *to)
 		}
 	} else {
 		c = 0;
-		WL_ERROR(("wl%d: don't know how to expand the list\n", WLCWLUNIT(wlc)));
+		WL_ASSOC_ERROR(("wl%d: don't know how to expand the list\n", WLCWLUNIT(wlc)));
 		goto err;
 	}
 
 	/* what if the join_target list is too big */
 	if (c >= (uint) wlc->pub->tunables->maxbss) {
-		WL_ERROR(("wl%d: two many entries, scan results may not be fully expanded\n",
+		WL_ASSOC_ERROR(("wl%d: two many entries, scan results may not be fully expanded\n",
 			WLCWLUNIT(wlc)));
 	}
 
@@ -6595,26 +7078,6 @@ err:
 	return BCME_ERROR;
 } /* wlc_bss_list_expand */
 
-
-static void
-wlc_assoc_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data)
-{
-	BCM_REFERENCE(ctx);
-
-	if (WL_INFORM_ON()) {
-		printf("%s: no parser\n", __FUNCTION__);
-		prhex("IE", data->ie, data->ie_len);
-	}
-}
-
-static uint8
-wlc_assoc_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data)
-{
-	wlc_info_t *wlc = (wlc_info_t *)ctx;
-
-	return wlc_iem_vs_get_id(wlc->iemi, data->ie);
-}
-
 void
 wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 	struct dot11_management_header *hdr, uint8 *body, uint body_len)
@@ -6628,11 +7091,11 @@ wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 	wlc_iem_upp_t upp;
 	wlc_iem_ft_pparm_t ftpparm;
 	wlc_iem_pparm_t pparm;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
 
 	bcm_ether_ntoa(&hdr->sa, eabuf);
-#endif 
+#endif /* BCMDBG || BCMDBG_ERR || WLMSG_ASSOC */
 
 	ASSERT(BSSCFG_STA(cfg));
 
@@ -6641,7 +7104,7 @@ wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 
 	if (!(as->state == AS_SENT_ASSOC || as->state == AS_REASSOC_RETRY) ||
 		bcmp(hdr->bssid.octet, target_bss->BSSID.octet, ETHER_ADDR_LEN)) {
-		WL_ERROR(("wl%d.%d: unsolicited association response from %s\n",
+		WL_NONE(("wl%d.%d: unsolicited association response from %s\n",
 		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), eabuf));
 		wlc_assoc_complete(cfg, WLC_E_STATUS_UNSOLICITED, &hdr->sa, 0,
 			fk != FC_ASSOC_RESP, 0);
@@ -6649,6 +7112,18 @@ wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 	}
 
 	/* capability */
+#ifdef BCMDBG
+	if (WL_ERROR_ON()) {
+		if (!(ltoh16(assoc->capability) & DOT11_CAP_ESS)) {
+			WL_ASSOC_ERROR(("wl%d: association response without ESS set from %s\n",
+				wlc->pub->unit, eabuf));
+		}
+		if (ltoh16(assoc->capability) & DOT11_CAP_IBSS) {
+			WL_ASSOC_ERROR(("wl%d: association response with IBSS set from %s\n",
+				wlc->pub->unit, eabuf));
+		}
+	}
+#endif /* BCMDBG */
 
 	/* save last (re)association response */
 	if (as->resp) {
@@ -6695,10 +7170,7 @@ wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 	                  body, (int)body_len);
 
 	/* prepare IE mgmt calls */
-	bzero(&upp, sizeof(upp));
-	upp.notif_fn = wlc_assoc_nhdlr_cb;
-	upp.vsie_fn = wlc_assoc_vsie_cb;
-	upp.ctx = wlc;
+	wlc_iem_parse_upp_init(wlc->iemi, &upp);
 	bzero(&ftpparm, sizeof(ftpparm));
 	ftpparm.assocresp.scb = scb;
 	ftpparm.assocresp.status = status;
@@ -6708,8 +7180,6 @@ wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 	/* parse IEs */
 	if (wlc_iem_parse_frame(wlc->iemi, cfg, fk, &upp, &pparm,
 	                        body, body_len) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: wlc_iem_parse_frame failed\n",
-		          wlc->pub->unit, __FUNCTION__));
 		return;
 	}
 	status = ftpparm.assocresp.status;
@@ -6719,14 +7189,6 @@ wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 		wlc_p2p_process_assocresp(wlc->p2p, scb, body, body_len);
 	}
 #endif
-
-#if defined(WL11AX) && defined(WL11AX_TRIGGERQ_ENABLED)
-	/* TODO Support for dynamic config need to be added  */
-	if (HE_ENAB(wlc->pub) && SCB_HE_CAP(scb)) {
-		/* For HE connection, use trigger queues by default for TX */
-		scb->flags3 |= SCB3_HE_TRIGGERED_TX;
-	}
-#endif /* defined(WL11AX) && defined(WL11AX_TRIGGERQ_ENABLED) */
 
 	/* Association success */
 	cfg->AID = ltoh16(assoc->aid);
@@ -6782,31 +7244,13 @@ wlc_assocresp_client(wlc_bsscfg_t *cfg, struct scb *scb,
 					err = wlc_key_set_data(bss_key, algo, data, data_len);
 				}
 				if (err != BCME_OK)
-					WL_ERROR(("wl%d.%d: Error %d inserting key for bss %s\n",
-						WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg), err, eabuf));
+					WL_ASSOC_ERROR(("wl%d.%d: Error %d inserting key for"
+							"bss %s\n", WLCWLUNIT(wlc),
+							WLC_BSSCFG_IDX(cfg), err, eabuf));
 			}
 		}
 	}
 } /* wlc_assocresp_client */
-
-static void
-wlc_auth_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data)
-{
-	BCM_REFERENCE(ctx);
-
-	if (WL_INFORM_ON()) {
-		printf("%s: no parser\n", __FUNCTION__);
-		prhex("IE", data->ie, data->ie_len);
-	}
-}
-
-static uint8
-wlc_auth_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data)
-{
-	wlc_info_t *wlc = (wlc_info_t *)ctx;
-
-	return wlc_iem_vs_get_id(wlc->iemi, data->ie);
-}
 
 void
 wlc_authresp_client(wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
@@ -6815,6 +7259,9 @@ wlc_authresp_client(wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
 	wlc_info_t *wlc = cfg->wlc;
 	wlc_assoc_t *as = cfg->assoc;
 	wlc_bss_info_t *target_bss = cfg->target_bss;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN], *sa = bcm_ether_ntoa(&hdr->sa, eabuf);
+#endif /* BCMDBG_ERR */
 	struct dot11_auth *auth = (struct dot11_auth *) body;
 	uint16 auth_alg, auth_seq, auth_status;
 	uint cfg_auth_alg;
@@ -6837,7 +7284,7 @@ wlc_authresp_client(wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
 	if (bcmp((char*)&hdr->sa, (char*)&target_bss->BSSID, ETHER_ADDR_LEN) ||
 	    (scb = wlc_scbfind(wlc, cfg, (struct ether_addr *)&hdr->sa)) == NULL ||
 	    (as->state != AS_SENT_AUTH_1 && as->state != AS_SENT_AUTH_3)) {
-		WL_ERROR(("wl%d.%d: unsolicited authentication response from %s\n",
+		WL_NONE(("wl%d.%d: unsolicited authentication response from %s\n",
 		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), sa));
 		wlc_auth_complete(cfg, WLC_E_STATUS_UNSOLICITED, &hdr->sa, 0, 0);
 		return;
@@ -6855,7 +7302,7 @@ wlc_authresp_client(wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
 
 	if ((as->state == AS_SENT_AUTH_1 && auth_seq != 2) ||
 	    (as->state == AS_SENT_AUTH_3 && auth_seq != 4)) {
-		WL_ERROR(("wl%d: out-of-sequence authentication response from %s\n",
+		WL_ASSOC_ERROR(("wl%d: out-of-sequence authentication response from %s\n",
 		          wlc->pub->unit, sa));
 		wlc_auth_complete(cfg, WLC_E_STATUS_UNSOLICITED, &hdr->sa, 0, 0);
 		return;
@@ -6883,8 +7330,8 @@ wlc_authresp_client(wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
 		cfg_auth_alg = cfg->auth;
 
 	if (auth_alg != cfg_auth_alg && !cfg->openshared) {
-		WL_ERROR(("wl%d: invalid authentication algorithm number, got %d, expected %d\n",
-		          wlc->pub->unit, auth_alg, cfg_auth_alg));
+		WL_ASSOC_ERROR(("wl%d: invalid authentication algorithm number,"
+				"got %d, expected %d\n", wlc->pub->unit, auth_alg, cfg_auth_alg));
 		wlc_auth_complete(cfg, WLC_E_STATUS_FAIL, &hdr->sa, auth_status, auth_alg);
 		return;
 	}
@@ -6896,10 +7343,7 @@ wlc_authresp_client(wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
 	body_len -= sizeof(struct dot11_auth);
 
 	/* prepare IE mgmt calls */
-	bzero(&upp, sizeof(upp));
-	upp.notif_fn = wlc_auth_nhdlr_cb;
-	upp.vsie_fn = wlc_auth_vsie_cb;
-	upp.ctx = wlc;
+	wlc_iem_parse_upp_init(wlc->iemi, &upp);
 	bzero(&ftpparm, sizeof(ftpparm));
 	ftpparm.auth.alg = auth_alg;
 	ftpparm.auth.seq = auth_seq;
@@ -6911,8 +7355,7 @@ wlc_authresp_client(wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
 	/* parse IEs */
 	if (wlc_iem_parse_frame(wlc->iemi, cfg, FC_AUTH, &upp, &pparm,
 	                        body, body_len) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: wlc_iem_parse_frame failed\n",
-		          wlc->pub->unit, __FUNCTION__));
+
 		return;
 	}
 	auth_status = ftpparm.auth.status;
@@ -7013,34 +7456,17 @@ wlc_create_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	/* zero out BSSID in order for _wlc_join_start_ibss() to assign a random one */
 	bzero(&cfg->BSSID, ETHER_ADDR_LEN);
 
-#if defined(WLRSDB) && defined(WL_MODESW)
-	if (RSDB_ENAB(wlc->pub) && WLC_MODESW_ENAB(wlc->pub)) {
-		if (WLC_RSDB_IS_AUTO_MODE(wlc)) {
-			wlc_info_t *to_wlc = NULL;
-			/* When an IBSS comes up as the first connection in wlc[0],
-			 * check for MIMO upgrade from RSDB
-			 */
-			to_wlc = wlc_rsdb_find_wlc_for_chanspec(wlc,
-					cfg->target_bss->chanspec);
-
-			/* Update the oper mode of the cfg based on chanspec */
-			if (cfg->oper_mode_enabled) {
-				cfg->oper_mode = wlc_modesw_derive_opermode(wlc->modesw,
-						cfg->target_bss->chanspec, cfg,
-						wlc->stf->rxstreams);
-			}
-			if ((to_wlc == wlc->cmn->wlc[0]) &&
-			    (wlc_rsdb_association_count(wlc) == 0)) {
-				if (WLC_RSDB_DUAL_MAC_MODE(WLC_RSDB_CURR_MODE(wlc)) &&
-				    wlc_rsdb_upgrade_allowed(wlc)) {
-					wlc_rsdb_upgrade_wlc(wlc);
-				}
-			}
+#ifdef WLRSDB
+	if (RSDB_ENAB(wlc->pub)) {
+		/* Will need clone/downgrade/upgrade. Deferring further processing */
+		if (wlc_rsdb_ibss_bringup(wlc, &cfg) != BCME_OK) {
+			return;
 		}
 	}
-#endif /* WLRSDB && WL_MODESW */
+#endif /* WLRSDB */
 
 	if (cfg->ibss_up_pending != TRUE) {
+		wlc_assoc_change_state(cfg, AS_IBSS_CREATE);
 		if (_wlc_join_start_ibss(wlc, cfg, cfg->target_bss->bss_type) != BCME_OK) {
 			wlc_set_ssid_complete(cfg, WLC_E_STATUS_FAIL, NULL,
 				DOT11_BSSTYPE_INDEPENDENT);
@@ -7049,13 +7475,12 @@ wlc_create_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	return;
 }
 
-
 /**
  * start an IBSS with all parameters in cfg->target_bss except SSID and BSSID.
  * SSID comes from cfg->SSID; BSSID comes from cfg->BSSID if it is not null,
  * generate a random BSSID otherwise.
  */
-static int
+int
 _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type)
 {
 	wlc_bss_info_t bi;
@@ -7086,8 +7511,8 @@ _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type)
 	bcopy(&cfg->BSSID, &bi.BSSID, ETHER_ADDR_LEN);
 
 
-	if (!ETHER_ISNULLADDR(&wlc->desired_BSSID))
-		bcopy(&wlc->desired_BSSID.octet, &bi.BSSID.octet, ETHER_ADDR_LEN);
+	if (!ETHER_ISNULLADDR(&wlc->default_bss->BSSID))
+		bcopy(&wlc->default_bss->BSSID.octet, &bi.BSSID.octet, ETHER_ADDR_LEN);
 
 	if (ETHER_ISNULLADDR(&bi.BSSID)) {
 		/* create IBSS BSSID using a random number */
@@ -7163,8 +7588,7 @@ _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type)
 
 	/* fixup bsscfg type based on chosen target_bss */
 	if ((err = wlc_assoc_fixup_bsscfg_type(wlc, cfg, &bi, TRUE)) != BCME_OK) {
-		WL_ERROR(("wl%d.%d: %s: wlc_assoc_fixup_bsscfg_type failed with err %d.\n",
-		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__, err));
+
 		return err;
 	}
 
@@ -7189,6 +7613,9 @@ _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type)
 	WL_RTDC(wlc, "wlc_join_start_ibss: associated", 0, 0);
 
 	/* force a PHY cal on the current IBSS channel */
+#ifdef PHYCAL_CACHING
+	phy_chanmgr_create_ctx((phy_info_t *) WLC_PI(wlc), bi.chanspec);
+#endif
 	wlc_full_phy_cal(wlc, cfg, PHY_PERICAL_START_IBSS);
 
 #ifdef WLMCNX
@@ -7215,7 +7642,7 @@ _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type)
 	/* notifying interested parties of the state... */
 	wlc_bss_assoc_state_notif(wlc, cfg, as->type, as->state);
 
-	WL_ERROR(("wl%d: IBSS started\n", wlc->pub->unit));
+	WL_ASSOC(("wl%d: IBSS started\n", wlc->pub->unit));
 	/* N.B.: bss_type passed through auth_type event field */
 	wlc_bss_mac_event(wlc, cfg, WLC_E_START, &bi.BSSID,
 	            WLC_E_STATUS_SUCCESS, 0, bss_type,
@@ -7227,6 +7654,7 @@ _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type)
 
 	wlc_set_ssid_complete(cfg, WLC_E_STATUS_SUCCESS, &bi.BSSID, bss_type);
 
+	wlc_if_event(wlc, WLC_E_IF_CHANGE, cfg->wlcif);
 	return BCME_OK;
 } /* _wlc_join_start_ibss */
 
@@ -7250,7 +7678,7 @@ wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int8 bss_type)
 	int err;
 
 	if (!wlc->pub->up) {
-		WL_ERROR(("wl%d: %s: unable to start IBSS while driver is down\n",
+		WL_ASSOC_ERROR(("wl%d: %s: unable to start IBSS while driver is down\n",
 		          wlc->pub->unit, __FUNCTION__));
 		err = BCME_NOTUP;
 		goto exit;
@@ -7296,35 +7724,42 @@ wlc_disassoc_tx_complete(wlc_info_t *wlc, uint txstatus, void *arg)
 
 	/* in case bsscfg is freed before this callback is invoked */
 	if (cfg == NULL) {
-		WL_ERROR(("wl%d: %s: unable to find bsscfg by ID %p\n",
+		WL_NONE(("wl%d: %s: unable to find bsscfg by ID %p\n",
 		          wlc->pub->unit, __FUNCTION__, OSL_OBFUSCATE_BUF(arg)));
 		return;
 	}
 
 	/* Make sure that this cfg is still associated */
 	if (!cfg->associated) {
-		WL_ERROR(("wl%d: %s: bsscfg %d is down/disabled.\n",
+		WL_NONE(("wl%d: %s: bsscfg %d is down/disabled.\n",
 		          wlc->pub->unit, __FUNCTION__, cfg->_idx));
 		return;
 	}
 #ifdef WLP2P
-	/* If cfg is P2P/GC and operated with NoA/Ops,
-	 * it should send disassoc with considering the absence of P2P/GO.
-	 */
-	if (wlc_p2p_get_noa_status(wlc, cfg)) {
-		interval = 10;
+	if (BSS_P2P_ENAB(wlc, cfg)) {
+		/* If cfg is P2P/GC and operated with NoA/Ops,
+		 * it should send disassoc with considering the absence of P2P/GO.
+		 */
+		if (wlc_p2p_get_noa_status(wlc, cfg)) {
+			interval = 10;
+		}
 	}
 #endif /* WLP2P */
-	cfg->assoc->disassoc_txstatus = txstatus;
-	cfg->assoc->type = AS_NONE;
-	cfg->assoc->state = AS_DISASSOC_TIMEOUT;
 
-	/* First delete the assoc timer before re-using it */
-	wlc_assoc_timer_del(wlc, cfg);
-
-	/* Add timer so that wlc_disassoc_tx happens in clean timer Call back context */
-	wl_add_timer(wlc->wl, cfg->assoc->timer, interval, FALSE);
-
+	if (txstatus & TX_STATUS_ACK_RCV) {
+		/* cleanup immediately on ACK_RCV */
+		cfg->assoc->block_disassoc_tx = TRUE;
+		wlc_disassoc_tx(cfg, FALSE);
+	} else {
+		/* no ack, arm timer to retry disassoc again */
+		cfg->assoc->disassoc_txstatus = txstatus;
+		cfg->assoc->type = AS_NONE;
+		cfg->assoc->state = AS_DISASSOC_TIMEOUT;
+		/* First delete the assoc timer before re-using it */
+		wlc_assoc_timer_del(wlc, cfg);
+		/* Add timer so that wlc_disassoc_tx happens in clean timer Call back context */
+		wl_add_timer(wlc->wl, cfg->assoc->timer, interval, FALSE);
+	}
 	return;
 }
 
@@ -7335,7 +7770,8 @@ wlc_disassoc_tx_cb(wlc_info_t *wlc, wlc_bsscfg_t *cfg, void *pkt,
 
 	if (wlc_pcb_fn_register(wlc->pcb, wlc_disassoc_tx_complete,
 		(void *)(uintptr)cfg->ID, pkt)) {
-			WL_ERROR(("wl%d: %s out of pkt callbacks\n", wlc->pub->unit, __FUNCTION__));
+			WL_ERROR(("wl%d: %s out of pkt callbacks\n",
+					wlc->pub->unit, __FUNCTION__));
 			return BCME_ERROR;
 		}
 	return BCME_OK;
@@ -7349,91 +7785,84 @@ wlc_disassoc_tx(wlc_bsscfg_t *cfg, bool send_disassociate)
 	wlc_assoc_t *as = cfg->assoc;
 	struct scb *scb;
 	struct ether_addr BSSID;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	wlc_bss_info_t *current_bss = cfg->current_bss;
 
 	WL_TRACE(("wl%d: wlc_disasso_tx\n", wlc->pub->unit));
 
-	if (wlc->pub->associated == FALSE)
+	if (DEVICEREMOVED(wlc) || !cfg->BSS)
 		goto exit;
+
+	/* abort any association state machine in process abort should be done
+	 * only if the current cfg is undergoing assoc. Else this might go and
+	 * clear some of the generic lists and states of the other bsscfg's
+	 */
+	if (wlc_assoc_get_as_cfg(wlc) == cfg) {
+			wlc_assoc_abort(cfg);
+	}
+
 	if (!cfg->associated)
 		goto exit;
 
-	if (cfg->BSS) {
-		bcopy(&cfg->prev_BSSID, &BSSID, ETHER_ADDR_LEN);
-	} else {
-		goto exit;
-	}
+	bcopy(&cfg->prev_BSSID, &BSSID, ETHER_ADDR_LEN);
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	bcm_ether_ntoa(&BSSID, eabuf);
 #endif
 
 
-	if (DEVICEREMOVED(wlc))
-		goto exit;
+	scb = wlc_scbfind(wlc, cfg, &BSSID);
 
-	/* BSS STA */
-	if (cfg->BSS) {
-		/* abort any association state machine in process abort should be done
-		 * only if the current cfg is undergoing assoc. Else this might go and
-		 * clear some of the generic lists and states of the other bsscfg's
-		 */
-		if (wlc_assoc_get_as_cfg(wlc) == cfg)
-			wlc_assoc_abort(cfg);
+	/* clear PM state, (value used for wake shouldn't matter) */
+	wlc_update_bcn_info(cfg, FALSE);
 
-		scb = wlc_scbfind(wlc, cfg, &BSSID);
-
-		/* clear PM state, (value used for wake shouldn't matter) */
-		wlc_update_bcn_info(cfg, FALSE);
-
-		wlc_pspoll_timer_upd(cfg, FALSE);
-		wlc_apsd_trigger_upd(cfg, FALSE);
+	wlc_pspoll_timer_upd(cfg, FALSE);
+	wlc_apsd_trigger_upd(cfg, FALSE);
 
 #ifdef QUIET_DISASSOC
-		if (send_disassociate) {
-			send_disassociate = FALSE;
-		}
+	if (send_disassociate) {
+		send_disassociate = FALSE;
+	}
 #endif /* QUIET_DISASSOC */
 #ifdef WLTDLS
-		if (TDLS_ENAB(wlc->pub) && wlc_tdls_quiet_down(wlc->tdls)) {
-			WL_ASSOC(("wl%d: JOIN: skipping DISASSOC to %s since we are "
-					    "quite down.\n", WLCWLUNIT(wlc), eabuf));
-			send_disassociate = FALSE;
-		}
+	if (TDLS_ENAB(wlc->pub) && wlc_tdls_quiet_down(wlc->tdls)) {
+		WL_ASSOC(("wl%d: JOIN: skipping DISASSOC to %s since we are "
+				    "quite down.\n", WLCWLUNIT(wlc), eabuf));
+		send_disassociate = FALSE;
+	}
 #endif
-		/* Send disassociate packet and (attempt to) schedule callback */
-		if (send_disassociate) {
-			if (ETHER_ISNULLADDR(cfg->BSSID.octet)) {
-				/* a NULL BSSID indicates that we have given up on our AP connection
-				 * to the point that we will reassociate to it if we ever see it
-				 * again. In this case, we should not send a disassoc
-				 */
-				WL_ASSOC(("wl%d: JOIN: skipping DISASSOC to %s since we lost "
-					    "contact.\n", WLCWLUNIT(wlc), eabuf));
-			} else if (wlc_radar_chanspec(wlc->cmi, current_bss->chanspec) ||
-			           wlc_restricted_chanspec(wlc->cmi, current_bss->chanspec)) {
-				WL_ASSOC(("wl%d: JOIN: sending DISASSOC to %s on "
-				          "radar/restricted channel \n",
-				          WLCWLUNIT(wlc), eabuf));
-			} else if (as->disassoc_tx_retry < 7) {
-				WL_ASSOC(("wl%d: JOIN: sending DISASSOC to %s\n",
-					WLCWLUNIT(wlc), eabuf));
-				if (wlc_senddisassoc_ex(wlc, cfg, scb, &BSSID, &BSSID,
-						&cfg->cur_etheraddr, DOT11_RC_DISASSOC_LEAVING,
-						wlc_disassoc_tx_cb, NULL, NULL)) {
+	/* Send disassociate packet and (attempt to) schedule callback */
+	if (send_disassociate) {
+		if (ETHER_ISNULLADDR(cfg->BSSID.octet)) {
+			/* a NULL BSSID indicates that we have given up on our AP connection
+			 * to the point that we will reassociate to it if we ever see it
+			 * again. In this case, we should not send a disassoc
+			 */
+			WL_ASSOC(("wl%d: JOIN: skipping DISASSOC to %s since we lost "
+				    "contact.\n", WLCWLUNIT(wlc), eabuf));
+		} else if (wlc_radar_chanspec(wlc->cmi, current_bss->chanspec) ||
+		           wlc_restricted_chanspec(wlc->cmi, current_bss->chanspec)) {
+			WL_ASSOC(("wl%d: JOIN: sending DISASSOC to %s on "
+			          "radar/restricted channel \n",
+			          WLCWLUNIT(wlc), eabuf));
+		} else if (as->disassoc_tx_retry < 7) {
+			WL_ASSOC(("wl%d: JOIN: sending DISASSOC to %s\n",
+				WLCWLUNIT(wlc), eabuf));
+			if (wlc_senddisassoc_ex(wlc, cfg, scb, &BSSID, &BSSID,
+					&cfg->cur_etheraddr, DOT11_RC_DISASSOC_LEAVING,
+					wlc_disassoc_tx_cb, NULL, NULL)) {
 
-					WL_ASSOC(("wl%d: JOIN: error sending "
-					          "DISASSOC\n", WLCWLUNIT(wlc)));
-					goto exit;
-				}
-				as->disassoc_tx_retry++;
-				return;
+				WL_ASSOC(("wl%d: JOIN: error sending "
+				          "DISASSOC\n", WLCWLUNIT(wlc)));
+				goto exit;
 			}
+			as->disassoc_tx_retry++;
+			return;
 		}
 	}
+
 
 exit:
 	as->disassoc_tx_retry = 0;
@@ -7509,14 +7938,14 @@ _wlc_disassociate_client(wlc_bsscfg_t *cfg, bool send_disassociate, pkcb_fn_t fn
 	wlc_assoc_t *as = cfg->assoc;
 	struct scb *scb;
 	struct ether_addr BSSID;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 	uint bsstype;
 	wlc_bss_info_t *current_bss = cfg->current_bss;
 	wlc_bss_info_t *target_bss = cfg->target_bss;
 	bool mute_mode = ON;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char chanbuf[CHANSPEC_STR_LEN];
 #endif
 
@@ -7531,16 +7960,10 @@ _wlc_disassociate_client(wlc_bsscfg_t *cfg, bool send_disassociate, pkcb_fn_t fn
 	} else {
 		bcopy(&current_bss->BSSID, &BSSID, ETHER_ADDR_LEN);
 	}
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	bcm_ether_ntoa(&BSSID, eabuf);
-#endif 
+#endif /* BCMDBG || WLMSG_ASSOC */
 
-
-
-#ifdef	WLCAC
-	if (CAC_ENAB(wlc->pub))
-		wlc_cac_on_leave_bss(wlc->cac);
-#endif	/* WLCAC */
 
 
 #ifdef WLTDLS
@@ -7605,7 +8028,8 @@ _wlc_disassociate_client(wlc_bsscfg_t *cfg, bool send_disassociate, pkcb_fn_t fn
 				 */
 				WL_ASSOC(("wl%d: JOIN: skipping DISASSOC to %s since we lost "
 					    "contact.\n", WLCWLUNIT(wlc), eabuf));
-			} else if (wlc_radar_chanspec(wlc->cmi, current_bss->chanspec) ||
+			} else if ((wlc_radar_chanspec(wlc->cmi, current_bss->chanspec) &&
+				wlc_quiet_chanspec(wlc->cmi, current_bss->chanspec)) ||
 			        wlc_restricted_chanspec(wlc->cmi, current_bss->chanspec)) {
 				/* note that if the channel is a radar or restricted channel,
 				 * Permit sending disassoc packet if no subsequent processing
@@ -7796,12 +8220,6 @@ wlc_assoc_success(wlc_bsscfg_t *cfg, struct scb *scb)
 			if (prev_scb != scb) {
 				bit_flag |= AUTHENTICATED;
 			}
-#ifdef WLFBT
-			if (WLFBT_ENAB(wlc->pub) && (cfg->WPA_auth & WPA2_AUTH_FT) &&
-				CAC_ENAB(wlc->pub) && (wlc->cac != NULL)) {
-				wlc_cac_copy_state(wlc->cac, prev_scb, scb);
-			}
-#endif /* WLFBT */
 			wlc_scb_clearstatebit(wlc, prev_scb, bit_flag);
 
 
@@ -7880,6 +8298,20 @@ wlc_assoc_continue_post_auth1(wlc_bsscfg_t *cfg, struct scb *scb)
 	wlc_assoc_change_state(cfg, AS_SENT_ASSOC);
 	pkt = wlc_join_assoc_start(wlc, cfg, scb, target_bss, cfg->associated);
 
+#if defined(WLP2P) && defined(BCMDBG)
+	if (WL_P2P_ON()) {
+		int bss = wlc_mcnx_BSS_idx(wlc->mcnx, cfg);
+		uint16 state = wlc_mcnx_read_shm(wlc->mcnx, M_P2P_BSS_ST(wlc, bss));
+		uint16 next_noa = wlc_mcnx_read_shm(wlc->mcnx, M_P2P_BSS_N_NOA(wlc, bss));
+		uint16 hps = wlc_mcnx_read_shm(wlc->mcnx, M_P2P_HPS_OFFSET(wlc));
+
+		WL_P2P(("wl%d: %s: queue ASSOC at tick 0x%x ST 0x%04X "
+		        "N_NOA 0x%X HPS 0x%04X\n",
+		        wlc->pub->unit, __FUNCTION__,
+		        R_REG(wlc->osh, &wlc->regs->tsf_timerlow),
+		        state, next_noa, hps));
+	}
+#endif /* WLP2P && BCMDBG */
 
 	wlc_assoc_timer_del(wlc, cfg);
 
@@ -7906,13 +8338,13 @@ wlc_auth_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr* addr,
 	bool more_to_do_after_event = FALSE;
 	struct scb *scb;
 	void *pkt;
-#if defined(WLMSG_ASSOC) || defined(WLEXTLOG)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_ASSOC) || defined(WLEXTLOG)
 	char eabuf[ETHER_ADDR_STR_LEN];
 	if (addr != NULL)
 		bcm_ether_ntoa(addr, eabuf);
 	else
 		strncpy(eabuf, "<NULL>", sizeof(eabuf) - 1);
-#endif 
+#endif /* BCMDBG || BCMDBG_ERR || WLMSG_ASSOC */
 
 	/* If we receive an event not for us, preserve the timer and keep waiting */
 	if (status != WLC_E_STATUS_UNSOLICITED) {
@@ -8042,7 +8474,7 @@ wlc_auth_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr* addr,
 		WL_ASSOC(("wl%d: JOIN: authentication aborted\n", WLCWLUNIT(wlc)));
 		goto do_event;
 	} else {
-		WL_ERROR(("wl%d: %s, unexpected status %d\n",
+		WL_ASSOC_ERROR(("wl%d: %s, unexpected status %d\n",
 		          WLCWLUNIT(wlc), __FUNCTION__, (int)status));
 		goto do_event;
 	}
@@ -8107,7 +8539,7 @@ wlc_assoc_continue_sent_auth1(wlc_bsscfg_t *cfg, struct ether_addr* addr)
 
 		if (scb == NULL || target_bss == NULL) {
 			bcmerr = BCME_NOTREADY;
-			WL_ERROR(("%s: couldn't continue assoc scb=%p target_bss=%p\n",
+			WL_ASSOC_ERROR(("%s: couldn't continue assoc scb=%p target_bss=%p\n",
 				__FUNCTION__, OSL_OBFUSCATE_BUF(scb),
 				OSL_OBFUSCATE_BUF(target_bss)));
 			break;
@@ -8129,16 +8561,16 @@ wlc_assoc_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr* addr,
 	wlc_assoc_t *as = cfg->assoc;
 	bool more_to_do_after_event = FALSE;
 	struct scb *scb;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG_ERR) || defined(WLMSG_ASSOC)
 	const char* action = (reassoc)?"reassociation":"association";
 #endif
-#if defined(WLMSG_ASSOC) || defined(WLEXTLOG)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_ASSOC) || defined(WLEXTLOG)
 	char eabuf[ETHER_ADDR_STR_LEN];
 	if (addr != NULL)
 		bcm_ether_ntoa(addr, eabuf);
 	else
 		strncpy(eabuf, "<NULL>", sizeof(eabuf) - 1);
-#endif 
+#endif /* BCMDBG || BCMDBG_ERR || WLMSG_ASSOC */
 
 	if (status == WLC_E_STATUS_UNSOLICITED)
 		goto do_event;
@@ -8157,6 +8589,17 @@ wlc_assoc_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr* addr,
 			cfg->roam->scan_block = SCAN_BLOCK_AT_ASSOC_COMPL;
 		}
 
+#ifdef SLAVE_RADAR
+		if (WL11H_STA_ENAB(wlc) && wlc_dfs_get_radar(wlc->dfs) &&
+			(cfg->roam->reason == WLC_E_REASON_RADAR_DETECTED)) {
+			if (!wlc_radar_chanspec(wlc->cmi, WLC_BAND_PI_RADIO_CHANSPEC)) {
+				cfg->pm->PMmodeChangeDisabled = FALSE;
+				wlc_set_pm_mode(wlc, cfg->pm->PM_oldvalue, cfg);
+				wlc->mpc = TRUE;
+				wlc_radio_mpc_upd(wlc);
+			}
+		}
+#endif	/* SLAVE_RADAR */
 		if (WOWL_ENAB(wlc->pub) && cfg == wlc->cfg)
 			cfg->roam->roam_on_wowl = FALSE;
 		/* Restart the ap's in case of a band change */
@@ -8228,7 +8671,7 @@ wlc_assoc_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr* addr,
 		WL_ASSOC(("wl%d: JOIN: %s aborted\n", wlc->pub->unit, action));
 		goto do_event;
 	} else {
-		WL_ERROR(("wl%d: %s: %s, unexpected status %d\n",
+		WL_ASSOC_ERROR(("wl%d: %s: %s, unexpected status %d\n",
 		    WLCWLUNIT(wlc), __FUNCTION__, action, (int)status));
 		goto do_event;
 	}
@@ -8290,6 +8733,13 @@ wlc_set_ssid_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr *addr, u
 		}
 	}
 
+	if (status == WLC_E_STATUS_ABORT) {
+		/*
+		* mark cfg un-associated before passing notification
+		* in case association process was aborted.
+		*/
+		wlc_sta_assoc_upd(cfg, FALSE);
+	}
 	/* Association state machine is halting, clear state and allow core to sleep */
 	as->type = AS_NONE;
 	wlc_assoc_change_state(cfg, AS_IDLE);
@@ -8299,7 +8749,7 @@ wlc_set_ssid_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr *addr, u
 
 	if ((status != WLC_E_STATUS_SUCCESS) && (status != WLC_E_STATUS_FAIL) &&
 	    (status != WLC_E_STATUS_NO_NETWORKS) && (status != WLC_E_STATUS_ABORT))
-		WL_ERROR(("wl%d: %s: unexpected status %d\n",
+		WL_ASSOC_ERROR(("wl%d: %s: unexpected status %d\n",
 		          WLCWLUNIT(wlc), __FUNCTION__, (int)status));
 
 	if (status != WLC_E_STATUS_SUCCESS) {
@@ -8370,7 +8820,6 @@ wlc_set_ssid_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr *addr, u
 	if (retry)
 		return;
 
-
 	/* free join scan/assoc params */
 	if (status == WLC_E_STATUS_SUCCESS) {
 		wlc_bsscfg_scan_params_reset(wlc, cfg);
@@ -8428,9 +8877,10 @@ wlc_roam_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr *addr, uint 
 	} else if (status == WLC_E_STATUS_ABORT) {
 		WL_ASSOC(("wl%d: JOIN: roam aborted\n", WLCWLUNIT(wlc)));
 	} else {
-		WL_ERROR(("wl%d: %s: unexpected status %d\n",
+		WL_ASSOC_ERROR(("wl%d: %s: unexpected status %d\n",
 		    WLCWLUNIT(wlc), __FUNCTION__, (int)status));
 	}
+	roam->roam_scan_started = FALSE;
 #ifdef WLWNM
 	if (WLWNM_ENAB(wlc->pub)) {
 		/* If bsstrans_resp is pending here then we don't have a roam candidate.
@@ -8440,7 +8890,6 @@ wlc_roam_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr *addr, uint 
 			DOT11_BSSTRANS_RESP_STATUS_REJ_BSS_LIST_PROVIDED, NULL);
 	}
 #endif /* WLWNM */
-
 	/* Association state machine is halting, clear state */
 	wlc_bss_list_free(wlc, wlc->as->cmn->join_targets);
 
@@ -8506,6 +8955,9 @@ wlc_roam_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr *addr, uint 
 		wlc_bss_mac_event(wlc, cfg, WLC_E_ASSOC_RECREATED, NULL, status, 0, 0, 0, 0);
 #endif /* NLO */
 	}
+#ifdef OPPORTUNISTIC_ROAM
+	memcpy(cfg->join_bssid.octet, BSSID_INVALID, sizeof(cfg->join_bssid.octet));
+#endif /* OPPORTUNISTIC_ROAM */
 
 	/* Handle AP lost scenario when roam complete happens */
 	if ((roam->time_since_bcn > roam->bcn_timeout) && !roam->bcns_lost &&
@@ -8538,7 +8990,7 @@ wlc_disassoc_complete(wlc_bsscfg_t *cfg, uint status, struct ether_addr *addr,
 	                  disassoc_reason, bss_type, 0, 0);
 } /* wlc_disassoc_complete */
 
-void
+int
 wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 {
 	wlc_info_t *wlc = cfg->wlc;
@@ -8546,13 +8998,14 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 	wlc_roam_t *roam = cfg->roam;
 	bool roamscan_full = FALSE, roamscan_new;
 	bool roamscan_stop;
-	int err;
+	int err = BCME_OK;
 #ifdef WLABT
 	if (WLABT_ENAB(wlc->pub) && roam_reason == WLC_E_REASON_LOW_RSSI) {
 		wlc_check_adaptive_bcn_timeout(cfg);
 	}
 #endif /* WLABT */
-	if (roam_reason == WLC_E_REASON_DEAUTH || roam_reason == WLC_E_REASON_DISASSOC) {
+	if (roam_reason == WLC_E_REASON_DEAUTH || roam_reason == WLC_E_REASON_DISASSOC ||
+		roam_reason == WLC_E_REASON_RADAR_DETECTED) {
 		wlc_update_bcn_info(cfg, FALSE);
 
 		/* Don't block this scan */
@@ -8581,10 +9034,10 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 				WL_ASSOC(("wl%d: %s: Unable start roamscan because there are no "
 				          "valid entries in the roam cache\n", wlc->pub->unit,
 				          __FUNCTION__));
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 				wlc_print_roam_status(cfg, roam_reason, TRUE);
 #endif
-				return;
+				return BCME_ERROR;
 			}
 		}
 
@@ -8606,7 +9059,7 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 				 */
 				if (as->type == AS_ROAM && (SCAN_IN_PROGRESS(wlc->scan) ||
 						(as->state == AS_WAIT_RCV_BCN))) {
-					return;
+					return BCME_BUSY;
 				}
 
 				WL_ASSOC(("wl%d: %s: Detecting a significant RSSI change, "
@@ -8658,13 +9111,13 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 				/* Ignore RSSI thrashing about the wnm_roam_trigger */
 				if (WBTEXT_ACTIVE(wlc->pub) &&
 					wlc_wnm_bsstrans_check_for_roamthrash(wlc, cfg)) {
-					return;
+					return BCME_ERROR;
 				}
 				else
 				/* Ignore RSSI thrashing about the roam_trigger */
 				if ((cfg->link->rssi - wlc->band->roam_trigger) <
 				    wlc->roam_rssi_cancel_hysteresis) {
-					return;
+					return BCME_ERROR;
 				}
 
 				WL_ASSOC(("wl%d: %s: Finished with roaming\n",
@@ -8696,7 +9149,7 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 				if (wlc->band->roam_prof)
 					wlc_roam_prof_update(wlc, cfg, TRUE);
 			}
-			return;
+			return BCME_ERROR;
 		}
 
 		if (roam->reason == WLC_E_REASON_MINTXRATE ||
@@ -8718,13 +9171,20 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 				roam->txpass_cnt = 0;
 				roam->reason = WLC_E_REASON_INITIAL_ASSOC; /* clear reason */
 
-				return;
+				return BCME_ERROR;
 			}
 		}
 
+#ifdef OPPORTUNISTIC_ROAM
+		/* This is an explicit request from the HOST, so ignore scan_block */
+		if (roam->reason == WLC_E_REASON_BETTER_AP) {
+			roam->scan_block = 0;
+		}
+#endif /* OPPORTUNISTIC_ROAM */
+
 		/* Already roaming, come back in another watchdog tick  */
 		if (roam->scan_block) {
-			return;
+			return BCME_EPERM;
 		}
 
 		/* Should initiate the roam scan now */
@@ -8762,7 +9222,10 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 				"already in progress for reason %u, as->state %d\n",
 				wlc->pub->unit, __FUNCTION__, roam_reason, roam->reason,
 				as->state));
-			return;
+#ifdef OPPORTUNISTIC_ROAM
+			memcpy(cfg->join_bssid.octet, BSSID_INVALID, sizeof(cfg->join_bssid.octet));
+#endif /* OPPORTUNISTIC_ROAM */
+			return BCME_BUSY;
 		}
 
 		WL_ASSOC(("wl%d: %s: Start roam scan: Doing a %s scan with a scan period of %d "
@@ -8795,14 +9258,16 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 			}
 		}
 		else {
-			if (err == BCME_EPERM)
+			if (err == BCME_EPERM) {
 				WL_ASSOC(("wl%d: %s: Couldn't start the roam with error %d\n",
 				          wlc->pub->unit, __FUNCTION__, err));
-			else
-				WL_ERROR(("wl%d: %s: Couldn't start the roam with error %d\n",
+			}
+			else {
+				WL_ASSOC_ERROR(("wl%d: %s: Couldn't start the roam with error %d\n",
 				          wlc->pub->unit,  __FUNCTION__, err));
+			}
 		}
-		return;
+		return err;
 	}
 	/* Original roaming */
 	else {
@@ -8814,6 +9279,7 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 
 		if (roam_metric < wlc->band->roam_trigger) {
 			if (roam->scan_block || roam->off) {
+				err = BCME_EPERM;
 				WL_ASSOC(("ROAM: roam_metric=%d; block roam scan request(%u,%d)\n",
 				          roam_metric, roam->scan_block, roam->off));
 			} else {
@@ -8821,10 +9287,11 @@ wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason)
 				          roam_metric));
 
 				roam->scan_block = roam->fullscan_period;
-				wlc_roam_scan(cfg, WLC_E_REASON_LOW_RSSI, NULL, 0);
+				err = wlc_roam_scan(cfg, WLC_E_REASON_LOW_RSSI, NULL, 0);
 			}
 		}
 	}
+	return err;
 } /* wlc_roamscan_start */
 
 static void
@@ -8839,7 +9306,8 @@ wlc_roamscan_complete(wlc_bsscfg_t *cfg)
 	if (!((roam->reason == WLC_E_REASON_LOW_RSSI) ||
 	      (roam->reason == WLC_E_REASON_BCNS_LOST) ||
 	      (roam->reason == WLC_E_REASON_MINTXRATE) ||
-	      (roam->reason == WLC_E_REASON_TXFAIL)))
+	      (roam->reason == WLC_E_REASON_TXFAIL) ||
+	      (roam->reason == WLC_E_REASON_RADAR_DETECTED)))
 		return;
 
 	if (roam->roam_type == ROAM_PARTIAL) {
@@ -8896,13 +9364,17 @@ bool
 wlc_assoc_check_roam_candidate(wlc_bsscfg_t *cfg, wlc_bss_info_t *candidate_bi)
 {
 	wlc_bss_info_t *current_bi = cfg->current_bss;
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	char eabuf1[ETHER_ADDR_STR_LEN], eabuf2[ETHER_ADDR_STR_LEN];
 #endif
 
 	WL_ASSOC(("current:%s (auth=0x%x), candidate:%s (auth=0x%x)\n",
 		bcm_ether_ntoa(&current_bi->BSSID, eabuf1), cfg->WPA_auth,
 		bcm_ether_ntoa(&candidate_bi->BSSID, eabuf2), candidate_bi->WPA_auth_support));
+
+	if (cfg->WPA_auth == WPA_AUTH_DISABLED) {
+		return (candidate_bi->WPA_auth_support == WPA_AUTH_DISABLED);
+	}
 
 	/* fisrt, check the candidate supports current auth type */
 	if ((cfg->WPA_auth & candidate_bi->WPA_auth_support) != cfg->WPA_auth) {
@@ -8948,19 +9420,7 @@ wlc_build_roam_cache(wlc_bsscfg_t *cfg, wlc_bss_list_t *candidates)
 		/* If associated, add the current AP to the cache. */
 		if (cfg->associated && !ETHER_ISNULLADDR(&cfg->BSSID)) {
 			bssid = &cfg->current_bss->BSSID;
-#ifdef WL11ULB
-			if (CHSPEC_IS2P5(cfg->current_bss->chanspec)) {
-				chanspec = CH2P5MHZ_CHSPEC(
-					wf_chspec_ctlchan(cfg->current_bss->chanspec));
-			} else if (CHSPEC_IS5(cfg->current_bss->chanspec)) {
-				chanspec = CH5MHZ_CHSPEC(
-					wf_chspec_ctlchan(cfg->current_bss->chanspec));
-			} else if (CHSPEC_IS10(cfg->current_bss->chanspec)) {
-				chanspec = CH10MHZ_CHSPEC(
-					wf_chspec_ctlchan(cfg->current_bss->chanspec));
-			} else
-#endif /* WL11ULB */
-				chanspec = CH20MHZ_CHSPEC(
+			chanspec = CH20MHZ_CHSPEC(
 					wf_chspec_ctlchan(cfg->current_bss->chanspec));
 			WL_SRSCAN(("cache add: idx %d: bssid %02x:%02x",
 				roam->cache_numentries, bssid->octet[4], bssid->octet[5]));
@@ -8980,19 +9440,7 @@ wlc_build_roam_cache(wlc_bsscfg_t *cfg, wlc_bss_list_t *candidates)
 		(nentries < ROAM_CACHELIST_SIZE); i--) {
 
 		bssid = &candidates->ptrs[i]->BSSID;
-#ifdef WL11ULB
-		if (CHSPEC_IS2P5(candidates->ptrs[i]->chanspec)) {
-			chanspec = CH2P5MHZ_CHSPEC(
-				wf_chspec_ctlchan(candidates->ptrs[i]->chanspec));
-		} else if (CHSPEC_IS5(candidates->ptrs[i]->chanspec)) {
-			chanspec = CH5MHZ_CHSPEC(
-				wf_chspec_ctlchan(candidates->ptrs[i]->chanspec));
-		} else if (CHSPEC_IS10(candidates->ptrs[i]->chanspec)) {
-			chanspec = CH10MHZ_CHSPEC(
-				wf_chspec_ctlchan(candidates->ptrs[i]->chanspec));
-		} else
-#endif /* WL11ULB */
-			chanspec = CH20MHZ_CHSPEC(
+		chanspec = CH20MHZ_CHSPEC(
 				wf_chspec_ctlchan(candidates->ptrs[i]->chanspec));
 
 		for (j = 0; j < nentries; j++) {
@@ -9037,7 +9485,7 @@ wlc_build_roam_cache(wlc_bsscfg_t *cfg, wlc_bss_list_t *candidates)
 	}
 
 	/* print status */
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 	wlc_print_roam_status(cfg, roam->reason, TRUE);
 #endif
 } /* wlc_build_roam_cache */
@@ -9349,7 +9797,7 @@ wlc_roam_bcns_lost(wlc_bsscfg_t *cfg)
 				 * otherwise disconnection event from roamed AP can be blocked
 				 * from DHD.
 				 */
-				WL_ERROR(("wl%d.%d: ROAM: bcns_lost in WAIT_RCV_BCN"
+				WL_ASSOC_ERROR(("wl%d.%d: ROAM: bcns_lost in WAIT_RCV_BCN"
 					"during FBT, update BSSID\n", WLCWLUNIT(wlc),
 					WLC_BSSCFG_IDX(cfg)));
 				wlc_roam_complete(cfg, WLC_E_STATUS_SUCCESS, &cfg->BSSID,
@@ -9386,7 +9834,6 @@ wlc_roam_bcns_lost(wlc_bsscfg_t *cfg)
 			          WLCWLUNIT(wlc), WLC_BSSCFG_IDX(cfg), __FUNCTION__,
 			          roam->consec_roam_bcns_lost));
 		}
-
 
 		wlc_roamscan_start(cfg, WLC_E_REASON_BCNS_LOST);
 	}
@@ -9487,7 +9934,7 @@ wlc_txrate_roam(wlc_info_t *wlc, struct scb *scb, tx_status_t *txs, bool pkt_sen
 	}
 } /* wlc_txrate_roam */
 
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 static void
 wlc_print_roam_status(wlc_bsscfg_t *cfg, uint roam_reason, bool printcache)
 {
@@ -9536,7 +9983,7 @@ wlc_print_roam_status(wlc_bsscfg_t *cfg, uint roam_reason, bool printcache)
 		}
 	}
 }
-#endif 
+#endif /* defined(BCMDBG) || defined(WLMSG_ASSOC) */
 #endif /* STA */
 
 #ifdef STA
@@ -9619,6 +10066,7 @@ wlc_mac_request_assoc(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int req)
 
 	return err;
 }
+
 
 /**
  * roam request will be granted only when there is no outstanding association requests
@@ -9741,8 +10189,13 @@ wlc_mac_request_scan(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int req)
 			}
 		}
 
-		if (!WLC_APSTA_ON_RADAR_CHANNEL(wlc) && AP_ACTIVE(wlc) && WL11H_AP_ENAB(wlc) &&
-			wlc_radar_chanspec(wlc->cmi, wlc->home_chanspec) && !p2p_go_flag) {
+		if (wlc_radar_chanspec(wlc->cmi, wlc->home_chanspec) &&
+			((!WLC_APSTA_ON_RADAR_CHANNEL(wlc) && AP_ACTIVE(wlc) &&
+			WL11H_AP_ENAB(wlc) && !p2p_go_flag) ||
+#ifdef SLAVE_RADAR
+			(WL11H_STA_ENAB(wlc) && STA_ACTIVE(wlc)) ||
+#endif
+		FALSE)) {
 			WL_INFORM(("wl%d: %s: On radar channel, WLC_SCAN ignored\n", wlc->pub->unit,
 				__FUNCTION__));
 			err = BCME_SCANREJECT;
@@ -9766,7 +10219,7 @@ wlc_mac_request_scan(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int req)
 
 		/* is any assoc in progress? */
 		if (as->state != AS_IDLE && as->type != AS_ROAM) {
-			WL_ERROR(("wl%d: scan request blocked for association in progress\n",
+			WL_ASSOC_ERROR(("wl%d: scan request blocked for association in progress\n",
 				wlc->pub->unit));
 			err = BCME_BUSY;
 		}
@@ -9920,7 +10373,7 @@ wlc_mac_request_quiet(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int req)
 		           "aborting scan\n", wlc->pub->unit));
 		wlc_scan_abort(wlc->scan, WLC_E_STATUS_11HQUIET);
 	} else if (!cfg->associated) {
-		WL_ERROR(("wl%d: should not be attempting to enter Quiet Period "
+		WL_ASSOC_ERROR(("wl%d: should not be attempting to enter Quiet Period "
 		          "if not associated, blocking Quiet\n",
 		          wlc->pub->unit));
 		err = BCME_ERROR;
@@ -10049,7 +10502,7 @@ wlc_mac_request_entry(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int req)
 #if defined(WL_MODESW) && defined(WLRSDB)
 	if (RSDB_ENAB(wlc->pub) && WLC_MODESW_ENAB(WLC_RSDB_GET_PRIMARY_WLC(wlc)->pub) &&
 	    MODE_SWITCH_IN_PROGRESS(WLC_RSDB_GET_PRIMARY_WLC(wlc)->modesw)) {
-		WL_ERROR(("wl%d: req %d blocked due to mode switch in progress\n",
+		WL_ASSOC_ERROR(("wl%d: req %d blocked due to mode switch in progress\n",
 		          wlc->pub->unit, req));
 		return BCME_BUSY;
 	}
@@ -10170,7 +10623,7 @@ wlc_mac_request_entry(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int req)
 
 		/* add the request into assoc req list */
 		if ((err = wlc_assoc_req_add_entry(wlc, cfg, type, FALSE)) < 0) {
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 			char ssidbuf[SSID_FMT_BUF_LEN];
 			wlc_format_ssid(ssidbuf, cfg->SSID, cfg->SSID_len);
 			WL_INFORM(("wl%d.%d: %s request not granted for SSID %s\n",
@@ -10211,35 +10664,10 @@ BCMATTACHFN(wlc_roam_defaults)(wlc_info_t *wlc, wlcband_t *band, int *roam_trigg
 	uint *roam_delta)
 {
 	/* set default roam parameters */
-	switch (band->radioid) {
-	case BCM2050_ID:
-		if (band->radiorev == 1) {
-			*roam_trigger = WLC_2053_ROAM_TRIGGER;
-			*roam_delta = WLC_2053_ROAM_DELTA;
-		} else {
-			*roam_trigger = WLC_2050_ROAM_TRIGGER;
-			*roam_delta = WLC_2050_ROAM_DELTA;
-		}
-		if (wlc->pub->boardflags & BFL_EXTLNA) {
-			*roam_trigger -= 2;
-		}
-		break;
-	case BCM2055_ID:
-	case BCM2056_ID:
-		*roam_trigger = WLC_2055_ROAM_TRIGGER;
-		*roam_delta = WLC_2055_ROAM_DELTA;
-		break;
-	case BCM2060_ID:
-		*roam_trigger = WLC_2060WW_ROAM_TRIGGER;
-		*roam_delta = WLC_2060WW_ROAM_DELTA;
-		break;
-
-	case NORADIO_ID:
+	if (band->radioid == NORADIO_ID) {
 		*roam_trigger = WLC_NEVER_ROAM_TRIGGER;
 		*roam_delta = WLC_NEVER_ROAM_DELTA;
-		break;
-
-	default:
+	} else {
 		*roam_trigger = BAND_5G(band->bandtype) ? WLC_5G_ROAM_TRIGGER :
 		        WLC_2G_ROAM_TRIGGER;
 		*roam_delta = BAND_5G(band->bandtype) ? WLC_5G_ROAM_DELTA :
@@ -10248,7 +10676,6 @@ BCMATTACHFN(wlc_roam_defaults)(wlc_info_t *wlc, wlcband_t *band, int *roam_trigg
 		           "(%d %d) FOR RADIO %04x IN BAND %s\n", wlc->pub->unit,
 		           *roam_trigger, *roam_delta, band->radioid,
 		           BAND_5G(band->bandtype) ? "5G" : "2G"));
-		break;
 	}
 
 	/* Fill up the default roam profile */
@@ -10778,7 +11205,7 @@ void wlc_roam_prof_update_default(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 
 		/* Only for no roam profile support and single default profile */
 		if (band->roam_prof && !(band->roam_prof->roam_flags & WL_ROAM_PROF_DEFAULT)) {
-			WL_ERROR(("wl%d.%d: %s: Only for no roam support\n", WLCWLUNIT(wlc),
+			WL_ASSOC_ERROR(("wl%d.%d: %s: Only for no roam support\n", WLCWLUNIT(wlc),
 				WLC_BSSCFG_IDX(cfg), __FUNCTION__));
 			return;
 		}
@@ -10846,6 +11273,11 @@ wlc_roam_handle_missed_beacons(wlc_bsscfg_t *cfg, uint32 missed_beacons)
 	wlc_roam_t *roam = cfg->roam;
 	wlc_info_t *wlc = cfg->wlc;
 
+#ifdef BCMDBG
+	if (cfg->associated) {
+		roam->tbtt_since_bcn++;
+	}
+#endif /* BCMDBG */
 
 	/* if NOT in PS mode, increment beacon "interval" count */
 	if (!cfg->pm->PMenabled && roam->bcn_thresh != 0) {
@@ -10861,7 +11293,7 @@ wlc_roam_handle_missed_beacons(wlc_bsscfg_t *cfg, uint32 missed_beacons)
 		*/
 		if (roam->bcn_interval_cnt == roam->bcn_thresh) {
 
-			WL_ERROR(("%s: bcn_interval_cnt 0x%x\n",
+			WL_ASSOC_ERROR(("%s: bcn_interval_cnt 0x%x\n",
 				__FUNCTION__, roam->bcn_interval_cnt));
 			wlc_mac_event(wlc, WLC_E_BCNLOST_MSG,
 				&cfg->prev_BSSID, WLC_E_STATUS_FAIL,
@@ -10957,6 +11389,9 @@ wlc_link_monitor_watchdog(wlc_info_t *wlc)
 {
 	int i;
 	wlc_bsscfg_t *cfg;
+	uint32 tdiff;
+	assoc_cfg_cubby_t *assoc_cfg_cubby;
+	int err;
 
 
 	/* link monitor, roam, ... */
@@ -11012,6 +11447,16 @@ wlc_link_monitor_watchdog(wlc_info_t *wlc)
 				wlc_pm_st_t *pm = cfg->pm;
 				uint32 bp = bss->beacon_period;
 
+#ifdef BCMDBG
+				if (ETHER_ISNULLADDR(&cfg->BSSID)) {
+					WL_ASSOC(("wl%d.%d: time_since_bcn %d\n", WLCWLUNIT(wlc),
+						WLC_BSSCFG_IDX(cfg), roam->time_since_bcn));
+				} else {
+					WL_ASSOC_ERROR(("wl%d.%d: time_since_bcn %d\n",
+							WLCWLUNIT(wlc),	WLC_BSSCFG_IDX(cfg),
+							roam->time_since_bcn));
+				}
+#endif /* BCMDBG */
 
 				/* convert from Kusec to millisec */
 				bp = (bp << 10)/1000;
@@ -11033,14 +11478,36 @@ wlc_link_monitor_watchdog(wlc_info_t *wlc)
 						WL_ASSOC(("wl%d: ROAM: check for unaligned TBTT, "
 							"time_since_bcn %d Sec\n",
 							WLCWLUNIT(wlc), roam->time_since_bcn));
-						wlc_set_uatbtt(cfg, TRUE);
-						ASSERT(STAY_AWAKE(wlc));
+						err = wlc_assoc_homech_req_register(cfg);
+						if (err != BCME_OK) {
+							WL_ERROR(("wl%d: homechreg failed err %d\n",
+								WLCWLUNIT(wlc), err));
+						}
 					}
 					if ((roam->timer_active == FALSE) &&
 						!roam->roam_bcnloss_off) {
 						wl_add_timer(wlc->wl, roam->timer,
 							bp * UATBTT_TO_ROAM_BCN, FALSE);
 						roam->timer_active = TRUE;
+					}
+				}
+
+				/* no beacon seen for longer than roam_time_thresh and
+				 * sta is still associated, not roaming,
+				 * force going back to home channel to wait for beacon
+				 * for 2 beacon periods
+				 * tdiff in miliseconds
+				 */
+				assoc_cfg_cubby = BSSCFG_ASSOC_CUBBY(wlc->as, cfg);
+				ASSERT(assoc_cfg_cubby != NULL);
+				tdiff = OSL_SYSUPTIME() - assoc_cfg_cubby->timestamp_lastbcn;
+				if (!ETHER_ISNULLADDR(&cfg->BSSID) &&
+					cfg->assoc->type != AS_ROAM &&
+					tdiff > roam_time_thresh) {
+					err = wlc_assoc_homech_req_register(cfg);
+					if (err != BCME_OK) {
+						WL_ERROR(("wl%d: homechreg failed err=%d\n",
+							WLCWLUNIT(wlc), err));
 					}
 				}
 				if ((roam->time_since_bcn*1000u) < roam_time_thresh) {
@@ -11077,13 +11544,13 @@ wlc_link_monitor_watchdog(wlc_info_t *wlc)
 
 				if (ap_scb) {
 					bcm_ether_ntoa(&cfg->BSSID, eabuf);
-					WL_ERROR(("bcn_loss:\tLost beacon: %d AP:%s\n",
+					WL_ASSOC_ERROR(("bcn_loss:\tLost beacon: %d AP:%s\n",
 						roam->time_since_bcn, eabuf));
-					WL_ERROR(("bcn_loss:\tNow: %d AP RSSI: %d BI: %d\n",
+					WL_ASSOC_ERROR(("bcn_loss:\tNow: %d AP RSSI: %d BI: %d\n",
 						wlc->pub->now, wlc->cfg->link->rssi,
 						bss->beacon_period));
 
-					WL_ERROR(("bcn_loss:\tTime of Assoc: %d"
+					WL_ASSOC_ERROR(("bcn_loss:\tTime of Assoc: %d"
 						" Last pkt from AP: %d RSSI: %d BCN_RSSI: %d"
 						" Last pkt to AP: %d\n",
 						ap_scb->assoctime,
@@ -11192,6 +11659,36 @@ wlc_link_monitor_watchdog(wlc_info_t *wlc)
 		     TRUE ||
 #endif
 		     !ISSIM_ENAB(wlc->pub->sih))) {
+#ifdef BCMDBG
+			if (roam->time_since_bcn > 0) {
+#ifdef WLMCNX
+				if (MCNX_ENAB(wlc->pub)) {
+					WL_ASSOC(("wl%d.%d: ROAM: time_since_bcn %d\n",
+					          wlc->pub->unit, WLC_BSSCFG_IDX(cfg),
+					          roam->time_since_bcn));
+				} else
+#endif
+				{
+					if (cfg == wlc->cfg) {
+#ifdef WLCNT
+						WL_ASSOC(("wl%d.%d: "
+							"ROAM: time_since_bcn %d, tbtt %u\n",
+							wlc->pub->unit, WLC_BSSCFG_IDX(cfg),
+							roam->time_since_bcn,
+							wlc->pub->_cnt->tbtt));
+#endif /* WLCNT */
+						WL_ASSOC(("wl%d.%d: "
+							"TSF: 0x%08x 0x%08x CFPSTART: 0x%08x "
+							"CFPREP: 0x%08x\n",
+							wlc->pub->unit, WLC_BSSCFG_IDX(cfg),
+							R_REG(wlc->osh, &wlc->regs->tsf_timerhigh),
+							R_REG(wlc->osh, &wlc->regs->tsf_timerlow),
+							R_REG(wlc->osh, &wlc->regs->tsf_cfpstart),
+							R_REG(wlc->osh, &wlc->regs->tsf_cfprep)));
+					}
+				}
+			}
+#endif	/* BCMDBG */
 
 
 #if defined(AWDL_FAMILY) || defined(WLMCHAN)
@@ -11211,7 +11708,7 @@ wlc_link_monitor_watchdog(wlc_info_t *wlc)
 			bool still_blocked = FALSE;
 			int j;
 			for (j = 0; j < (int) roam->cache_numentries; j++) {
-#if defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(WLMSG_ASSOC)
 				char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 				if (roam->cached_ap[j].time_left_to_next_assoc == 0)
@@ -11273,8 +11770,7 @@ wlc_assoc_chanspec_sanitize(wlc_info_t *wlc, chanspec_list_t *list, int len, wlc
 		if (wf_chspec_malformed(chanspec))
 			return BCME_BADCHAN;
 		/* get the control channel from the chanspec */
-		/* In ULB Mode, chanspec is formed with min_bw of corresponding bsscfg */
-		chanspec = BSSCFG_MINBW_CHSPEC(wlc, cfg, wf_chspec_ctlchan(chanspec));
+		chanspec = CH20MHZ_CHSPEC(wf_chspec_ctlchan(chanspec));
 		htol16_ua_store(chanspec, (uint8 *)&chanspec_list[i]);
 		if (!wlc_valid_chanspec_db(wlc->cmi, chanspec)) {
 			/* Country Deafult : If channel is not supported by phy,
@@ -11515,7 +12011,8 @@ static const bcm_iovar_t assoc_iovars[] = {
 	{"assoc_resp_ies", IOV_ASSOC_RESP_IES, IOVF_OPEN_ALLOW, 0, IOVT_BUFFER, 0},
 	{"bcn_timeout", IOV_BCN_TIMEOUT, IOVF_NTRL, 0, IOVT_UINT32, 0},
 	{"bcn_thresh", IOV_BCN_THRESH, IOVF_WHL | IOVF_BSSCFG_STA_ONLY, 0, IOVT_UINT32, 0},
-	{"ibss_coalesce_allowed", IOV_IBSS_COALESCE_ALLOWED, IOVF_OPEN_ALLOW, 0, IOVT_BOOL, 0},
+	{"ibss_coalesce_allowed", IOV_IBSS_COALESCE_ALLOWED, (IOVF_OPEN_ALLOW|IOVF_RSDB_SET), 0,
+	IOVT_BOOL, 0},
 	{"assoc_listen", IOV_ASSOC_LISTEN, 0, 0, IOVT_UINT16, 0},
 #ifdef WL_ASSOC_RECREATE
 	{"assoc_recreate", IOV_ASSOC_RECREATE, IOVF_OPEN_ALLOW | IOVF_RSDB_SET, 0, IOVT_BOOL, 0},
@@ -11547,7 +12044,7 @@ static const bcm_iovar_t assoc_iovars[] = {
 	(0), 0, IOVT_BUFFER, (sizeof(uint32)*(WL_NUMCHANSPECS+1))},
 	{"roamscan_parms", IOV_ROAMSCAN_PARMS, 0, 0, IOVT_BUFFER, 0},
 #ifdef LPAS
-	{"lpas", IOV_LPAS, 0, 0, IOVT_UINT32, 0},
+	{"lpas", IOV_LPAS, IOVF_RSDB_SET, 0, IOVT_UINT32, 0},
 #endif /* LPAS */
 #ifdef OPPORTUNISTIC_ROAM
 	{"oppr_roam_off", IOV_OPPORTUNISTIC_ROAM_OFF, 0, 0, IOVT_BOOL,   0},
@@ -11841,7 +12338,6 @@ wlc_assoc_doiovar(void *hdl, uint32 actionid,
 
 	case IOV_SVAL(IOV_ROAM_OFF):
 		roam->off = bool_val;
-		WL_ERROR(("Roam state ==> %s\n", (bool_val)?"Roam-Off": "Roam-On"));
 		break;
 
 	case IOV_GVAL(IOV_ROAM_OFF):
@@ -12165,7 +12661,7 @@ wlc_assoc_doiovar(void *hdl, uint32 actionid,
 			}
 #endif /* WLC_SW_DIVERSITY */
 			/* Disable scheduling noise measurements in the ucode */
-			wlc_phy_noise_sched_set(wlc->band->pi, PHY_LPAS_MODE, TRUE);
+			phy_noise_sched_set(WLC_PI(wlc), PHY_LPAS_MODE, TRUE);
 		} else {
 			roam->max_roam_time_thresh = wlc->pub->tunables->maxroamthresh;
 			wlc->pub->align_wd_tbtt = TRUE;
@@ -12175,9 +12671,10 @@ wlc_assoc_doiovar(void *hdl, uint32 actionid,
 			}
 #endif /* WLC_SW_DIVERSITY */
 			/* Enable scheduling noise measurements in the ucode */
-			wlc_phy_noise_sched_set(wlc->band->pi, PHY_LPAS_MODE, FALSE);
+			phy_noise_sched_set(WLC_PI(wlc), PHY_LPAS_MODE, FALSE);
 		}
-		wlc_watchdog_upd(bsscfg, PS_ALLOWED(bsscfg));
+		wlc_watchdog_upd(bsscfg, WLC_WATCHDOG_TBTT(wlc));
+
 		break;
 	case IOV_GVAL(IOV_LPAS):
 		*ret_int_ptr = wlc->lpas;
@@ -12447,6 +12944,9 @@ wlc_assoc_doioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlc
 			as->disassoc_tx_retry = 0;
 			wlc_disassoc_tx(bsscfg, TRUE);
 #else
+			if (wlc_assoc_get_as_cfg(wlc) == bsscfg) {
+				wlc_assoc_abort(bsscfg);
+			}
 			wlc_bsscfg_disable(wlc, bsscfg);
 #endif
 #ifdef WL_MIMOPS_CFG
@@ -12487,9 +12987,9 @@ wlc_assoc_doioctl(void *ctx, uint32 cmd, void *arg, uint len, struct wlc_if *wlc
 			len = (int)WL_REASSOC_PARAMS_FIXED_SIZE;
 		}
 
-		if ((bcmerror = wlc_reassoc(bsscfg, params)) != 0)
-			WL_ERROR(("%s: wlc_reassoc fails (%d)\n", __FUNCTION__, bcmerror));
-
+		if ((bcmerror = wlc_reassoc(bsscfg, params)) != 0) {
+			WL_ASSOC_ERROR(("%s: wlc_reassoc fails (%d)\n", __FUNCTION__, bcmerror));
+		}
 		if ((bcmerror == BCME_BUSY) && (BSSCFG_STA(bsscfg)) && (bsscfg == wlc->cfg)) {
 			/* If REASSOC is blocked by other activity,
 			   it will retry again from wlc_watchdog
@@ -12711,7 +13211,7 @@ wlc_assoc_bss_init(void *ctx, wlc_bsscfg_t *cfg)
 	/* create roam timer */
 	if ((roam->timer =
 	     wl_init_timer(wlc->wl, wlc_roam_timer_expiry, cfg, "roam")) == NULL) {
-		WL_ERROR(("wl%d: wl_init_timer for bsscfg %d roam_timer failed\n",
+		WL_ASSOC_ERROR(("wl%d: wl_init_timer for bsscfg %d roam_timer failed\n",
 		          wlc->pub->unit, WLC_BSSCFG_IDX(cfg)));
 		err = BCME_NORESOURCE;
 		goto fail;
@@ -12762,6 +13262,9 @@ wlc_assoc_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	if (cfg->assoc != NULL) {
 		wlc_assoc_t *as = cfg->assoc;
 #ifdef STA
+		if (as->state != AS_IDLE) {
+			wlc_assoc_abort(cfg);
+		}
 		if (as->timer != NULL) {
 			wl_free_timer(wlc->wl, as->timer);
 		}
@@ -12886,8 +13389,15 @@ wlc_assoc_bss_set(void *ctx, wlc_bsscfg_t *cfg, const uint8 *data, int len)
 			cfg->roam->ap_environment = cp->clone_roam_params->ap_environment;
 			cfg->roam->motion_rssi_delta = cp->clone_roam_params->motion_rssi_delta;
 			cfg->roam->piggyback_enab = cp->clone_roam_params->piggyback_enab;
+		#ifdef WLRCC
+			if (WLRCC_ENAB(cfg->wlc->pub)) {
+				cfg->roam->n_rcc_channels = cp->clone_roam_params->n_rcc_channels;
+				memcpy(cfg->roam->rcc_channels, cp->clone_roam_params->rcc_channels,
+					sizeof(chanspec_t)*cp->clone_roam_params->n_rcc_channels);
+				cfg->roam->rcc_valid = cp->clone_roam_params->rcc_valid;
+			}
+		#endif
 		}
-
 		ASSERT(cfg->join_pref && cp->clone_join_pref);
 		if (cfg->join_pref && cp->clone_join_pref) {
 			memcpy(cfg->join_pref, cp->clone_join_pref, sizeof(wlc_join_pref_t));
@@ -12902,6 +13412,94 @@ wlc_assoc_bss_set(void *ctx, wlc_bsscfg_t *cfg, const uint8 *data, int len)
 #define wlc_assoc_bss_set NULL
 #endif /* WLRSDB */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#ifdef STA
+static void
+wlc_as_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_assoc_t *as;
+	BCM_REFERENCE(ctx);
+
+	ASSERT(cfg != NULL);
+
+	as = cfg->assoc;
+	if (as == NULL)
+		return;
+
+	bcm_bprintf(b, "============= assoc states =============\n");
+	bcm_bprintf(b, "type %u state %u flags 0x%x\n", as->type, as->state, as->flags);
+	bcm_bprintf(b, "preserved %d recreate_bi_to %u verify_to %u\n",
+	            as->preserved, as->recreate_bi_timeout, as->verify_timeout);
+	bcm_bprintf(b, "retry_max %u ess_retries %u bss_retries %u\n",
+	            as->retry_max, as->ess_retries, as->bss_retries);
+}
+
+static void
+wlc_roam_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_roam_t *roam;
+	BCM_REFERENCE(ctx);
+
+	ASSERT(cfg != NULL);
+
+	roam = cfg->roam;
+	if (roam == NULL)
+		return;
+
+	bcm_bprintf(b, "============= roam states =============\n");
+	bcm_bprintf(b, "off %d\n", roam->off);
+	bcm_bprintf(b, "reason %u\n", roam->reason);
+	bcm_bprintf(b, "bcn_timeout %u time_since_bcn %u bcns_lost %d\n",
+	            roam->bcn_timeout, roam->time_since_bcn, roam->bcns_lost);
+	bcm_bprintf(b, "assocroam %d\n", roam->assocroam);
+#ifdef BCMDBG
+	bcm_bprintf(b, "tbtt_since_bcn %u\n", roam->tbtt_since_bcn);
+#endif
+}
+
+static void
+wlc_join_pref_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	uint i;
+
+	BCM_REFERENCE(ctx);
+
+	if ((ctx == NULL) || (cfg == NULL) || (cfg->join_pref == NULL)) {
+		return;
+	}
+
+	bcm_bprintf(b, "============= join pref =============\n");
+	bcm_bprintf(b, "band %d\n", cfg->join_pref->band);
+	bcm_bprintf(b, "pref bitmap 0x%x\n", cfg->join_pref->prfbmp);
+	for (i = 0; i < cfg->join_pref->fields; i ++) {
+		bcm_bprintf(b, "field %d: type %d start %d bits %d\n",
+		            i, cfg->join_pref->field[i].type,
+		            cfg->join_pref->field[i].start,
+		            cfg->join_pref->field[i].bits);
+	}
+	for (i = 0; i < cfg->join_pref->wpas; i ++) {
+		bcm_bprintf(b, "wpa %d:", i);
+		bcm_bprhex(b, " akm ", FALSE, cfg->join_pref->wpa[i].akm,
+		           sizeof(cfg->join_pref->wpa[i].akm));
+		bcm_bprhex(b, " ucipher ", FALSE, cfg->join_pref->wpa[i].ucipher,
+		           sizeof(cfg->join_pref->wpa[i].ucipher));
+		bcm_bprhex(b, " mcipher ", FALSE, cfg->join_pref->wpa[i].mcipher,
+		           sizeof(cfg->join_pref->wpa[i].mcipher));
+		bcm_bprintf(b, "\n");
+	}
+}
+#endif /* STA */
+
+static void
+wlc_assoc_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+#ifdef STA
+	wlc_as_bss_dump(ctx, cfg, b);
+	wlc_roam_bss_dump(ctx, cfg, b);
+	wlc_join_pref_dump(ctx, cfg, b);
+#endif
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #ifdef STA
 /* handle bsscfg state change */
@@ -12992,6 +13590,11 @@ wlc_auth_write_chlng_ie(void *ctx, wlc_iem_build_data_t *data)
 
 			/* write to frame */
 			bcopy(chlng, data->buf, 2 + chlng[1]);
+#ifdef BCMDBG
+			if (WL_ASSOC_ON()) {
+				prhex("Auth challenge text #3", chlng, 2 + chlng[1]);
+			}
+#endif
 		}
 
 		ftcbparm->auth.status = status;
@@ -13228,6 +13831,25 @@ BCMATTACHFN(wlc_bss_assoc_state_unregister)(wlc_info_t *wlc,
 }
 #endif /* STA */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_assoc_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = ctx;
+
+#ifdef STA
+	/* display bss assoc state change callbacks */
+	bcm_bprintf(b, "-------- assoc state change notify list --------\n");
+	bcm_notif_dump_list(wlc->as->as_st_notif_hdl, b);
+#endif /* STA */
+
+	/* display bss disassoc state change callbacks */
+	bcm_bprintf(b, "-------- disassoc state change notify list --------\n");
+	bcm_notif_dump_list(wlc->as->dis_st_notif_hdl, b);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /**
  * These functions register/unregister/invoke the callback
@@ -13349,11 +13971,14 @@ BCMATTACHFN(wlc_assoc_attach)(wlc_info_t *wlc)
 	cubby_params.context = asi;
 	cubby_params.fn_init = wlc_assoc_bss_init;
 	cubby_params.fn_deinit = wlc_assoc_bss_deinit;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = wlc_assoc_bss_dump;
+#endif
 	cubby_params.fn_get = wlc_assoc_bss_get;
 	cubby_params.fn_set = wlc_assoc_bss_set;
 	cubby_params.config_size = ASSOC_COPY_SIZE;
 
-	asi->cfgh = wlc_bsscfg_cubby_reserve_ext(wlc, 0, &cubby_params);
+	asi->cfgh = wlc_bsscfg_cubby_reserve_ext(wlc, sizeof(assoc_cfg_cubby_t), &cubby_params);
 
 	if (asi->cfgh < 0) {
 		WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve_ext failed\n",
@@ -13409,10 +14034,20 @@ BCMATTACHFN(wlc_assoc_attach)(wlc_info_t *wlc)
 	}
 #endif /* STA */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	(void)wlc_dump_register(wlc->pub, "assoc", wlc_assoc_dump, wlc);
+#endif
 
 #ifdef STA
 	wlc->ibss_coalesce_allowed = TRUE;
+
+	/* register beacon rx notification callback */
+	wlc_bss_rx_bcn_register(wlc, wlc_assoc_on_rxbcn, asi);
 #endif /* STA */
+
+#if defined(RSDB_APSCAN) && !defined(RSDB_APSCAN_DISABLED)
+	wlc->pub->cmn->_rsdb_scan |= SCAN_DOWNGRADED_CH_PRUNE_ROAM;
+#endif /* RSDB_APSCAN && !RSDB_APSCAN_DISABLED */
 
 	return asi;
 
@@ -13432,6 +14067,9 @@ BCMATTACHFN(wlc_assoc_detach)(wlc_assoc_info_t *asi)
 	wlc = asi->wlc;
 
 #ifdef STA
+	/* un-register beacon rx notification callback */
+	wlc_bss_rx_bcn_unregister(wlc, wlc_assoc_on_rxbcn, asi);
+
 	(void)wlc_module_unregister(wlc->pub, "assoc", asi);
 #endif
 	if (asi->dis_st_notif_hdl != NULL)
@@ -13454,6 +14092,170 @@ BCMATTACHFN(wlc_assoc_detach)(wlc_assoc_info_t *asi)
 	}
 
 	MFREE(wlc->osh, asi, sizeof(*asi));
+}
+
+#ifdef STA
+static int
+wlc_assoc_homech_req_register(wlc_bsscfg_t *bsscfg)
+{
+	wlc_info_t *wlc;
+	assoc_cfg_cubby_t *assoc_cfg_cubby;
+	wlc_msch_req_param_t req;
+	int err;
+	DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
+
+	ASSERT(bsscfg);
+	wlc = bsscfg->wlc;
+
+	if (BSSCFG_SPECIAL(wlc, bsscfg) || !bsscfg->associated) {
+		return BCME_NOTREADY;
+	}
+
+	WL_INFORM(("wl%d.%d: %s: on chanspec %s\n", wlc->pub->unit,
+		WLC_BSSCFG_IDX(bsscfg), __FUNCTION__,
+		wf_chspec_ntoa(bsscfg->current_bss->chanspec, chanbuf)));
+
+	assoc_cfg_cubby = BSSCFG_ASSOC_CUBBY(wlc->as, bsscfg);
+	ASSERT(assoc_cfg_cubby != NULL);
+
+	/* if previous preempt request is still on, return */
+	if (assoc_cfg_cubby->msch_homech_req_hdl)
+		return BCME_EPERM;
+
+	ASSERT(bsscfg->current_bss);
+
+	memset(&req, 0, sizeof(wlc_msch_req_param_t));
+	req.req_type = MSCH_RT_START_FLEX;
+	req.flags = 0;
+	/* 2 beacon period duration in us unit */
+	req.duration = bsscfg->current_bss->beacon_period << 11;
+	req.interval = 0;
+	req.priority = MSCH_RP_SYNC_FRAME;
+
+	/* will retry after 1 second, if register fails */
+	err = wlc_msch_timeslot_register(wlc->msch_info, &bsscfg->current_bss->chanspec, 1,
+	      wlc_assoc_homech_req_clbk, bsscfg, &req, &assoc_cfg_cubby->msch_homech_req_hdl);
+	if (err != BCME_OK) {
+		WL_ERROR(("%s homech req register failed. error %d\n", __FUNCTION__, err));
+		assoc_cfg_cubby->mschreg_errcnt++;
+	}
+
+	return err;
+}
+
+static void
+wlc_assoc_homech_req_unregister(wlc_bsscfg_t *bsscfg)
+{
+	wlc_info_t *wlc;
+	assoc_cfg_cubby_t *assoc_cfg_cubby;
+	int err;
+
+	ASSERT(bsscfg);
+	wlc = bsscfg->wlc;
+
+	if (BSSCFG_SPECIAL(wlc, bsscfg)) {
+		return;
+	}
+
+	assoc_cfg_cubby = BSSCFG_ASSOC_CUBBY(wlc->as, bsscfg);
+	ASSERT(assoc_cfg_cubby);
+
+	if (assoc_cfg_cubby->msch_homech_req_hdl) {
+		err = wlc_msch_timeslot_unregister(wlc->msch_info,
+			&assoc_cfg_cubby->msch_homech_req_hdl);
+		if (err != BCME_OK) {
+			WL_ERROR(("%s homech req unregister failed. error %d\n",
+			 __FUNCTION__, err));
+			assoc_cfg_cubby->mschunreg_errcnt++;
+		}
+		assoc_cfg_cubby->msch_homech_req_hdl = NULL;
+	}
+}
+
+static int
+wlc_assoc_homech_req_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
+{
+		wlc_bsscfg_t *cfg = (wlc_bsscfg_t *)handler_ctxt;
+		wlc_info_t *wlc;
+		uint32 type = cb_info->type;
+		assoc_cfg_cubby_t *assoc_cfg_cubby;
+		DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
+
+		if (!cfg || !cfg->up || !cfg->associated) {
+			/* The request is been cancelled, ignore the Clbk */
+			return BCME_OK;
+		}
+
+		wlc = cfg->wlc;
+		if (!BSSCFG_STA(cfg) || BSSCFG_SPECIAL(wlc, cfg)) {
+			return BCME_OK;
+		}
+
+		assoc_cfg_cubby = BSSCFG_ASSOC_CUBBY(wlc->as, cfg);
+		ASSERT(assoc_cfg_cubby != NULL);
+
+		WL_INFORM(("wl%d.%d: %s: chanspec %s, type 0x%04x\n",
+			wlc->pub->unit, WLC_BSSCFG_IDX(cfg), __FUNCTION__,
+			wf_chspec_ntoa(cb_info->chanspec, chanbuf), type));
+
+		/* ASSERT START & END combination in same callback */
+		ASSERT(((type & (MSCH_CT_ON_CHAN | MSCH_CT_SLOT_START)) == 0) ||
+			((type & (MSCH_CT_OFF_CHAN | MSCH_CT_SLOT_END | MSCH_CT_OFF_CHAN_DONE))
+			== 0));
+
+		if (type & MSCH_CT_ON_CHAN) {
+			wlc_set_uatbtt(cfg, TRUE);
+			ASSERT(STAY_AWAKE(wlc));
+		}
+
+		if (type & (MSCH_CT_REQ_END | MSCH_CT_SLOT_END)) {
+			/* The msch hdl is not valid, set to NULL */
+			assoc_cfg_cubby->msch_homech_req_hdl = NULL;
+		}
+
+		return BCME_OK;
+}
+
+void
+wlc_assoc_homech_req_update(wlc_bsscfg_t *bsscfg)
+{
+	wlc_info_t *wlc = bsscfg->wlc;
+	assoc_cfg_cubby_t *assoc_cfg_cubby;
+
+	if (!BSSCFG_STA(bsscfg) || BSSCFG_SPECIAL(wlc, bsscfg))
+		return;
+
+	assoc_cfg_cubby = BSSCFG_ASSOC_CUBBY(wlc->as, bsscfg);
+	ASSERT(assoc_cfg_cubby != NULL);
+
+	assoc_cfg_cubby->timestamp_lastbcn = OSL_SYSUPTIME();
+	if (assoc_cfg_cubby->msch_homech_req_hdl)
+		wlc_assoc_homech_req_unregister(bsscfg);
+}
+
+static void
+wlc_assoc_on_rxbcn(void *ctx, bss_rx_bcn_notif_data_t *data)
+{
+	wlc_bsscfg_t *cfg = data->cfg;
+	wlc_assoc_homech_req_update(cfg);
+}
+#endif /* STA */
+
+uint8
+wlc_assoc_get_prune_type(wlc_info_t *wlc)
+{
+	if (wlc->as->cmn->assoc_req[0] &&
+		wlc->as->cmn->assoc_req[0]->roam)
+		return wlc->as->cmn->assoc_req[0]->roam->prune_type;
+	else
+		return ROAM_PRUNE_NONE;
+}
+
+wlc_bss_info_t *
+wlc_assoc_get_next_join_bi(wlc_info_t *wlc)
+{
+	ASSERT(wlc->as->cmn->join_targets_last != 0);
+	return wlc->as->cmn->join_targets->ptrs[--wlc->as->cmn->join_targets_last];
 }
 
 /* ******** WORK IN PROGRESS ******** */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_iocv_reg.h 614548 2016-01-22 16:56:37Z $
+ * $Id: wlc_iocv_reg.h 660317 2016-09-20 05:54:54Z $
  */
 
 #ifndef _wlc_iocv_reg_h_
@@ -34,6 +34,7 @@
  */
 #define IOV_PATCH_TBL NULL
 #define IOV_PATCH_FN NULL
+#define IOC_PATCH_FN NULL
 #endif
 
 /* ==== For WLC modules use ==== */
@@ -48,6 +49,9 @@ int wlc_iocv_high_register_iovt(wlc_iocv_info_t *ii,
 /* register wlc ioctl table & dispatcher */
 int wlc_iocv_high_register_ioct(wlc_iocv_info_t *ii,
 	const wlc_ioctl_cmd_t *ioct, uint num_cmds, wlc_ioc_disp_fn_t disp_fn,
+#ifdef WLC_PATCH_IOCTL
+    wlc_ioc_disp_fn_t ioc_patch_fn,
+#endif
 	void *ctx);
 
 /* ioctl state validate function */
@@ -76,6 +80,7 @@ typedef struct {
 	wlc_ioc_vld_fn_t st_vld_fn;
 	/* dispatch callback */
 	wlc_ioc_disp_fn_t disp_fn;
+	wlc_ioc_disp_fn_t ioc_patch_fn;
 	void *ctx;
 } wlc_ioct_desc_t;
 

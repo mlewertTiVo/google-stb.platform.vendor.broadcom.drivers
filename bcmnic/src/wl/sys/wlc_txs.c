@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_txs.c 640756 2016-05-30 16:24:01Z $
+ * $Id: wlc_txs.c 664895 2016-10-14 03:04:20Z $
  */
 
 #include <wlc_cfg.h>
@@ -50,7 +50,6 @@
 #endif
 #include <wlc_assoc.h>
 #if defined(PROP_TXSTATUS)
-#include <wlfc_proto.h>
 #include <wlc_wlfc.h>
 #endif
 #include <wlc_txbf.h>
@@ -69,17 +68,20 @@
 #ifdef WLC_SW_DIVERSITY
 #include <wlc_swdiv.h>
 #endif
-#ifdef WLCXO
-#include <wlc_cxo_ctrl.h>
-#include <wlc_cxo_tsc.h>
-#include <wlc_txc.h>
-#endif
 #include <wlc_log.h>
+#ifdef WL_MU_TX
+#include <wlc_mutx.h>
+#endif
+#include <wlc_vht.h>
+#include <wlc_bmac.h>
+#ifdef WL_LEAKY_AP_STATS
+#include <wlc_leakyapstats.h>
+#endif /* WL_LEAKY_AP_STATS */
 
 static void wlc_pkttag_scb_restore_ex(wlc_info_t* wlc, void* p, wlc_txh_info_t* txh_info,
 	wlc_bsscfg_t **bsscfg_out, struct scb **scb_out);
 
-#if defined(ENABLE_CORECAPTURE)
+#if defined(BCMDBG) || defined(ENABLE_CORECAPTURE)
 static void
 wlc_print_txs_status_raw(uint16 s)
 {
@@ -108,12 +110,13 @@ wlc_print_txs_status_aqm_raw(tx_status_t* txs)
 	printf("[14:8] %d Ncons\n", ((status_bits & TX_STATUS40_NCONS) >> TX_STATUS40_NCONS_SHIFT));
 	printf("[15]   %d Acked\n", (status_bits & TX_STATUS40_ACK_RCV) != 0);
 }
-#endif 
+#endif /* BCMDBG || ENABLE_CORECAPTURE */
 
 void
 wlc_print_txstatus(wlc_info_t* wlc, tx_status_t* txs)
 {
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(ENABLE_CORECAPTURE)
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_PRHDRS) || \
+	defined(WLMSG_PRPKT) || defined(ENABLE_CORECAPTURE)
 	uint16 s = txs->status.raw_bits;
 	static const char *supr_reason[] = {
 		"None", "PMQ Entry", "Flush request",
@@ -144,7 +147,7 @@ wlc_print_txstatus(wlc_info_t* wlc, tx_status_t* txs)
 	printf("RxAckSQ: 0x%04x", (txs->ackphyrxsh & PRXS1_SQ_MASK) >> PRXS1_SQ_SHIFT);
 	printf("\n");
 
-#if defined(ENABLE_CORECAPTURE)
+#if defined(BCMDBG) || defined(ENABLE_CORECAPTURE)
 	if (txs->phyerr) {
 		wlc_dump_phytxerr(wlc, txs->phyerr);
 	}
@@ -153,13 +156,27 @@ wlc_print_txstatus(wlc_info_t* wlc, tx_status_t* txs)
 		wlc_print_txs_status_raw(txs->status.raw_bits);
 	} else {
 		wlc_print_txs_status_aqm_raw(txs);
+		if ((txs->status.s5 & TX_STATUS64_MUTX)) {
+			printf("MUTX: mcs %d nss %d sgi %d bw %d txpwr %d\n"
+				"gid %d gpos %d gbmp 0x%x mutxcnt %d snr %d\n",
+				TX_STATUS64_MU_MCS(txs->status.s4),
+				TX_STATUS64_MU_NSS(txs->status.s4),
+				TX_STATUS64_MU_SGI(txs->status.s3),
+				TX_STATUS64_MU_BW(txs->status.s3),
+				TX_STATUS64_MU_TXPWR(txs->status.s3),
+				TX_STATUS64_MU_GID(txs->status.s3),
+				TX_STATUS64_MU_GPOS(txs->status.s4),
+				TX_STATUS64_MU_GBMP(txs->status.s4),
+				TX_STATUS64_MU_TXCNT(txs->status.s4),
+				TX_STATUS64_MU_SNR(txs->status.s4));
+		}
 	}
 	printf("txpktpend AC_BK %d AC_BE %d AC_VI %d AC_VO %d BCMC %d ATIM %d\n",
 		TXPKTPENDGET(wlc, TX_AC_BK_FIFO), TXPKTPENDGET(wlc, TX_AC_BE_FIFO),
 		TXPKTPENDGET(wlc, TX_AC_VI_FIFO), TXPKTPENDGET(wlc, TX_AC_VO_FIFO),
 		TXPKTPENDGET(wlc, TX_BCMC_FIFO), TXPKTPENDGET(wlc, TX_ATIM_FIFO));
-#endif 
-#endif	
+#endif /* BCMDBG || ENABLE_CORECAPTURE */
+#endif	/* BCMDBG || BCMDBG_ERR || WLMSG_PRHDRS || WLMSG_PRPKT */
 }
 
 static void
@@ -258,7 +275,7 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 	uint totlen, supr_status;
 	bool lastframe;
 	struct dot11_header *h;
-	uint16 fc, txpktpend;
+	uint16 fc;
 	wlc_pkttag_t *pkttag;
 	wlc_bsscfg_t *bsscfg = NULL;
 	bool pkt_sent = FALSE;
@@ -290,16 +307,26 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 		wlc_print_txstatus(wlc, txs);
 	}
 
-	/* discard intermediate indications for ucode with one legitimate case:
-	 * e.g. if "useRTS" is set. ucode did a successful rts/cts exchange, but the subsequent
-	 * tx of DATA failed. so it will start rts/cts from the beginning (resetting the rts
-	 * transmission count)
+	/* discard intermediate indications for ucode with legitimate cases:
+	 * 1. corerev < 40: e.g. if "useRTS" is set. ucode did a successful rts/cts exchange,
+	 * but the subsequent tx of DATA failed. so it will start rts/cts from the beginning
+	 * (resetting the rts transmission count)
+	 * 2. corerev >= 40:MUTX intermediate txstatus
 	 */
-	if ((txs->status.is_intermediate) &&
-		wlc_txs_reg_mpdu(wlc, txs)) {
-		WLCNTADD(wlc->pub->_cnt->txnoack, (txs->status.frag_tx_cnt));
-		WL_TRACE(("%s: bail: txs status no ack\n", __FUNCTION__));
-		return FALSE;
+	if (txs->status.is_intermediate) {
+		if (D11REV_GE(wlc->pub->corerev, 40)) {
+			/* Must be MU intermediate txstatus. Return for now */
+#if defined(WL_MU_TX)
+#ifdef WLCNT
+			wlc_ampdu_aqm_mutx_dotxinterm_status(wlc->ampdu_tx, txs);
+#endif
+#endif /* defined(WL_MU_TX) */
+			return FALSE;
+		} else if (wlc_txs_reg_mpdu(wlc, txs)) {
+			WLCNTADD(wlc->pub->_cnt->txnoack, (txs->status.frag_tx_cnt));
+			WL_TRACE(("%s: bail: txs status no ack\n", __FUNCTION__));
+			return FALSE;
+		}
 	}
 
 	osh = wlc->osh;
@@ -335,6 +362,11 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 	p = GETNEXTTXP(wlc, queue);
 	WL_TRACE(("%s: pkt fr queue=%d p=%p\n", __FUNCTION__, queue, OSL_OBFUSCATE_BUF(p)));
 
+#if defined(BCMDBG)
+	if (p == NULL || wlc->excursion_active || wlc->txfifo_detach_pending) {
+		WL_MQ(("MQ: %s: txs->frameid 0x%x\n", __FUNCTION__, txs->frameid));
+	}
+#endif /* BCMDBG */
 
 	if (p == NULL) {
 		void *p1;
@@ -373,14 +405,17 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 
 	PKTDBG_TRACE(osh, p, PKTLIST_MI_TFS_RCVD);
 
-	if (p == NULL) {
-		WL_ERROR(("%s: bail: p == NULL\n", __FUNCTION__));
-		goto fatal;
-	}
-
 	wlc_get_txh_info(wlc, p, &txh_info);
 
-
+	if ((D11REV_GE(wlc->pub->corerev, 40)) &&
+		(ltoh16(txh_info.MacTxControlHigh) & D11AC_TXC_FIX_RATE) &&
+		!(txs->status.s5 & TX_STATUS64_MUTX)) {
+		/* if using fix rate, retrying 64 mpdus >=4 times can overflow 8-bit cnt.
+		 * So ucode treats fix rate specially unless it is MUTX.
+		 * Update this before calling AMPDU dotxstatus function.
+		 */
+		txs->status.frag_tx_cnt = txs->status.s3 & 0xffff;
+	}
 #ifdef WLC_MACDBG_FRAMEID_TRACE
 	wlc_macdbg_frameid_trace_txs(wlc->macdbg, p, txs);
 #endif
@@ -462,37 +497,6 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 	}
 #endif
 
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(wlc->pub)) {
-		/* Sync the state of TSC with offload driver */
-		if (pkttag->flags & WLF_CXO_TSC_PAUSED) {
-			wlc_cx_tsc_t *tsc;
-#ifdef WLCXO_IPC
-			tsc = wlc_cxo_ctrl_tsc_find_by_aid(wlc, bsscfg->_idx, scb->aid);
-#else
-			tsc = wlc_cxo_tsc_find_by_aid(wlc->wlc_cx, bsscfg->_idx, scb->aid);
-#endif
-			if (tsc != NULL)
-				tsc->state[PKTPRIO(p)] = WLCXO_STATE_PAUSED;
-			pkttag->flags &= ~WLF_CXO_TSC_PAUSED;
-		}
-
-		if ((scb != NULL) && ((pkttag->flags & WLF_CXO_PKT) != 0)) {
-			if ((supr_status != TX_STATUS_INT_XFER_ERR) &&
-			    (((pkttag->flags & WLF_VRATE_PROBE) != 0) ||
-			    ((txs->frameid & TXFID_RATE_PROBE_MASK) != 0))) {
-				wlc_scb_ratesel_probe_ready(wlc->wrsi, scb, txs->frameid, FALSE,
-					0, ac);
-			}
-			/* Update bsscfg txrspec[] to maintain ratespec history */
-			bsscfg->txrspec[bsscfg->txrspecidx][0] =
-				WLCNTSCBVAL(scb->scb_stats.tx_rate);
-			bsscfg->txrspec[bsscfg->txrspecidx][1] = 1;
-			bsscfg->txrspecidx = (bsscfg->txrspecidx + 1) % NTXRATE;
-		}
-	}
-#endif /* WLCXO_CTRL */
-
 #ifdef WLCNT
 	if (N_ENAB(wlc->pub)) {
 		if (wlc_txh_get_isSGI(&txh_info))
@@ -521,6 +525,9 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 #endif /* ENABLE_CORECAPTURE */
 
 #ifdef WLAMPDU
+	/* Reset txnoprog counter if ucode is giving txstatus */
+	wlc_ampdu_reset_txnoprog(wlc->ampdu_tx);
+
 	if (WLPKTFLAG_AMPDU(pkttag)) {
 		bool regmpdu = (pkttag->flags3 & WLF3_AMPDU_REGMPDU) != 0;
 		bool ret_val;
@@ -550,8 +557,14 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 			/* continue with rest of regular mpdu processing */
 		} else {
 #ifdef STA
-			if (bsscfg != NULL && BSSCFG_STA(bsscfg))
+			if (bsscfg != NULL && BSSCFG_STA(bsscfg)) {
 				wlc_pm2_ret_upd_last_wake_time(bsscfg, &txs->lasttxtime);
+#ifdef WL_LEAKY_AP_STATS
+				if (WL_LEAKYAPSTATS_ENAB(wlc->pub)) {
+					wlc_leakyapstats_gt_start_time_upd(wlc, bsscfg, txs);
+				}
+#endif /* WL_LEAKY_AP_STATS */
+			}
 #endif /* STA */
 			if (ret_val) {
 				WL_PRINT(("wl%d: %s: %d frameid 0x%x 0x%x\n",
@@ -574,14 +587,6 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 	tx_rts = wlc_txh_has_rts(wlc, &txh_info);
 	tx_frame_count = txs->status.frag_tx_cnt;
 	tx_rts_count = txs->status.rts_tx_cnt;
-
-	if ((D11REV_GE(wlc->pub->corerev, 40)) &&
-		(ltoh16(txh_info.MacTxControlHigh) & D11AC_TXC_FIX_RATE)) {
-		/* if using fix rate, retrying 64 mpdus >=4 times can overflow 8-bit cnt.
-		 * So ucode treats fix rate specially.
-		 */
-		tx_frame_count = txs->status.s3 & 0xffff;
-	}
 
 	/* count all retransmits */
 	if (tx_frame_count) {
@@ -767,9 +772,9 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 		update_rate = FALSE;
 
 		if ((bsscfg != NULL && BSSCFG_AP(bsscfg)) || BSS_TDLS_ENAB(wlc, bsscfg)) {
-#if defined(WLMSG_PS)
+#if defined(BCMDBG) || defined(WLMSG_PS)
 			char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG_ERR */
 
 
 			if (scb != NULL && (SCB_ISMULTI(scb) || SCB_ASSOCIATED(scb) ||
@@ -829,6 +834,21 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 	} else if (P2P_ABS_SUPR(wlc, supr_status)) {
 		update_rate = FALSE;
 		if (bsscfg != NULL && BSS_TX_SUPR_ENAB(bsscfg)) {
+#ifdef BCMDBG
+			if (WL_P2P_ON()) {
+#if defined(WLP2P_UCODE)
+				int bss = wlc_mcnx_BSS_idx(wlc->mcnx, bsscfg);
+				WL_P2P(("wl%d: suppress packet %p for absence, seqnum %d, "
+					"TSF 0x%x, state 0x%x\n",
+					wlc->pub->unit, OSL_OBFUSCATE_BUF(p),
+					ltoh16(h->seq) >> SEQNUM_SHIFT,
+					R_REG(wlc->osh, &wlc->regs->tsf_timerlow),
+					wlc_mcnx_read_shm(wlc->mcnx, M_P2P_BSS_ST(wlc, bss))));
+#endif /* WLP2P_UCODE */
+				wlc_print_txdesc(wlc, (wlc_txd_t*)PKTDATA(osh, p));
+				wlc_print_txstatus(wlc, txs);
+			}
+#endif /* BCMDBG */
 
 			/* This is possible if we got a packet suppression
 			 * before getting ABS interrupt
@@ -877,6 +897,13 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 		WL_TX_STS_UPDATE(tx_status, WLC_TX_STS_PHY_ERROR);
 		WL_ERROR(("wl%d: %s: tx phy error (0x%x)\n", wlc->pub->unit,
 			__FUNCTION__, txs->phyerr));
+#ifdef BCMDBG
+		if (WL_ERROR_ON()) {
+			prpkt("txpkt (MPDU)", osh, p);
+			wlc_print_txdesc(wlc, (wlc_txd_t *)PKTDATA(osh, p));
+			wlc_print_txstatus(wlc, txs);
+		}
+#endif /* BCMDBG */
 	} else if (ETHER_ISMULTI(txh_info.TxFrameRA)) {
 		/* mcast success */
 		/* update counters */
@@ -945,6 +972,18 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 			                 (struct ether_addr *)txh_info.TxFrameRA,
 			                 WLC_E_STATUS_TIMEOUT, 0, 0, 0, 0);
 		}
+#ifdef BCMDBG
+		if ((!tx_rts && tx_frame_count != wlc->SRL) ||
+		    (tx_rts && tx_rts_count != wlc->SRL &&
+		               tx_frame_count != wlc->LRL)) {
+			/* catch ucode retrying too much */
+			WL_ERROR(("wl%d: %s: status indicates too many retries before "
+			          "failure\n", wlc->pub->unit, __FUNCTION__));
+			WL_ERROR(("tx_rts = %d tx_rts_count = %d tx_frame_count = %d ->"
+				" srl=%d lrl=%d\n",
+				tx_rts, tx_rts_count, tx_frame_count, wlc->SRL, wlc->LRL));
+		}
+#endif /* BCMDBG */
 		pkt_max_retries = TRUE;
 	} else {
 		/* unexpected tx status */
@@ -1017,41 +1056,19 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 #endif /* WL_LPC */
 #if defined(WLCNT) && defined(WL_MU_TX)
 		if (MU_TX_ENAB(wlc) && SCB_MU(scb)) {
-			wlc_mutx_update_txcounters(wlc->mutx, frametype, scb, txh_info.plcpPtr,
-				(txs->status.s5 & TX_STATUS64_MUTX), 1);
+			uint8 gid = wlc_vht_get_gid(txh_info.plcpPtr);
+			ratespec_t rspec = wlc_vht_get_rspec_from_plcp(txh_info.plcpPtr);
+
+			wlc_mutx_update_txcounters(wlc->mutx, scb, rspec, FALSE,
+				(txs->status.s5 & TX_STATUS64_MUTX) ? TRUE : FALSE,
+				1, txs->status.was_acked ? 0 : 1, gid, txs);
 		}
 #endif /* WLCNT && WL_MU_TX */
 
 	}
 	WL_TRACE(("%s: calling txfifo_complete\n", __FUNCTION__));
 
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(wlc->pub)) {
-		if (!WLPKTFLAG_CXO(pkttag)) {
-			/* if packet transmit using internal scb, don't check the
-			 * txpktpend on correspond STA scb
-			 */
-			if ((pkttag->flags3 & WLF3_CXO_SCBPKTPEND_NOP) == 0) {
-				SCBPKTPENDDEC(wlc, scb, 1);
-			}
-			else {
-				pkttag->flags3 &= ~WLF3_CXO_SCBPKTPEND_NOP;
-			}
-			txpktpend = 1;
-		} else {
-			if ((pkttag->flags & WLF_MIMO) == 0)
-				wlc_txc_inv(wlc->txc, scb);
-
-			txpktpend = 0;
-			pkttag->flags &= ~WLF_CXO_TXFLAGS;
-			if (((pkttag->flags & WLF_AMSDU) != 0) && (PKTNEXT(wlc->osh, p) != NULL)) {
-				WLPKTTAG(PKTNEXT(wlc->osh, p))->flags &= ~WLF_CXO_TXFLAGS;
-			}
-		}
-	} else
-#endif /* WLCXO_CTRL */
-		txpktpend = 1;
-	WLC_TXFIFO_COMPLETE(wlc, queue, txpktpend, WLPKTTIME(p));
+	WLC_TXFIFO_COMPLETE(wlc, queue, 1, WLPKTTIME(p));
 
 #ifdef PSPRETEND
 	/* Provide tx status input to the PS Pretend state machine.
@@ -1099,6 +1116,11 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 	 *   been taken care of when deleting the scb or the bsscfg, yes we hope;-)
 	 */
 	if (bsscfg != NULL) {
+#ifdef WL_LEAKY_AP_STATS
+		if (WL_LEAKYAPSTATS_ENAB(wlc->pub)) {
+			wlc_leakyapstats_gt_start_time_upd(wlc, bsscfg, txs);
+		}
+#endif /* WL_LEAKY_AP_STATS */
 		wlc_update_pmstate(bsscfg, (uint)(wlc_txs_alias_to_old_fmt(wlc, &(txs->status))));
 
 		if ((((fc & FC_KIND_MASK) == FC_DATA) ||
@@ -1115,7 +1137,7 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 
 #ifdef STA
 	/* Roaming decision based upon too many packets at the min tx rate */
-	if (scb != NULL && !SCB_ISMULTI(scb) &&
+	if (scb != NULL && !SCB_INTERNAL(scb) &&
 	    bsscfg != NULL && BSSCFG_STA(bsscfg) &&
 	    bsscfg->BSS && bsscfg->associated &&
 #ifdef WLP2P
@@ -1145,36 +1167,10 @@ wlc_dotxstatus(wlc_info_t *wlc, tx_status_t *txs, uint32 frm_tx2)
 		}
 	}
 #endif
+#ifdef WLAMPDU
+#endif /* WLAMPDU */
 
 	PKTDBG_TRACE(osh, p, PKTLIST_TXDONE);
-
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(wlc->pub) && (scb != NULL)) {
-		/* If there are no more pending frames for the current station
-		 * and if the connection is in paused/new state change it to
-		 * established.
-		 */
-		WL_CXO(("%s: scb:%p fc_type %x scb_cxo %d pause_reason %x "
-			"scbpktpend %d pktflags %x\n", __FUNCTION__,
-			scb, (int)FC_TYPE(fc), (int)SCB_CXO_ENABLED(scb),
-			WLCXO_CTRL_SCB_CUBBY(wlc->cxo_ctrl, scb)->pause_reason,
-			SCBPKTPENDGET(wlc, scb), pkttag->flags));
-
-		if (SCB_CXO_ENABLED(scb)) {
-			if (!WLPKTFLAG_CXO(pkttag)) {
-				wlc_cxo_ctrl_ampdu_state_update(wlc->ampdu_tx, scb, -1);
-			} else {
-				/* Update scb tx counters */
-				WLCNTSCBINCR(scb->scb_stats.tx_pkts);
-				WLCNTSCBADD(scb->scb_stats.tx_ucast_bytes, PKTLEN(osh, p));
-				wlc_update_txpktsuccess_stats(wlc, scb, PKTLEN(osh, p),
-				                              PKTPRIO(p), 1);
-
-				WLCNTINCR(wlc->pub->_cnt->txchit);
-			}
-		}
-	}
-#endif /* WLCXO_CTRL */
 
 	/* free the mpdu */
 	if (free_pdu) {

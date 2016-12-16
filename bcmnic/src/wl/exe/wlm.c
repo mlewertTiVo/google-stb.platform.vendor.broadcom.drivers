@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlm.c 643791 2016-06-16 01:32:24Z $
+ * $Id: wlm.c 661788 2016-09-27 10:52:28Z $
  */
 
 #if defined(WIN32)
@@ -130,7 +130,7 @@ extern chanspec_t wl_chspec_to_legacy(chanspec_t chspec);
 extern int process_clm_data(void *wl, char *clmfilename, int ds_id);
 extern int process_txcap_data(void *wl, char *txcapfilename);
 extern int process_cal_data(void *wl, char *calfilename);
-extern int process_cal_dump(void *wl, char *calfilename);
+extern int process_cal_dump(void *wl, char *fname_txcal, char *fname_rxcal);
 extern int ota_loadtest(void *wl, char *command, char **argv);
 extern void wl_otatest_display_skip_test_reason(int8 skip_test_reason);
 extern void wl_ota_display_test_option(wl_ota_test_args_t *test_arg, int16 cnt);
@@ -153,8 +153,16 @@ static cmd_t *wlm_find_cmd(char *name, int ap_mode, int remote_os_type);
 static const char *outf = "output.txt";
 #endif
 
+#define WLMPRVALV1(name) stats += sprintf(stats, "%s %u ", #name, dtoh32(cnt_v1->name))
 #define WLMPRVAL(name) stats += sprintf(stats, "%s %u ", #name, dtoh32(cnt->name))
 #define WLMPRNL() stats += sprintf(stats, "\n")
+
+#define MASK(sbit, nbits) ((uint32)(((1 << (nbits)) - 1) << (sbit)))
+#define OFF_MASK(sbit, nbits) (~MASK(sbit, nbits))
+#define MASKED_VAL(val, sbit, nbits) (((uint32)(val)) & OFF_MASK(sbit, nbits))
+#define TRIMMED_VAL(val, sbit, nbits) (((uint32)(val)) & MASK(sbit, nbits))
+#define SHIFT_VAL(val, sbit, nbits) (TRIMMED_VAL(val, 0, nbits) << (sbit))
+#define BIT_OR(reg, val, sbit, nbits) (MASKED_VAL(reg, sbit, nbits) | SHIFT_VAL(val, sbit, nbits))
 
 static char errorString[256];
 static const char *wlm_version_string = WLM_VERSION_STR;
@@ -354,6 +362,53 @@ int wlmSelectInterface(WLM_DUT_INTERFACE ifType, char *ifName,
 
 	return TRUE;
 }
+
+int wlmCreateSecondaryInterface(char *ifType, int interfaceidx, char *ifName)
+{
+	wl_interface_create_t wlif;
+	wl_interface_info_t *pwlif_info;
+
+	memset(&wlif, 0, sizeof(wlif));
+	wlif.ver = WL_INTERFACE_CREATE_VER;
+
+	/*
+	 * First Argument:
+	 * Find the interface that user need to create and update the flag/iftype
+	 * flags field is still used along with iftype inorder to support the old version of the
+	 * FW work with the latest app changes.
+	 */
+	if (stricmp(ifType, "sta") == 0) {
+		wlif.iftype = WL_INTERFACE_TYPE_STA;
+		wlif.flags |= WL_INTERFACE_CREATE_STA;
+	} else if (stricmp(ifType, "ap") == 0) {
+		wlif.iftype = WL_INTERFACE_TYPE_AP;
+		wlif.flags |= WL_INTERFACE_CREATE_AP;
+	} else {
+		printf("wlmCreateSecondaryInterface: Unsupported secondary interface type\n");
+		return FALSE;
+	}
+
+	/* The mac address is optional, if its passed and valid use it. */
+	if (wl_ether_atoe(ifName, &wlif.mac_addr)) {
+		wlif.flags |= WL_INTERFACE_MAC_USE;
+	}
+
+	/* The wlc_index is optional. */
+	wlif.flags |= WL_INTERFACE_WLC_INDEX_USE;
+	wlif.wlc_index = interfaceidx;
+
+	if (wlu_var_getbuf(irh, "interface_create", &wlif, sizeof(wlif), (void *)&pwlif_info)) {
+		printf("wlmCreateSecondaryInterface: %s\n", wlmLastError());
+		return FALSE;
+	} else {
+		printf("ifname: %s bsscfgidx: %d mac_addr %s\r\n",
+			pwlif_info->ifname, pwlif_info->bsscfgidx,
+			wl_ether_etoa(&pwlif_info->mac_addr));
+	}
+
+	return TRUE;
+}
+
 
 int wlmSelectIntfidx(char *opt, char *idx)
 {
@@ -1217,7 +1272,7 @@ int wlmACPaParametersRev12Get(WLM_BANDRANGE bandrange, int chain, WLM_BANDWIDTH 
 		return FALSE;
 	}
 
-	if (!(sromrev == 12 || sromrev == 13 || sromrev == 14)) {
+	if (!(sromrev == 12 || sromrev == 13 || sromrev == 14 || sromrev == 15)) {
 		printf("wlmACPaParametersSRRev12Get: Srom revision is not supported\n");
 		return FALSE;
 	}
@@ -1280,7 +1335,7 @@ int wlmACPaParametersRev12Set(WLM_BANDRANGE bandrange, int chain, WLM_BANDWIDTH 
 		return FALSE;
 	}
 
-	if (!(sromrev == 12 || sromrev == 13 || sromrev == 14)) {
+	if (!(sromrev == 12 || sromrev == 13 || sromrev == 14 || sromrev == 15)) {
 		printf("wlmACPaParametersSRRev12Get: Srom revision is not supported\n");
 		return FALSE;
 	}
@@ -3425,7 +3480,7 @@ int wlmRxIQEstGet(float *val, int sampleCount, int ant)
 		gain_correct = gain_correct & 0xf;
 		rxiq = ((gain_correct << 24) | (rxiq & 0xf0ffffff));
 	}
-	/* printf("wlmRxIQGet: rxiq after gain_correct = 0x%x\n.", rxiq); */
+	/* printf("wlmRxIQEstGet: rxiq after gain_correct = 0x%x\n.", rxiq); */
 
 	if (lpf_hpc > 1) {
 		printf("wlmRXIQEstGet: invalid lpf-hpc override select [0|1].\n");
@@ -3850,6 +3905,186 @@ int wlmRxIQEstACGet(float *val, int sampleCount, int ant, int extragain, int gi,
 	}
 
 	return TRUE;
+}
+
+#define NO_EXTRA_GAIN 0
+#define NO_GAIN_CORRECTION 0
+#define LPF_HPC_OVERRIDE 1
+#define LTRN_LPF_MODE 1
+#define COARSE_RESOLUTION 1
+#define TEN_SAMPLES 10
+#define INIT_GAIN_MODE 0
+#define THIRD_ANTENA 3
+#define SWEEP_API_ERROR "wlmRxIQEstSweepGet Error: "
+#define SWEEP_IOVAR "phy_rxiqest_sweep"
+static int wlmRxIQEstSweepGetFull(wlmRxIQEstSweepReult_t **result, int *channels, int niter,
+	int delay, int sampleCount, int antenna, int extraGain, int isForLcn, int gainIndex,
+	int gainCorrect, int elna)
+{
+	int i, j;
+	char buf[sizeof(wl_iqest_result_t) + WL_NUMCHANNELS * sizeof(wl_iqest_value_t)];
+	wl_iqest_sweep_params_t *sweep_params = (wl_iqest_sweep_params_t *)buf;
+	wl_iqest_params_t *params = &sweep_params->params;
+	wl_iqest_result_t *estimate;
+	int params_size;
+	float x, y;
+
+	params->niter = niter;
+	params->delay = delay;
+
+	/* DEFAULT:
+	 * gain_correct = 0 (disable gain correction),
+	 * lpf_hpc = 1 (sets lpf hpc to lowest value),
+	 * dig_lpf = 1; (sets to ltrn_lpf mode)
+	 * resolution = 0 (coarse),
+	 * samples = 1024 (2^10) and antenna = 3
+	 * force_gain_type = 0 (init gain mode)
+	 */
+
+	params->rxiq = SHIFT_VAL(NO_EXTRA_GAIN, 28, 4) | SHIFT_VAL(NO_GAIN_CORRECTION, 24, 4) |
+		SHIFT_VAL(LTRN_LPF_MODE, 22, 2) | SHIFT_VAL(LPF_HPC_OVERRIDE, 20, 4) |
+		SHIFT_VAL(COARSE_RESOLUTION, 16, 4) | SHIFT_VAL(TEN_SAMPLES, 8, 8) |
+		SHIFT_VAL(INIT_GAIN_MODE, 4, 4) | SHIFT_VAL(THIRD_ANTENA, 0, 2);
+
+	if (isForLcn)
+		params->rxiq = BIT_OR(params->rxiq, 0x0f, 28, 4);
+	else {
+		if (extraGain < 0 || extraGain > 24 || extraGain % 3 != 0) {
+			printf(SWEEP_API_ERROR "valid extra INITgain ={0,3, ..., 21,24}\n");
+			return FALSE;
+		}
+		params->rxiq = BIT_OR(params->rxiq, extraGain/3, 28, 4);
+	}
+
+	if (gainCorrect < 0 || gainCorrect > 8) {
+		printf(SWEEP_API_ERROR "invalid gain-correction. select [0 - 8]\n");
+		return FALSE;
+	}
+	params->rxiq = BIT_OR(params->rxiq, gainCorrect, 24, 4);
+
+	if (elna < 0 || elna > 1) {
+		printf(SWEEP_API_ERROR "Invalid elna on/off select [0|1].\n");
+		return FALSE;
+	}
+	params->rxiq = BIT_OR(params->rxiq, elna, 20, 1);
+
+	if (sampleCount < 0 || sampleCount > 16) {
+		printf(SWEEP_API_ERROR "SampleCount out of range of [0 - 16].\n");
+		return FALSE;
+	}
+	params->rxiq = BIT_OR(params->rxiq, sampleCount, 8, 8);
+
+	if ((gainIndex < 0) || (gainIndex > 9))  {
+		printf(SWEEP_API_ERROR "Valid gain index options are: {0,1,4}\n");
+		return FALSE;
+	}
+	params->rxiq = BIT_OR(params->rxiq, gainIndex, 4, 4);
+
+	if (antenna < 0 || antenna > 3) {
+		printf(SWEEP_API_ERROR "Antenna out of range of [0, 3].\n");
+		return FALSE;
+	}
+	params->rxiq = BIT_OR(params->rxiq, antenna, 0, 4);
+
+	if (!channels) {
+		sweep_params->nchannels = 1;
+		sweep_params->channel[0] = 0;
+	} else {
+		for (i = 0, sweep_params->nchannels = 0; i < WL_NUMCHANNELS && channels[i]; ++i) {
+			for (j = 0; j < sweep_params->nchannels; ++j) {
+				if (channels[i] == sweep_params->channel[j]) {
+					printf(SWEEP_API_ERROR "Duplicate channels\n");
+					return FALSE;
+				}
+			}
+			sweep_params->channel[sweep_params->nchannels++] = (uint8) channels[i];
+		}
+		if (channels[i]) {
+			printf(SWEEP_API_ERROR "Maximum of %d channels allowed\n", WL_NUMCHANNELS);
+			return FALSE;
+		}
+	}
+	if ((sweep_params->nchannels == 0 || sweep_params->nchannels > WL_NUMCHANNELS_MANY_CHAN) &&
+		sweep_params->params.niter > WL_ITER_LIMIT_MANY_CHAN) {
+		printf(SWEEP_API_ERROR "Maximum %d averaging iterations allowed if number"
+				" of channel is greater than %d\n", WL_ITER_LIMIT_MANY_CHAN,
+				WL_NUMCHANNELS_MANY_CHAN);
+		return FALSE;
+	}
+
+	params_size = sizeof(wl_iqest_sweep_params_t) + (sweep_params->nchannels - 1)
+		* sizeof(uint8);
+	if (wlu_var_getbuf_med(irh, SWEEP_IOVAR, sweep_params, params_size, (void **)result) < 0) {
+		printf(SWEEP_API_ERROR "%s\n", wlmLastError());
+		return FALSE;
+	}
+	estimate = (wl_iqest_result_t *)*result;
+	memcpy(buf, estimate, sizeof(wl_iqest_result_t) + (estimate->nvalues -1) *
+		sizeof(wl_iqest_value_t));
+	estimate = (wl_iqest_result_t *)buf;
+
+	(*result)->numChannels = estimate->nvalues;
+	for (i = 0; i < estimate->nvalues; ++i) {
+		/* fine resolutin power reporting (0.25dB resolution) */
+		uint8 core;
+		int16 tmp;
+
+		(*result)->value[i].channel = estimate->value[i].channel;
+		if (estimate->value[i].rxiq >> 20) {
+			/* Three chains: return the core matches the antenna number */
+			if (antenna > 2)
+				antenna = 2;
+			for (core = 0; core < 3; core++) {
+				if (core == antenna) {
+					tmp = (estimate->value[i].rxiq >>(10*core)) & 0x3ff;
+					tmp = ((int16)(tmp << 6)) >> 6;  /* sign extension */
+					break;
+				}
+			}
+		} else if (estimate->value[i].rxiq >> 10) {
+			/* Two chains: return the core matches the antenna number */
+			for (core = 0; core < 2; core++) {
+				if (core == antenna) {
+					tmp = (estimate->value[i].rxiq >>(10*core)) & 0x3ff;
+					tmp = ((int16)(tmp << 6)) >> 6;  /* sign extension */
+					break;
+				}
+			}
+		} else {
+			/* 1-chain specific */
+			tmp = (estimate->value[i].rxiq & 0x3ff);
+			tmp = ((int16)(tmp << 6)) >> 6; /* signed extension */
+		}
+
+		if (tmp < 0) {
+			tmp = -1 * tmp;
+		}
+		x = (float) (tmp >> 2);
+		y = (float) (tmp & 0x3);
+		(*result)->value[i].rxIqEst = (float)(x + (y * 25) /100) * (-1);
+	}
+
+	return TRUE;
+}
+
+int wlmRxIQEstSweepGet(wlmRxIQEstSweepReult_t **result, int *channels, int sampleCount, int antenna)
+{
+	return wlmRxIQEstSweepGetFull(result, channels, 1, PHY_RXIQEST_AVERAGING_DELAY,
+		sampleCount, antenna, 0, 1, 0, 0, 0);
+}
+
+int wlmRxIQEstExtSweepGet(wlmRxIQEstSweepReult_t **result, int *channels, int sampleCount,
+	int antenna, int elna, int gainIndex)
+{
+	return wlmRxIQEstSweepGetFull(result, channels, 1, PHY_RXIQEST_AVERAGING_DELAY,
+		sampleCount, antenna, 0, 0, gainIndex, 0, elna);
+}
+
+int wlmRxIQEstACSweepGet(wlmRxIQEstSweepReult_t **result, int *channels, int sampleCount,
+        int antenna, int extraGain, int gainIndex, int gainCorrect, int niter, int delay)
+{
+	return wlmRxIQEstSweepGetFull(result, channels, niter, delay, sampleCount, antenna,
+		extraGain, 0, gainIndex, gainCorrect, 0);
 }
 
 int wlmPHYTxPowerIndexGet(unsigned int *val, const char *chipid)
@@ -4535,7 +4770,7 @@ int
 wlmPhyRssiGainDelta5gGet(char *varname, int *deltaValues, int core)
 {
 	int i, index;
-	int8 vals[28];
+	int8 vals[40];
 	uint32 phytype;
 	uint8 N = 13;
 
@@ -4572,7 +4807,7 @@ int
 wlmPhyRssiGainDelta5gSet(char *varname, int *deltaValues, int core)
 {
 	int i, index;
-	int8 vals[28];
+	int8 vals[40];
 	uint32 phytype;
 	uint8 N = 13;
 
@@ -5254,7 +5489,9 @@ wlmPhyRssiGainDelta2gSubGet(char *varname, int *values, int coreid)
 			       "failed to get delta values %s\n", wlmGetLastError());
 			return FALSE;
 		}
-		N = 9; /* 9 entries per core, 4350 - 18 MAX entries; 4345 9 MAX entries */
+		N = 9; /* 9 entries per core,43602WLCSP - 27 MAX entries,
+				* 4350 - 18 MAX entries; 4345 9 MAX entries
+				*/
 		for (i = 0; i < N - 1; i++) {
 			if (deltaValues[(9 * coreid) + i] ==  -1)
 				break;
@@ -5356,6 +5593,32 @@ wlmPhyTestIdleTssiGet(int core, int *tssi)
 }
 
 int
+wlmPhyTestTssiGet(int core, int *tssi)
+{
+	int val;
+	char *buf = NULL;
+	const char *iovar = "phy_test_tssi";
+	const uint buf_size = strlen(iovar) + 1 + sizeof(val);
+	val = htod32(core);
+	buf = malloc(buf_size);
+	memset(buf, 0, buf_size);
+
+	if (buf == NULL) {
+		printf("wlmPhyTestTssiGet: failed to allocate memory\n");
+		return FALSE;
+	}
+
+	if (wlu_iovar_getbuf(irh, iovar, &val, sizeof(val), buf, buf_size) < 0) {
+		printf("wlmPhyTestTssiGet: failed to get tssi value %s\n", wlmLastError());
+		return FALSE;
+	}
+
+	*tssi = dtoh32(*(int*)buf);
+
+	return TRUE;
+}
+
+int
 wlmTxCalGainSweepMeasGet(int count, int *tssi, int *txpower, int core)
 {
 	wl_txcal_meas_ncore_t * txcal_meas;
@@ -5398,7 +5661,8 @@ wlmTxCalGainSweepMeasGet(int count, int *tssi, int *txpower, int core)
 
 	} else {
 		txcal_meas->version = TXCAL_IOVAR_VERSION;
-		if (wlu_var_getbuf(irh, "txcal_gainsweep_meas", txcal_meas, buf_size, &ptr) < 0) {
+		if (wlu_var_getbuf_minimal(irh, "txcal_gainsweep_meas",
+				txcal_meas, buf_size, &ptr) < 0) {
 			printf("wlmTxCalGainSweepMeasGet: failed to get"
 					"txcal gain sweep measurement\n");
 			goto fail;
@@ -5498,7 +5762,8 @@ wlmTxCalGainSweepMeasSet(int *measPower, int count, int core)
 
 	} else {
 		txcal_meas->version = TXCAL_IOVAR_VERSION;
-		if (wlu_var_getbuf(irh, "txcal_gainsweep_meas", txcal_meas, buf_size, &ptr) < 0) {
+		if (wlu_var_getbuf_minimal(irh, "txcal_gainsweep_meas",
+				txcal_meas, buf_size, &ptr) < 0) {
 			printf("wlmTxCalGainSweepMeasSet: failed to"
 					"get current TxCalGainSweep entries.\n");
 			goto fail;
@@ -5649,7 +5914,7 @@ wlmTxCalPowerTssiTableGet(int core, int *channel, int *startPower, int *num, int
 	} else {
 		txcal_tssi->version = TXCAL_IOVAR_VERSION;
 		txcal_tssi->channel = *channel;
-		if (wlu_var_getbuf(irh, "txcal_pwr_tssi_tbl",
+		if (wlu_var_getbuf_minimal(irh, "txcal_pwr_tssi_tbl",
 			txcal_tssi, buf_size, &ptr) < 0) {
 			printf("wlmTxCalPowerTssiTableGet: failed to read the table\n");
 			goto fail;
@@ -5747,7 +6012,7 @@ wlmTxCalPowerTssiTableSet(int core, int channel, int startPower, int num, int *t
 		}
 
 		if (i != txcal_pwr_tssi.num_entries[core]) {
-			printf("wlmTxXalPowerTsiTableset: Incorrect Number of Entries."
+			printf("wlmTxCalPowerTssiTableSet: Incorrect Number of Entries."
 			       "Expected %d, Entered %d\n",
 			       txcal_pwr_tssi.num_entries[core], i);
 			goto fail;
@@ -5766,7 +6031,7 @@ wlmTxCalPowerTssiTableSet(int core, int channel, int startPower, int num, int *t
 
 		txcal_tssi->version = TXCAL_IOVAR_VERSION;
 		txcal_tssi->channel = channel;
-		if (wlu_var_getbuf(irh, "txcal_pwr_tssi_tbl",
+		if (wlu_var_getbuf_minimal(irh, "txcal_pwr_tssi_tbl",
 			txcal_tssi, buf_size, &ptr) < 0) {
 			printf("wlmTxCalPowerTssiTableSet: could not set the consolidated"
 					"power tssi table, %s\n", wlmLastError());
@@ -5908,16 +6173,16 @@ wlmTxCalPowerTssiTableGenerate(int core, int channel, int startPower, int num, i
 	} else {
 		txcal_tssi->version = TXCAL_IOVAR_VERSION;
 		txcal_tssi->channel = channel;
-		if (wlu_var_getbuf(irh, "txcal_pwr_tssi_tbl",
+		if (wlu_var_getbuf_minimal(irh, "txcal_pwr_tssi_tbl",
 			txcal_tssi, buf_size, &ptr) < 0) {
 			printf("wlmTxCalPowerTssiTableGenerate: "
 			       "could not generate consolidate table, %s\n", wlmLastError());
 			goto fail;
 		}
 
-	/* Current copy from fw */
-	txcal_tssi_old = (wl_txcal_power_tssi_ncore_t *)ptr;
-	   /* txcal version check */
+		/* Current copy from fw */
+		txcal_tssi_old = (wl_txcal_power_tssi_ncore_t *)ptr;
+		/* txcal version check */
 		if (txcal_tssi_old->version != TXCAL_IOVAR_VERSION) {
 			printf("version %d unsupported \n", txcal_tssi_old->version);
 			goto fail;
@@ -5949,7 +6214,7 @@ wlmTxCalPowerTssiTableGenerate(int core, int channel, int startPower, int num, i
 
 		txcal_tssi->version = TXCAL_IOVAR_VERSION;
 		txcal_tssi->channel = channel;
-		if (wlu_var_getbuf(irh, "txcal_pwr_tssi_tbl",
+		if (wlu_var_getbuf_minimal(irh, "txcal_pwr_tssi_tbl",
 			txcal_tssi, buf_size, &ptr) < 0) {
 			printf("wlmTxCalPowerTssiTableGenerate: "
 				"could not generate consolidate table, %s\n", wlmLastError());
@@ -6521,13 +6786,25 @@ wlmSWDiversityStatsGet(char *stats, int length)
 {
 	char *statsbuf;
 	void *ptr;
-	wlc_swdiv_stats_t *cnt;
+	struct wlc_swdiv_stats_v1 *cnt_v1;
+	struct wlc_swdiv_stats_v2 *cnt;
 
-	if (length < (int)sizeof(wlc_swdiv_stats_t)) {
-		printf("wlmSWDiversityStatsGet: "
+	if (wlc_ver_major(irh) <= 5) /* Check for WLC major_version */
+	{
+		if (length < (int)sizeof(struct wlc_swdiv_stats_v1)) {
+			printf("wlmSWDiversityStatsGet: "
 		       "requested length %d is less than expected %d\n",
-		       length, (int)sizeof(wlc_swdiv_stats_t));
-		return FALSE;
+		       length, (int)sizeof(struct wlc_swdiv_stats_v2));
+			return FALSE;
+		}
+	} else {
+
+		if (length < (int)sizeof(struct wlc_swdiv_stats_v2)) {
+			printf("wlmSWDiversityStatsGet: "
+		       "requested length %d is less than expected %d\n",
+		       length, (int)sizeof(struct wlc_swdiv_stats_v2));
+			return FALSE;
+		}
 	}
 
 	if (wlu_var_getbuf_med (irh, "swdiv_stats", NULL, 0, &ptr) < 0) {
@@ -6537,24 +6814,43 @@ wlmSWDiversityStatsGet(char *stats, int length)
 
 	statsbuf = (char *)ptr;
 
-	cnt = (wlc_swdiv_stats_t*)malloc(sizeof(wlc_swdiv_stats_t));
-	if (cnt == NULL) {
-		printf("wlmSWDiversityStatsGet: "
+	if (wlc_ver_major(irh) <= 5) {
+		cnt_v1 = (struct wlc_swdiv_stats_v1 *)malloc(sizeof(struct wlc_swdiv_stats_v1));
+		if (cnt_v1 == NULL) {
+			printf("wlmSWDiversityStatsGet: "
 		       "Can not allocate %d bytes for wl swdiv stats struct\n",
-		       (int)sizeof(wlc_swdiv_stats_t));
-		return FALSE;
+		       (int)sizeof(struct wlc_swdiv_stats_v1));
+			return FALSE;
+		}
+		memcpy(cnt_v1, statsbuf, sizeof(struct wlc_swdiv_stats_v1));
+		WLMPRVALV1(auto_en); WLMPRVALV1(active_ant); WLMPRVALV1(rxcount); WLMPRNL();
+		WLMPRVALV1(avg_snr_per_ant0); WLMPRVALV1(avg_snr_per_ant1);
+		WLMPRVALV1(avg_snr_per_ant2); WLMPRNL();
+		WLMPRVALV1(swap_ge_rxcount0); WLMPRVALV1(swap_ge_rxcount1); WLMPRNL();
+		WLMPRVALV1(swap_ge_snrthresh0); WLMPRVALV1(swap_ge_snrthresh1); WLMPRNL();
+		WLMPRVALV1(swap_txfail0); WLMPRVALV1(swap_txfail1); WLMPRNL();
+		WLMPRVALV1(swap_timer0); WLMPRVALV1(swap_timer1); WLMPRNL();
+		WLMPRVALV1(swap_alivecheck0); WLMPRVALV1(swap_alivecheck1); WLMPRNL();
+
+	} else {
+		cnt = (struct wlc_swdiv_stats_v2 *)malloc(sizeof(struct wlc_swdiv_stats_v2));
+		if (cnt == NULL) {
+			printf("wlmSWDiversityStatsGet: "
+		       "Can not allocate %d bytes for wl swdiv stats struct\n",
+		       (int)sizeof(struct wlc_swdiv_stats_v2));
+			return FALSE;
+		}
+		memcpy(cnt, statsbuf, sizeof(struct wlc_swdiv_stats_v2));
+
+		WLMPRVAL(auto_en); WLMPRVAL(active_ant); WLMPRVAL(rxcount); WLMPRNL();
+		WLMPRVAL(avg_snr_per_ant0); WLMPRVAL(avg_snr_per_ant1);
+		WLMPRVAL(avg_snr_per_ant2); WLMPRNL();
+		WLMPRVAL(swap_ge_rxcount0); WLMPRVAL(swap_ge_rxcount1); WLMPRNL();
+		WLMPRVAL(swap_ge_snrthresh0); WLMPRVAL(swap_ge_snrthresh1); WLMPRNL();
+		WLMPRVAL(swap_txfail0); WLMPRVAL(swap_txfail1); WLMPRNL();
+		WLMPRVAL(swap_timer0); WLMPRVAL(swap_timer1); WLMPRNL();
+		WLMPRVAL(swap_alivecheck0); WLMPRVAL(swap_alivecheck1); WLMPRNL();
 	}
-	memcpy(cnt, statsbuf, sizeof(wlc_swdiv_stats_t));
-
-	WLMPRVAL(auto_en); WLMPRVAL(active_ant); WLMPRVAL(rxcount); WLMPRNL();
-	WLMPRVAL(avg_snr_per_ant0); WLMPRVAL(avg_snr_per_ant1);
-	WLMPRVAL(avg_snr_per_ant2); WLMPRNL();
-	WLMPRVAL(swap_ge_rxcount0); WLMPRVAL(swap_ge_rxcount1); WLMPRNL();
-	WLMPRVAL(swap_ge_snrthresh0); WLMPRVAL(swap_ge_snrthresh1); WLMPRNL();
-	WLMPRVAL(swap_txfail0); WLMPRVAL(swap_txfail1); WLMPRNL();
-	WLMPRVAL(swap_timer0); WLMPRVAL(swap_timer1); WLMPRNL();
-	WLMPRVAL(swap_alivecheck0); WLMPRVAL(swap_alivecheck1); WLMPRNL();
-
 	stats += sprintf(stats, "\n");
 	printf("stats: %s\n", stats);
 
@@ -6587,7 +6883,7 @@ wlmCalLoadStatusGet(int *status)
 int
 wlmCalDump(char *fileName)
 {
-	if (process_cal_dump(irh, fileName) < 0) {
+	if (process_cal_dump(irh, fileName, NULL) < 0) {
 		printf("wlmCalDump: dump cal file %s failed. %s\n",
 		       fileName, wlmLastError());
 		return FALSE;
@@ -6670,11 +6966,13 @@ wlmRadioRegGet(int offset, WLM_BAND band, int id, int *val)
 	reg = htod32(offset);
 
 	/* Support AC PHY only:
-	 * RADIO_2069_CORE_CR0 (0x0 << 9)
-	 * RADIO_2069_CORE_CR1 (0x1 << 9)
-	 * RADIO_2069_CORE_CR2 (0x2 << 9)
-	 * RADIO_2069_CORE_ALL (0x3 << 9)
-	 * RADIO_2069_CORE_PLL (0x4 << 9)
+	 * RADIO_2069_CORE_CR0  (0x0 << 9)
+	 * RADIO_2069_CORE_CR1  (0x1 << 9)
+	 * RADIO_2069_CORE_CR2  (0x2 << 9)
+	 * RADIO_2069_CORE_ALL  (0x3 << 9)
+	 * RADIO_2069_CORE_PLL  (0x4 << 9)
+	 * RADIO_2069_CORE_PLL0 (0x4 << 9)
+	 * RADIO_2069_CORE_PLL1 (0x5 << 9)
 	 */
 
 	reg |= (id << 9);
@@ -6705,11 +7003,13 @@ wlmRadioRegSet(int offset, WLM_BAND band, int id, int val)
 	reg = htod32(offset);
 
 	/* Support AC PHY only:
-	 * RADIO_2069_CORE_CR0 (0x0 << 9)
-	 * RADIO_2069_CORE_CR1 (0x1 << 9)
-	 * RADIO_2069_CORE_CR2 (0x2 << 9)
-	 * RADIO_2069_CORE_ALL (0x3 << 9)
-	 * RADIO_2069_CORE_PLL (0x4 << 9)
+	 * RADIO_2069_CORE_CR0  (0x0 << 9)
+	 * RADIO_2069_CORE_CR1  (0x1 << 9)
+	 * RADIO_2069_CORE_CR2  (0x2 << 9)
+	 * RADIO_2069_CORE_ALL  (0x3 << 9)
+	 * RADIO_2069_CORE_PLL  (0x4 << 9)
+	 * RADIO_2069_CORE_PLL0 (0x4 << 9)
+	 * RADIO_2069_CORE_PLL1 (0x5 << 9)
 	 */
 
 	reg |= (id << 9);
@@ -7128,4 +7428,83 @@ int wlmPhyTpcVmidGet(int core, int subband, int *val)
 	free(buf);
 
 	return TRUE;
+}
+
+
+
+int
+wlmBtcoexDesenseRxgainGet(WLM_BAND *band, int *num_cores, int *desense_array)
+{
+	wl_desense_restage_gain_t *desense_restage_gain_ptr, desense_restage_gain;
+	void *ptr = NULL;
+	uint32 phytype;
+	int16 cnt = 0;
+
+	if (curPhyType == PHY_TYPE_NULL)
+		phytype = wlmPhyTypeGet();
+	else
+		phytype = curPhyType;
+
+	if (phytype == WLC_PHY_TYPE_AC) {
+		desense_restage_gain_ptr = &desense_restage_gain;
+		desense_restage_gain_ptr->version =  0;
+		desense_restage_gain_ptr->length = sizeof(desense_restage_gain);
+
+		if (wlu_var_getbuf(irh, "phy_btcoex_desense_rxgain", desense_restage_gain_ptr,
+				sizeof(wl_desense_restage_gain_t), &ptr) < 0) {
+			printf("wlmBtcoexDesenseRxgainGet: failed to retrieve"
+							"rxgain desense mode \n");
+			return FALSE;
+		}
+		desense_restage_gain_ptr = ptr;
+
+		*band = (uint) (desense_restage_gain_ptr->band);
+		*num_cores = (uint8) (desense_restage_gain_ptr->num_cores);
+		for (cnt = 0; cnt < desense_restage_gain_ptr->num_cores; cnt++) {
+			desense_array[cnt] = (desense_restage_gain_ptr->desense_array[cnt]);
+		}
+
+		return TRUE;
+	} else {
+		printf("wlmBtcoexDesenseRxgainGet: "
+			"phy type %d is not suppprted\n", phytype);
+		return FALSE;
+	}
+}
+
+int
+wlmBtcoexDesenseRxgainSet(WLM_BAND band, int num_cores, int *desense_array)
+{
+	wl_desense_restage_gain_t *desense_restage_gain_ptr, desense_restage_gain;
+	uint32 phytype;
+	int16 cnt = 0;
+
+	if (curPhyType == PHY_TYPE_NULL)
+		phytype = wlmPhyTypeGet();
+	else
+		phytype = curPhyType;
+
+	if (phytype == WLC_PHY_TYPE_AC) {
+		desense_restage_gain_ptr = &desense_restage_gain;
+
+		desense_restage_gain_ptr->version =  0;
+		desense_restage_gain_ptr->length = sizeof(desense_restage_gain);
+		desense_restage_gain_ptr->band = (uint) band;
+
+		desense_restage_gain_ptr->num_cores = (uint8) num_cores;
+		for (cnt = 0; cnt < num_cores; cnt++) {
+			desense_restage_gain_ptr->desense_array[cnt] = (uint8) desense_array[cnt];
+		}
+
+		if (wlu_var_setbuf(irh, "phy_btcoex_desense_rxgain", desense_restage_gain_ptr,
+				sizeof(desense_restage_gain_ptr)) < 0) {
+			printf("wlmBtcoexDesenseRxgainSet: failed to set btcoex rxgain desense\n");
+			return FALSE;
+		}
+		return TRUE;
+	} else {
+		printf("wlmBtcoexDesenseRxgainSet: "
+			"phy type %d is not suppprted\n", phytype);
+		return FALSE;
+	}
 }

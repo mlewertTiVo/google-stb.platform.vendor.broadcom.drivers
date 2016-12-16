@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_cmn.c 630390 2016-04-08 18:21:46Z lut $
+ * $Id: phy_cmn.c 659833 2016-09-16 05:39:06Z $
  */
 
 #include <phy_cfg.h>
@@ -204,4 +204,11 @@ phy_get_femctrl_clb_prio_2g_acphy(phy_info_t *pi)
 {
 	ASSERT(pi != NULL && pi->cmni != NULL);
 	return pi->cmni->femctrl_clb_prio_2g;
+}
+
+int
+phy_numofcores(wlc_phy_t *pih)
+{
+	phy_info_t *pi = (phy_info_t*)pih;
+	return pi->pubpi->phy_corenum;
 }

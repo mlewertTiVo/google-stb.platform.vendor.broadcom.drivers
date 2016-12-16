@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_hw_impl.h 631569 2016-04-15 02:17:57Z $
+ * $Id: km_hw_impl.h 654771 2016-08-16 13:04:43Z $
  */
 
 #ifndef _km_hw_impl_h_
@@ -269,7 +269,7 @@ struct km_hw_algo_entry {
 	(_dt) == WLC_KEY_DATA_TYPE_MIC_KEY_TO_DS || \
 	(_dt) == WLC_KEY_DATA_TYPE_MIC_KEY)
 
-#define KM_HW_ERR(args) KM_ERR(args)
+#define KM_HW_ERR(args) WL_ERROR(args)
 #define KM_HW_LOG(args) KM_LOG(args)
 #define KM_HW_LOG_DECL(stmt) KM_LOG_DECL(stmt)
 #define KM_HW_LOG_DUMP(stmt) KM_LOG_DUMP(stmt)

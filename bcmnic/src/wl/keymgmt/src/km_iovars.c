@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_iovars.c 645639 2016-06-25 00:52:23Z $
+ * $Id: km_iovars.c 647436 2016-07-05 22:09:54Z $
  */
 
 #include "km_pvt.h"
@@ -426,7 +426,45 @@ km_doiovar(void *ctx, uint32 actionid,
 
 		break;
 	}
-#if defined(WLMOTOROLALJ)
+#if defined(BCMDBG)
+	case IOV_SVAL(IOV_WSEC_KEY_SEQ): /* params <key idx:4x><tx:1x><seq id:2x>|<seq(LE):12> */
+	{
+		wlc_key_index_t key_idx;
+		uint8 seq[KEY_SEQ_SIZE];
+		wlc_key_seq_id_t seq_id;
+		int i;
+		bool tx;
+		uint8 *p;
+
+		if (p_len < (2*KEY_SEQ_SIZE + 7))  {
+			err = BCME_BUFTOOSHORT;
+			break;
+		}
+
+		p = (uint8 *)params;
+		key_idx = km_hex2int(p[3], p[2]);
+		key_idx |= km_hex2int(p[1], p[0]) << 8;
+
+		tx = km_hex2int(p[4], '0');
+		seq_id = km_hex2int(p[6], p[5]);
+
+		for (i = 0; i < KEY_SEQ_SIZE; ++i) {
+			int j;
+			j =  7 + (i << 1);
+			seq[i] = km_hex2int(p[j+1], p[j]);
+		}
+
+		key = wlc_keymgmt_get_key(km, key_idx, &key_info);
+		if (key_info.key_idx == WLC_KEY_INDEX_INVALID) {
+			err = BCME_BADKEYIDX;
+			break;
+		}
+
+		err = wlc_key_set_seq(key, seq, KEY_SEQ_SIZE, seq_id, tx);
+		break;
+	}
+#endif /* BCMDBG */
+#if defined(BCMDBG) || defined(WLMOTOROLALJ)
 	case IOV_GVAL(IOV_WSEC_KEY):
 	{
 		int wl_idx;
@@ -473,7 +511,7 @@ km_doiovar(void *ctx, uint32 actionid,
 		memcpy(arg, &wl_key, sizeof(wl_key));
 		break;
 	}
-#endif 
+#endif /* BCMDBG || WLMOTOROLALJ */
 
 
 #ifdef BRCMAPIVTW
@@ -745,7 +783,7 @@ km_iov_set_wsec_info(keymgmt_t *km, wlc_bsscfg_t *bsscfg,
 	ctx.km = km;
 	ctx.bsscfg = bsscfg;
 
-	total_tlv_len = outbuf_len - OFFSETOF(wl_wsec_info_t, tlvs);
+	total_tlv_len = (uint16)(outbuf_len - OFFSETOF(wl_wsec_info_t, tlvs));
 	err = bcm_unpack_xtlv_buf((void*)&ctx, (uint8*)req->tlvs, total_tlv_len,
 		BCM_XTLV_OPTION_ALIGN32, km_iov_set_wsec_info_tlv_cb);
 done:

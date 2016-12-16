@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_helper.c 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_ie_helper.c 665073 2016-10-14 20:33:29Z $
  */
 
 /**
@@ -39,90 +39,11 @@
 #include <wlc_types.h>
 #include <wlc_ie_mgmt_types.h>
 #include <wlc_ie_mgmt_ft.h>
+#include <wlc_ie_mgmt_vs.h>
+#include <wlc_ie_mgmt.h>
 #include <wlc_ie_helper.h>
 
 /* Accessors */
-
-/*
- * 'calc_len' callback data structure decode accessors
- */
-wlc_bsscfg_t *
-wlc_iem_calc_get_cfg(wlc_iem_calc_data_t *calc)
-{
-	if (calc != NULL)
-		return calc->cfg;
-	return NULL;
-}
-
-uint16
-wlc_iem_calc_get_ft(wlc_iem_calc_data_t *calc)
-{
-	if (calc != NULL)
-		return calc->ft;
-	return WLC_IEM_FC_UNK;
-}
-
-wlc_iem_cbparm_t *
-wlc_iem_calc_get_parm(wlc_iem_calc_data_t *calc)
-{
-	if (calc != NULL)
-		return calc->cbparm;
-	return NULL;
-}
-
-/*
- * 'build' callback data structure decode accessors
- */
-wlc_bsscfg_t *
-wlc_iem_build_get_cfg(wlc_iem_build_data_t *build)
-{
-	if (build != NULL)
-		return build->cfg;
-	return NULL;
-}
-
-uint16
-wlc_iem_build_get_ft(wlc_iem_build_data_t *build)
-{
-	if (build != NULL)
-		return build->ft;
-	return WLC_IEM_FC_UNK;
-}
-
-wlc_iem_cbparm_t *
-wlc_iem_build_get_parm(wlc_iem_build_data_t *build)
-{
-	if (build != NULL)
-		return build->cbparm;
-	return NULL;
-}
-
-/*
- * 'parse' callback data structure decode accessors
- */
-wlc_bsscfg_t *
-wlc_iem_parse_get_cfg(wlc_iem_parse_data_t *parse)
-{
-	if (parse != NULL)
-		return parse->cfg;
-	return NULL;
-}
-
-uint16
-wlc_iem_parse_get_ft(wlc_iem_parse_data_t *parse)
-{
-	if (parse != NULL)
-		return parse->ft;
-	return WLC_IEM_FC_UNK;
-}
-
-wlc_iem_pparm_t *
-wlc_iem_parse_get_parm(wlc_iem_parse_data_t *parse)
-{
-	if (parse != NULL)
-		return parse->pparm;
-	return NULL;
-}
 
 /*
  * 'calc_len' Frame Type specific parameter structure decode accessors.
@@ -214,4 +135,51 @@ wlc_iem_parse_get_assoc_bcn_scb(wlc_iem_parse_data_t *parse)
 	}
 
 	return scb;
+}
+
+static void
+wlc_iem_parse_nhdlr_cb(void *ctx, wlc_iem_nhdlr_data_t *data)
+{
+	BCM_REFERENCE(ctx);
+
+	if (0) {
+		prhex("no parser", data->ie, data->ie_len);
+	}
+}
+
+static wlc_iem_tag_t
+wlc_iem_parse_vsie_cb(void *ctx, wlc_iem_pvsie_data_t *data)
+{
+	return wlc_iem_vs_get_id(data->ie);
+}
+
+/* initialize user provided parse structure.
+ * caller can override the entire structure if needed.
+ */
+void
+wlc_iem_parse_upp_init(wlc_iem_info_t *iem, wlc_iem_upp_t *upp)
+{
+	bzero(upp, sizeof(*upp));
+
+	upp->notif_fn = wlc_iem_parse_nhdlr_cb;
+	upp->vsie_fn = wlc_iem_parse_vsie_cb;
+	upp->ctx = iem;
+}
+
+static wlc_iem_tag_t
+wlc_iem_cbvsie_cb(void *ctx, wlc_iem_cbvsie_data_t *data)
+{
+	return wlc_iem_vs_get_id(data->ie);
+}
+
+/* initialize user IE list params - likely common portion only.
+ * caller can override the structure if needed.
+ */
+void
+wlc_iem_build_uiel_init(wlc_iem_info_t *iem, wlc_iem_uiel_t *uiel)
+{
+	bzero(uiel, sizeof(*uiel));
+
+	uiel->vsie_fn = wlc_iem_cbvsie_cb;
+	uiel->ctx = iem;
 }

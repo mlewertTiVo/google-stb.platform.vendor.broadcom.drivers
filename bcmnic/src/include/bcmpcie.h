@@ -20,7 +20,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmpcie.h 632491 2016-04-19 13:26:38Z $
+ * $Id: bcmpcie.h 660165 2016-09-19 10:11:05Z $
  */
 
 
@@ -63,6 +63,9 @@ typedef struct {
 #define PCIE_SHARED_EVT_SEQNUM		0x08000
 #define PCIE_SHARED_DMA_INDEX		0x10000
 
+/* WAR: D11 txstatus through unused status field of PCIe completion header */
+#define PCIE_SHARED_D2H_D11_TX_STATUS  0x40000000	/* using flags2 in shared area */
+#define PCIE_SHARED_H2D_D11_TX_STATUS  0x80000000	/* using flags2 in shared area */
 
 /**
  * There are host types where a device interrupt can 'race ahead' of data written by the device into
@@ -78,6 +81,10 @@ typedef struct {
 	(PCIE_SHARED_D2H_SYNC_SEQNUM | PCIE_SHARED_D2H_SYNC_XORCSUM)
 #define PCIE_SHARED_IDLE_FLOW_RING		0x80000
 #define PCIE_SHARED_2BYTE_INDICES       0x100000
+
+/* WAR: D11 txstatus through unused status field of PCIe completion header */
+#define PCIE_SHARED2_D2H_D11_TX_STATUS	0x40000000	/* using flags2 in shared area */
+#define PCIE_SHARED2_H2D_D11_TX_STATUS	0x80000000	/* using flags2 in shared area */
 
 /* dongle supports fatal buf log collection */
 #define PCIE_SHARED_FATAL_LOGBUG_VALID 0x200000
@@ -114,6 +121,11 @@ typedef struct {
 /* When set, Firmwar supports Inband DS protocol */
 #define PCIE_SHARED_INBAND_DS	0x40000000
 
+/*
+ * Implicit DMA WAR for 4347B0 PCIe memory retention
+ * HW4347-884: PCIe M2M DMA memories don't have retention
+ */
+#define PCIE_SHARED_IDMA_RETENTION_DS	0x80000000
 
 #define PCIE_SHARED_D2H_MAGIC		0xFEDCBA09
 #define PCIE_SHARED_H2D_MAGIC		0x12345678
@@ -218,6 +230,11 @@ enum d2hring_idx {
 #define BCMPCIE_D2H_RW_INDEX_ARRAY_SZ(rw_index_sz) \
 	((rw_index_sz) * BCMPCIE_D2H_COMMON_MSGRINGS)
 
+#ifdef HOFFLOAD_MODULES
+#define HOFFLOAD_MODULES_ENAB(shmem) ((shmem)->hoffload_addr.low_addr)
+#else
+#define HOFFLOAD_MODULES_ENAB(shmem) (0)
+#endif
 /**
  * This type is used by a 'message buffer' (which is a FIFO for messages). Message buffers are used
  * for host<->device communication and are instantiated on both sides. ring_mem_t is instantiated
@@ -310,7 +327,7 @@ typedef struct {
 	uint32		device_rings_stsblk_len;
 	sh_addr_t	device_rings_stsblk;
 
-	uint32	buzz_dbg_ptr;	/* BUZZZ state format strings and trace buffer */
+	uint32		buzzz;	/* BUZZZ state format strings and trace buffer */
 
 	/* rev6 compatible changes */
 	uint32          flags2;
@@ -324,6 +341,9 @@ typedef struct {
 
 	/* location for host fatal error log buffer start address */
 	uint32		device_fatal_logbuf_start;
+
+	/* location in host memory for offloaded modules */
+	sh_addr_t	hoffload_addr;
 } pciedev_shared_t;
 
 extern pciedev_shared_t pciedev_shared;
@@ -341,14 +361,15 @@ extern pciedev_shared_t pciedev_shared;
  */
 
 /* H2D mail box Data */
-#define H2D_HOST_D3_INFORM	0x00000001
+#define H2D_HOST_D3_INFORM		0x00000001
 #define H2D_HOST_DS_ACK		0x00000002
 #define H2D_HOST_DS_NAK		0x00000004
-#define H2D_HOST_CONS_INT	0x80000000	/**< h2d int for console cmds  */
+#define H2D_HOST_D0_INFORM_IN_USE		0x00000008
+#define H2D_HOST_D0_INFORM		0x00000010
+#define H2D_HOST_IDMA_INITED		0x00000020
+#define H2D_HOST_ACK_NOINT		0x00010000	/* d2h_ack interrupt ignore */
 #define H2D_FW_TRAP		0x20000000	/**< h2d force TRAP */
-#define H2D_HOST_D0_INFORM_IN_USE	0x00000008
-#define H2D_HOST_D0_INFORM	0x00000010
-#define H2D_HOST_IDMA_INITED	0x00000020
+#define H2D_HOST_CONS_INT		0x80000000	/**< h2d int for console cmds  */
 
 /* D2H mail box Data */
 #define D2H_DEV_D3_ACK		0x00000001
@@ -356,8 +377,10 @@ extern pciedev_shared_t pciedev_shared;
 #define D2H_DEV_DS_EXIT_NOTE	0x00000004
 #define D2H_DEV_FWHALT		0x10000000
 #define D2H_DEV_IDMA_INITED	0x00000008
+#define D2H_FWTRAP_MASK		0x0000001F	/* Adding maskbits for TRAP information */
 #define D2H_DEV_MB_MASK		(D2H_DEV_D3_ACK | D2H_DEV_DS_ENTER_REQ | \
-				D2H_DEV_DS_EXIT_NOTE | D2H_DEV_IDMA_INITED | D2H_DEV_FWHALT)
+				D2H_DEV_DS_EXIT_NOTE | D2H_DEV_IDMA_INITED | D2H_DEV_FWHALT | \
+				D2H_FWTRAP_MASK)
 #define D2H_DEV_MB_INVALIDATED(x)	((!x) || (x & ~D2H_DEV_MB_MASK))
 
 /** These macro's operate on type 'inuse_lclbuf_pool_t' and are used by firmware only */

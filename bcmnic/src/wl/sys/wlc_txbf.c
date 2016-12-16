@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_txbf.c 645916 2016-06-27 22:17:30Z $
+ * $Id: wlc_txbf.c 664177 2016-10-11 01:51:26Z $
  */
 
 
@@ -52,30 +52,31 @@
 #include <wlc_mutx.h>
 #endif
 #include <wlc_scb_ratesel.h>
+#include <wlc_vasip.h>
 
 #ifdef WL_BEAMFORMING
 
 /* iovar table */
-enum {
-	IOV_TXBF_BFR_CAP,
-	IOV_TXBF_BFE_CAP,
-	IOV_TXBF_TIMER,
-	IOV_TXBF_TRIGGER,
-	IOV_TXBF_RATESET,
-	IOV_TXBF_MODE,
-	IOV_TXBF_VIRTIF_DISABLE,
-	IOV_TXBF_BFE_NRX_OV,
-	IOV_TXBF_IMP,
-	IOV_TXBF_HT_ENABLE,
-#ifdef TXBF_MORE_LINKS
-	IOV_TXBF_SCHED_TIMER,
-	IOV_TXBF_SCHED_MSG,
-	IOV_TXBF_MAX_RSSI,
-	IOV_TXBF_MIN_RSSI,
-	IOV_TXBF_PKT_THRE,
-#endif /* TXBF_MORE_LINKS */
-	IOV_TXBF_MUTIMER,
-	IOV_TXBF_MU_FEATURES,
+enum wlc_txbf_iov {
+	IOV_TXBF_BFR_CAP = 1,
+	IOV_TXBF_BFE_CAP = 2,
+	IOV_TXBF_TIMER = 3,
+	IOV_TXBF_TRIGGER = 4,
+	IOV_TXBF_RATESET = 5,
+	IOV_TXBF_MODE = 6,
+	IOV_TXBF_VIRTIF_DISABLE = 7,
+	IOV_TXBF_BFE_NRX_OV = 8,
+	IOV_TXBF_IMP = 9,
+	IOV_TXBF_HT_ENABLE = 10,
+	IOV_TXBF_SCHED_TIMER = 11,
+	IOV_TXBF_SCHED_MSG = 12,
+	IOV_TXBF_MAX_RSSI = 13,
+	IOV_TXBF_MIN_RSSI = 14,
+	IOV_TXBF_PKT_THRE = 15,
+	IOV_TXBF_BFM_SPEXP = 16,
+	IOV_TXBF_BFR_SPEXP = 17,
+	IOV_TXBF_MUTIMER = 18,
+	IOV_TXBF_MU_FEATURES = 19,
 	IOV_TXBF_BF_LAST
 };
 
@@ -173,6 +174,7 @@ struct wlc_txbf_info {
 	/* special mode of bfm-based freq-domain spatial expansion */
 	uint8 bfm_spexp;
 	uint8 bfr_spexp;
+	wlc_bsscfg_t *mu_bsscfg;
 };
 
 #define TXBF_SCB_CUBBY(txbf, scb) (struct txbf_scb_cubby *)SCB_CUBBY(scb, (txbf->scb_handle))
@@ -300,9 +302,22 @@ static bool wlc_txbf_check_ofdm_rate(uint8 rate, uint8 *supported_rates, uint8 n
 static uint8 wlc_txbf_set_shm_idx(wlc_txbf_info_t *txbf, struct txbf_scb_info *bfi);
 static void wlc_txbf_bfr_init(wlc_txbf_info_t *txbf, struct txbf_scb_info *bfi);
 static void wlc_txbf_bfe_init(wlc_txbf_info_t *txbf, struct txbf_scb_info *bfi);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_txbf_dump_stats(wlc_txbf_info_t *txbf, struct bcmstrbuf *b);
+static int wlc_txbf_dump(wlc_txbf_info_t *txbf, struct bcmstrbuf *b);
+static void wlc_txbf_shm_dump(wlc_txbf_info_t *txbf, struct bcmstrbuf *b);
+#ifdef WL_PSMX
+static void wlc_txbf_shmx_dump(wlc_txbf_info_t *txbf, struct bcmstrbuf *b);
+#endif
+static void wlc_txbf_dump_shm_bfi_blk(wlc_txbf_info_t *txbf, struct bcmstrbuf *b, uint8 idx);
+#ifdef WL_PSMX
+static void wlc_txbf_dump_shmx_bfi_blk(wlc_txbf_info_t *txbf, struct bcmstrbuf *b, uint8 idx);
+#endif
+#endif 
 
 static int scb_txbf_init(void *context, struct scb *scb);
 static void scb_txbf_deinit(void *context, struct scb *scb);
+static int scb_txbf_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg);
 static uint8 wlc_txbf_system_gain_acphy(uint8 bfr_ntx, uint8 bfe_nrx, uint8 std, uint8 mcs,
 	uint8 nss, uint8 rate, uint8 bw, bool is_ldpc, bool is_imp);
 static void wlc_txbf_scb_state_upd_cb(void *ctx, scb_state_upd_data_t *notif_data);
@@ -333,6 +348,17 @@ static uint8 wlc_txbf_set_shm_idx(wlc_txbf_info_t *txbf, struct txbf_scb_info *b
  * source file may reference private constants, types, variables, and functions).
  */
 #include <wlc_patch.h>
+
+static int
+scb_txbf_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg)
+{
+	wlc_txbf_info_t *txbf = (wlc_txbf_info_t *)context;
+	wlc_info_t *new_wlc = new_cfg->wlc;
+	struct txbf_scb_cubby *txbf_scb_cubby = (struct txbf_scb_cubby *)TXBF_SCB_CUBBY(txbf, scb);
+	struct txbf_scb_info *txbf_scb_info = txbf_scb_cubby->txbf_scb_info;
+	txbf_scb_info->txbf = new_wlc->txbf;
+	return TRUE;
+}
 
 static int
 scb_txbf_init(void *context, struct scb *scb)
@@ -655,6 +681,7 @@ BCMATTACHFN(wlc_txbf_attach)(wlc_info_t *wlc)
 {
 	wlc_txbf_info_t *txbf;
 	int err, i;
+	scb_cubby_params_t cubby_params;
 
 	if (!(txbf = (wlc_txbf_info_t *)MALLOCZ(wlc->osh, sizeof(wlc_txbf_info_t)))) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
@@ -680,12 +707,24 @@ BCMATTACHFN(wlc_txbf_attach)(wlc_info_t *wlc)
 		MFREE(wlc->osh, (void *)txbf, sizeof(wlc_txbf_info_t));
 		return NULL;
 	}
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "txbf", (dump_fn_t)wlc_txbf_dump, (void *)txbf);
+#endif 
 
 	if (!wlc->pub->_txbf)
 		return txbf;
 
-	txbf->scb_handle = wlc_scb_cubby_reserve(wlc, sizeof(struct txbf_scb_cubby),
-		scb_txbf_init, scb_txbf_deinit, NULL, (void *)txbf);
+	/* Reserve some space in SCB container */
+	bzero(&cubby_params, sizeof(cubby_params));
+
+	cubby_params.context = txbf;
+	cubby_params.fn_init = scb_txbf_init;
+	cubby_params.fn_deinit = scb_txbf_deinit;
+	cubby_params.fn_update = scb_txbf_update;
+
+	txbf->scb_handle = wlc_scb_cubby_reserve_ext(wlc, sizeof(struct txbf_scb_cubby),
+		&cubby_params);
+
 	if (txbf->scb_handle < 0) {
 		WL_ERROR(("wl%d: wlc_scb_cubby_reserve() failed\n", wlc->pub->unit));
 		MFREE(wlc->osh, (void *)txbf, sizeof(wlc_txbf_info_t));
@@ -768,7 +807,7 @@ wlc_txbf_up(void *context)
 	int rxchains = WLC_BITSCNT(wlc->stf->rxchain);
 	uint16 bfcfg_base, coremask0 = 0, coremask1 = 0, mask0;
 	/* Initialize TxBF links during big-hammer */
-	if (wlc->pub->up && wlc->pub->associated && TXBF_ENAB(wlc->pub)) {
+	if (wlc->pub->associated && TXBF_ENAB(wlc->pub)) {
 		struct scb *scb;
 		struct scb_iter scbiter;
 		wlc_bsscfg_t *bsscfg;
@@ -788,7 +827,8 @@ wlc_txbf_up(void *context)
 #ifdef WL_PSMX
 	if (PSMX_HWCAP(wlc->pub)) {
 		txbf->mx_bfiblk_base = wlc_read_shmx(wlc, MX_BFI_BLK_PTR(wlc));
-		wlc_txbf_mutimer_update(txbf);
+		wlc_txbf_mutimer_update(txbf, FALSE);
+		txbf->mu_bsscfg = NULL;
 	}
 #endif
 	if (txchains == 1) {
@@ -893,11 +933,11 @@ wlc_txbf_murx_capable(wlc_txbf_info_t *txbf)
 
 #ifdef WL_PSMX
 void
-wlc_txbf_mutimer_update(wlc_txbf_info_t *txbf)
+wlc_txbf_mutimer_update(wlc_txbf_info_t *txbf, bool force_disable)
 {
 	wlc_info_t *wlc = txbf->wlc;
 	if (PSMX_HWCAP(wlc->pub)) {
-		if (MU_TX_ENAB(wlc))
+		if (MU_TX_ENAB(wlc) && !force_disable)
 			wlc_write_shmx(wlc, MX_MUSND_PER(wlc), txbf->mu_sounding_period << 2);
 		else
 			wlc_write_shmx(wlc, MX_MUSND_PER(wlc), 0);
@@ -1013,8 +1053,50 @@ BCMATTACHFN(wlc_txbf_init)(wlc_txbf_info_t *txbf)
 	txbf->bfr_spexp = 0;
 }
 
+void
+wlc_txbf_link_upd(wlc_txbf_info_t *txbf, struct scb *scb)
+{
+	ASSERT(txbf);
+	ASSERT(scb);
+
+	if (!SCB_INTERNAL(scb) && SCB_ASSOCIATED(scb)) {
+		/* Re-initial beamforming link, may change from SU to MU */
+		wlc_txbf_delete_link(txbf, scb);
+		wlc_txbf_init_link(txbf, scb);
+	}
+}
 
 #ifdef WL_PSMX
+wlc_bsscfg_t *
+wlc_txbf_get_mu_bsscfg(wlc_txbf_info_t *txbf)
+{
+	return txbf->mu_bsscfg;
+}
+
+void
+wlc_txbf_set_mu_bsscfg(wlc_txbf_info_t *txbf, wlc_bsscfg_t *bsscfg)
+{
+	txbf->mu_bsscfg = bsscfg;
+	if (bsscfg)
+		wlc_bmac_set_myaddr(txbf->wlc->hw, &bsscfg->cur_etheraddr);
+}
+
+bool
+wlc_txbf_max_mu_link_limit(wlc_txbf_info_t *txbf, wlc_bsscfg_t *bsscfg)
+{
+	int i, mu_count = 0;
+	/* count number of mu scb */
+	for (i = 0; i < txbf->mu_max_links; i++) {
+		if (txbf->mu_scbs[i] != NULL) {
+			mu_count++;
+		}
+	}
+	if (mu_count && mu_count >= txbf->pub->max_muclients)
+		return TRUE;
+
+	return FALSE;
+}
+
 static bool
 wlc_txbf_mu_link_qualify(wlc_txbf_info_t *txbf, struct scb *scb)
 {
@@ -1023,21 +1105,19 @@ wlc_txbf_mu_link_qualify(wlc_txbf_info_t *txbf, struct scb *scb)
 	uint8 mu_count = 0;
 	wlc_info_t *wlc = txbf->wlc;
 	uint16 vht_flags = wlc_vht_get_scb_flags(wlc->vhti, scb);
-	uint32 bw_policy;
-	uint8 link_bw;
 
 	ASSERT(txbf);
 	ASSERT(scb);
 
-	if (!MU_TX_ENAB(txbf->wlc) ||
-		(!(vht_flags & SCB_MU_BEAMFORMEE)))
+	if (!MU_TX_ENAB(txbf->wlc) || !BSSCFG_IS_MU(scb->bsscfg) ||
+		(!(vht_flags & SCB_MU_BEAMFORMEE)) ||
+		wlc_mutx_sta_on_hold(wlc->mutx, scb) ||
+		!wlc_mutx_sta_mu_link_permit(wlc->mutx, scb))
 		return FALSE;
 
-	/* Check BW policy */
-	bw_policy = wlc_mutx_bw_policy(wlc->mutx);
-	link_bw = wlc_scb_ratesel_get_link_bw(wlc, scb);
-	if (link_bw != bw_policy)
-		return FALSE;
+	if (!txbf->mu_bsscfg) {
+		wlc_txbf_set_mu_bsscfg(txbf, scb->bsscfg);
+	}
 
 	/* count number of mu scb, except it self */
 	for (i = 0; i < txbf->mu_max_links; i++) {
@@ -1056,18 +1136,19 @@ wlc_txbf_mu_link_qualify(wlc_txbf_info_t *txbf, struct scb *scb)
 
 #ifdef WL_MU_TX
 int
-wlc_txbf_mu_cap_stas(wlc_txbf_info_t *txbf)
+wlc_txbf_mu_cap_stas(wlc_txbf_info_t *txbf, wlc_bsscfg_t *bsscfg, uint32 bw_policy)
 {
 	wlc_info_t *wlc = txbf->wlc;
 	int mu_cap_stas = 0;
 	struct scb *scb;
 	struct scb_iter scbiter;
 	struct txbf_scb_info *bfi;
-	uint32 bw_policy;
 	uint8 link_bw;
 
-	bw_policy = wlc_mutx_bw_policy(wlc->mutx);
-	FOREACHSCB(wlc->scbstate, &scbiter, scb) {
+	if (!(wlc->pub->mu_features & (MU_FEATURES_AUTO| MU_FEATURES_MUTX)))
+		return 0;
+
+	FOREACH_BSS_SCB(wlc->scbstate, &scbiter, bsscfg, scb) {
 		bfi = (struct txbf_scb_info *)TXBF_SCB_INFO(txbf, scb);
 		link_bw = wlc_scb_ratesel_get_link_bw(wlc, scb);
 		if (!bfi)
@@ -1077,11 +1158,33 @@ wlc_txbf_mu_cap_stas(wlc_txbf_info_t *txbf)
 		/* Check BW policy */
 		if (link_bw != bw_policy)
 			continue;
+		/* Check AC policy */
+		if (!wlc_mutx_sta_ac_check(wlc->mutx, scb))
+			continue;
 
 		mu_cap_stas++;
 	}
 
 	return (mu_cap_stas);
+}
+
+uint8
+wlc_txbf_get_free_su_bfr_links(wlc_txbf_info_t *txbf)
+{
+	uint8 i, cnt = 0, su_shm_idx = 0;
+
+	su_shm_idx = txbf->pub->max_muclients;
+
+	for (i = su_shm_idx; i <= txbf->max_link; i++) {
+		if ((txbf->shm_idx_bmp & (1 << i)) == 0) {
+			if (i == (uint8)txbf->impbf_usr_idx) {
+				continue;
+			}
+			cnt++;
+		}
+	}
+
+	return cnt;
 }
 #endif /* WL_MU_TX */
 #endif /* WL_PSMX */
@@ -1130,7 +1233,7 @@ wlc_txbf_init_exp(wlc_txbf_info_t *txbf, struct scb *scb, struct txbf_scb_info *
 	bfi->flags = 0;
 
 	if ((!(txbf->bfr_capable || txbf->bfe_capable)) ||
-		WLC_PHY_AS_80P80(wlc, wlc->chanspec)) {
+		WLC_PHY_AS_80P80(wlc, wlc->chanspec)|| (!wlc->clk)) {
 		return BCME_OK;
 	}
 
@@ -1233,7 +1336,6 @@ wlc_txbf_init_exp(wlc_txbf_info_t *txbf, struct scb *scb, struct txbf_scb_info *
 	}
 
 	if (txbf->bfr_capable && bfi->bfe_capable) {
-		ASSERT(wlc->pub->up);
 		wlc_txbf_bfr_init(txbf, bfi);
 		bfi->exp_en = TRUE;
 		bfi->init_pending = FALSE;
@@ -1307,9 +1409,6 @@ wlc_txbf_get_bfe_sts_cap(wlc_txbf_info_t *txbf, struct scb *scb)
 }
 
 #if defined(WL_BEAMFORMING) && !defined(WLTXBF_DISABLED)
-/* JIRA:SWMUMIMO-457
- * WAR for intel interop issue: Using bfm to do frequency-domain spatial expansion
- */
 bool
 wlc_txbf_bfmspexp_enable(wlc_txbf_info_t *txbf)
 {
@@ -1649,6 +1748,11 @@ wlc_txbf_delete_link_serve(wlc_txbf_info_t *txbf, struct scb *scb)
 		}
 	}
 
+	if (wlc->going_down && txbf->mu_bsscfg) {
+		BSSCFG_CLR_MU(txbf->mu_bsscfg);
+		txbf->mu_bsscfg = NULL;
+	}
+
 	if ((i > txbf->max_link) &&
 #ifdef WL_PSMX
 	(j == txbf->mu_max_links) &&
@@ -1863,6 +1967,11 @@ wlc_txbf_bfr_init(wlc_txbf_info_t *txbf, struct txbf_scb_info *bfi)
 	uint16	bfi_blk, bfrctl = 0, bfr_config0, ndpa_type, sta_info;
 	bool isVHT = FALSE;
 	uint8 nc_idx = 0;
+#if defined(WLVASIP)
+	uint8 sgi;
+	uint16 rate_cap = 0;
+	uint16 mcs_bitmap[MCSSET_LEN];
+#endif /* WLVASIP */
 
 	ASSERT(scb);
 
@@ -1900,6 +2009,24 @@ wlc_txbf_bfr_init(wlc_txbf_info_t *txbf, struct txbf_scb_info *bfi)
 				bfr_config0 |= (0x1 << 13);
 			}
 		}
+#if defined(WLVASIP)
+		wlc_scb_ratesel_get_ratecap(wlc->wrsi, scb, &sgi, mcs_bitmap, 0 /* AC_BE */);
+
+		/* unused(10) | brcmSTA(1) | ldpc(1) | sgi(2) | bw(2) |
+		 * mcs_nss0(16) | mcs_nss1(16) | mcs_nss2(16) | mcs_nss3(16)
+		 */
+		rate_cap = (wlc_scb_ratesel_get_link_bw(wlc, scb) - 1);
+		rate_cap |= sgi << VASIP_RTCAP_SGI_NBIT;
+		if (SCB_LDPC_CAP(scb))
+			rate_cap |= 1 << VASIP_RTCAP_LDPC_NBIT;
+		if (scb->flags & SCB_BRCM)
+			rate_cap |= 1 << VASIP_RTCAP_BCMSTA_NBIT;
+
+		wlc_svmp_mem_blk_set(wlc->hw, VASIP_RATECAP_BLK + (bfi->mx_bfiblk_idx * 5),
+			1, &rate_cap);
+		wlc_svmp_mem_blk_set(wlc->hw, VASIP_RATECAP_BLK + 1 + (bfi->mx_bfiblk_idx * 5),
+			4, mcs_bitmap);
+#endif /* WLVASIP */
 	} else {
 		if (CHSPEC_IS40(wlc->chanspec)) {
 			bfr_config0 |= (0x1 << 13);
@@ -1969,6 +2096,12 @@ wlc_txbf_bfr_init(wlc_txbf_info_t *txbf, struct txbf_scb_info *bfi)
 			WL_TXBF(("wl%d: %s SCB is in PM. Defer setting BFI_BFRIDX_EN\n",
 				wlc->pub->unit, __FUNCTION__));
 		}
+#if defined(BCMDBG)
+		if (WL_TXBF_ON()) {
+			wlc_txbf_dump_shmx_bfi_blk(txbf, NULL, bfi->mx_bfiblk_idx);
+			wlc_txbf_dump_shm_bfi_blk(txbf, NULL, bfi->mx_bfiblk_idx);
+		}
+#endif
 		wlc_bmac_enable_macx(wlc->hw);
 	} else
 #endif /* WL_PSMX */
@@ -1983,6 +2116,11 @@ wlc_txbf_bfr_init(wlc_txbf_info_t *txbf, struct txbf_scb_info *bfi)
 		/* Update AID */
 		sta_info = (scb->aid & DOT11_AID_MASK);
 		wlc_write_shm(wlc, shm_addr(bfi_blk, C_BFI_STAINFO_POS), sta_info);
+#endif
+#if defined(BCMDBG)
+		if (WL_TXBF_ON()) {
+			wlc_txbf_dump_shm_bfi_blk(txbf, NULL, bfi->shm_index);
+		}
 #endif
 		wlc_enable_mac(wlc);
 	}
@@ -2059,7 +2197,7 @@ wlc_txbf_scb_state_upd_cb(void *ctx, scb_state_upd_data_t *notif_data)
 	*/
 	if ((oldstate & ASSOCIATED) && !SCB_ASSOCIATED(scb))
 		wlc_txbf_delete_link(txbf, scb);
-	else if (SCB_ASSOCIATED(scb))
+	else if (SCB_ASSOCIATED(scb) && !SCB_AUTHORIZED(scb))
 		wlc_txbf_init_link(txbf, scb);
 }
 
@@ -2215,7 +2353,7 @@ void wlc_txbf_scb_ps_notify(wlc_txbf_info_t *txbf, struct scb *scb, bool ps_on)
 		return;
 	}
 
-	if (PSMX_HWCAP(txbf->wlc->pub) && (bfi->flags & MU_BFE)) {
+	if (PSMX_HWCAP(txbf->pub) && (bfi->flags & MU_BFE)) {
 		/* Disable/Enable MU sounding to the BFE when PS mode changes */
 		bfi_blk = txbf->mx_bfiblk_base +  bfi->mx_bfiblk_idx * BFI_BLK_SIZE;
 		WL_TXBF(("====================\n%s %d, %s\n",
@@ -2761,6 +2899,21 @@ wlc_txbf_exp_sel(wlc_txbf_info_t *txbf, ratespec_t rspec, struct scb *scb, uint8
 	else
 		return wlc_txbf_bfen(txbf, scb, rspec, txpwrs, FALSE);
 }
+
+uint8
+wlc_txbf_get_bfi_idx(wlc_txbf_info_t *txbf, struct scb *scb)
+{
+	struct txbf_scb_info *bfi;
+
+	if (SCB_INTERNAL(scb)) {
+		return BF_SHM_IDX_INV;
+	}
+
+	bfi = TXBF_SCB_INFO(txbf, scb);
+	ASSERT(bfi);
+	return bfi->shm_index;
+}
+
 #ifdef WL_PSMX
 uint8
 wlc_txbf_get_mubfi_idx(wlc_txbf_info_t *txbf, struct scb *scb)
@@ -2876,6 +3029,267 @@ wlc_txbf_fix_rspec_plcp(wlc_txbf_info_t *txbf, ratespec_t *prspec, uint8 *plcp,
 
 	return;
 }
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#ifdef WL_PSMX
+void
+wlc_txbf_shmx_dump(wlc_txbf_info_t *txbf, struct bcmstrbuf *b)
+{
+	char eabuf[ETHER_ADDR_STR_LEN];
+	uint8 i;
+	struct scb *scb;
+	struct txbf_scb_info *bfi;
+	wlc_info_t *wlc = txbf->wlc;
+
+	if (!PSMX_HWCAP(wlc->pub))
+		return;
+
+	bcm_bprintf(b, "%d links with MU-Beamforming enabled\n",
+		WLC_BITSCNT(txbf->mx_bfiblk_idx_bmp));
+
+	for (i = 0; i < txbf->mu_max_links; i++) {
+		bool valid;
+		if (!(txbf->mx_bfiblk_idx_bmp & (1 << i)))
+			continue;
+		scb = txbf->mu_scbs[i];
+		ASSERT(scb);
+		if (!scb)
+			continue;
+		bfi = (struct txbf_scb_info *)TXBF_SCB_INFO(txbf, scb);
+
+		valid = (wlc_read_shmx(wlc, (txbf->mx_bfiblk_base + i * BFI_BLK_SIZE) * 2)
+				& BF_FB_VALID) ? TRUE : FALSE;
+
+		bcm_bprintf(b, "%d: %s\n\tVHT cap: 0x%x exp_en: %s \n\tbfi_idx: %d amt_idx: %d\n"
+			"\tLast sounding successful: %s\n",
+			(i + 1), bcm_ether_ntoa(&scb->ea, eabuf),
+			bfi->vht_cap, bfi->exp_en ? "true" : "false",
+			bfi->mx_bfiblk_idx,
+			bfi->amt_index, valid ? "true" : "false");
+		if (bfi->vht_cap & VHT_CAP_INFO_MU_BEAMFMR)
+			bcm_bprintf(b, "\tmu bfr cap, bfe link %s\n",
+				(txbf->bfe_capable ? "ON" : "OFF"));
+
+		if (bfi->vht_cap & VHT_CAP_INFO_MU_BEAMFMEE)
+			bcm_bprintf(b, "\tmu bfe cap, bfr link %s, nsts %d\n",
+				(txbf->bfr_capable ? "ON" : "OFF"), bfi->bfe_sts_cap);
+
+		wlc_txbf_dump_shmx_bfi_blk(txbf, b, i);
+
+	}
+}
+#endif /* WL_PSMX */
+
+static void
+wlc_txbf_shm_dump(wlc_txbf_info_t *txbf, struct bcmstrbuf *b)
+{
+	char eabuf[ETHER_ADDR_STR_LEN];
+	uint8 i = 0;
+	struct scb *scb;
+	struct txbf_scb_info *bfi;
+	wlc_info_t *wlc = txbf->wlc;
+
+	bcm_bprintf(b, "\n%d links with SU-Beamforming enabled\n",
+		WLC_BITSCNT(txbf->shm_idx_bmp));
+
+	for (i = 0; i <= txbf->max_link; i++) {
+		bool valid;
+		if (!(txbf->shm_idx_bmp & (1 << i)))
+			continue;
+		scb = txbf->su_scbs[i];
+		ASSERT(scb);
+		if (!scb)
+			continue;
+		bfi = (struct txbf_scb_info *)TXBF_SCB_INFO(txbf, scb);
+
+		valid = (wlc_read_shm(wlc, (txbf->shm_base + i * BFI_BLK_SIZE) * 2)
+				& BF_FB_VALID) ? TRUE : FALSE;
+
+		bcm_bprintf(b, "%d: %s\n\tVHT cap: 0x%x exp_en: %s \n\tbfi_idx: %d amt_idx: %d\n"
+			"\tLast sounding successful: %s\n",
+			(i + 1), bcm_ether_ntoa(&scb->ea, eabuf),
+			bfi->vht_cap, bfi->exp_en ? "true" : "false",
+			bfi->shm_index,
+			bfi->amt_index, valid ? "true" : "false");
+		if (bfi->vht_cap & VHT_CAP_INFO_SU_BEAMFMR)
+			bcm_bprintf(b, "\tsu bfr cap, bfe link %s\n",
+				txbf->bfe_capable ? "ON" : "OFF");
+		if (bfi->vht_cap & VHT_CAP_INFO_SU_BEAMFMEE)
+			bcm_bprintf(b, "\tsu bfe cap, bfr link %s, nsts %d\n",
+				((txbf->bfr_capable && !(bfi->flags & MU_BFE)) ?
+				"ON" : "OFF"), bfi->bfe_sts_cap);
+
+		wlc_txbf_dump_shm_bfi_blk(txbf, b, i);
+
+	}
+}
+
+static int
+wlc_txbf_dump(wlc_txbf_info_t *txbf, struct bcmstrbuf *b)
+{
+	char eabuf[ETHER_ADDR_STR_LEN];
+	struct scb *scb;
+	struct txbf_scb_info *txbf_scb_info;
+	wlc_info_t *wlc = txbf->wlc;
+	struct scb_iter scbiter;
+	int ret = BCME_OK;
+	uint16 coremask0, coremask1;
+
+	BCM_REFERENCE(eabuf);
+
+	if (!wlc->clk)
+		return BCME_NOCLK;
+
+	if (!TXBF_ENAB(wlc->pub)) {
+		bcm_bprintf(b, "Beamforming is not supported!\n");
+	}
+
+	bcm_bprintf(b, "TxBF bfr capable:%d bfe capable:%d\n"
+		"Explicit txbf mode: %s, active: %s\n"
+		"Allowed by country code: %s\n"
+		"Allow txbf on non primaryIF: %s\n",
+		(txbf->bfr_capable > TXBF_MU_BFR_CAP) ? TXBF_MU_BFR_CAP : txbf->bfr_capable,
+		(txbf->bfe_capable > TXBF_MU_BFE_CAP) ? TXBF_MU_BFE_CAP : txbf->bfe_capable,
+		(txbf->mode == TXBF_ON ? "on" : (txbf->mode == TXBF_AUTO ? "auto" : "off")),
+		txbf->active ? "true" : "false", wlc->stf->allow_txbf ? "true" : "false",
+		txbf->virtif_disable ? "false" : "true");
+	coremask0 = wlc_read_shm(wlc, M_COREMASK_BFM(wlc));
+	coremask1 = wlc_read_shm(wlc, M_COREMASK_BFM1(wlc));
+	bcm_bprintf(b, "coremask0 0x%x coremask1 0x%x\n", coremask0, coremask1);
+
+	wlc_txbf_shm_dump(txbf, b);
+#ifdef WL_PSMX
+	wlc_txbf_shmx_dump(txbf, b);
+#endif
+	/*
+	 * dump implicit info
+	 */
+	bcm_bprintf(b, "Implicit txbf mode: %s, calibr_flag: %d\n",
+		(txbf->imp == TXBF_ON ? "on" : (txbf->imp == TXBF_AUTO ? "auto" : "off")),
+		(txbf->flags & WLC_TXBF_FLAG_IMPBF) ? 1 : 0);
+	if (((txbf->flags & WLC_TXBF_FLAG_IMPBF) && txbf->imp)) {
+		FOREACHSCB(wlc->scbstate, &scbiter, scb) {
+			txbf_scb_info = (struct txbf_scb_info *)TXBF_SCB_INFO(txbf, scb);
+			if (!txbf_scb_info) continue;
+			bcm_bprintf(b, "%s: en %d imp_used %d imp_bad %d\n",
+				bcm_ether_ntoa(&scb->ea, eabuf),
+				txbf_scb_info->imp_en, txbf_scb_info->imp_used,
+					txbf_scb_info->imp_bad);
+		}
+	}
+
+	wlc_txbf_dump_stats(txbf, b);
+	return ret;
+}
+
+static void
+wlc_txbf_dump_stats(wlc_txbf_info_t *txbf, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = txbf->wlc;
+
+	if (!wlc->clk)
+		return;
+
+	bcm_bprintf(b, "\nBeamforming Statistics:\n");
+	bcm_bprintf(b, "txndpa %d txndp %d txbfpoll %d txsf %d txcwrts %d txcwcts %d txbfm %d\n",
+		wlc_read_shm(wlc, M_TXNDPA_CNT(wlc)),
+		wlc_read_shm(wlc, M_TXNDP_CNT(wlc)),
+		wlc_read_shm(wlc, M_TXBFPOLL_CNT(wlc)),
+		wlc_read_shm(wlc, M_TXSF_CNT(wlc)),
+		wlc_read_shm(wlc, M_TXCWRTS_CNT(wlc)),
+		wlc_read_shm(wlc, M_TXCWCTS_CNT(wlc)),
+		wlc_read_shm(wlc, M_TXBFM_CNT(wlc)));
+	bcm_bprintf(b, "rxndpa_u %d rxndpa_m %d rxbfpoll %d bferpt %d "
+		"rxsf %d rxcwrts %d rxcwcts %d\n",
+		wlc_read_shm(wlc, M_RXNDPAUCAST_CNT(wlc)),
+		wlc_read_shm(wlc, M_RXNDPAMCAST_CNT(wlc)),
+		wlc_read_shm(wlc, M_RXBFPOLLUCAST_CNT(wlc)),
+		wlc_read_shm(wlc, M_BFERPTRDY_CNT(wlc)),
+		wlc_read_shm(wlc, M_RXSFUCAST_CNT(wlc)),
+		wlc_read_shm(wlc, M_RXCWRTSUCAST_CNT(wlc)),
+		wlc_read_shm(wlc, M_RXCWCTSUCAST_CNT(wlc)));
+}
+
+static void
+wlc_txbf_dump_shm_bfi_blk(wlc_txbf_info_t *txbf, struct bcmstrbuf *b, uint8 idx)
+{
+	uint32 offset;
+	uint16 bfi_blk, val;
+	wlc_info_t *wlc = txbf->wlc;
+
+	if (!wlc->clk)
+		return;
+
+	val = wlc_read_amtinfo_by_idx(wlc, idx);
+	if (val) {
+		if (b) {
+			bcm_bprintf(b, "\tAMT_INFO_BLK[%d] = 0x%x\n", idx, val);
+		} else {
+			printf("AMT_INFO_BLK[%d] = 0x%x\n", idx, val);
+		}
+	}
+
+	if (b) {
+		bcm_bprintf(b, "\tshm_blk %d:\n", idx);
+	} else {
+		printf("\tshm_blk %d:\n", idx);
+	}
+	bfi_blk = (txbf->shm_base + idx * BFI_BLK_SIZE) << 1;
+	for (offset = 0; offset < BFI_BLK_SIZE; offset += 4) {
+		if (b) {
+			bcm_bprintf(b, "\toffset %2d: %04x %04x %04x %04x\n", offset,
+			    wlc_read_shm(wlc, bfi_blk + offset*2),
+			    wlc_read_shm(wlc, bfi_blk + (offset + 1)*2),
+			    wlc_read_shm(wlc, bfi_blk + (offset + 2)*2),
+			    wlc_read_shm(wlc, bfi_blk + (offset + 3)*2));
+		} else {
+			printf("\toffset %2d: %04x %04x %04x %04x\n", offset,
+			    wlc_read_shm(wlc, bfi_blk + offset*2),
+			    wlc_read_shm(wlc, bfi_blk + (offset + 1)*2),
+			    wlc_read_shm(wlc, bfi_blk + (offset + 2)*2),
+			    wlc_read_shm(wlc, bfi_blk + (offset + 3)*2));
+		}
+	}
+
+}
+
+#ifdef WL_PSMX
+static void
+wlc_txbf_dump_shmx_bfi_blk(wlc_txbf_info_t *txbf, struct bcmstrbuf *b, uint8 idx)
+{
+	uint32 offset;
+	uint16 bfi_blk;
+	wlc_info_t *wlc = txbf->wlc;
+
+	if (!wlc->clk)
+		return;
+
+	if (!PSMX_HWCAP(wlc->pub))
+		return;
+
+	if (b) {
+		bcm_bprintf(b, "\tshmx_blk %d:\n", idx);
+	} else {
+		printf("\tshmx_blk %d:\n", idx);
+	}
+	bfi_blk = (txbf->mx_bfiblk_base + idx * BFI_BLK_SIZE) << 1;
+	for (offset = 0; offset < BFI_BLK_SIZE; offset += 4) {
+		if (b) {
+			bcm_bprintf(b, "\toffset %2d: %04x %04x %04x %04x\n", offset,
+			    wlc_read_shmx(wlc, bfi_blk + offset*2),
+			    wlc_read_shmx(wlc, bfi_blk + (offset + 1)*2),
+			    wlc_read_shmx(wlc, bfi_blk + (offset + 2)*2),
+			    wlc_read_shmx(wlc, bfi_blk + (offset + 3)*2));
+		} else {
+			printf("\toffset %2d: %04x %04x %04x %04x\n", offset,
+			    wlc_read_shmx(wlc, bfi_blk + offset*2),
+			    wlc_read_shmx(wlc, bfi_blk + (offset + 1)*2),
+			    wlc_read_shmx(wlc, bfi_blk + (offset + 2)*2),
+			    wlc_read_shmx(wlc, bfi_blk + (offset + 3)*2));
+		}
+	}
+}
+#endif /* WL_PSMX */
+#endif 
 
 /*
  * query keymgmt for the entry to use
@@ -2997,7 +3411,6 @@ void wlc_txfbf_update_amt_idx(wlc_txbf_info_t *txbf, int amt_idx, const struct e
 			val &= (~BF_AMT_MASK);
 			val |= (BF_AMT_BFM_ENABLED | (shm_idx << BF_AMT_BLK_IDX_SHIFT));
 			wlc_write_amtinfo_by_idx(wlc, amt_idx, val);
-			bfi->exp_en = TRUE;
 			WL_TXBF(("wl%d: %s update amt idx %d %s for shm idx %d: val %#x\n",
 				wlc->pub->unit, __FUNCTION__, amt_idx,
 				bcm_ether_ntoa(addr, eabuf), shm_idx, val));
@@ -3474,7 +3887,7 @@ wlc_txbf_ht_upd_bfr_bfe_cap(wlc_txbf_info_t *txbf, wlc_bsscfg_t *cfg, uint32 *ca
 
 #ifdef WL_MUPKTENG
 int
-wlc_txbf_mupkteng_addsta(wlc_txbf_info_t *txbf, struct scb *scb, int idx, int nrxchain)
+wlc_txbf_mupkteng_addsta(wlc_txbf_info_t *txbf, struct scb *scb, uint8 idx, uint8 nrxchain)
 {
 	struct txbf_scb_info *bfi;
 	int i;
@@ -3530,6 +3943,7 @@ wlc_txbf_mupkteng_clrsta(wlc_txbf_info_t *txbf, struct scb *scb)
 
 	BCM_REFERENCE(eabuf);
 	wlc = txbf->wlc;
+	BCM_REFERENCE(wlc);
 
 	bfi = (struct txbf_scb_info *)TXBF_SCB_INFO(txbf, scb);
 	ASSERT(bfi);

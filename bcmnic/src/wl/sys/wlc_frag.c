@@ -48,7 +48,11 @@ typedef struct scb_frag {
 static int wlc_frag_scb_init(void *ctx, struct scb *scb);
 static void wlc_frag_scb_deinit(void *ctx, struct scb *scb);
 static uint wlc_frag_scb_secsz(void *ctx, struct scb *scb);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_frag_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_frag_scb_dump NULL
+#endif
 
 static void wlc_defrag_prog_cleanup(wlc_frag_info_t *frag, struct scb *scb,
 	uint8 prio);
@@ -164,6 +168,24 @@ wlc_frag_scb_secsz(void *ctx, struct scb *scb)
 	return sizeof(scb_frag_t);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_frag_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_frag_info_t *frag = (wlc_frag_info_t *)ctx;
+	scb_frag_t *scb_frag = SCB_FRAG(frag, scb);
+	uint8 prio;
+
+	if (scb_frag == NULL)
+		return;
+
+	bcm_bprintf(b, "     defrag:%d ", (scb->flags & SCB_DEFRAG_INPROG) != 0);
+	for (prio = 0; prio < NUMPRIO; prio++) {
+		bcm_bprintf(b, "(%u:%d)", prio, scb_frag->fragbuf[prio] != NULL);
+	}
+	bcm_bprintf(b, "\n");
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* rx defragmentation interfaces */
 
@@ -174,6 +196,9 @@ wlc_defrag_prog_reset(wlc_frag_info_t *frag, struct scb *scb, uint8 prio,
 {
 	wlc_info_t *wlc = frag->wlc;
 	scb_frag_t *scb_frag = SCB_FRAG(frag, scb);
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	BCM_REFERENCE(wlc);
 

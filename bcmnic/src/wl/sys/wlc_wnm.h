@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_wnm.h 645240 2016-06-23 06:03:18Z $
+ * $Id: wlc_wnm.h 648713 2016-07-13 11:07:48Z $
  */
 
 
@@ -131,7 +131,7 @@ extern void wlc_wnm_set_cu_avg_calc_dur(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint
 extern bool wlc_wnm_bsstrans_roam_required(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int *reason);
 extern bool wlc_wnm_bsstrans_check_for_roamthrash(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 extern void wlc_wnm_bsstrans_print_score(wlc_wnm_info_t *wnm, wlc_bsscfg_t *cfg,
-	wlc_bss_info_t *bi, uint32 weight);
+	wlc_bss_info_t *bi, int16 rssi, uint32 weight);
 extern void wlc_wnm_update_nonnbr_bestscore(wlc_wnm_info_t *wnm, wlc_bsscfg_t *cfg,
 	wlc_bss_info_t *bsi, uint32 score);
 extern bool wlc_wnm_is_blacklisted_bss(wlc_wnm_info_t *wnm, wlc_bsscfg_t *cfg, wlc_bss_info_t *bip);

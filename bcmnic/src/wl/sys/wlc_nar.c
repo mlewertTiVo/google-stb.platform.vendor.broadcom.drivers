@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_nar.c 644608 2016-06-21 03:32:27Z $
+ * $Id: wlc_nar.c 663073 2016-10-04 01:33:08Z $
  *
  */
 
@@ -41,6 +41,7 @@
 #include <wlc_ampdu.h>
 #include <wlc_rate.h>
 #include <wlc_nar.h>
+#include <wlc_pcb.h>
 
 #ifdef WLATF
 #include <wlc_airtime.h>
@@ -55,6 +56,7 @@
 #include <wlc_perf_utils.h>
 #include <wlc_dump.h>
 #include <wlc_tx.h>
+#include <wlc_pktc.h>
 
 /*
  * Initial parameter settings. Most can be tweaked by wl debug commands. Some we may want to
@@ -75,8 +77,13 @@
  */
 #define NAR_DEFAULT_TRANSIT_US	4000
 
+#if defined(BCMDBG)		/* Only keep stats if we can display them (via dump cmd) */
+#define NAR_STATS (1)
+#define WL_NAR_MSG(m) WL_SPARE1(m)	/* WL_TRACE(m) */
+#else
 #undef NAR_STATS
 #define WL_NAR_MSG(m)			/* nada */
+#endif /* BCMDBG */
 
 #if defined(NAR_STATS)
 /*
@@ -284,6 +291,7 @@ nar_stats_clear_all(wlc_nar_info_t * nit)
  */
 static int BCMFASTPATH wlc_nar_release_from_queue(nar_scb_cubby_t * cubby, int prec);
 static bool BCMFASTPATH wlc_nar_fair_share_reached(nar_scb_cubby_t * cubby);
+static void BCMFASTPATH wlc_nar_pkt_freed(wlc_info_t *wlc, void *pkt, uint txs);
 static void wlc_nar_scbcubby_exit(void *handle, struct scb *scb);
 
 #if defined(PKTQ_LOG)
@@ -313,13 +321,15 @@ wlc_nar_prec_pktq(wlc_info_t * wlc, struct scb *scb)
 /*
  * Module iovar handling.
  */
-enum {
-	IOV_NAR,		       /**< Global on/off switch */
-	IOV_NAR_HANDLE_AMPDU,	       /**< on/off switch for handling ampdu-capable STAs */
-	IOV_NAR_TRANSIT_LIMIT,	       /**< max packets in transit allowed */
-#if defined(NAR_STATS)
-	IOV_NAR_CLEAR_DUMP	       /* Clear statistics (aka dump, like for ampdu) */
-#endif
+enum wlc_nar_iov {
+	IOV_NAR = 1,			/**< Global on/off switch */
+	IOV_NAR_HANDLE_AMPDU = 2,	/**< on/off switch for handling ampdu-capable STAs */
+	IOV_NAR_TRANSIT_LIMIT = 3,	/**< max packets in transit allowed */
+	IOV_NAR_QUEUE_LEN = 4,		/**< per station queue length */
+	IOV_NAR_RELEASE = 5,		/**< # of packets to release at once */
+	IOV_NAR_ATF_US = 6,		/**< Total inflight time in microseconds */
+	IOV_NAR_CLEAR_DUMP = 7,		/* Clear statistics (aka dump, like for ampdu) */
+	IOV_NAR_LAST
 };
 
 static const bcm_iovar_t nar_iovars[] = {
@@ -563,6 +573,76 @@ wlc_nar_down(void *handle)
 	return BCME_OK;
 }
 
+#if defined(BCMDBG)
+static int
+wlc_nar_dump(void *handle, struct bcmstrbuf *b)
+{
+	wlc_nar_info_t *nit = handle;
+	struct scb     *scb;
+	struct scb_iter scbiter;
+	int             i;
+
+#define _VPRINT(nl, s, v) bcm_bprintf(b, "%25s : %9u%c", s, v, (nl++&1) ? '\n':' ')
+
+	i = 0;
+	_VPRINT(i, "nar regulation enabled", nit->nar_allowed);
+	_VPRINT(i, "nar regulation active", nit->nar_enabled);
+	_VPRINT(i, "ampdu capable STAs seen", nit->ampdu_scb_present);
+	_VPRINT(i, "handle ampdu regulation", nit->nar_handle_ampdu);
+	_VPRINT(i, "station in-transit limit", nit->transit_packet_limit);
+	_VPRINT(i, "packet queue length", nit->queue_length);
+	_VPRINT(i, "packets now in queues", nit->packets_in_queue);
+	_VPRINT(i, "packets now in transit", nit->packets_in_transit);
+#ifdef WLATF
+	_VPRINT(i, "txq_time_allowance_us(us)", nit->txq_time_allowance_us);
+#endif
+	bcm_bprintf(b, "\n");
+
+	NAR_STATS_DUMP(&nit->stats, b);
+
+	/*
+	 * Dump all SCBs.
+	 */
+	FOREACHSCB(nit->wlc->scbstate, &scbiter, scb) {
+
+		char            eabuf[ETHER_ADDR_STR_LEN];
+
+		bcm_bprintf(b, "-------- Station : %s, %s, rate %dkbps\n",
+			bcm_ether_ntoa(&scb->ea, eabuf),
+			SCB_AMPDU(scb) ? "AMPDU Capable" : "Legacy",
+			wlc_rate_rspec2rate(wlc_scb_ratesel_get_primary(nit->wlc, scb, NULL)));
+
+		if (nit->nar_enabled) {
+
+			nar_scb_cubby_t *cubby;
+
+			cubby = SCB_NAR_CUBBY(nit, scb);
+
+			if (cubby) {
+			    i = 0;
+			    _VPRINT(i, "packets in station queues", cubby->packets_in_queue);
+			    _VPRINT(i, "packets in transit", cubby->packets_in_transit);
+			    _VPRINT(i, "seconds in transit", cubby->tx_stuck_time);
+			    _VPRINT(i, "aggregation prec mask", cubby->aggr_prio_mask);
+			    _VPRINT(i, "txq_time_allowance_us(us)", cubby->txq_time_allowance_us);
+#ifdef WLATF
+			    _VPRINT(i, "released airtime (us)", cubby->packet_airtime_us);
+			    _VPRINT(i, "last packet rspec", cubby->last_packet_rspec);
+			    _VPRINT(i, "last packet nbytes", cubby->last_packet_nbytes);
+			    _VPRINT(i, "last packet airtime(us)", cubby->last_packet_airtime_us);
+#endif
+			    bcm_bprintf(b, "\n");
+
+			    NAR_STATS_DUMP(&cubby->stats, b);
+			}
+		}
+	}
+
+#undef _VPRINT
+
+	return BCME_OK;
+}
+#endif /* BCMDBG */
 
 /*
  * Initialise module parameters.
@@ -678,7 +758,6 @@ static const txmod_fns_t nar_txmod_fns = {
 wlc_nar_info_t *
 BCMATTACHFN(wlc_nar_attach) (wlc_info_t * wlc)
 {
-	int             status;
 	wlc_nar_info_t *nit;
 
 	/*
@@ -688,45 +767,60 @@ BCMATTACHFN(wlc_nar_attach) (wlc_info_t * wlc)
 	if (!nit) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
 				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->pub->osh)));
-		return NULL;
+		goto fail;
 	}
 
-	nit->wlc = wlc;		       /* save backlink to wlc */
+	/* save backlink to wlc */
+	nit->wlc = wlc;
 
-	wlc_nar_module_init(nit);     /* set up module parameters */
+	/* set up module parameters */
+	wlc_nar_module_init(nit);
 
-	status = wlc_module_register(wlc->pub, nar_iovars, "nar", nit,
-		wlc_nar_doiovar, wlc_nar_watchdog, wlc_nar_up, wlc_nar_down);
-
-	if (status == BCME_OK) {
-		/*
-		 * set up an scb cubby - returns an offset or -1 on failure.
-		 */
-		if ((nit->scb_handle = wlc_scb_cubby_reserve(wlc, sizeof(nar_scb_cubby_t *),
-			wlc_nar_scbcubby_init, wlc_nar_scbcubby_exit, NULL, nit)) < 0) {
-
-			status = BCME_NORESOURCE;
-
-			wlc_module_unregister(wlc->pub, "nar", nit);
-
-		}
+	/* register module */
+	if (wlc_module_register(wlc->pub, nar_iovars, "nar", nit,
+		wlc_nar_doiovar, wlc_nar_watchdog, wlc_nar_up, wlc_nar_down)) {
+		WL_ERROR(("wl%d: %s: wlc_module_register failed\n", wlc->pub->unit, __FUNCTION__));
+		goto fail;
 	}
 
-	if (status != BCME_OK) {
-		MFREE(wlc->pub->osh, nit, sizeof(*nit));
-		return NULL;
+	/* reserve cubby in the scb container for per-scb private data */
+	nit->scb_handle = wlc_scb_cubby_reserve(wlc, sizeof(nar_scb_cubby_t *),
+		wlc_nar_scbcubby_init, wlc_nar_scbcubby_exit, NULL, nit);
+
+	if (nit->scb_handle < 0) {
+		WL_ERROR(("%s: wlc_scb_cubby_reserve failed\n", __FUNCTION__));
+		goto fail;
 	}
+
+	/* register packet class callback */
+	if (wlc_pcb_fn_set(wlc->pcb, 0, WLF2_PCB1_NAR, wlc_nar_pkt_freed) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_pcb_fn_set() failed\n", wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+
+#if defined(BCMDBG)
+	wlc_dump_register(wlc->pub, "nar", wlc_nar_dump, nit);
+#endif /* BCMDBG */
 
 	nit->nar_enabled = nit->nar_allowed;
 
 	wlc_txmod_fn_register(wlc->txmodi, TXMOD_NAR, nit, nar_txmod_fns);
 
-	return nit;					/* all fine, return handle */
+	/* all fine, return handle */
+	return nit;
+
+fail:
+	wlc_nar_detach(nit);
+	return NULL;
 }
 
-int
+void
 BCMATTACHFN(wlc_nar_detach) (wlc_nar_info_t *nit)
 {
+	if (nit == NULL) {
+		return;
+	}
+
 	/*
 	 * Flush scb queues
 	 */
@@ -736,8 +830,6 @@ BCMATTACHFN(wlc_nar_detach) (wlc_nar_info_t *nit)
 
 	wlc_module_unregister(nit->wlc->pub, "nar", nit);
 	MFREE(nit->wlc->pub->osh, nit, sizeof(*nit));
-
-	return BCME_OK;
 }
 
 /*
@@ -978,6 +1070,43 @@ wlc_nar_fair_share_reached(nar_scb_cubby_t * cubby)
 #endif
 		(cubby->packets_in_transit >= cubby->nit->transit_packet_limit));
 }
+
+static void BCMFASTPATH
+wlc_nar_pkt_freed(wlc_info_t *wlc, void *pkt, uint txs)
+{
+	wlc_nar_info_t *nit = wlc->nar_handle;
+	struct scb *scb;
+	nar_scb_cubby_t *cubby;
+
+	/* no packet */
+	if (!pkt)
+		return;
+
+	scb = WLPKTTAGSCBGET(pkt);
+
+	/*
+	 * Return if we are not set up to handle the tx status for this scb.
+	 */
+	if (!scb ||		       /* no SCB */
+	    !nit->nar_enabled ) {      /* Feature is not enabled */
+		return;
+	}
+
+	cubby = SCB_NAR_CUBBY(nit, scb);
+	if (!cubby) {
+		return;
+	}
+
+	WL_NAR_MSG(("%30s: txs %08x, %d in transit\n",
+		__FUNCTION__, txs, cubby->packets_in_transit));
+
+	if (cubby->packets_in_transit) {
+		NAR_STATS_INC(cubby, PACKETS_TRANSMITTED);
+
+		NAR_COUNTER_DEC(cubby, packets_in_transit);
+	}
+}
+
 /*
  * Pass a packet to the next txmod below, incrementing the in transit count.
  */
@@ -986,6 +1115,8 @@ wlc_nar_pass_packet_on(nar_scb_cubby_t * cubby, struct scb *scb, void *pkt, uint
 {
 	WL_NAR_MSG(("%30s: prec %d transit count %d\n", __FUNCTION__,
 		prec, cubby->packets_in_transit));
+
+	WLF2_PCB1_REG(pkt, WLF2_PCB1_NAR);
 
 	NAR_COUNTER_INC(cubby, packets_in_transit);
 
@@ -1012,15 +1143,17 @@ wlc_nar_release_from_queue(nar_scb_cubby_t * cubby, int prec)
 	struct scb *scb = NULL;
 	ratespec_t cur_rspec = 0;
 	uint8 fl = 0;
-	uint32 dot11hdrsize;
+	uint32 dot11hdrsize = 0;
 	wlc_atfd_t *atfd;
 
 	scb = cubby->scb_bl;
 	ASSERT(scb->bsscfg);
 	wlc = scb->bsscfg->wlc;
-	cur_rspec = wlc_ravg_get_scb_cur_rspec(wlc, scb);
-	fl = RAVG_PRIO2FLR(PRIOMAP(wlc), WLC_PREC_TO_PRIO(prec));
-	dot11hdrsize = wlc_scb_dot11hdrsize(scb);
+	if (ATFD_ENAB(wlc)) {
+		cur_rspec = wlc_ravg_get_scb_cur_rspec(wlc, scb);
+		fl = RAVG_PRIO2FLR(PRIOMAP(wlc), WLC_PREC_TO_PRIO(prec));
+		dot11hdrsize = wlc_scb_dot11hdrsize(scb);
+	};
 
 #endif /* WLATF_DONGLE */
 
@@ -1032,7 +1165,7 @@ wlc_nar_release_from_queue(nar_scb_cubby_t * cubby, int prec)
 	 * See if this SCB has packets queued, if so, reinject the next few in line.
 	 */
 #if defined(WLATF_DONGLE)
-	if (BCMPCIEDEV_ENAB()) {
+	if (ATFD_ENAB(wlc)) {
 		atfd = wlfc_get_atfd(wlc, scb);
 	}
 #endif
@@ -1051,7 +1184,7 @@ wlc_nar_release_from_queue(nar_scb_cubby_t * cubby, int prec)
 			wlc_nar_add_packet_airtime(cubby, prec, p);
 #endif
 #if defined(WLATF_DONGLE)
-			if (BCMPCIEDEV_ENAB()) {
+			if (ATFD_ENAB(wlc)) {
 				uint16 frmbytes = pkttotlen(wlc->osh, p) + dot11hdrsize;
 
 				/* adding pktlen into the moving average buffer */
@@ -1064,7 +1197,7 @@ wlc_nar_release_from_queue(nar_scb_cubby_t * cubby, int prec)
 	}
 
 #if defined(WLATF_DONGLE)
-	if ((BCMPCIEDEV_ENAB()) && (nreleased)) {
+	if ((ATFD_ENAB(wlc)) && (nreleased)) {
 		/* adding weight into the moving average buffer */
 		wlc_ravg_add_weight(atfd, fl, cur_rspec);
 	}
@@ -1238,11 +1371,6 @@ wlc_nar_dotxstatus(wlc_nar_info_t *nit, struct scb *scb, void *pkt, tx_status_t 
 #endif /* PKTQ_LOG */
 
 		if (cubby->packets_in_transit) {
-
-			NAR_STATS_INC(cubby, PACKETS_TRANSMITTED);
-
-			NAR_COUNTER_DEC(cubby, packets_in_transit);
-
 #ifdef WLATF
 			wlc_nar_dec_packet_airtime(cubby, pkt);
 #endif
@@ -1252,10 +1380,9 @@ wlc_nar_dotxstatus(wlc_nar_info_t *nit, struct scb *scb, void *pkt, tx_status_t 
 			 */
 			NAR_STATS_INC(cubby, PACKETS_TX_NO_TRANSIT);
 			if (SCB_AMPDU(scb)) {
-			    nit->ampdu_scb_present = TRUE;
+				nit->ampdu_scb_present = TRUE;
 			}
 		}
-
 	} /* for all packets */
 
 	if (wlc_nar_release_from_queue(cubby, prec)) {
@@ -1278,8 +1405,10 @@ wlc_nar_transmit_packet(void *handle, struct scb *scb, void *pkt, uint prec)
 	wlc_nar_info_t *nit = handle;
 	nar_scb_cubby_t *cubby;
 	bool prio_is_aggregating;
-
-	ASSERT(!PKTISCHAINED(pkt));
+#if defined(PKTC) || defined(PKTC_TX_DONGLE)
+	void *pkt1 = NULL;
+	uint32 lifetime = 0;
+#endif /* #if defined(PKTC) */
 
 	ASSERT(scb != NULL);		/* Why would we get called with no SCB ? */
 
@@ -1300,47 +1429,62 @@ wlc_nar_transmit_packet(void *handle, struct scb *scb, void *pkt, uint prec)
 
 	NAR_STATS_INC(cubby, PACKETS_RECEIVED);
 
-	/*
-	 * If the queue is already full, try to dequeue some packets before queueing this one.
-	 */
-	if (wlc_nar_queue_is_full(cubby)) {
+	prio_is_aggregating =
+		(SCB_AMPDU(scb) && (cubby->aggr_prio_mask & (1<<PKTPRIO(pkt))));
 
-		if (wlc_nar_release_from_queue(cubby, prec)) {
-			NAR_STATS_INC(cubby, KICKSTARTS_IN_TX_QF);
+	/* If ampdu is enabled, pass on the packets */
+	if (SCB_AMPDU(scb)) {
+		nit->ampdu_scb_present = TRUE; /* Ask watchdog to keep an eye on this scb */
+
+		if (prio_is_aggregating) {
+			/* We have not queued this packet, pass it to the next layer (ampdu) */
+			NAR_STATS_INC(cubby, PACKETS_AGGREGATING);
+			SCB_TX_NEXT(TXMOD_NAR, scb, pkt, prec);   /* Pass the packet on */
+			return;
 		}
 	}
 
-	prio_is_aggregating = (SCB_AMPDU(scb) && (cubby->aggr_prio_mask & (1<<PKTPRIO(pkt))));
+#if defined(PKTC) || defined(PKTC_TX_DONGLE)
+	lifetime =
+	nit->wlc->lifetime[(SCB_WME(scb) ? WME_PRIO2AC(PKTPRIO(pkt)) : AC_BE)];
 
-	/*
-	 * Enqueue packet, then try to dequeue up to fair share.
-	 */
-	if (!prio_is_aggregating && !wlc_nar_enqueue_packet(cubby, pkt, prec)) {
+	FOREACH_CHAINED_PKT(pkt, pkt1) {
+		PKTCLRCHAINED(nit->wlc->osh, pkt);
+		if (pkt1 != NULL) {
+			wlc_pktc_sdu_prep(nit->wlc, scb, pkt, pkt1, lifetime);
+		}
+#endif /* PKTC || PKTC_TX_DONGLE  */
+
 		/*
-		 * Failed to queue packet. Drop it on the floor.
+		 * If the queue is already full, try to dequeue some packets
+		 * before queueing this one.
 		 */
-		PKTFREE(nit->wlc->osh, pkt, TRUE);
-		NAR_STATS_INC(cubby, PACKETS_DROPPED);
-		WLCNTINCR(nit->wlc->pub->_cnt->txnobuf);
+		if (wlc_nar_queue_is_full(cubby)) {
+			if (wlc_nar_release_from_queue(cubby, prec)) {
+				NAR_STATS_INC(cubby, KICKSTARTS_IN_TX_QF);
+			}
+		}
+
+		/*
+		 * Enqueue packet, then try to dequeue up to fair share.
+		 */
+		if (!prio_is_aggregating && !wlc_nar_enqueue_packet(cubby, pkt, prec)) {
+			/*
+			 * Failed to queue packet. Drop it on the floor.
+			 */
+			PKTFREE(nit->wlc->osh, pkt, TRUE);
+			NAR_STATS_INC(cubby, PACKETS_DROPPED);
+			WLCNTINCR(nit->wlc->pub->_cnt->txnobuf);
+		}
+#if defined(PKTC) || defined(PKTC_TX_DONGLE)
 	}
+#endif /*  PKTC || PKTC_TX_DONGLE */
 
 	if (wlc_nar_release_from_queue(cubby, prec)) {
 		NAR_STATS_INC(cubby, KICKSTARTS_IN_TX);
 	}
 
-	if (SCB_AMPDU(scb)) {
-
-	    nit->ampdu_scb_present = TRUE;   /* Ask watchdog to keep an eye on this scb */
-
-	    if (prio_is_aggregating) {
-		/* We have not queued this packet, pass it to the next layer (ampdu) */
-		NAR_STATS_INC(cubby, PACKETS_AGGREGATING);
-		SCB_TX_NEXT(TXMOD_NAR, scb, pkt, prec);   /* Pass the packet on */
-	    }
-	}
-
 	return;
-
 }
 
 /*

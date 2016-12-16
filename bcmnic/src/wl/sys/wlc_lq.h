@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_lq.h 645549 2016-06-24 14:53:48Z $
+ * $Id: wlc_lq.h 658362 2016-09-07 19:01:44Z $
  */
 
 #ifndef _wlc_lq_h_
@@ -25,6 +25,7 @@
 
 /* snr constants */
 #define WLC_SNR_INVALID		0	/**< invalid SNR value */
+#define WLC_SNR_MINVAL		1	/**< the minimum accepted SNR */
 #define WLC_SNR_EXCELLENT	25
 #define WLC_SNR_EXCELLENT_11AC	35
 
@@ -96,6 +97,9 @@ extern chanim_stats_t* wlc_lq_chanspec_to_chanim_stats(chanim_info_t *c_info, ch
 #define wlc_lq_chanim_stats_get(a, b, c) FALSE
 #endif /* WLCHANIM */
 
+#ifdef RSSI_MONITOR
+extern void wlc_lq_rssi_monitor_event(wlc_bsscfg_t *cfg);
+#endif /* RSSI_MONITOR */
 
 /* ******** per scb rssi/snr & moving average ********* */
 
@@ -181,6 +185,7 @@ typedef int (*stats_cb)(wlc_info_t *wlc, void *ctx, uint32 elapsed_time, void *v
 */
 int wlc_lq_register_dynbw_stats_cb(wlc_info_t *wlc, uint32 req_time_ms, stats_cb cb,
 	uint16 connID, void *arg);
+extern void wlc_lq_rssi_ant_get_api(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, int8 *rssi);
 
 /* move WLC_NOISE_REQUEST_xxx  */
 #define WLC_NOISE_REQUEST_SCAN	0x1
@@ -192,7 +197,15 @@ void wlc_lq_noise_cb(wlc_info_t *wlc, uint8 channel, int8 noise_dbm);
 
 void wlc_lq_channel_qa_sample_req(wlc_info_t *wlc);
 uint32 wlc_rsdb_get_lq_load(wlc_info_t *wlc);
+int8 wlc_lq_read_noise_lte(wlc_info_t *wlc);
 
+#define RSSI_MONITOR_ENABLED    (1 << 0)
+#define RSSI_MONITOR_EVT_SENT   (1 << 1)
+typedef struct wlc_rssi_monitor {
+	int8 min_rssi;
+	int8 max_rssi;
+	int8 flag;
+} wlc_rssi_monitor_t;
 
 /* ******** WORK-IN-PROGRESS ******** */
 
@@ -203,6 +216,7 @@ struct wlc_link_qual {
 	int8	rssi;		/**< RSSI moving average */
 	uint8	rssi_qdb;	/**< RSSI qdb portion moving average */
 	uint8	snr;		/**< SNR moving average */
+	wlc_rssi_monitor_t rssi_monitor;
 };
 
 /* ******** WORK-IN-PROGRESS ******** */

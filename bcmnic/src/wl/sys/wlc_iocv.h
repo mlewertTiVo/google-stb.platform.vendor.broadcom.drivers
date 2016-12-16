@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_iocv.h 614277 2016-01-21 20:28:50Z $
+ * $Id: wlc_iocv.h 660317 2016-09-20 05:54:54Z $
  */
 #ifndef _wlc_iocv_h_
 #define _wlc_iocv_h_
@@ -28,12 +28,14 @@ void wlc_iocv_detach(wlc_iocv_info_t *iocvi);
 #ifdef WLC_PATCH_IOCTL
 #define wlc_iocv_add_iov_fn(iocvi, tbl, fn, ctx) \
 	wlc_iocv_high_register_iovt(iocvi, tbl, fn, IOV_PATCH_TBL, IOV_PATCH_FN, ctx)
+#define wlc_iocv_add_ioc_fn(iocvi, tbl, tbl_sz, fn, ctx) \
+	wlc_iocv_high_register_ioct(iocvi, tbl, tbl_sz, fn, IOC_PATCH_FN, ctx)
 #else /* !WLC_PATCH_IOCTL */
 #define wlc_iocv_add_iov_fn(iocvi, tbl, fn, ctx) \
 	wlc_iocv_high_register_iovt(iocvi, tbl, fn, ctx)
-#endif /* !WLC_PATCH_IOCTL */
 #define wlc_iocv_add_ioc_fn(iocvi, tbl, tbl_sz, fn, ctx) \
 	wlc_iocv_high_register_ioct(iocvi, tbl, tbl_sz, fn, ctx)
+#endif /* !WLC_PATCH_IOCTL */
 
 /* ioctl compatibility interface */
 #define wlc_module_add_ioctl_fn(pub, hdl, fn, sz, tbl) \

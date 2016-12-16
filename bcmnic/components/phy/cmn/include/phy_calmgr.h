@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_calmgr.h 620395 2016-02-23 01:15:14Z vyass $
+ * $Id: phy_calmgr.h 659967 2016-09-16 19:35:14Z $
  */
 
 /*
@@ -75,11 +75,12 @@ typedef enum phy_calmgr_trigger_id {
 typedef void phy_calmgr_trigger_ctx_t;
 
 typedef bool (*phy_calmgr_trigger_fn_t)(phy_calmgr_trigger_ctx_t *ctx);
-
+#ifdef NEW_PHY_CAL_ARCH
 /* Add a calibration trigger fn in calibration trigger registry. Returns BCME_XXXX. */
 int phy_calmgr_add_trigger_fn(phy_calmgr_info_t *ci,
 	phy_calmgr_trigger_fn_t fn, phy_calmgr_trigger_ctx_t *ctx,
 	phy_calmgr_trigger_id_t tid);
+#endif /* NEW_PHY_CAL_ARCH */
 
 /*
  * Add a calibration function in calibration registry.
@@ -150,5 +151,7 @@ typedef struct phy_calmgr_cal_info {
 void phy_calmgr_query_cal(phy_calmgr_info_t *ci, phy_calmgr_cal_info_t *st);
 
 void phy_calmgr_cals(phy_info_t *pi, uint8 legacy_caltype, uint8 searchmode);
-
+int phy_calmgr_mphase_reset(phy_calmgr_info_t *ci);
+int phy_calmgr_mphase_restart(phy_calmgr_info_t *ci);
+bool phy_calmgr_no_cal_possible(phy_info_t *pi);
 #endif /* _phy_calmgr_h_ */

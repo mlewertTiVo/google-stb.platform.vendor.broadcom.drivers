@@ -17,7 +17,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  * All Rights Reserved.
  *
- * $Id: wlc_phytbl_20693.h 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: wlc_phytbl_20693.h 648596 2016-07-13 01:16:40Z $
  */
 
 #ifndef _WLC_PHYTBL_20693_H_
@@ -148,10 +148,10 @@ typedef struct _chan_info_radio20693_altclkplan {
 	uint8 dacdiv;
 } chan_info_radio20693_altclkplan_t;
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 extern const radio_20xx_dumpregs_t dumpregs_20693_rev5[];
 
-#endif	/* BCMINTERNAL */
+#endif	
 #endif	/* BCMDBG || BCMDBG_DUMP */
 
 /* Radio referred values tables */

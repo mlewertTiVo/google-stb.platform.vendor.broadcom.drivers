@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.c 589291 2015-09-29 07:09:00Z $
+ * $Id: linux_osl.c 641629 2016-06-03 14:39:47Z $
  */
 
 #define LINUX_PORT
@@ -2219,29 +2219,31 @@ osl_sec_dma_alloc_mem_elem(osl_t *osh, void *va, uint size, int direction,
 		sec_mem_elem = osh->sec_list_512;
 		osh->sec_list_512 = sec_mem_elem->next;
 	}
-	else if (size <= 2048 && osh->sec_list_2048) {
+	else (size <= 2048 && osh->sec_list_2048) {
 		sec_mem_elem = osh->sec_list_2048;
 		osh->sec_list_2048 = sec_mem_elem->next;
 	}
-	else
-#else
-		ASSERT(osh->sec_list_4096);
+#endif /* NOT_YET */
+
+	ASSERT(osh->sec_list_4096);
+	if(osh->sec_list_4096) {
 		sec_mem_elem = osh->sec_list_4096;
 		osh->sec_list_4096 = sec_mem_elem->next;
-#endif /* NOT_YET */
 
 		sec_mem_elem->next = NULL;
 
-	if (ptr_cma_info->sec_alloc_list_tail) {
-		ptr_cma_info->sec_alloc_list_tail->next = sec_mem_elem;
-		ptr_cma_info->sec_alloc_list_tail = sec_mem_elem;
+		if (ptr_cma_info->sec_alloc_list_tail) {
+			ptr_cma_info->sec_alloc_list_tail->next = sec_mem_elem;
+			ptr_cma_info->sec_alloc_list_tail = sec_mem_elem;
+		}
+		else {
+			/* First allocation: If tail is NULL, sec_alloc_list MUST also be NULL */
+			ASSERT(ptr_cma_info->sec_alloc_list == NULL);
+			ptr_cma_info->sec_alloc_list = sec_mem_elem;
+			ptr_cma_info->sec_alloc_list_tail = sec_mem_elem;
+		}
 	}
-	else {
-		/* First allocation: If tail is NULL, sec_alloc_list MUST also be NULL */
-		ASSERT(ptr_cma_info->sec_alloc_list == NULL);
-		ptr_cma_info->sec_alloc_list = sec_mem_elem;
-		ptr_cma_info->sec_alloc_list_tail = sec_mem_elem;
-	}
+
 	return sec_mem_elem;
 }
 
@@ -2360,6 +2362,13 @@ osl_sec_dma_map_txmeta(osl_t *osh, void *va, uint size, int direction, void *p,
 	return dma_handle;
 }
 
+bool
+osl_sec_dma_buffs_is_avail(osl_t *osh)
+{
+	return (osh->sec_list_4096) ? TRUE : FALSE;
+}
+
+
 dma_addr_t BCMFASTPATH
 osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 	hnddma_seg_map_t *dmah, void *ptr_cma_info, uint offset)
@@ -2379,73 +2388,78 @@ osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 
 	ASSERT((direction == DMA_RX) || (direction == DMA_TX));
 	sec_mem_elem = osl_sec_dma_alloc_mem_elem(osh, va, size, direction, ptr_cma_info, offset);
+	ASSERT(sec_mem_elem);
 
-	sec_mem_elem->va = va;
-	sec_mem_elem->direction = direction;
-	pa_cma_page = sec_mem_elem->pa_cma_page;
+	if(sec_mem_elem) {
+		sec_mem_elem->va = va;
+		sec_mem_elem->direction = direction;
+		pa_cma_page = sec_mem_elem->pa_cma_page;
 
-	loffset = sec_mem_elem->pa_cma -(sec_mem_elem->pa_cma & ~(PAGE_SIZE-1));
-	/* pa_cma_kmap_va = kmap_atomic(pa_cma_page);
-	* pa_cma_kmap_va += loffset;
-	*/
+		loffset = sec_mem_elem->pa_cma -(sec_mem_elem->pa_cma & ~(PAGE_SIZE-1));
+		/* pa_cma_kmap_va = kmap_atomic(pa_cma_page);
+		* pa_cma_kmap_va += loffset;
+		*/
 
-	pa_cma_kmap_va = sec_mem_elem->vac;
-	pa_cma_kmap_va = ((uint8 *)pa_cma_kmap_va + offset);
-	buflen = size;
+		pa_cma_kmap_va = sec_mem_elem->vac;
+		pa_cma_kmap_va = ((uint8 *)pa_cma_kmap_va + offset);
+		buflen = size;
 
-	if (direction == DMA_TX) {
-		memcpy((uint8*)pa_cma_kmap_va+offset, va, size);
+		if (direction == DMA_TX) {
+			memcpy((uint8*)pa_cma_kmap_va+offset, va, size);
 
 #ifdef NOT_YET
-		if (p == NULL) {
+			if (p == NULL) {
 
-			memcpy(pa_cma_kmap_va+offset, va, size);
-			buflen = size;
-		}
-		else {
-			for (skb = (struct sk_buff *)p; skb != NULL; skb = PKTNEXT(osh, skb)) {
-				if (skb_is_nonlinear(skb)) {
+				memcpy(pa_cma_kmap_va+offset, va, size);
+				buflen = size;
+			}
+			else {
+				for (skb = (struct sk_buff *)p; skb != NULL; skb = PKTNEXT(osh, skb)) {
+					if (skb_is_nonlinear(skb)) {
 
 
-					for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
-						skb_frag_t *f = &skb_shinfo(skb)->frags[i];
-						fragva = kmap_atomic(skb_frag_page(f));
-						memcpy((pa_cma_kmap_va+offset+buflen),
-						(fragva + f->page_offset), skb_frag_size(f));
-						kunmap_atomic(fragva);
-						buflen += skb_frag_size(f);
+						for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
+							skb_frag_t *f = &skb_shinfo(skb)->frags[i];
+							fragva = kmap_atomic(skb_frag_page(f));
+							memcpy((pa_cma_kmap_va+offset+buflen),
+							(fragva + f->page_offset), skb_frag_size(f));
+							kunmap_atomic(fragva);
+							buflen += skb_frag_size(f);
+						}
+					}
+					else {
+						memcpy((pa_cma_kmap_va+offset+buflen), skb->data, skb->len);
+						buflen += skb->len;
 					}
 				}
-				else {
-					memcpy((pa_cma_kmap_va+offset+buflen), skb->data, skb->len);
-					buflen += skb->len;
-				}
+
 			}
-
-		}
 #endif /* NOT_YET */
+			if (dmah) {
+				dmah->nsegs = 1;
+				dmah->origsize = buflen;
+			}
+		}
+		else
+		{
+			if ((p != NULL) && (dmah != NULL)) {
+				dmah->nsegs = 1;
+				dmah->origsize = buflen;
+			}
+		}
+			dma_handle = dma_map_page(OSH_NULL, pa_cma_page, loffset+offset, buflen,
+				(direction == DMA_TX ? DMA_TO_DEVICE:DMA_FROM_DEVICE));
+
 		if (dmah) {
-			dmah->nsegs = 1;
-			dmah->origsize = buflen;
+			dmah->segs[0].addr = dma_handle;
+			dmah->segs[0].length = buflen;
 		}
+		sec_mem_elem->dma_handle = dma_handle;
+		/* kunmap_atomic(pa_cma_kmap_va-loffset); */
 	}
-	else
-	{
-		if ((p != NULL) && (dmah != NULL)) {
-			dmah->nsegs = 1;
-			dmah->origsize = buflen;
-		}
+	else {
 	}
 
-		dma_handle = dma_map_page(OSH_NULL, pa_cma_page, loffset+offset, buflen,
-			(direction == DMA_TX ? DMA_TO_DEVICE:DMA_FROM_DEVICE));
-
-	if (dmah) {
-		dmah->segs[0].addr = dma_handle;
-		dmah->segs[0].length = buflen;
-	}
-	sec_mem_elem->dma_handle = dma_handle;
-	/* kunmap_atomic(pa_cma_kmap_va-loffset); */
 	return dma_handle;
 }
 
@@ -2485,61 +2499,63 @@ void *p, hnddma_seg_map_t *map,	void *ptr_cma_info, uint offset)
 	sec_mem_elem = osl_sec_dma_find_rem_elem(osh, ptr_cma_info, dma_handle);
 	ASSERT(sec_mem_elem);
 
-	va = sec_mem_elem->va;
-	va = (uint8 *)va - offset;
-	pa_cma = sec_mem_elem->pa_cma;
+	if(sec_mem_elem){
+		va = sec_mem_elem->va;
+		va = (uint8 *)va - offset;
+		pa_cma = sec_mem_elem->pa_cma;
 
-	pa_cma_page = sec_mem_elem->pa_cma_page;
+		pa_cma_page = sec_mem_elem->pa_cma_page;
 
 
-	if (direction == DMA_RX) {
+		if (direction == DMA_RX) {
 
-		if (p == NULL) {
+			if (p == NULL) {
 
-			/* pa_cma_kmap_va = kmap_atomic(pa_cma_page);
-			* pa_cma_kmap_va += loffset;
-			*/
+				/* pa_cma_kmap_va = kmap_atomic(pa_cma_page);
+				* pa_cma_kmap_va += loffset;
+				*/
 
-			pa_cma_kmap_va = sec_mem_elem->vac;
+				pa_cma_kmap_va = sec_mem_elem->vac;
 
-			dma_unmap_page(OSH_NULL, pa_cma, size, DMA_FROM_DEVICE);
-			memcpy(va, pa_cma_kmap_va, size);
-			/* kunmap_atomic(pa_cma_kmap_va); */
-		}
+				dma_unmap_page(OSH_NULL, pa_cma, size, DMA_FROM_DEVICE);
+				memcpy(va, pa_cma_kmap_va, size);
+				/* kunmap_atomic(pa_cma_kmap_va); */
+			}
 #ifdef NOT_YET
-		else {
-			buflen = 0;
-			for (skb = (struct sk_buff *)p; (buflen < size) &&
-				(skb != NULL); skb = skb->next) {
-				if (skb_is_nonlinear(skb)) {
-					pa_cma_kmap_va = kmap_atomic(pa_cma_page);
-					for (i = 0; (buflen < size) &&
-						(i < skb_shinfo(skb)->nr_frags); i++) {
-						skb_frag_t *f = &skb_shinfo(skb)->frags[i];
-						cpuaddr = kmap_atomic(skb_frag_page(f));
-						memcpy((cpuaddr + f->page_offset),
-							(pa_cma_kmap_va+buflen), skb_frag_size(f));
-						kunmap_atomic(cpuaddr);
-						buflen += skb_frag_size(f);
+			else {
+				buflen = 0;
+				for (skb = (struct sk_buff *)p; (buflen < size) &&
+					(skb != NULL); skb = skb->next) {
+					if (skb_is_nonlinear(skb)) {
+						pa_cma_kmap_va = kmap_atomic(pa_cma_page);
+						for (i = 0; (buflen < size) &&
+							(i < skb_shinfo(skb)->nr_frags); i++) {
+							skb_frag_t *f = &skb_shinfo(skb)->frags[i];
+							cpuaddr = kmap_atomic(skb_frag_page(f));
+							memcpy((cpuaddr + f->page_offset),
+								(pa_cma_kmap_va+buflen), skb_frag_size(f));
+							kunmap_atomic(cpuaddr);
+							buflen += skb_frag_size(f);
+						}
+							kunmap_atomic(pa_cma_kmap_va);
 					}
+					else {
+						pa_cma_kmap_va = kmap_atomic(pa_cma_page);
+						memcpy(skb->data, (pa_cma_kmap_va + buflen), skb->len);
 						kunmap_atomic(pa_cma_kmap_va);
-				}
-				else {
-					pa_cma_kmap_va = kmap_atomic(pa_cma_page);
-					memcpy(skb->data, (pa_cma_kmap_va + buflen), skb->len);
-					kunmap_atomic(pa_cma_kmap_va);
-					buflen += skb->len;
+						buflen += skb->len;
+					}
+
 				}
 
 			}
-
-		}
 #endif /* NOT YET */
-	} else {
-		dma_unmap_page(OSH_NULL, pa_cma, size+offset, DMA_TO_DEVICE);
-	}
+		} else {
+			dma_unmap_page(OSH_NULL, pa_cma, size+offset, DMA_TO_DEVICE);
+		}
 
-	osl_sec_dma_free_mem_elem(osh, sec_mem_elem);
+		osl_sec_dma_free_mem_elem(osh, sec_mem_elem);
+	}
 }
 
 void

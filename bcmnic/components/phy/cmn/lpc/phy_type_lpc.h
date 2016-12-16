@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_lpc.h 618416 2016-02-11 01:05:38Z guangjie $
+ * $Id: phy_type_lpc.h 666101 2016-10-19 23:52:54Z $
  */
 
 #ifndef _phy_type_lpc_h_
@@ -46,11 +46,11 @@ typedef struct {
 
 	phy_type_lpc_getminidx_fn_t		getminidx;
 	phy_type_lpc_getpwros_fn_t		getpwros;
-	phy_type_lpc_gettxcpwrval_fn_t	gettxcpwrval;
-	phy_type_lpc_settxcpwrval_fn_t	settxcpwrval;
+	phy_type_lpc_gettxcpwrval_fn_t		gettxcpwrval;
+	phy_type_lpc_settxcpwrval_fn_t		settxcpwrval;
 	phy_type_lpc_setmode_fn_t		setmode;
 #ifdef WL_LPC_DEBUG
-	phy_type_lpc_getpwrlevelptr_fn_t		getpwrlevelptr;
+	phy_type_lpc_getpwrlevelptr_fn_t	getpwrlevelptr;
 #endif
 
 } phy_type_lpc_fns_t;

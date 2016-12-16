@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_misc.c 639978 2016-05-25 16:03:11Z vyass $
+ * $Id: phy_ht_misc.c 658200 2016-09-07 01:03:02Z $
  */
 #include <typedefs.h>
 #include <phy_dbg.h>
@@ -40,7 +40,7 @@ struct phy_ht_misc_info {
 };
 
 /* Local functions */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static int phy_ht_misc_test_freq_accuracy(phy_type_misc_ctx_t *ctx, int channel);
 static void phy_ht_misc_test_stop(phy_type_misc_ctx_t *ctx);
 #endif
@@ -54,6 +54,10 @@ static int phy_ht_iovar_get_rx_iq_est(phy_type_misc_ctx_t *ctx, int32 *ret_int_p
 	int32 int_val, int err);
 static int phy_ht_iovar_set_rx_iq_est(phy_type_misc_ctx_t *ctx, int32 int_val, int err);
 static bool phy_ht_misc_get_rxgainerr(phy_type_misc_ctx_t *ctx, int16 *gainerr);
+static void phy_ht_misc_set_ldpc_override(phy_type_misc_ctx_t *ctx, bool ldpc);
+/* WAR */
+static int phy_ht_misc_set_filt_war(phy_type_misc_ctx_t *ctx, bool war);
+static bool phy_ht_misc_get_filt_war(phy_type_misc_ctx_t *ctx);
 
 /* register phy type specific implementation */
 phy_ht_misc_info_t *
@@ -80,7 +84,7 @@ BCMATTACHFN(phy_ht_misc_register_impl)(phy_info_t *pi, phy_ht_info_t *hti,
 	fns.phy_type_misc_rx_iq_est = phy_ht_rx_iq_est;
 	fns.phy_type_misc_set_deaf = wlc_phy_deaf_htphy;
 	fns.phy_type_misc_clear_deaf = wlc_phy_deaf_htphy;
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 	fns.phy_type_misc_test_freq_accuracy = phy_ht_misc_test_freq_accuracy;
 	fns.phy_type_misc_test_stop = phy_ht_misc_test_stop;
 #endif
@@ -89,6 +93,9 @@ BCMATTACHFN(phy_ht_misc_register_impl)(phy_info_t *pi, phy_ht_info_t *hti,
 	fns.phy_type_misc_iovar_get_rx_iq_est = phy_ht_iovar_get_rx_iq_est;
 	fns.phy_type_misc_iovar_set_rx_iq_est = phy_ht_iovar_set_rx_iq_est;
 	fns.phy_type_misc_get_rxgainerr = phy_ht_misc_get_rxgainerr;
+	fns.set_ldpc_override = phy_ht_misc_set_ldpc_override;
+	fns.set_filt_war = phy_ht_misc_set_filt_war;
+	fns.get_filt_war = phy_ht_misc_get_filt_war;
 
 	if (phy_misc_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_misc_register_impl failed\n", __FUNCTION__));
@@ -193,7 +200,7 @@ static uint8 phy_ht_calc_extra_init_gain(phy_info_t *pi, uint8 extra_gain_3dB,
 	return gain_ticks;
 }
 
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static int
 phy_ht_misc_test_freq_accuracy(phy_type_misc_ctx_t *ctx, int channel)
 {
@@ -214,7 +221,7 @@ phy_ht_misc_test_stop(phy_type_misc_ctx_t *ctx)
 	PHY_REG_LIST_EXECUTE(pi);
 	}
 }
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 
 static uint32 phy_ht_rx_iq_est(phy_type_misc_ctx_t *ctx, uint8 samples, uint8 antsel,
 	uint8 resolution, uint8 lpf_hpc, uint8 dig_lpf, uint8 gain_correct,
@@ -256,7 +263,7 @@ static uint32 phy_ht_rx_iq_est(phy_type_misc_ctx_t *ctx, uint8 samples, uint8 an
 	/* get IQ power measurements */
 
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 	if (lpf_hpc) {
 		/* Override the LPF high pass corners to their lowest values (0x1) */
 		wlc_phy_lpf_hpc_override_htphy(pi, TRUE);
@@ -294,7 +301,7 @@ static uint32 phy_ht_rx_iq_est(phy_type_misc_ctx_t *ctx, uint8 samples, uint8 an
 	if (dig_lpf) {
 		wlc_phy_dig_lpf_override_htphy(pi, 0);
 	}
-	wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 
 	/* sum I and Q powers for each core, average over num_samps with rounding */
@@ -389,9 +396,9 @@ static void phy_ht_iovar_tx_tone(phy_type_misc_ctx_t *ctx, int32 int_val)
 
 	if (pi->phy_tx_tone_freq == 0) {
 		wlc_phy_stopplayback_htphy(pi);
-		wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 	} else {
-		wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 		wlc_phy_tx_tone_htphy(pi, (uint32)int_val, 151, 0, 0, TRUE); /* play tone */
 	}
 }
@@ -401,7 +408,7 @@ static void phy_ht_iovar_txlo_tone(phy_type_misc_ctx_t *ctx)
 	phy_ht_misc_info_t *info = (phy_ht_misc_info_t *)ctx;
 	phy_info_t *pi = info->pi;
 	pi->phy_tx_tone_freq = 0;
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 	wlc_phy_tx_tone_htphy(pi, 0, 151, 0, 0, TRUE); /* play tone */
 }
 
@@ -511,13 +518,13 @@ wlc_phy_deaf_htphy(phy_type_misc_ctx_t *ctx, bool mode)
 	wlapi_suspend_mac_and_wait(pi->sh->physhim);
 	if (mode) {
 		if (pi_ht->deaf_count == 0)
-			wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+			phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 		else
 			PHY_ERROR(("%s: Deafness already set\n", __FUNCTION__));
 	}
 	else {
 		if (pi_ht->deaf_count > 0)
-			wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+			phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 		else
 			PHY_ERROR(("%s: Deafness already cleared\n", __FUNCTION__));
 	}
@@ -561,4 +568,36 @@ phy_ht_misc_get_rxgainerr(phy_type_misc_ctx_t *ctx, int16 *gainerr)
 	}
 	/* For 80P80, retrun only primary channel value */
 	return srom_isempty[0];
+}
+
+static void
+phy_ht_misc_set_ldpc_override(phy_type_misc_ctx_t *ctx, bool ldpc)
+{
+	phy_ht_misc_info_t *misc_info = (phy_ht_misc_info_t *) ctx;
+	phy_info_t *pi = misc_info->pi;
+	wlc_phy_update_rxldpc_htphy(pi, ldpc);
+	return;
+}
+
+/* WAR */
+static int
+phy_ht_misc_set_filt_war(phy_type_misc_ctx_t *ctx, bool war)
+{
+	phy_ht_misc_info_t *misc_info = (phy_ht_misc_info_t *) ctx;
+	phy_info_t *pi = misc_info->pi;
+	phy_info_htphy_t *pi_ht = misc_info->hti;
+	if (pi_ht->ht_ofdm20_filt_war_req != war) {
+		pi_ht->ht_ofdm20_filt_war_req = war;
+		if (pi->sh->up)
+			wlc_phy_tx_digi_filts_htphy_war(pi, TRUE);
+	}
+	return BCME_OK;
+}
+
+static bool
+phy_ht_misc_get_filt_war(phy_type_misc_ctx_t *ctx)
+{
+	phy_ht_misc_info_t *misc_info = (phy_ht_misc_info_t *) ctx;
+	phy_info_htphy_t *pi_ht = misc_info->hti;
+	return pi_ht->ht_ofdm20_filt_war_req;
 }

@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_ivtw.c 639485 2016-05-23 22:22:41Z $
+ * $Id: km_ivtw.c 654771 2016-08-16 13:04:43Z $
  */
 
 #include "km.h"
@@ -25,7 +25,7 @@ typedef unsigned long long km_uint64_t;
 #define IVTW_VALID(_ivtw) ((_ivtw) != NULL)
 #define IVTW_LOG(args) KM_LOG(args)
 #define IVTW_NONE(args) KM_NONE(args)
-#define IVTW_ERR(args) KM_ERR(args)
+#define IVTW_ERR(args) WL_ERROR(args)
 #define IVTW_WLC(_ivtw) ((_ivtw)->wlc)
 #define IVTW_UNIT(_ivtw) WLCWLUNIT(IVTW_WLC(_ivtw))
 #define IVTW_KM(_ivtw) (IVTW_WLC(_ivtw)->keymgmt)
@@ -385,6 +385,35 @@ upd_tw:
 		(uint32)((lb >> 32) & 0xffffffff), (uint32)(lb & 0xffffffff)));
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void
+km_ivtw_dump(km_ivtw_t *ivtw, struct bcmstrbuf *b)
+{
+	int i, j, k;
+
+	KM_DBG_ASSERT(IVTW_VALID(ivtw));
+
+	bcm_bprintf(b, "begin wl%d ivtww dump: mode %d, max keys %d\n",
+		IVTW_UNIT(ivtw), ivtw->mode, ivtw->max_keys);
+	for (i = 0; i < ivtw->max_keys; ++i) {
+		const ivtw_key_info_t *ivtw_key_info = ivtw->key_info[i];
+		if (!ivtw_key_info)
+			continue;
+		bcm_bprintf(b, "\tivtw key info: key index %d\n", i);
+		for (j = 0; j < IVTW_NUM_RX_SEQ(ivtw); ++j) {
+			const ivtw_seq_info_t *seq_info = &ivtw_key_info->seq_info[j];
+			bcm_bprintf(b, "\t\tivtw seq info: seq index %d, lb %d.%d\n",
+				j, seq_info->wstart >> 32, seq_info->wstart & 0xffffffff);
+			bcm_bprintf(b, "\t\t\twindow: 0x");
+			for (k = sizeof(seq_info->window) - 1; k >= 0; --k) {
+				bcm_bprintf(b, "%02x", seq_info->window[k]);
+			}
+			bcm_bprintf(b, "\n");
+		}
+	}
+	bcm_bprintf(b, "end ivtw dump\n");
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 void
 km_ivtw_clone(km_ivtw_t *from_ivtw, km_ivtw_t *to_ivtw,

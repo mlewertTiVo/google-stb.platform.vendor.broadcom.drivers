@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hnddma.c 648804 2016-07-13 19:39:52Z $
+ * $Id: hnddma.c 654572 2016-08-15 08:06:23Z $
  */
 
 /**
@@ -47,7 +47,11 @@
 
 /* default dma message level (if input msg_level pointer is null in dma_attach()) */
 static uint dma_msg_level =
+#ifdef BCMDBG_ERR
+	1;
+#else
 	0;
+#endif /* BCMDBG_ERR */
 
 /* Common prototypes */
 static bool _dma_isaddrext(dma_info_t *di);
@@ -84,6 +88,7 @@ static void _dma_burstlen_set(dma_info_t *di, uint8 rxburstlen, uint8 txburstlen
 static uint _dma_avoidancecnt(dma_info_t *di);
 static void _dma_param_set(dma_info_t *di, uint16 paramid, uint16 paramval);
 static bool _dma_glom_enable(dma_info_t *di, uint32 val);
+static void _dma_context(dma_info_t *di, setup_context_t fn, void *ctx);
 
 
 /* Prototypes for 32-bit routines */
@@ -102,6 +107,13 @@ static void dma32_txflush_clear(dma_info_t *di);
 static bool dma32_txstopped(dma_info_t *di);
 static bool dma32_rxstopped(dma_info_t *di);
 static bool dma32_rxcheckidlestatus(dma_info_t *di);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void dma32_dumpring(dma_info_t *di, struct bcmstrbuf *b, dma32dd_t *ring, uint start,
+	uint end, uint max_num);
+static void dma32_dump(dma_info_t *di, struct bcmstrbuf *b, bool dumpring);
+static void dma32_dumptx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring);
+static void dma32_dumprx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring);
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 static bool _dma32_addrext(osl_t *osh, dma32regs_t *dma32regs);
 
@@ -128,6 +140,13 @@ static bool _dma64_addrext(osl_t *osh, dma64regs_t *dma64regs);
 static void dma_param_set_nrxpost(dma_info_t *di, uint16 paramval);
 static bool dma64_rxcheckidlestatus(dma_info_t *di);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void dma64_dumpring(dma_info_t *di, struct bcmstrbuf *b, dma64dd_t *ring, uint start,
+	uint end, uint max_num);
+static void dma64_dump(dma_info_t *di, struct bcmstrbuf *b, bool dumpring);
+static void dma64_dumptx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring);
+static void dma64_dumprx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring);
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 /* NULL entries will be overwritten during ATTACH phase in hnddma_rx.c/hnddma_tx.c */
 const di_fcn_t dma64proc = {
@@ -173,9 +192,15 @@ const di_fcn_t dma64proc = {
 	(di_counterreset_t)_dma_counterreset,
 	(di_ctrlflags_t)_dma_ctrlflags,
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	(di_dump_t)dma64_dump,
+	(di_dumptx_t)dma64_dumptx,
+	(di_dumprx_t)dma64_dumprx,
+#else
 	NULL,
 	NULL,
 	NULL,
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 	(di_rxactive_t)_dma_rxactive,
 	(di_txpending_t)_dma_txpending,
 	(di_txcommitted_t)_dma_txcommitted,
@@ -191,7 +216,8 @@ const di_fcn_t dma64proc = {
 	(dma_glom_enable_t)_dma_glom_enable,
 	(dma_active_rxbuf_t)_dma_activerxbuf,
 	(di_rxidlestatus_t)dma64_rxcheckidlestatus,
-	53
+	(di_context_t)_dma_context,
+	54
 };
 
 static const di_fcn_t dma32proc = {
@@ -237,9 +263,15 @@ static const di_fcn_t dma32proc = {
 	(di_counterreset_t)_dma_counterreset,
 	(di_ctrlflags_t)_dma_ctrlflags,
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	(di_dump_t)dma32_dump,
+	(di_dumptx_t)dma32_dumptx,
+	(di_dumprx_t)dma32_dumprx,
+#else
 	NULL,
 	NULL,
 	NULL,
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 	(di_rxactive_t)_dma_rxactive,
 	(di_txpending_t)_dma_txpending,
 	(di_txcommitted_t)_dma_txcommitted,
@@ -255,15 +287,15 @@ static const di_fcn_t dma32proc = {
 	NULL,
 	NULL,
 	(di_rxidlestatus_t)dma32_rxcheckidlestatus,
-	53
+	(di_context_t)_dma_context,
+	54
 };
 /*
  * This function needs to be called during initialization before calling dma_attach_ext.
  */
 dma_common_t *
 BCMATTACHFN_DMA_ATTACH(dma_common_attach)(osl_t *osh, volatile uint32 *indqsel,
-	volatile uint32 *suspreq, volatile uint32 *flushreq,
-	volatile uint32 *chnflushstatus)
+	volatile uint32 *suspreq, volatile uint32 *flushreq)
 {
 	dma_common_t *dmac;
 
@@ -279,7 +311,6 @@ BCMATTACHFN_DMA_ATTACH(dma_common_attach)(osl_t *osh, volatile uint32 *indqsel,
 	dmac->indqsel = indqsel;
 	dmac->suspreq = suspreq;
 	dmac->flushreq = flushreq;
-	dmac->chnflushstatus = chnflushstatus;
 
 	return dmac;
 }
@@ -345,7 +376,7 @@ BCMATTACHFN_DMA_ATTACH(dma_attach_ext)(dma_common_t *dmac, osl_t *osh, const cha
 #endif
 	/* allocate private info structure */
 	if ((di = MALLOC(osh, sizeof (dma_info_t))) == NULL) {
-#if defined(WLC_BCMDMA_ERRORS)
+#if defined(BCMDBG) || defined(WLC_BCMDMA_ERRORS)
 		DMA_ERROR(("%s: out of memory, malloced %d bytes\n", __FUNCTION__, MALLOCED(osh)));
 		OSL_SYS_HALT();
 #endif
@@ -1055,7 +1086,8 @@ _dma_rxinit(dma_info_t *di)
 	}
 #endif
 
-	ASSERT(di->rxin == di->rxout);
+	/* For split fifo, for fifo-0 reclaim is handled by fifo-1 */
+	ASSERT((di->rxin == di->rxout) || (di->split_fifo == SPLIT_FIFO_0));
 	di->rxin = di->rxout = di->rs0cd = 0;
 	di->rxavail = di->nrxd - 1;
 
@@ -1564,6 +1596,176 @@ BCMATTACHFN_DMA_ATTACH(dma_ringalloc)(osl_t *osh, uint32 boundary, uint size, ui
 	return va;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+dma32_dumpring(dma_info_t *di, struct bcmstrbuf *b, dma32dd_t *ring, uint start, uint end,
+	uint max_num)
+{
+	uint i;
+
+	BCM_REFERENCE(di);
+
+	for (i = start; i != end; i = XXD((i + 1), max_num)) {
+		/* in the format of high->low 8 bytes */
+		bcm_bprintf(b, "ring index %d: 0x%x %x\n",
+			i, R_SM(&ring[i].addr), R_SM(&ring[i].ctrl));
+	}
+}
+
+static void
+dma32_dumptx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring)
+{
+	if (di->ntxd == 0)
+		return;
+
+	bcm_bprintf(b, "DMA32: txd32 %p txdpa 0x%lx txp %p txin %d txout %d "
+		    "txavail %d txnodesc %d\n", OSL_OBFUSCATE_BUF(di->txd32),
+		    PHYSADDRLO(di->txdpa), OSL_OBFUSCATE_BUF(di->txp), di->txin,
+		    di->txout, di->hnddma.txavail, di->hnddma.txnodesc);
+
+	bcm_bprintf(b, "xmtcontrol 0x%x xmtaddr 0x%x xmtptr 0x%x xmtstatus 0x%x\n",
+		R_REG(di->osh, &di->d32txregs->control),
+		R_REG(di->osh, &di->d32txregs->addr),
+		R_REG(di->osh, &di->d32txregs->ptr),
+		R_REG(di->osh, &di->d32txregs->status));
+
+	if (dumpring && di->txd32)
+		dma32_dumpring(di, b, di->txd32, di->txin, di->txout, di->ntxd);
+}
+
+static void
+dma32_dumprx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring)
+{
+	if (di->nrxd == 0)
+		return;
+
+	bcm_bprintf(b, "DMA32: rxd32 %p rxdpa 0x%lx rxp %p rxin %d rxout %d\n",
+	            OSL_OBFUSCATE_BUF(di->rxd32), PHYSADDRLO(di->rxdpa),
+			OSL_OBFUSCATE_BUF(di->rxp), di->rxin, di->rxout);
+
+	bcm_bprintf(b, "rcvcontrol 0x%x rcvaddr 0x%x rcvptr 0x%x rcvstatus 0x%x\n",
+		R_REG(di->osh, &di->d32rxregs->control),
+		R_REG(di->osh, &di->d32rxregs->addr),
+		R_REG(di->osh, &di->d32rxregs->ptr),
+		R_REG(di->osh, &di->d32rxregs->status));
+	if (di->rxd32 && dumpring)
+		dma32_dumpring(di, b, di->rxd32, di->rxin, di->rxout, di->nrxd);
+}
+
+static void
+dma32_dump(dma_info_t *di, struct bcmstrbuf *b, bool dumpring)
+{
+	dma32_dumptx(di, b, dumpring);
+	dma32_dumprx(di, b, dumpring);
+}
+
+static void
+dma64_dumpring(dma_info_t *di, struct bcmstrbuf *b, dma64dd_t *ring, uint start, uint end,
+	uint max_num)
+{
+	uint i;
+
+	/* if using indirect DMA access, then configure IndQSel */
+	if (DMA_INDIRECT(di)) {
+		dma_set_indqsel((hnddma_t *)di, FALSE);
+	}
+
+	BCM_REFERENCE(di);
+
+	for (i = start; i != end; i = XXD((i + 1), max_num)) {
+		/* in the format of high->low 16 bytes */
+		if (b) {
+			bcm_bprintf(b, "ring index %d: 0x%x %x %x %x\n",
+			i, R_SM(&ring[i].addrhigh), R_SM(&ring[i].addrlow),
+			R_SM(&ring[i].ctrl2), R_SM(&ring[i].ctrl1));
+		} else {
+			DMA_ERROR(("ring index %d: 0x%x %x %x %x\n",
+			i, R_SM(&ring[i].addrhigh), R_SM(&ring[i].addrlow),
+			R_SM(&ring[i].ctrl2), R_SM(&ring[i].ctrl1)));
+		}
+	}
+}
+
+static void
+dma64_dumptx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring)
+{
+	if (di->ntxd == 0)
+		return;
+
+	/* if using indirect DMA access, then configure IndQSel */
+	if (DMA_INDIRECT(di)) {
+		dma_set_indqsel((hnddma_t *)di, FALSE);
+	}
+
+	if (b) {
+		bcm_bprintf(b, "DMA64: txd64 %p txdpa 0x%lx txdpahi 0x%lx txp %p txin %d txout %d "
+			"txavail %d txnodesc %d\n", di->txd64, PHYSADDRLO(di->txdpa),
+			PHYSADDRHI(di->txdpaorig), di->txp, di->txin, di->txout, di->hnddma.txavail,
+			di->hnddma.txnodesc);
+
+		bcm_bprintf(b, "xmtcontrol 0x%x xmtaddrlow 0x%x xmtaddrhigh 0x%x "
+			    "xmtptr 0x%x xmtstatus0 0x%x xmtstatus1 0x%x\n",
+			    R_REG(di->osh, &di->d64txregs->control),
+			    R_REG(di->osh, &di->d64txregs->addrlow),
+			    R_REG(di->osh, &di->d64txregs->addrhigh),
+			    R_REG(di->osh, &di->d64txregs->ptr),
+			    R_REG(di->osh, &di->d64txregs->status0),
+			    R_REG(di->osh, &di->d64txregs->status1));
+
+		bcm_bprintf(b, "DMA64: DMA avoidance applied %d\n", di->dma_avoidance_cnt);
+	} else {
+		DMA_ERROR(("DMA64: txd64 %p txdpa 0x%lx txdpahi 0x%lx txp %p txin %d txout %d "
+		       "txavail %d txnodesc %d\n", di->txd64, (unsigned long)PHYSADDRLO(di->txdpa),
+		       (unsigned long)PHYSADDRHI(di->txdpaorig), di->txp, di->txin, di->txout,
+		       di->hnddma.txavail, di->hnddma.txnodesc));
+
+		DMA_ERROR(("xmtcontrol 0x%x xmtaddrlow 0x%x xmtaddrhigh 0x%x "
+		       "xmtptr 0x%x xmtstatus0 0x%x xmtstatus1 0x%x\n",
+		       R_REG(di->osh, &di->d64txregs->control),
+		       R_REG(di->osh, &di->d64txregs->addrlow),
+		       R_REG(di->osh, &di->d64txregs->addrhigh),
+		       R_REG(di->osh, &di->d64txregs->ptr),
+		       R_REG(di->osh, &di->d64txregs->status0),
+		       R_REG(di->osh, &di->d64txregs->status1)));
+	}
+
+	if (dumpring && di->txd64) {
+		dma64_dumpring(di, b, di->txd64, di->txin, di->txout, di->ntxd);
+	}
+}
+
+static void
+dma64_dumprx(dma_info_t *di, struct bcmstrbuf *b, bool dumpring)
+{
+	if (di->nrxd == 0)
+		return;
+
+	bcm_bprintf(b, "DMA64: rxd64 %p rxdpa 0x%lx rxdpahi 0x%lx rxp %p rxin %d rxout %d\n",
+			OSL_OBFUSCATE_BUF(di->rxd64), PHYSADDRLO(di->rxdpa),
+			PHYSADDRHI(di->rxdpaorig), OSL_OBFUSCATE_BUF(di->rxp),
+			di->rxin, di->rxout);
+
+	bcm_bprintf(b, "rcvcontrol 0x%x rcvaddrlow 0x%x rcvaddrhigh 0x%x rcvptr "
+		       "0x%x rcvstatus0 0x%x rcvstatus1 0x%x\n",
+		       R_REG(di->osh, &di->d64rxregs->control),
+		       R_REG(di->osh, &di->d64rxregs->addrlow),
+		       R_REG(di->osh, &di->d64rxregs->addrhigh),
+		       R_REG(di->osh, &di->d64rxregs->ptr),
+		       R_REG(di->osh, &di->d64rxregs->status0),
+		       R_REG(di->osh, &di->d64rxregs->status1));
+	if (di->rxd64 && dumpring) {
+		dma64_dumpring(di, b, di->rxd64, di->rxin, di->rxout, di->nrxd);
+	}
+}
+
+static void
+dma64_dump(dma_info_t *di, struct bcmstrbuf *b, bool dumpring)
+{
+	dma64_dumptx(di, b, dumpring);
+	dma64_dumprx(di, b, dumpring);
+}
+
+#endif	/* BCMDBG || BCMDBG_DUMP */
 
 
 /* 32-bit DMA functions */
@@ -1963,9 +2165,14 @@ static void
 dma64_txinit(dma_info_t *di)
 {
 	uint32 control;
-#ifdef BCMM2MDEV_ENABLED
+#if defined(BCMM2MDEV_ENABLED) || defined(BCM_DMA_INDIRECT)
 	uint32 addrlow;
 #endif
+#ifdef BCM_DMA_INDIRECT
+	uint32 act;
+	int i;
+	si_t *sih = di->sih;
+#endif /* BCM_DMA_INDIRECT */
 
 	DMA_TRACE(("%s: dma_txinit\n", di->name));
 
@@ -2012,6 +2219,28 @@ dma64_txinit(dma_info_t *di)
 	W_REG(di->osh, &di->d64txregs->ptr, addrlow);
 #endif
 
+#ifdef BCM_DMA_INDIRECT
+	if (DMA_INDIRECT(di) &&
+		(di->hnddma.dmactrlflags & DMA_CTRL_DESC_ONLY_FLAG) &&
+		((si_coreid(sih) == D11_CORE_ID) && (si_corerev(sih) == 65))) {
+		addrlow = (uint32)(R_REG(di->osh, &di->d64txregs->addrlow) & 0xffff);
+		if (addrlow != 0)
+			W_REG(di->osh, &di->d64txregs->ptr, addrlow);
+		for (i = 0; i < 20; i++) {
+			act = (uint32)(R_REG(di->osh, &di->d64txregs->status1) & 0xffff);
+			if (addrlow == act) {
+				break;
+			}
+			OSL_DELAY(1);
+		}
+		if (addrlow != act) {
+			DMA_ERROR(("%s %s: dma txdesc AD %#x != addrlow %#x\n", di->name,
+			__FUNCTION__, act, addrlow));
+		}
+		ASSERT(addrlow == act);
+	}
+#endif /* BCM_DMA_INDIRECT */
+
 	if (di->hnddma.dmactrlflags & DMA_CTRL_CS)
 		control |= D64_XC_CS_MASK;
 
@@ -2054,12 +2283,15 @@ dma64_txsuspend(dma_info_t *di)
 	if (di->ntxd == 0)
 		return;
 
-	/* if using indirect DMA access, then configure IndQSel */
+#ifdef BCM_DMA_INDIRECT
+	/* if using indirect DMA access, then use common register, SuspReq */
 	if (DMA_INDIRECT(di)) {
-		dma_set_indqsel((hnddma_t *)di, FALSE);
+		OR_REG(di->osh, di->dmacommon->suspreq, (1 << di->q_index));
+	} else
+#endif
+	{
+		OR_REG(di->osh, &di->d64txregs->control, D64_XC_SE);
 	}
-
-	OR_REG(di->osh, &di->d64txregs->control, D64_XC_SE);
 }
 
 static void
@@ -2070,24 +2302,32 @@ dma64_txresume(dma_info_t *di)
 	if (di->ntxd == 0)
 		return;
 
-	/* if using indirect DMA access, then configure IndQSel */
+#ifdef BCM_DMA_INDIRECT
+	/* if using indirect DMA access, then use common register, SuspReq */
 	if (DMA_INDIRECT(di)) {
-		dma_set_indqsel((hnddma_t *)di, FALSE);
+		AND_REG(di->osh, di->dmacommon->suspreq, ~(1 << di->q_index));
+	} else
+#endif
+	{
+		AND_REG(di->osh, &di->d64txregs->control, ~D64_XC_SE);
 	}
-
-	AND_REG(di->osh, &di->d64txregs->control, ~D64_XC_SE);
 }
 
 static bool
 dma64_txsuspended(dma_info_t *di)
 {
-	/* if using indirect DMA access, then configure IndQSel */
-	if (DMA_INDIRECT(di)) {
-		dma_set_indqsel((hnddma_t *)di, FALSE);
-	}
+	if (di->ntxd == 0)
+		return TRUE;
 
-	return (di->ntxd == 0) ||
-	        ((R_REG(di->osh, &di->d64txregs->control) & D64_XC_SE) == D64_XC_SE);
+#ifdef BCM_DMA_INDIRECT
+	/* if using indirect DMA access, then use common register, SuspReq */
+	if (DMA_INDIRECT(di)) {
+		return ((R_REG(di->osh, di->dmacommon->suspreq) & (1 << di->q_index)) != 0);
+	} else
+#endif
+	{
+		return ((R_REG(di->osh, &di->d64txregs->control) & D64_XC_SE) == D64_XC_SE);
+	}
 }
 
 static void
@@ -2098,12 +2338,15 @@ dma64_txflush(dma_info_t *di)
 	if (di->ntxd == 0)
 		return;
 
-	/* if using indirect DMA access, then configure IndQSel */
+#ifdef BCM_DMA_INDIRECT
+	/* if using indirect DMA access, then use common register, FlushReq */
 	if (DMA_INDIRECT(di)) {
-		dma_set_indqsel((hnddma_t *)di, FALSE);
+		OR_REG(di->osh, di->dmacommon->flushreq, (1 << di->q_index));
+	} else
+#endif
+	{
+		OR_REG(di->osh, &di->d64txregs->control, D64_XC_SE | D64_XC_FL);
 	}
-
-	OR_REG(di->osh, &di->d64txregs->control, D64_XC_SE | D64_XC_FL);
 }
 
 static void
@@ -2116,17 +2359,20 @@ dma64_txflush_clear(dma_info_t *di)
 	if (di->ntxd == 0)
 		return;
 
-	/* if using indirect DMA access, then configure IndQSel */
+#ifdef BCM_DMA_INDIRECT
+	/* if using indirect DMA access, then use common register, FlushReq */
 	if (DMA_INDIRECT(di)) {
-		dma_set_indqsel((hnddma_t *)di, FALSE);
+		AND_REG(di->osh, di->dmacommon->flushreq, ~(1 << di->q_index));
+	} else
+#endif
+	{
+		SPINWAIT(((status = (R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK)) !=
+		          D64_XS0_XS_DISABLED) &&
+		         (status != D64_XS0_XS_IDLE) &&
+		         (status != D64_XS0_XS_STOPPED),
+		         10000);
+		AND_REG(di->osh, &di->d64txregs->control, ~D64_XC_FL);
 	}
-
-	SPINWAIT(((status = (R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK)) !=
-	          D64_XS0_XS_DISABLED) &&
-	         (status != D64_XS0_XS_IDLE) &&
-	         (status != D64_XS0_XS_STOPPED),
-	         10000);
-	AND_REG(di->osh, &di->d64txregs->control, ~D64_XC_FL);
 }
 
 void
@@ -2264,7 +2510,7 @@ BCMATTACHFN_DMA_ATTACH(dma64_alloc)(dma_info_t *di, uint direction)
 static bool
 dma64_txreset(dma_info_t *di)
 {
-	uint32 status;
+	uint32 status = D64_XS0_XS_DISABLED;
 
 	if (di->ntxd == 0)
 		return TRUE;
@@ -2274,31 +2520,36 @@ dma64_txreset(dma_info_t *di)
 	/* So force the configuration */
 	if (DMA_INDIRECT(di)) {
 		dma_set_indqsel((hnddma_t *)di, TRUE);
+	} else {
+		/* If DMA is already in reset, do not reset. */
+		if ((R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK) ==
+			D64_XS0_XS_DISABLED)
+			return TRUE;
+
+		/* suspend tx DMA first */
+		W_REG(di->osh, &di->d64txregs->control, D64_XC_SE);
+		SPINWAIT(((status = (R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK)) !=
+		          D64_XS0_XS_DISABLED) &&
+		         (status != D64_XS0_XS_IDLE) &&
+		         (status != D64_XS0_XS_STOPPED),
+		         10000);
 	}
 
-	/* If DMA is already in reset, do not reset. */
-	if ((R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK) ==
-		D64_XS0_XS_DISABLED)
-		return TRUE;
-
-	/* suspend tx DMA first */
-	W_REG(di->osh, &di->d64txregs->control, D64_XC_SE);
-	SPINWAIT(((status = (R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK)) !=
-	          D64_XS0_XS_DISABLED) &&
-	         (status != D64_XS0_XS_IDLE) &&
-	         (status != D64_XS0_XS_STOPPED),
-	         10000);
-
+	/* For IndDMA, the channel status is ignored. */
 	W_REG(di->osh, &di->d64txregs->control, 0);
-	SPINWAIT(((status = (R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK)) !=
-	          D64_XS0_XS_DISABLED),
-	         10000);
 
-	/* We should be disabled at this point */
-	if (status != D64_XS0_XS_DISABLED) {
-		DMA_ERROR(("%s: status != D64_XS0_XS_DISABLED 0x%x\n", __FUNCTION__, status));
-		ASSERT(status == D64_XS0_XS_DISABLED);
-		OSL_DELAY(300);
+	if (!DMA_INDIRECT(di) || (di->hnddma.dmactrlflags & DMA_CTRL_DESC_ONLY_FLAG)) {
+		SPINWAIT(((status = (R_REG(di->osh, &di->d64txregs->status0) & D64_XS0_XS_MASK)) !=
+		          D64_XS0_XS_DISABLED),
+		         10000);
+
+		/* We should be disabled at this point */
+		if (status != D64_XS0_XS_DISABLED) {
+			DMA_ERROR(("%s: status != D64_XS0_XS_DISABLED 0x%x\n",
+					__FUNCTION__, status));
+			ASSERT(status == D64_XS0_XS_DISABLED);
+			OSL_DELAY(300);
+		}
 	}
 
 	return (status == D64_XS0_XS_DISABLED);
@@ -2897,6 +3148,13 @@ _dma_glom_enable(dma_info_t *di, uint32 val)
 		AND_REG(di->osh, &dregs->control, ~D64_RC_GE);
 	}
 	return ret;
+}
+
+void
+_dma_context(dma_info_t *di, setup_context_t fn, void *ctx)
+{
+	di->fn = fn;
+	di->ctx = ctx;
 }
 
 int BCMFASTPATH

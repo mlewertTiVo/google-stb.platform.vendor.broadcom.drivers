@@ -23,6 +23,7 @@
 #include <phy_mem.h>
 #include <phy_type_ocl.h>
 #include <phy_ocl.h>
+#include <phy_ocl_api.h>
 
 /* module private states */
 struct phy_ocl_info {
@@ -87,6 +88,7 @@ BCMATTACHFN(phy_ocl_register_impl)(phy_ocl_info_t *ocl_info,
 	phy_type_ocl_fns_t *fns)
 {
 	PHY_TRACE(("%s\n", __FUNCTION__));
+
 	*ocl_info->fns = *fns;
 
 	return BCME_OK;
@@ -98,12 +100,58 @@ BCMATTACHFN(phy_ocl_unregister_impl)(phy_ocl_info_t *ocl_info)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 }
 
-void wlc_phy_ocl_enable(phy_info_t *pi, bool enable)
+/* **************************************** */
+/*	PHY HAL functions                                           */
+/* **************************************** */
+int
+phy_ocl_coremask_change(wlc_phy_t *ppi, uint8 coremask)
 {
-	phy_ocl_info_t *ocl_info = pi->ocli;
-	phy_type_ocl_fns_t *fns = ocl_info->fns;
-	PHY_TRACE(("%s\n", __FUNCTION__));
-	ASSERT(fns->ocl != NULL);
-	(fns->ocl)(pi, enable);
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_ocl_fns_t *fns = pi->ocli->fns;
+
+	if (fns->ocl_coremask_change) {
+		return (fns->ocl_coremask_change)(fns->ctx, coremask);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
+}
+
+uint8
+phy_ocl_get_coremask(wlc_phy_t *ppi)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_ocl_fns_t *fns = pi->ocli->fns;
+
+	if (fns->ocl_get_coremask) {
+		return (fns->ocl_get_coremask)(fns->ctx);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
+}
+
+int
+phy_ocl_status_get(wlc_phy_t *ppi, uint16 *reqs, uint8 *coremask, bool *ocl_en)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_ocl_fns_t *fns = pi->ocli->fns;
+
+	if (fns->ocl_status_get) {
+		return (fns->ocl_status_get)(fns->ctx, reqs, coremask, ocl_en);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
+}
+
+int
+phy_ocl_disable_req_set(wlc_phy_t *ppi, uint16 req, bool disable, uint8 req_id)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_ocl_fns_t *fns = pi->ocli->fns;
+
+	if (fns->ocl_disable_req_set) {
+		return (fns->ocl_disable_req_set)(fns->ctx, req, disable, req_id);
+	} else {
+		return BCME_UNSUPPORTED;
+	}
 }
 #endif /* OCL */

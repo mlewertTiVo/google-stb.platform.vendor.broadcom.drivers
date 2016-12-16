@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_ht.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: wlc_phy_ht.h 657373 2016-09-01 01:08:38Z $
  */
 
 #ifndef _wlc_phy_ht_h_
@@ -29,5 +29,6 @@ void wlc_phy_txpwrctrl_set_idle_tssi_htphy(phy_info_t *pi, int8 idle_tssi, uint8
 
 /* **************************** REMOVE ************************** */
 void wlc_phy_get_initgain_dB_htphy(phy_info_t *pi, int16 *initgain_dB);
+void wlc_phy_tx_digi_filts_htphy_war(phy_info_t *pi, bool init);
 
 #endif /* _wlc_phy_ht_h_ */

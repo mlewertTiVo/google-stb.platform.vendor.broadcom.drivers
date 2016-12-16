@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_samp.c 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_samp.c 659187 2016-09-13 04:45:39Z $
  */
 
 #include <phy_cfg.h>
@@ -25,6 +25,7 @@
 #include "phy_type_samp.h"
 #include <phy_ac.h>
 #include <phy_ac_samp.h>
+#include <phy_misc_api.h>
 
 /* ************************ */
 /* Modules used by this module */
@@ -36,12 +37,22 @@
 #include <sbchipc.h>
 #include <phy_utils_reg.h>
 #include <phy_ac_info.h>
+#ifdef IQPLAY_DEBUG
+#include "phy_ac_samp_data.h"
+#endif /* IQPLAY_DEBUG */
+
+typedef struct acphy_lpfCT_phyregs {
+	bool   is_orig;
+	uint16 RfctrlOverrideLpfCT[PHY_CORE_MAX];
+	uint16 RfctrlCoreLpfCT[PHY_CORE_MAX];
+} acphy_lpfCT_phyregs_t;
 
 /* module private states */
 struct phy_ac_samp_info {
 	phy_info_t	*pi;
 	phy_ac_info_t	*aci;
 	phy_samp_info_t	*cmn_info;
+	acphy_lpfCT_phyregs_t *ac_lpfCT_phyregs_orig;
 	uint32	pstart; 	/* sample collect fifo begins		*/
 	uint32	pstop;  	/* sample collect fifo ends		*/
 	uint32	pfirst; 	/* sample collect trigger begins	*/
@@ -56,6 +67,10 @@ static int phy_ac_sample_collect(phy_type_samp_ctx_t *ctx,
 static int phy_ac_sample_collect_core_sel(phy_info_t *pi, int coresel);
 #endif /* SAMPLE_COLLECT */
 
+#ifdef IQPLAY_DEBUG
+static void phy_ac_samp_prep_IQplay(phy_type_samp_ctx_t *ctx);
+#endif /* IQPLAY_DEBUG */
+
 /* register phy type specific implementation */
 phy_ac_samp_info_t *
 BCMATTACHFN(phy_ac_samp_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
@@ -63,6 +78,7 @@ BCMATTACHFN(phy_ac_samp_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 {
 	phy_ac_samp_info_t *ac_info = NULL;
 	phy_type_samp_fns_t fns;
+	acphy_lpfCT_phyregs_t *ac_lpfCT_phyregs_orig = NULL;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
@@ -71,6 +87,13 @@ BCMATTACHFN(phy_ac_samp_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 		PHY_ERROR(("%s: phy_malloc failed\n", __FUNCTION__));
 		goto fail;
 	}
+	if ((ac_lpfCT_phyregs_orig = phy_malloc(pi, sizeof(*ac_lpfCT_phyregs_orig))) == NULL) {
+		PHY_ERROR(("%s: ac_lpfCT_phyregs_orig malloc failed\n", __FUNCTION__));
+		goto fail;
+	}
+
+	ac_info->ac_lpfCT_phyregs_orig = ac_lpfCT_phyregs_orig;
+
 	ac_info->pi = pi;
 	ac_info->aci = aci;
 	ac_info->cmn_info = cmn_info;
@@ -83,7 +106,9 @@ BCMATTACHFN(phy_ac_samp_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	fns.samp_data = phy_ac_sample_data;
 	fns.samp_collect = phy_ac_sample_collect;
 #endif
-
+#ifdef IQPLAY_DEBUG
+	fns.samp_play = phy_ac_samp_prep_IQplay;
+#endif /* IQPLAY_DEBUG */
 	if (phy_samp_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_samp_register_impl failed\n", __FUNCTION__));
 		goto fail;
@@ -113,6 +138,10 @@ BCMATTACHFN(phy_ac_samp_unregister_impl)(phy_ac_samp_info_t *ac_info)
 
 	/* unregister from common */
 	phy_samp_unregister_impl(cmn_info);
+
+	if (ac_info->ac_lpfCT_phyregs_orig != NULL) {
+		phy_mfree(pi, ac_info->ac_lpfCT_phyregs_orig, sizeof(acphy_lpfCT_phyregs_t));
+	}
 	phy_mfree(pi, ac_info, sizeof(phy_ac_samp_info_t));
 }
 
@@ -335,6 +364,29 @@ phy_ac_words_per_us(phy_ac_samp_info_t *sampi, uint16 sd_adc_rate, uint16 mo)
 			break;
 		case SC_MODE_4s_rx_farrow_1core:
 		case SC_MODE_5s_iq_comp:
+			switch (pi->bw) {
+				case WL_CHANSPEC_BW_20:
+					sampRate = 20 * 2;
+					break;
+				case WL_CHANSPEC_BW_40:
+					sampRate = 40 * 2;
+					break;
+				case WL_CHANSPEC_BW_80:
+					sampRate = 80 * 2;
+					break;
+				default:
+					/* Default 20MHz */
+					sampRate = 20 * 2;
+					ASSERT(0); /* should never get here */
+					break;
+			}
+			if (mo == SC_MODE_5s_iq_comp)
+				md_datapath_os = (ACMAJORREV_3(pi->pubpi->phy_rev) ||
+					ACMAJORREV_4(pi->pubpi->phy_rev) ||
+					ACMAJORREV_5(pi->pubpi->phy_rev)) ? 2 : 1;
+						sampRate /= md_datapath_os;
+			words_per_us = sampRate;
+			break;
 		case SC_MODE_6s_dc_filt:
 			switch (pi->bw) {
 				case WL_CHANSPEC_BW_20:
@@ -352,14 +404,14 @@ phy_ac_words_per_us(phy_ac_samp_info_t *sampi, uint16 sd_adc_rate, uint16 mo)
 					ASSERT(0); /* should never get here */
 					break;
 			}
-			if ((mo == SC_MODE_5s_iq_comp) || (mo == SC_MODE_6s_dc_filt))
-				md_datapath_os = (ACMAJORREV_3(pi->pubpi->phy_rev) ||
+			md_datapath_os = (ACMAJORREV_3(pi->pubpi->phy_rev) ||
 					ACMAJORREV_4(pi->pubpi->phy_rev) ||
 					ACMAJORREV_5(pi->pubpi->phy_rev) ||
 					ACMAJORREV_32(pi->pubpi->phy_rev) ||
 					ACMAJORREV_33(pi->pubpi->phy_rev) ||
-					ACMAJORREV_37(pi->pubpi->phy_rev)) ? 2 : 1;
-				sampRate /= md_datapath_os;
+					ACMAJORREV_37(pi->pubpi->phy_rev) ||
+					ACMAJORREV_40(pi->pubpi->phy_rev)) ? 2 : 1;
+			sampRate /= md_datapath_os;
 			words_per_us = sampRate;
 			break;
 
@@ -702,7 +754,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 	uint	index, sicoreunit;
 	uint32	timer, cnt, mac_ctl;
 	uint32	szbytes, sc_buff_length, sc_buff_offs, sc_buff_start, sc_buff_end;
-	uint16	sd_adc_rate, save_gpio, fc, val, save_clkgatests = 0;
+	uint16	sd_adc_rate, sar_adc_rate, save_gpio, fc, val, save_clkgatests = 0;
 	uint8	num_cores, core, RxFeTesMmuxCtrl_rxfe_dbg_mux_sel_save, wide64bus_sel_save = 0;
 	uint8	sample_rate, sample_bitwidth, support_spectrum_analyzer_mode;
 	uint8   num_actv_cores = 1, bit_unpacking_mode_28nm = 3;
@@ -713,9 +765,11 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 	uint32	mo = 0xffff, *ptr = NULL, pmu_chipctReg5_def = 0, pmu_chip_ctl_regupdate = 0;
 	uint16	words_per_us = 0, fft_sampRate = 0, macBasedDACPlayEn_save = 0;
 	uint16	dBsample_to_dBm_sub = 0;
+	int32   pfirst_wrap_check;
 
 	bool	downSamp = FALSE, suspend = FALSE;
 	int	coreSel = 0, bitStartVal = 2;
+	int     readreg = 0;
 
 	wl_sampledata_t	*sample_data;
 
@@ -837,6 +891,9 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 		/* Store ClkGateSts register */
 		save_clkgatests = R_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateSts);
 	}
+	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		save_clkgatests = R_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateSts);
+	}
 
 	if (macBasedDACPlayEn_save == 1) {
 		/* If MAC based sample play is being used, use only half the TX FIFO for */
@@ -854,16 +911,16 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 		switch (pi->bw) {
 			case WL_CHANSPEC_BW_20:
 				sd_adc_rate = fc * 3/ 32;
+				sar_adc_rate = fc / 48;
 				break;
 			case WL_CHANSPEC_BW_40:
 				sd_adc_rate = fc * 3/16;
-				break;
-			case WL_CHANSPEC_BW_80:
-				sd_adc_rate = fc * 3/12;
+				sar_adc_rate = fc / 24;
 				break;
 			default:
 				/* Default 20MHz */
 				sd_adc_rate = fc * 3/ 32;
+				sar_adc_rate = fc / 24;
 				ASSERT(0); /* should never get here */
 				break;
 		}
@@ -872,16 +929,20 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 		switch (pi->bw) {
 			case WL_CHANSPEC_BW_20:
 				sd_adc_rate = fc/24;
+				sar_adc_rate = fc / 96;
 				break;
 			case WL_CHANSPEC_BW_40:
 				sd_adc_rate = fc/12;
+				sar_adc_rate = fc / 48;
 				break;
 			case WL_CHANSPEC_BW_80:
 				sd_adc_rate = fc/9;
+				sar_adc_rate = fc / 32;
 				break;
 			default:
 				/* Default 20MHz */
 				sd_adc_rate = fc/24;
+				sar_adc_rate = fc / 32;
 				ASSERT(0); /* should never get here */
 				break;
 		}
@@ -890,13 +951,13 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 
 	if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
 		if (fc < 3000) {
-				if (pi->u.pi_acphy->ulp_adc_mode) {
+				if (phy_ac_radio_get_data(pi_ac->radioi)->ulp_adc_mode) {
 					sd_adc_rate = fc/48;
 				} else {
 					sd_adc_rate = fc/56;
 				}
 		} else {
-			if (pi->u.pi_acphy->ulp_adc_mode) {
+			if (phy_ac_radio_get_data(pi_ac->radioi)->ulp_adc_mode) {
 					sd_adc_rate = fc/96;
 				if (fc >= 5180) {
 					sd_adc_rate = fc/104;
@@ -958,7 +1019,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 
 		case  SC_MODE_0_28nm_sar_adc_nti:
 
-			coreSel = collect->cores;
+			coreSel = phy_ac_sample_collect_core_sel(pi, coreSel);
 			bit_unpacking_mode_28nm = 3;
 			if ((coreSel < 0) || (coreSel > 2)) {
 				coreSel = 0;
@@ -967,14 +1028,14 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 			/*	Determine how many words need to be placed in the MAC buffer
 				to capture 1us of the signal, in this sample capture mode
 			 */
-			words_per_us  =
-				phy_ac_words_per_us(sampi, sd_adc_rate, SC_MODE_0_28nm_sar_adc_nti);
+			words_per_us = phy_ac_words_per_us(sampi,
+					sar_adc_rate, SC_MODE_0_28nm_sar_adc_nti);
 
 			if (ACMAJORREV_25(pi->pubpi->phy_rev)) {
 				MOD_PHYREG(pi, SpecAnaDataCollect, wide64bus_sel, 1);
 			} else if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
 				MOD_PHYREG(pi, SpecAnaDataCollect, sar_adc_legacy_bus_sel, 1);
-				if (coreSel == 2) {
+				if (coreSel == 3) {
 					MOD_PHYREG(pi, SpecAnaDataCollect,
 						single_or_dual_core_sel, 1);
 					words_per_us = words_per_us * 2;
@@ -1069,7 +1130,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 				to capture 1us of the signal, in this sample capture mode
 			 */
 			words_per_us  =
-				phy_ac_words_per_us(sampi, sd_adc_rate, SC_MODE_2_28nm_dcc_out);
+				phy_ac_words_per_us(sampi, sar_adc_rate, SC_MODE_2_28nm_dcc_out);
 
 			if (ACMAJORREV_25(pi->pubpi->phy_rev)) {
 				MOD_PHYREG(pi, SpecAnaDataCollect, wide64bus_sel, 1);
@@ -1142,7 +1203,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 				to capture 1us of the signal, in this sample capture mode
 			 */
 			words_per_us  =
-				phy_ac_words_per_us(sampi, sd_adc_rate, SC_MODE_3_28nm_farrow_in);
+				phy_ac_words_per_us(sampi, sar_adc_rate, SC_MODE_3_28nm_farrow_in);
 
 			if (ACMAJORREV_25(pi->pubpi->phy_rev)) {
 				MOD_PHYREG(pi, SpecAnaDataCollect, wide64bus_sel, 1);
@@ -1194,7 +1255,8 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 
 			if (ACMAJORREV_32(pi->pubpi->phy_rev) ||
 				ACMAJORREV_33(pi->pubpi->phy_rev) ||
-				ACMAJORREV_37(pi->pubpi->phy_rev)) {
+				ACMAJORREV_37(pi->pubpi->phy_rev) ||
+				ACMAJORREV_40(pi->pubpi->phy_rev)) {
 			  MOD_PHYREG(pi, AdcDataCollect, sampSel, 4);
 			  MOD_PHYREG(pi, AdcDataCollect, rxSingleCoreMode, 1);
 			  MOD_PHYREG(pi, AdcDataCollect, rxCoreSel, coreSel);
@@ -1229,7 +1291,8 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 				pmu_chip_ctl_regupdate = 1;
 			}
 			/* Special mode for BCM43457A0/B0, BCM4345B0/B1 (CRDOT11ACPHY-590) */
-			if (ACMAJORREV_3(pi->pubpi->phy_rev) || ACMAJORREV_4(pi->pubpi->phy_rev)) {
+			if (ACMAJORREV_3(pi->pubpi->phy_rev) || ACMAJORREV_4(pi->pubpi->phy_rev) ||
+				ACMAJORREV_40(pi->pubpi->phy_rev)) {
 				MOD_PHYREG(pi, SpecAnaDataCollect, pktprocMuxEn, 1);
 			}
 			break;
@@ -1243,6 +1306,8 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 				}
 				WRITE_PHYREG(pi, data_collect_crosscoresel0, 0x0000);
 				WRITE_PHYREG(pi, data_collect_crosscoresel1, 0xfff0);
+			} else if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+				bitStartVal = 3;
 			} else {
 				if ((bitStartVal < 0) || (bitStartVal > 2)) {
 					bitStartVal = 2;
@@ -1251,6 +1316,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 
 			MOD_PHYREG(pi, AdcDataCollect, bitStart, bitStartVal);
 			MOD_PHYREG(pi, AdcDataCollect, sampSel, 4);
+			MOD_PHYREG(pi, AdcDataCollect, rxCoreSel, coreSel);
 
 			if (pi->bw == WL_CHANSPEC_BW_80) {
 				MOD_PHYREG(pi, AdcDataCollect, downSample, 1);
@@ -1285,7 +1351,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 				to capture 1us of the signal, in this sample capture mode
 			 */
 			words_per_us  =
-				phy_ac_words_per_us(sampi, sd_adc_rate, SC_MODE_4_28nm_farrow_out);
+				phy_ac_words_per_us(sampi, sar_adc_rate, SC_MODE_4_28nm_farrow_out);
 
 			if (ACMAJORREV_25(pi->pubpi->phy_rev)) {
 				MOD_PHYREG(pi, SpecAnaDataCollect, wide64bus_sel, 1);
@@ -1780,7 +1846,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 	/* be deaf if requested (e.g. for spur measurement) */
 	if (collect->be_deaf) {
 		wlapi_suspend_mac_and_wait(pi->sh->physhim);
-		wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 	}
 	wlc_btcx_override_enable(pi);
 
@@ -1812,8 +1878,39 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 	phy_ac_set_startptr(sampi, sc_buff_start);
 	sampi->pstart = sc_buff_start;
 
-	if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
-		/* Disable Mac clkgating */
+	/* Disable Mac clkgating */
+	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		readreg = R_REG(pi->sh->osh, &pi->regs->psm_power_req_sts);
+		W_REG(pi->sh->osh, &pi->regs->psm_power_req_sts,
+			readreg & ~(1<<AUTO_MEM_STBY_RET_SHIFT));
+		readreg = R_REG(pi->sh->osh, &pi->regs->powerctl);
+		W_REG(pi->sh->osh, &pi->regs->powerctl,
+			readreg & ~(1 << PWRCTL_ENAB_MEM_CLK_GATE_SHIFT));
+		W_REG(pi->sh->osh, &pi->regs->powerctl,
+			readreg | (1 << PWRCTL_AUTO_MEM_STBYRET));
+		readreg = R_REG(pi->sh->osh, &pi->regs->u.d11acregs.BMCCTL);
+		W_REG(pi->sh->osh, &pi->regs->u.d11acregs.BMCCTL,
+			readreg & ~(1 << 8));
+
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateReqCtrl0, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateReqCtrl1, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateReqCtrl2, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodeReq0, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodeReq1, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodeReq2, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateStretch0, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateStretch1, 0x2000);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateMisc, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateDivCtrl, 0x22);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGatePhyClkCtrl, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateSts, 0x9853);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateExtReq0, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateExtReq1, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateExtReq2, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodePhyClkCtrl, 0x0);
+	}
+
+	if (ACMAJORREV_36(pi->pubpi->phy_rev) || ACMAJORREV_40(pi->pubpi->phy_rev)) {
 		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateSts, 0x0013);
 	}
 	PHY_TRACE(("wl%d: %s Start capture, trigger = %d\n", pi->sh->unit, __FUNCTION__,
@@ -1899,50 +1996,36 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 		wlapi_bmac_write_shm(pi->sh->physhim, M_SMPL_COL_CTL(pi), 1);
 
 		PHY_TRACE(("wl%d: %s Wait for trigger ...\n", pi->sh->unit, __FUNCTION__));
-		printf("wl%d: %s Wait for trigger ...\n", pi->sh->unit, __FUNCTION__);
-		val = 1;
-
-		do {
-			if (ACMAJORREV_32(pi->pubpi->phy_rev) ||
-				ACMAJORREV_33(pi->pubpi->phy_rev) ||
-				ACMAJORREV_37(pi->pubpi->phy_rev)) {
-				OSL_DELAY(1000); /* making delay same as in tcl */
-				if (D11REV_IS(pi->sh->corerev, 50) ||
-					D11REV_GE(pi->sh->corerev, 54)) {
-					/* check bit 0 and 2 which were set for capture */
-					val = R_REG(pi->sh->osh,
-						&pi->regs->PHYREF_SampleCollectPlayCtrl) & 0x05;
-				} else {
-					/* check bit 4 and 5 which were set for capture */
-					val = R_REG(pi->sh->osh, &pi->regs->psm_phy_hdr_param) &
-						0x30;
-				}
-			} else {
-				OSL_DELAY(790); /* making delay same as in tcl */
-				if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
-					val = (R_REG(pi->sh->osh,
-						&pi->regs->PHYREF_SampleCollectPlayCtrl) & 0x5);
-				} else {
-					val = R_REG(pi->sh->osh, &pi->regs->psm_phy_hdr_param) &
-						0x30;
-				}
-			}
-			timer--;
-		} while ((val != 0) && (timer > 0));
+		if (D11REV_IS(pi->sh->corerev, 50) || D11REV_GE(pi->sh->corerev, 54)) {
+			/* check bit 0 and 2 which were set for capture */
+			SPINWAIT(((val = R_REG(pi->sh->osh, &pi->regs->PHYREF_SampleCollectPlayCtrl)
+			                                                  & 0x05) != 0), timer);
+		} else {
+			/* check bit 4 and 5 which were set for capture */
+			SPINWAIT(((val = R_REG(pi->sh->osh, &pi->regs->psm_phy_hdr_param)
+			                                                  & 0x30) != 0), timer);
+		}
 
 		if (val != 0) {
+			timer = 0;
 			PHY_ERROR(("wl%d: %s timer expired without trigger fired.\n",
 				pi->sh->unit, __FUNCTION__));
+		} else {
 		}
 
 		/* set first and last pointer indices for readout */
 		sampi->plast = phy_ac_get_currptr(sampi);
+		pfirst_wrap_check = (sampi->plast -
+			((collect->pre_dur + collect->post_dur) * words_per_us));
 
 		sampi->pfirst = (sampi->plast -
 				((collect->pre_dur + collect->post_dur) * words_per_us));
 		/* Check for Wrap around */
-		if (sampi->pfirst < sampi->pstart) {
-			sampi->pfirst += (phy_ac_sample_collect_length(sampi)+1);
+		if ((pfirst_wrap_check < sampi->pstart) || pfirst_wrap_check <= 0) {
+			sampi->pfirst = pfirst_wrap_check +
+					phy_ac_sample_collect_length(sampi)+1;
+		} else {
+			sampi->pfirst = pfirst_wrap_check;
 		}
 
 		/* restore mac_ctl */
@@ -1972,7 +2055,7 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 	wlc_phy_btcx_override_disable(pi);
 	/* return from deaf if requested */
 	if (collect->be_deaf) {
-		wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 		wlapi_enable_mac(pi->sh->physhim);
 	}
 
@@ -2016,6 +2099,39 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateSts, save_clkgatests);
 	}
 
+	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		/* Restore clkgatests register */
+
+		readreg = R_REG(pi->sh->osh, &pi->regs->psm_power_req_sts);
+		W_REG(pi->sh->osh, &pi->regs->psm_power_req_sts,
+				readreg | (1<<AUTO_MEM_STBY_RET_SHIFT));
+		readreg = R_REG(pi->sh->osh, &pi->regs->powerctl);
+		W_REG(pi->sh->osh, &pi->regs->powerctl,
+				readreg | (1 << PWRCTL_ENAB_MEM_CLK_GATE_SHIFT));
+		W_REG(pi->sh->osh, &pi->regs->powerctl,
+				readreg | (1 << PWRCTL_AUTO_MEM_STBYRET));
+		readreg = R_REG(pi->sh->osh, &pi->regs->u.d11acregs.BMCCTL);
+		W_REG(pi->sh->osh, &pi->regs->u.d11acregs.BMCCTL,
+				readreg | (1 << 8));
+
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateReqCtrl0, 0xffff);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateReqCtrl1, 0xffff);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateReqCtrl2, 0x3ff);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodeReq0, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodeReq1, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodeReq2, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateStretch0, 0x1010);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateStretch1, 0x2000);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateMisc, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateDivCtrl, 0x27);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGatePhyClkCtrl, 0x7fff);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateExtReq0, 0xffff);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateExtReq1, 0xff);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateExtReq2, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateUcodePhyClkCtrl, 0x0);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_ClkGateSts, save_clkgatests);
+	}
+
 	/* Restore Gpio register */
 	WRITE_PHYREG(pi, gpioLoOutEn, gpioLo_save);
 	WRITE_PHYREG(pi, gpioHiOutEn, gpioHi_save);
@@ -2034,6 +2150,13 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 	/* abort if timeout ocurred */
 	if (timer == 0) {
 		PHY_ERROR(("wl%d: %s Error: Timeout\n", pi->sh->unit, __FUNCTION__));
+		if (pmu_chip_ctl_regupdate == 1) {
+			si_pmu_chipcontrol(pi->sh->sih, PMU_CHIPCTL5,
+					0xFFFFFFFF, pmu_chipctReg5_def);
+		}
+		/* restore gpio lo/hi out enable config */
+		WRITE_PHYREG(pi, gpioLoOutEn, gpioLo_save);
+		WRITE_PHYREG(pi, gpioHiOutEn, gpioHi_save);
 		/* Resume MAC */
 		wlc_phy_conditional_resume(pi, &suspend);
 		return BCME_NOTFOUND;
@@ -2126,10 +2249,8 @@ phy_ac_sample_collect(phy_type_samp_ctx_t *ctx, wl_samplecollect_args_t *collect
 	 * For ATE sample capture, even if mac is reenabled at this point, there is a burst of
 	 * glitches at around 260us.
 	 */
-#ifndef ATE_BUILD
 	if (CHIPID(pi->sh->chip) == BCM4345_CHIP_ID)
 		W_REG(pi->sh->osh, &pi->regs->maccontrol, mac_ctl);
-#endif /* ATE_BUILD */
 	if (ACMAJORREV_4(pi->pubpi->phy_rev) &&
 		phy_get_phymode(pi) == PHYMODE_MIMO) {
 		WRITE_PHYREG(pi, data_collect_crosscoresel0, 0x0000);
@@ -2383,7 +2504,7 @@ void
 phy_ac_lpf_hpc_override(phy_ac_info_t *aci, bool setup)
 {
 	phy_info_t *pi = aci->pi;
-	acphy_lpfCT_phyregs_t *porig = aci->ac_lpfCT_phyregs_orig;
+	acphy_lpfCT_phyregs_t *porig = aci->sampi->ac_lpfCT_phyregs_orig;
 	uint8 core, stall_val;
 	uint16 tmp_tia_hpc, tmp_lpf_dc_bw, val_tia_hpc, val_lpf_dc_bw;
 
@@ -2426,3 +2547,134 @@ phy_ac_lpf_hpc_override(phy_ac_info_t *aci, bool setup)
 	}
 }
 #endif /* SAMPLE_COLLECT */
+
+#ifdef IQPLAY_DEBUG
+static int
+phy_ac_samp_mac_IQplay(phy_ac_samp_info_t *sampi, const uint32* buf, uint16 len, bool start)
+{
+	phy_info_t *pi = sampi->pi;
+
+	if (start) {
+		uint32 startidx = START_IDX_ADDR;
+		if (!(ACMAJORREV_36(pi->pubpi->phy_rev) && !ACMINORREV_0(pi))) {
+
+			/* Load the waveform into MAC buffer */
+			ASSERT(buf != NULL);
+			/* multiply len by 4 since function expects length in bytes */
+			if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+				unsigned long axi_base = AXI_BASE_ADDR;
+				if (wlapi_si_coreunit(pi->sh->physhim) == 1) {
+					axi_base |= MAIN_AUX_CORE_ADDR_OFFSET;
+				}
+
+				unsigned long bm_base_offset = BM_BASE_OFFFSET_ADDR;
+				unsigned long axi_bm_addr = (axi_base + bm_base_offset + startidx);
+
+				memcpy((unsigned long *)axi_bm_addr, buf,
+					len*sizeof(uint32));
+			}
+		}
+		W_REG(pi->sh->osh, &pi->regs->u.d11acregs.SamplePlayStartPtr, startidx/4);
+		W_REG(pi->sh->osh, &pi->regs->u.d11acregs.SamplePlayStopPtr, (startidx/4)+len-1);
+
+		if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+			uint32 stall_val;
+			stall_val = READ_PHYREGFLD(pi, RxFeCtrl1, disable_stalls);
+			ACPHY_DISABLE_STALL(pi);
+			MOD_PHYREG(pi, sampleCmd, enable, 0x1);
+			ACPHY_ENABLE_STALL(pi, stall_val);
+		}
+		/* Play the Waveform */
+		phy_utils_or_phyreg(pi, ACPHY_macbasedDACPlay(phy_rev),
+			ACPHY_macbasedDACPlay_macBasedDACPlayEn_MASK(phy_rev));
+
+		if (!(ACMAJORREV_36(pi->pubpi->phy_rev))) {
+			phy_utils_or_phyreg(pi, ACPHY_macbasedDACPlay(phy_rev),
+			ACPHY_macbasedDACPlay_macBasedDACPlayMode_MASK(phy_rev) & (0x1 <<
+			ACPHY_macbasedDACPlay_macBasedDACPlayMode_SHIFT(phy_rev)));
+		}
+
+		PHY_TRACE(("Starting MAC based Sample Play"));
+		wlc_phy_force_rfseq_acphy(pi, ACPHY_RFSEQ_RX2TX);
+
+		if (D11REV_IS(pi->sh->corerev, 50) || D11REV_GE(pi->sh->corerev, 53)) {
+			uint16 SampleCollectPlayCtrl =
+				R_REG(pi->sh->osh, &pi->regs->PHYREF_SampleCollectPlayCtrl);
+			SampleCollectPlayCtrl |= (1 << SAMPLE_COLLECT_PLAY_CTRL_PLAY_START_SHIFT);
+			W_REG(pi->sh->osh, &pi->regs->PHYREF_SampleCollectPlayCtrl,
+				SampleCollectPlayCtrl);
+		}
+	} else {
+		/* To stop playback */
+		bool mac_sample_play_on = 0;
+		if (D11REV_IS(pi->sh->corerev, 50) || D11REV_GE(pi->sh->corerev, 53)) {
+			uint16 SampleCollectPlayCtrl =
+				R_REG(pi->sh->osh, &pi->regs->PHYREF_SampleCollectPlayCtrl);
+			mac_sample_play_on =
+				((SampleCollectPlayCtrl >>
+					SAMPLE_COLLECT_PLAY_CTRL_PLAY_START_SHIFT) & 1);
+
+			if (mac_sample_play_on) {
+				/* Make the 9th bit zero */
+				SampleCollectPlayCtrl &= 0xFDFF;
+				W_REG(pi->sh->osh, &pi->regs->PHYREF_SampleCollectPlayCtrl,
+					SampleCollectPlayCtrl);
+			}
+		}
+		/* Stop MAC play  by setting macBasedDACPlayEn to 0 */
+		if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+			uint32 stall_val;
+			stall_val = READ_PHYREGFLD(pi, RxFeCtrl1, disable_stalls);
+			ACPHY_DISABLE_STALL(pi);
+			MOD_PHYREG(pi, macbasedDACPlay, macBasedDACPlayEn, 0);
+			MOD_PHYREG(pi, sampleCmd, enable, 0x0);
+			ACPHY_ENABLE_STALL(pi, stall_val);
+		}
+	} /* End of start */
+	return BCME_OK;
+}
+
+static void
+phy_ac_samp_prep_IQplay(phy_type_samp_ctx_t *ctx)
+{
+	uint8 stall_val = 0;
+	uint16  wbcal_waveform_sz;
+	const uint32 *macplay_wfm_ptr;
+	phy_ac_samp_info_t *sampi = (phy_ac_samp_info_t *)ctx;
+	phy_info_t *pi = sampi->pi;
+
+	/* Prepare Mac and Phregs */
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+
+	/* disable Stalls  before mac play and restore it later */
+	phy_ac_samp_mac_IQplay(sampi, NULL, 0, OFF);
+	OSL_DELAY(2);
+
+	stall_val = READ_PHYREGFLD(pi, RxFeCtrl1, disable_stalls);
+
+	MOD_PHYREG(pi, RxFeCtrl1, disable_stalls, 0x1);
+	MOD_PHYREG(pi, sampleCmd, stop, 0x1);
+
+	/* Transmit packet from MAC FIFO */
+	/* sizeof gives sizeof array in bytes and we want it in words */
+
+	wbcal_waveform_sz = ARRAYSIZE(phy_ping_waveform_11ax_test);
+	macplay_wfm_ptr = (const uint32 *)&phy_ping_waveform_11ax_test[0];
+
+	if (D11REV_IS(pi->sh->corerev, 50) || D11REV_GE(pi->sh->corerev, 53)) {
+		uint16 SampleCollectPlayCtrl =
+			R_REG(pi->sh->osh, &pi->regs->PHYREF_SampleCollectPlayCtrl);
+		SampleCollectPlayCtrl |= (1 << SAMPLE_COLLECT_PLAY_CTRL_PLAY_MODE_SHIFT);
+		W_REG(pi->sh->osh, &pi->regs->PHYREF_SampleCollectPlayCtrl,
+			SampleCollectPlayCtrl);
+	}
+
+	phy_ac_samp_mac_IQplay(sampi, macplay_wfm_ptr, wbcal_waveform_sz, ON);
+
+	ACPHY_ENABLE_STALL(pi, stall_val);
+
+	OSL_DELAY(150);
+
+	wlapi_enable_mac(pi->sh->physhim);
+}
+#endif /* IQPLAY_DEBUG */

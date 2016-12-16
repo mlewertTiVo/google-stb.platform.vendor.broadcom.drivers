@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_tpc.h 651513 2016-07-27 08:59:58Z mvermeid $
+ * $Id: phy_type_tpc.h 659961 2016-09-16 18:46:01Z $
  */
 
 #ifndef _phy_type_tpc_h_
@@ -49,6 +49,7 @@ typedef struct phy_tpc_config_info {
 } phy_tpc_config_info_t;
 
 typedef struct phy_tpc_data {
+	phy_tpc_config_info_t *cfg;
 	uint32	base_index_init_invalid_frame_cnt;
 	uint32	txallfrm_cnt_ref; /* #ifdef PREASSOC_PWRCTRL */
 	int16	radiopwr_override; /* phy PWR_CTL override, -1=default */
@@ -68,7 +69,6 @@ typedef struct phy_tpc_data {
 	bool	txpwroverrideset; /* override */
 	bool	txpwrnegative;
 	bool	channel_short_window; /* #ifdef PREASSOC_PWRCTRL */
-	phy_tpc_config_info_t cfg;
 	uint16 chanspec_array[8];
 	char ccode[24];
 	uint16 minpwrlimit_fail;
@@ -100,23 +100,25 @@ typedef void (*phy_type_tpc_store_setting_fn_t)(phy_type_tpc_ctx_t *ctx,
 typedef void (*phy_type_tpc_shortwindow_upd_fn_t)(phy_type_tpc_ctx_t *ctx, bool new_channel);
 typedef void (*phy_type_tpc_sromlimit_get_fn_t)(phy_type_tpc_ctx_t *ctx, chanspec_t chanspec,
     ppr_t *max_pwr, uint8 core);
-typedef void (*phy_type_tpc_check_fn_t)(phy_type_tpc_ctx_t *ctx);
-typedef bool (*phy_type_tpc_get_hwctrl_fn_t)(phy_type_tpc_ctx_t *ctx);
-
+typedef void (*phy_type_tpc_fn_t)(phy_type_tpc_ctx_t *ctx);
+typedef bool (*phy_type_tpc_bool_fn_t)(phy_type_tpc_ctx_t *ctx);
 typedef void (*phy_type_tpc_reglimit_calc_fn_t)(phy_type_tpc_ctx_t *ctx, ppr_t *txpwr,
     ppr_t *txpwr_limit, ppr_ht_mcs_rateset_t *mcs_limits);
 typedef void (*phy_type_tpc_set_fn_t)(phy_type_tpc_ctx_t *ctx, ppr_t *reg_pwr);
 typedef void (*phy_type_tpc_set_flags_fn_t)(phy_type_tpc_ctx_t *ctx, phy_tx_power_t *power);
 typedef void (*phy_type_tpc_set_max_fn_t)(phy_type_tpc_ctx_t *ctx, phy_tx_power_t *power);
 typedef int (*phy_type_tpc_dump_fn_t)(phy_type_tpc_ctx_t *ctx, struct bcmstrbuf *b);
-typedef bool (*phy_type_tpc_recalc_sw_fn_t)(phy_type_tpc_ctx_t *ctx);
 typedef int (*phy_type_tpc_txcorepwroffset_fn_t)(phy_type_tpc_ctx_t *ctx,
 	struct phy_txcore_pwr_offsets*);
 typedef void (*phy_type_tpc_set_avvmid_fn_t)(phy_type_tpc_ctx_t *ctx,
 	wlc_phy_avvmid_txcal_t *avvmidinfo, bool set);
 typedef int (*phy_type_tpc_pavars_fn_t)(phy_type_tpc_ctx_t *ctx, void* a, void* p);
 typedef int8 (*phy_type_tpc_get_maxtxpwr_lowlimit_fn_t)(phy_type_tpc_ctx_t *ctx);
-
+typedef phy_crash_reason_t (*phy_type_tpc_health_check_baseindex_fn_t)(phy_type_tpc_ctx_t *ctx);
+typedef int (*phy_type_tpc_get_est_pout_fn_t)(phy_type_tpc_ctx_t *ctx,
+	uint8* est_Pout, uint8* est_Pout_adj, uint8* est_Pout_cck);
+typedef void (*phy_type_tpc_dump_txpower_limits_fn_t)(phy_type_tpc_ctx_t *ctx,
+	ppr_t *tx_pwr_target);
 typedef struct {
 	/* get TX core power offset */
 	phy_type_tpc_txcorepwroffset_fn_t txcorepwroffsetget;
@@ -143,11 +145,15 @@ typedef struct {
 	/* get SROM limit */
 	phy_type_tpc_sromlimit_get_fn_t get_sromlimit;
 	/* check txpwr limit */
-	phy_type_tpc_check_fn_t check;
+	phy_type_tpc_fn_t check;
+	/* tx power ipa upd */
+	phy_type_tpc_fn_t ipa_upd;
+	/* tx power ipa is on */
+	phy_type_tpc_bool_fn_t ipa_ison;
 	/* calculate regulatory limit */
 	phy_type_tpc_reglimit_calc_fn_t reglimit_calc;
 	/* get hardware control */
-	phy_type_tpc_get_hwctrl_fn_t get_hwctrl;
+	phy_type_tpc_bool_fn_t get_hwctrl;
 	/* set txpwr */
 	phy_type_tpc_set_fn_t set;
 	/* set power flags */
@@ -155,13 +161,21 @@ typedef struct {
 	/* set max target power */
 	phy_type_tpc_set_max_fn_t setmax;
 	/* recalculate sw power control */
-	phy_type_tpc_recalc_sw_fn_t recalc_sw;
+	phy_type_tpc_bool_fn_t recalc_sw;
 	/* set  pavars */
 	phy_type_tpc_pavars_fn_t set_pavars;
 	/* get  pavars */
 	phy_type_tpc_pavars_fn_t get_pavars;
 	/* get maxpower low limit */
 	phy_type_tpc_get_maxtxpwr_lowlimit_fn_t get_maxtxpwr_lowlimit;
+	/* health check base index */
+	phy_type_tpc_health_check_baseindex_fn_t baseindex;
+	/* get_est_pout */
+	phy_type_tpc_get_est_pout_fn_t get_est_pout;
+	/* dump tx power limits */
+	phy_type_tpc_dump_txpower_limits_fn_t dump_txpower_limits;
+	/* set hardware control */
+	phy_type_tpc_set_fcc_pwr_limit_fn_t set_hwctrl;
 	/* context */
 	phy_type_tpc_ctx_t *ctx;
 } phy_type_tpc_fns_t;

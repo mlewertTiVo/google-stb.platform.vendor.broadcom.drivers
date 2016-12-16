@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_bsscfg.c 645446 2016-06-24 05:27:05Z $
+ * $Id: wlc_bsscfg.c 665171 2016-10-15 15:40:29Z $
  */
 
 #include <wlc_cfg.h>
@@ -44,8 +44,20 @@
 #include <wlc_dump.h>
 #if defined(WL_DATAPATH_LOG_DUMP)
 #include <event_log.h>
-#include <proto/event_log_payload.h>
 #endif /* WL_DATAPATH_LOG_DUMP */
+#ifdef TXQ_MUX
+#include <wlc_bcmc_txq.h>
+#endif
+
+/*
+ * Structure to store the interface_create specific handler registration
+ */
+
+typedef struct bsscfg_interface_info {
+	iface_create_hdlr_fn	iface_create_fn;	/* Func ptr for creating the interface */
+	iface_remove_hdlr_fn	iface_remove_fn;	/* Func ptr for removing the interface */
+	void			*iface_module_ctx;	/* Context of the module */
+} bsscfg_interface_info_t;
 
 /** structure for storing global bsscfg module state */
 struct bsscfg_module {
@@ -62,6 +74,8 @@ struct bsscfg_module {
 
 	/* TO BE REPLACED, LEAVE IT AT THE END */
 	bcm_notif_h up_down_notif_hdl;	/**< up/down notifier handle. */
+	bsscfg_interface_info_t *iface_info;	/**< bsscfg interface info */
+	wl_interface_type_t iface_info_max;	/**< Maximum number of interface type supported */
 };
 
 /** Flags that should not be cleared on AP bsscfg up */
@@ -93,6 +107,7 @@ struct bsscfg_module {
 		WLC_BSSCFG_FL2_MFP_REQUIRED | \
 		WLC_BSSCFG_FL2_FBT_1X | \
 		WLC_BSSCFG_FL2_FBT_PSK | \
+		WLC_BSSCFG_FL2_MU | \
 	0)
 /* Clear non-persistant flags2 */
 #define WLC_BSSCFG_FLAGS2_INIT(cfg) do { \
@@ -107,6 +122,9 @@ struct bsscfg_module {
 
 static int wlc_bsscfg_wlc_up(void *ctx);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_bsscfg_dump(wlc_info_t *wlc, struct bcmstrbuf *b);
+#endif
 
 static int wlc_bsscfg_init_int(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
 	wlc_bsscfg_type_t *type, uint flags, struct ether_addr *ea);
@@ -134,9 +152,10 @@ static bool wlc_bsscfg_preserve(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 static wlc_bsscfg_t *wlc_bsscfg_malloc(wlc_info_t *wlc);
 static void wlc_bsscfg_mfree(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 static bool wlc_bsscfg_is_special(wlc_bsscfg_t *cfg);
-
-static void wlc_bsscfg_type_get(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bsscfg_type_t *type);
 static void wlc_bsscfg_info_get(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bsscfg_info_t *info);
+static void wlc_set_iface_info(wlc_bsscfg_t *cfg, wl_interface_info_t *wl_info,
+		wl_interface_create_t *if_buf);
+
 
 /* module */
 
@@ -235,16 +254,9 @@ wlc_bsscfg_doiovar(void *hdl, uint32 actionid,
 	switch (actionid) {
 
 	case IOV_GVAL(IOV_INTERFACE_CREATE): {
-		int idx;
-		wlc_bsscfg_t *cfg;
 		wl_interface_create_t if_buf;
-		bool ap;
-		wl_interface_info_t *wl_info;
-		struct ether_addr *p_ether_addr;
-#ifdef WLRSDB
-		uint32 wlc_index = 0;
-#endif /* WLRSDB */
-		wlc_bsscfg_type_t type = {BSSCFG_TYPE_GENERIC, BSSCFG_SUBTYPE_NONE};
+		wlc_bsscfg_t *cfg = NULL;
+		wl_interface_info_t *wl_info = arg;
 
 		if ((uint)len < sizeof(if_buf)) {
 			WL_ERROR(("wl%d: input buffer too short\n", wlc->pub->unit));
@@ -260,94 +272,62 @@ wlc_bsscfg_doiovar(void *hdl, uint32 actionid,
 			break;
 		}
 
-		/*
-		 * Note that if -w argument is used we would get the
-		 * corresponding wlc, this IOVAR assumes that the correct
-		 * wlc is supplied. But if the wlc_index is passed with -c option
-		 * then it will override the value with -w option.
-		 */
-#ifdef WLRSDB
-		/* In case if RSDB is enabled, use the wlc index from if_buf */
-		if (RSDB_ENAB(wlc->pub)) {
-			if (WLC_RSDB_IS_AUTO_MODE(wlc)) {
-				wlc = wlc->cmn->wlc[0];
-			}
-			else {
-				if (if_buf.flags & WL_INTERFACE_WLC_INDEX_USE) {
-					/* Create virtual interface on other WLC */
-					wlc_index = if_buf.wlc_index;
-
-					if (wlc_index >= MAX_RSDB_MAC_NUM) {
-						WL_ERROR(("wl%d: Invalid WLC Index %d \n",
-							wlc->pub->unit, wlc_index));
-						err = BCME_BADARG;
-						break;
-					}
-
-					wlc = wlc->cmn->wlc[wlc_index];
-				}
-			}
-		} /* end of RSDB_ENAB check */
-#endif /* WLRSDB */
-
-		/* allocate bsscfg */
-		if ((idx = wlc_bsscfg_get_free_idx(wlc)) == BCME_ERROR) {
-			WL_ERROR(("wl%d: no free bsscfg\n", wlc->pub->unit));
-			return BCME_NORESOURCE;
-		}
-
-		if (if_buf.ver < 2) {
-			ap = (if_buf.flags & WL_INTERFACE_CREATE_AP) != 0;
-		} else {
-			ap = (if_buf.iftype == WL_INTERFACE_TYPE_AP) ? TRUE : FALSE;
-		}
-
-		if (if_buf.flags & WL_INTERFACE_MAC_USE)
-			p_ether_addr = &if_buf.mac_addr;
-		else
-			p_ether_addr = NULL;
-
-		type.subtype = ap ? BSSCFG_GENERIC_AP : BSSCFG_GENERIC_STA;
-		cfg = wlc_bsscfg_alloc(wlc, idx, &type, 0, p_ether_addr);
-		if (!cfg) {
-			WL_ERROR(("wl%d: can not allocate bsscfg\n", wlc->pub->unit));
+		if (wl_info == NULL) {
+			err = BCME_BADADDR;
 			break;
 		}
 
-		if (wlc_bsscfg_init(wlc, cfg) != BCME_OK) {
-			WL_ERROR(("wl%d: can not init bsscfg\n", wlc->pub->unit));
-			wlc_bsscfg_free(wlc, cfg);
+		if (if_buf.iftype >= bcmh->iface_info_max) {
+			WL_ERROR(("wl%d: invalid interface type %d\n", WLCWLUNIT(wlc),
+				if_buf.iftype));
+			err = BCME_RANGE;
 			break;
 		}
 
-		/*
-		 * Note that the wlc_bsscfg_init sends WLC_E_IF_ADD event with
-		 * the information about this interface, but all apps are not
-		 * capable of event handling, so returning this info in the
-		 * IOVAR path too.
-		 */
-		if (arg) {
-			wl_info = (wl_interface_info_t *)arg;
-			wl_info->bsscfgidx = (uint8)idx;
-			strncpy(wl_info->ifname, wl_ifname(cfg->wlc->wl, cfg->wlcif->wlif),
-				sizeof(wl_info->ifname) - 1);
-		        wl_info->ifname[sizeof(wl_info->ifname) - 1] = 0;
-			bcopy(&cfg->cur_etheraddr.octet, &wl_info->mac_addr.octet, ETHER_ADDR_LEN);
+		if (bcmh->iface_info[if_buf.iftype].iface_create_fn == NULL) {
+			WL_ERROR(("wl%d: Callback function not registered! iftype:%d\n",
+				WLCWLUNIT(wlc), if_buf.iftype));
+			err = BCME_NOTFOUND;
+			break;
 		}
-		WL_INFORM(("wl%d: Interface Create success\n", wlc->pub->unit));
+		cfg = bcmh->iface_info[if_buf.iftype].iface_create_fn(
+			bcmh->iface_info[if_buf.iftype].iface_module_ctx, &if_buf, wl_info, &err);
+		if (cfg) {
+			/*
+			 * Note that the wlc_bsscfg_init sends WLC_E_IF_ADD event with
+			 * the information about this interface, but all apps are not
+			 * capable of event handling, so returning this info in the
+			 * IOVAR path too.
+			 */
+			wlc_set_iface_info(cfg, wl_info, &if_buf);
+		}
+
+		WL_INFORM(("wl%d: Interface Create status = %d\n", WLCWLUNIT(wlc), err));
 		break;
 	}
 
 	case IOV_SVAL(IOV_INTERFACE_REMOVE):
-		if (WLC_BSSCFG_IDX(bsscfg) != 0) {
-			if (bsscfg->enable) {
-				wlc_bsscfg_disable(wlc, bsscfg);
-			}
-			wlc_bsscfg_free(wlc, bsscfg);
-		} else {
-			WL_ERROR(("wl%d: if_del failed: not delete primary bsscfg\n",
-				wlc->pub->unit));
+		if ((wlc_bsscfg_primary(wlc) == bsscfg) ||
+#ifdef WLRSDB
+			(RSDB_ENAB(wlc->pub) &&
+				(WLC_BSSCFG_IDX(bsscfg) == RSDB_INACTIVE_CFG_IDX)) ||
+#endif /* WLRSDB */
+			FALSE) {
+			WL_ERROR(("wl%d: if_del failed: cannot delete primary bsscfg\n",
+				WLCWLUNIT(wlc)));
+			err = BCME_EPERM;
+			break;
 		}
+		if ((bsscfg->iface_type < bcmh->iface_info_max) &&
+			(bcmh->iface_info[bsscfg->iface_type].iface_remove_fn)) {
+			err = bcmh->iface_info[bsscfg->iface_type].iface_remove_fn(wlc, bsscfg);
+		} else {
+			WL_ERROR(("wl%d: Failed to remove iface_type:%d\n", WLCWLUNIT(wlc),
+				bsscfg->iface_type));
+			err =  BCME_NOTFOUND;
+		}
+
+		WL_INFORM(("wl%d: Interface remove status = %d\n", WLCWLUNIT(wlc), err));
 		break;
 
 	case IOV_GVAL(IOV_BSSCFG_INFO):
@@ -422,10 +402,29 @@ BCMATTACHFN(wlc_bsscfg_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-	bcmh->cfgtotsize = ROUNDUP(sizeof(wlc_bsscfg_t), PTRSZ);
-	bcmh->cfgtotsize += ROUNDUP(DOT11_EXTCAP_LEN_MAX, PTRSZ);
-	bcmh->ext_cap_max = DOT11_EXTCAP_LEN_MAX;
+	/* Interface create list allocation */
+	bcmh->iface_info = (bsscfg_interface_info_t *)
+				obj_registry_get(wlc->objr, OBJR_IFACE_CREATE_INFO);
+	if (bcmh->iface_info == NULL) {
+		bcmh->iface_info = MALLOCZ(wlc->osh,
+			(sizeof(*bcmh->iface_info) * WL_INTERFACE_TYPE_MAX));
+		if (bcmh->iface_info == NULL) {
+			WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+				WLCWLUNIT(wlc), __FUNCTION__, MALLOCED(wlc->osh)));
+			goto fail;
+		}
+		obj_registry_set(wlc->objr, OBJR_IFACE_CREATE_INFO, bcmh->iface_info);
+	}
+	(void)obj_registry_ref(wlc->objr, OBJR_IFACE_CREATE_INFO);
+	bcmh->iface_info_max = WL_INTERFACE_TYPE_MAX;
 
+	bcmh->cfgtotsize = ROUNDUP(sizeof(wlc_bsscfg_t), PTRSZ);
+	bcmh->cfgtotsize += ROUNDUP(CEIL(DOT11_EXT_CAP_MAX_IDX, NBBY), PTRSZ);
+	bcmh->ext_cap_max = CEIL(DOT11_EXT_CAP_MAX_IDX, NBBY);
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "bsscfg", (dump_fn_t)wlc_bsscfg_dump, (void *)wlc);
+#endif
 
 	if (wlc_module_register(wlc->pub, wlc_bsscfg_iovars, "bsscfg", bcmh,
 		wlc_bsscfg_doiovar, NULL, wlc_bsscfg_wlc_up,
@@ -475,6 +474,14 @@ BCMATTACHFN(wlc_bsscfg_detach)(bsscfg_module_t *bcmh)
 	if (bcmh->rxbcn_nh != NULL)
 		bcm_notif_delete_list(&bcmh->rxbcn_nh);
 
+	if (obj_registry_unref(wlc->objr, OBJR_IFACE_CREATE_INFO) == 0) {
+		obj_registry_set(wlc->objr, OBJR_IFACE_CREATE_INFO, NULL);
+		if (bcmh->iface_info != NULL) {
+			MFREE(wlc->osh, bcmh->iface_info,
+				(sizeof(*bcmh->iface_info) * bcmh->iface_info_max));
+		}
+	}
+
 	wlc_cubby_detach(bcmh->cubby_info);
 
 	MFREE(wlc->osh, bcmh, sizeof(bsscfg_module_t));
@@ -516,16 +523,29 @@ wlc_bsscfg_wlc_up(void *ctx)
 	return BCME_OK;
 }
 
+#ifdef BCMDBG
+/* undefine the BCMDBG helper macros so they will not interfere with the function definitions */
+#undef wlc_bsscfg_cubby_reserve
+#undef wlc_bsscfg_cubby_reserve_ext
+#endif
 
 /**
  * Reduced parameter version of wlc_bsscfg_cubby_reserve_ext().
  *
  * Return value: negative values are errors.
  */
+#ifdef BCMDBG
+int
+BCMATTACHFN(wlc_bsscfg_cubby_reserve)(wlc_info_t *wlc, uint size,
+	bsscfg_cubby_init_t fn_init, bsscfg_cubby_deinit_t fn_deinit,
+	bsscfg_cubby_dump_t fn_dump, void *ctx,
+	const char *func)
+#else
 int
 BCMATTACHFN(wlc_bsscfg_cubby_reserve)(wlc_info_t *wlc, uint size,
 	bsscfg_cubby_init_t fn_init, bsscfg_cubby_deinit_t fn_deinit,
 	bsscfg_cubby_dump_t fn_dump, void *ctx)
+#endif /* BSSCFG */
 {
 	bsscfg_cubby_params_t params;
 	int ret;
@@ -537,7 +557,11 @@ BCMATTACHFN(wlc_bsscfg_cubby_reserve)(wlc_info_t *wlc, uint size,
 	params.fn_deinit = fn_deinit;
 	params.fn_dump = fn_dump;
 
+#ifdef BCMDBG
+	ret = wlc_bsscfg_cubby_reserve_ext(wlc, size, &params, func);
+#else
 	ret = wlc_bsscfg_cubby_reserve_ext(wlc, size, &params);
+#endif
 	return ret;
 }
 
@@ -552,8 +576,13 @@ BCMATTACHFN(wlc_bsscfg_cubby_reserve)(wlc_info_t *wlc, uint size,
  * negative values are errors.
  */
 int
+#ifdef BCMDBG
+BCMATTACHFN(wlc_bsscfg_cubby_reserve_ext)(wlc_info_t *wlc, uint size,
+	bsscfg_cubby_params_t *params, const char *func)
+#else
 BCMATTACHFN(wlc_bsscfg_cubby_reserve_ext)(wlc_info_t *wlc, uint size,
 	bsscfg_cubby_params_t *params)
+#endif
 {
 	bsscfg_module_t *bcmh = wlc->bcmh;
 	wlc_cubby_fn_t fn;
@@ -570,7 +599,15 @@ BCMATTACHFN(wlc_bsscfg_cubby_reserve_ext)(wlc_info_t *wlc, uint size,
 #if defined(WL_DATAPATH_LOG_DUMP)
 	fn.fn_data_log_dump = (cubby_datapath_log_dump_fn_t)params->fn_data_log_dump;
 #endif
+#if defined(BCMDBG)
+	fn.name = func;
+#endif
 
+	/* Optional Cubby copy function. Currently we dont support
+	* update API for bsscfg cubby copy. Only get/set
+	* functions should be used by the callers to allow
+	* copy of cubby data during bsscfg clone.
+	*/
 	bzero(&cp_fn, sizeof(cp_fn));
 	cp_fn.fn_get = (cubby_get_fn_t)params->fn_get;
 	cp_fn.fn_set = (cubby_set_fn_t)params->fn_set;
@@ -671,6 +708,65 @@ BCMATTACHFN(wlc_bsscfg_updown_unregister)(wlc_info_t *wlc, bsscfg_up_down_fn_t c
 	hdl = wlc->bcmh->up_down_notif_hdl;
 
 	return bcm_notif_remove_interest(hdl, (bcm_notif_client_callback)callback, arg);
+}
+
+/**
+ * wlc_bsscfg_iface_register()
+ *
+ * This function registers a callback that will be invoked while creating an interface.
+ *
+ * Parameters
+ *    wlc       Common driver context.
+ *    if_type	Type of interface to be created.
+ *    callback  Invoke respective interface creation callback function.
+ *    ctx       Context of the respective callback function.
+ * Returns:
+ *    BCME_OK on success, else BCME_xxx error code.
+ */
+int
+BCMATTACHFN(wlc_bsscfg_iface_register)(wlc_info_t *wlc, wl_interface_type_t if_type,
+		iface_create_hdlr_fn create_cb, iface_remove_hdlr_fn remove_cb, void *ctx)
+{
+	bsscfg_interface_info_t *iface_info = wlc->bcmh->iface_info;
+
+	if (if_type >= wlc->bcmh->iface_info_max) {
+		WL_ERROR(("wl%d: invalid interface type\n", WLCWLUNIT(wlc)));
+		return (BCME_RANGE);
+	}
+
+	iface_info[if_type].iface_create_fn = create_cb;
+	iface_info[if_type].iface_remove_fn = remove_cb;
+	iface_info[if_type].iface_module_ctx = ctx;
+
+	return (BCME_OK);
+}
+
+/**
+ * wlc_bsscfg_iface_unregister()
+ *
+ * This function unregisters a callback that will be invoked while creating an interface.
+ *
+ * Parameters
+ *    wlc       Common driver context.
+ *    if_type	Type of interface to be created.
+ * Returns:
+ *    BCME_OK on success, else BCME_xxx error code.
+ */
+int32
+BCMATTACHFN(wlc_bsscfg_iface_unregister)(wlc_info_t *wlc, wl_interface_type_t if_type)
+{
+	bsscfg_interface_info_t *iface_info = wlc->bcmh->iface_info;
+
+	if (if_type >= wlc->bcmh->iface_info_max) {
+		WL_ERROR(("wl%d: invalid interface type\n", WLCWLUNIT(wlc)));
+		return (BCME_RANGE);
+	}
+
+	iface_info[if_type].iface_create_fn = NULL;
+	iface_info[if_type].iface_remove_fn = NULL;
+	iface_info[if_type].iface_module_ctx = NULL;
+
+	return (BCME_OK);
 }
 
 /* These functions register/unregister/invoke the callback
@@ -853,16 +949,6 @@ wlc_bsscfg_up(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 
 #ifdef AP
 	if (BSSCFG_AP(cfg)) {
-#ifdef STA
-		bool mpc_out = wlc->mpc_out;
-#endif
-
-#ifdef STA
-		/* bringup the driver */
-		wlc->mpc_out = TRUE;
-		wlc_radio_mpc_upd(wlc);
-#endif
-
 		/* AP mode operation must have the driver up before bringing
 		 * up a configuration
 		 */
@@ -881,11 +967,11 @@ wlc_bsscfg_up(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 
 #ifdef WLRSDB
 		if (RSDB_ENAB(wlc->pub)) {
-			ret = wlc_rsdb_ap_bringup(wlc, &cfg);
+			ret = wlc_rsdb_ap_bringup(wlc->rsdbinfo, &cfg);
 			if (ret == BCME_NOTREADY) {
 				return ret;
 			} else if (ret == BCME_ASSOCIATED) {
-				cfg->up = FALSE;
+				ret = BCME_OK;
 				goto end;
 			} else if (ret != BCME_OK) {
 				goto end;
@@ -944,8 +1030,6 @@ wlc_bsscfg_up(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 				WLC_BSSCFG_IDX(cfg)));
 		}
 #ifdef STA
-		wlc->mpc_out = mpc_out;
-		wlc_radio_mpc_upd(wlc);
 		wlc_set_wake_ctrl(wlc);
 #endif
 	}
@@ -957,6 +1041,21 @@ wlc_bsscfg_up(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 	}
 #endif
 
+	if (cfg->up) {
+		if (!(cfg->flags & WLC_BSSCFG_NOBCMC) &&
+			(BSSCFG_AP(cfg) || BSSCFG_IBSS(cfg))) {
+			/* Allocate the BCMC scb when bringing up the BSS */
+			if (wlc_bsscfg_bcmcscballoc(wlc, cfg)) {
+				WL_ERROR(("wl%d: %s: wlc_bsscfg_handle_bcmcscb_alloc\n",
+					wlc->pub->unit, __FUNCTION__));
+				ret = BCME_NOMEM;
+				cfg->up = FALSE;
+				goto err_ret;
+			}
+		}
+	}
+
+err_ret:
 	if (stop || ret != BCME_OK)
 		return ret;
 
@@ -968,12 +1067,12 @@ wlc_bsscfg_up(wlc_info_t *wlc, wlc_bsscfg_t *cfg)
 
 	/* invoke bsscfg up callbacks */
 	/* TO BE REPLACED BY ABOVE STATE CHANGE CALLBACK */
-	{
-	bsscfg_up_down_event_data_t evt_data;
-	memset(&evt_data, 0, sizeof(evt_data));
-	evt_data.bsscfg = cfg;
-	evt_data.up     = TRUE;
-	bcm_notif_signal(bcmh->up_down_notif_hdl, &evt_data);
+	if (cfg->up) {
+		bsscfg_up_down_event_data_t evt_data;
+		memset(&evt_data, 0, sizeof(evt_data));
+		evt_data.bsscfg = cfg;
+		evt_data.up     = TRUE;
+		bcm_notif_signal(bcmh->up_down_notif_hdl, &evt_data);
 	}
 
 	return ret;
@@ -1009,6 +1108,10 @@ wlc_bsscfg_enable(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 {
 	bsscfg_module_t *bcmh = wlc->bcmh;
 	bsscfg_state_upd_data_t st_data;
+#ifdef STA
+	bool mpc_out = wlc->mpc_out;
+#endif
+	int ret = BCME_OK;
 
 	ASSERT(bsscfg != NULL);
 
@@ -1016,42 +1119,56 @@ wlc_bsscfg_enable(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 		wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg),
 		(bsscfg->enable ? "ENABLED" : "DISABLED")));
 
+#ifdef MBSS
+	if (MBSS_ENAB(wlc->pub)) {
+		; /* do nothing */
+	} else
+#endif
+	{
+	/* block simultaneous multiple same band AP connection */
+	if (RSDB_ENAB(wlc->pub)) {
+		if (BSSCFG_AP(bsscfg) && AP_ACTIVE(wlc)) {
+			int idx;
+			wlc_bsscfg_t *cfg;
+			FOREACH_BSS(wlc, idx, cfg) {
+				if (cfg == bsscfg)
+					continue;
+				if (BSSCFG_AP_UP(cfg) &&
+					CHSPEC_BANDUNIT(cfg->current_bss->chanspec) ==
+					CHSPEC_BANDUNIT(wlc->default_bss->chanspec)) {
+					WL_ERROR(("wl%d.%d: Cannot enable "
+						"multiple AP bsscfg in same band\n",
+						wlc->pub->unit,
+						bsscfg->_idx));
+					return BCME_ERROR;
+				}
+			}
+		}
+	}
+	/* block simultaneous IBSS and AP connection */
+	if (BSSCFG_AP(bsscfg)) {
+		uint ibss_bsscfgs = wlc_ibss_cnt(wlc);
+		if (ibss_bsscfgs) {
+			WL_ERROR(("wl%d: Cannot enable AP bsscfg with a IBSS\n",
+				wlc->pub->unit));
+			return BCME_ERROR;
+		}
+	}
+	}
+
 	bzero(&st_data, sizeof(st_data));
 	st_data.cfg = bsscfg;
 	st_data.old_enable = bsscfg->enable;
 	st_data.old_up = bsscfg->up;
 
-	if (!MBSS_ENAB(wlc->pub)) {
-		/* block simultaneous multiple same band AP connection */
-		if (RSDB_ENAB(wlc->pub)) {
-			if (BSSCFG_AP(bsscfg) && AP_ACTIVE(wlc)) {
-				int idx;
-				wlc_bsscfg_t *cfg;
-				FOREACH_BSS(wlc, idx, cfg) {
-					if (cfg == bsscfg)
-						continue;
-					if (BSSCFG_AP_UP(cfg) &&
-						CHSPEC_BANDUNIT(cfg->current_bss->chanspec) ==
-						CHSPEC_BANDUNIT(wlc->default_bss->chanspec)) {
-						WL_ERROR(("wl%d.%d: Cannot enable "
-							"multiple AP bsscfg in same band\n",
-							wlc->pub->unit,
-							bsscfg->_idx));
-						return BCME_ERROR;
-					}
-				}
-			}
-		}
-		/* block simultaneous IBSS and AP connection */
-		if (BSSCFG_AP(bsscfg)) {
-			uint ibss_bsscfgs = wlc_ibss_cnt(wlc);
-			if (ibss_bsscfgs) {
-				WL_ERROR(("wl%d: Cannot enable AP bsscfg with a IBSS\n",
-					wlc->pub->unit));
-				return BCME_ERROR;
-			}
-		}
+#ifdef STA
+	/* For AP+STA combo build */
+	if (BSSCFG_AP(bsscfg)) {
+		/* bringup the driver */
+		wlc->mpc_out = TRUE;
+		wlc_radio_mpc_upd(wlc);
 	}
+#endif
 
 	bsscfg->enable = TRUE;
 
@@ -1063,7 +1180,8 @@ wlc_bsscfg_enable(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 			WL_ERROR(("wl%d: max %d ap bss allowed\n",
 			          wlc->pub->unit, WLC_MAX_AP_BSS(wlc->pub->corerev)));
 			bsscfg->enable = FALSE;
-			return BCME_ERROR;
+			ret = BCME_ERROR;
+			goto fail;
 		}
 #endif /* MBSS */
 	}
@@ -1075,8 +1193,20 @@ wlc_bsscfg_enable(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 	bcm_notif_signal(bcmh->state_upd_notif_hdl, &st_data);
 
 	if (BSSCFG_AP(bsscfg)) {
-		return wlc_bsscfg_up(wlc, bsscfg);
+		ret = wlc_bsscfg_up(wlc, bsscfg);
 	}
+
+#ifdef MBSS
+fail:
+#endif
+
+#ifdef STA
+	/* For AP+STA combo build */
+	if (BSSCFG_AP(bsscfg)) {
+		wlc->mpc_out = mpc_out;
+		wlc_radio_mpc_upd(wlc);
+	}
+#endif
 
 	/* wlc_bsscfg_up() will be called for STA assoication code:
 	 * - for IBSS, in wlc_join_start_ibss() and in wlc_join_BSS()
@@ -1088,7 +1218,7 @@ wlc_bsscfg_enable(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 	 * }
 	 */
 
-	return BCME_OK;
+	return ret;
 }
 
 static void
@@ -1184,12 +1314,13 @@ do_down:
 #endif /* MBSS */
 
 #ifdef STA
-		wlc_radio_mpc_upd(wlc);
 		wlc_set_wake_ctrl(wlc);
 #endif
 	}
 #endif /* AP */
 
+	/* Always BCMC SCBs are de-allocated as part of bsscfg-down */
+	wlc_bsscfg_bcmcscbfree(wlc, cfg);
 
 	return callbacks;
 }
@@ -1238,6 +1369,14 @@ wlc_bsscfg_disable(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 	 * driver down path.
 	 */
 	callbacks += cbpend_sum;
+
+#ifdef STA
+	/* For AP+STA combo build */
+	if (BSSCFG_AP(bsscfg)) {
+		/* force an update to power down the radio */
+		wlc_radio_mpc_upd(wlc);
+	}
+#endif
 
 	return callbacks;
 }
@@ -1292,8 +1431,9 @@ wlc_bsscfg_ap_init(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 
 	BSSCFG_SET_PSINFO(bsscfg);
 
-#ifdef BCMPCIEDEV_ENABLED
-	bsscfg->ap_isolate = AP_ISOLATE_SENDUP_ALL;
+#ifdef BCMPCIEDEV
+	if (BCMPCIEDEV_ENAB())
+		bsscfg->ap_isolate = AP_ISOLATE_SENDUP_ALL;
 #endif
 
 	/* invoke bsscfg cubby init function */
@@ -1302,14 +1442,6 @@ wlc_bsscfg_ap_init(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), __FUNCTION__, ret));
 		return ret;
 	}
-
-	/* Allocate a broadcast SCB for each band */
-	if ((ret = wlc_bsscfg_bcmcscballoc(wlc, bsscfg)) != BCME_OK) {
-		WL_ERROR(("wl%d.%d: %s: wlc_bsscfg_bcmcscballoc failed with err %d\n",
-		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), __FUNCTION__, ret));
-		return ret;
-	}
-
 	return BCME_OK;
 }
 
@@ -1318,8 +1450,6 @@ wlc_bsscfg_ap_deinit(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 {
 	WL_APSTA_UPDN(("wl%d.%d: wlc_bsscfg_ap_deinit:\n",
 	               wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg)));
-
-	wlc_bsscfg_bcmcscbfree(wlc, bsscfg);
 
 	/* invoke bsscfg cubby deinit function */
 	wlc_bsscfg_cubby_deinit(wlc, bsscfg);
@@ -1343,14 +1473,6 @@ wlc_bsscfg_sta_init(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), __FUNCTION__, ret));
 		return ret;
 	}
-
-	/* Allocate a broadcast SCB for each band */
-	if ((ret = wlc_bsscfg_bcmcscballoc(wlc, bsscfg)) != BCME_OK) {
-		WL_ERROR(("wl%d.%d: %s: wlc_bsscfg_bcmcscballoc failed with err %d\n",
-		          wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), __FUNCTION__, ret));
-		return ret;
-	}
-
 	return BCME_OK;
 }
 
@@ -1359,8 +1481,6 @@ wlc_bsscfg_sta_deinit(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 {
 	WL_APSTA_UPDN(("wl%d.%d: wlc_bsscfg_sta_deinit:\n",
 	               wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg)));
-
-	wlc_bsscfg_bcmcscbfree(wlc, bsscfg);
 
 	/* invoke bsscfg cubby deinit function */
 	wlc_bsscfg_cubby_deinit(wlc, bsscfg);
@@ -1467,7 +1587,6 @@ typedef struct {
 
 static const bsscfg_ap_type_t bsscfg_ap_types[] = {
 	{BSSCFG_TYPE_GENERIC, BSSCFG_GENERIC_AP},
-	{BSSCFG_TYPE_BTA, BSSCFG_BTA_INI},
 	{BSSCFG_TYPE_P2P, BSSCFG_P2P_GO}
 };
 
@@ -1505,8 +1624,6 @@ typedef struct {
 static const bsscfg_bss_type_t bsscfg_bss_types[] = {
 	{BSSCFG_TYPE_GENERIC, BSSCFG_GENERIC_AP},
 	{BSSCFG_TYPE_GENERIC, BSSCFG_GENERIC_STA},
-	{BSSCFG_TYPE_BTA, BSSCFG_BTA_INI},
-	{BSSCFG_TYPE_BTA, BSSCFG_BTA_RESP},
 	{BSSCFG_TYPE_P2P, BSSCFG_P2P_GO},
 	{BSSCFG_TYPE_P2P, BSSCFG_P2P_GC},
 	{BSSCFG_TYPE_PSTA, BSSCFG_SUBTYPE_NONE}
@@ -1544,10 +1661,27 @@ wlc_bsscfg_type_set(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bsscfg_type_t *type)
 {
 	BCM_REFERENCE(wlc);
 	cfg->type = type->type;
+	cfg->subtype = type->subtype;
 	cfg->_ap = wlc_bsscfg_type_isAP(type);
 	cfg->BSS = wlc_bsscfg_type_isBSS(type);
 }
 
+#ifdef BCMDBG
+static const char *_wlc_bsscfg_type_name(bsscfg_type_t type);
+static const char *_wlc_bsscfg_subtype_name(uint subtype);
+
+static const char *
+wlc_bsscfg_type_name(wlc_bsscfg_type_t *type)
+{
+	return _wlc_bsscfg_type_name(type->type);
+}
+
+static const char *
+wlc_bsscfg_subtype_name(wlc_bsscfg_type_t *type)
+{
+	return _wlc_bsscfg_subtype_name(type->subtype);
+}
+#endif /* BCMDBG */
 
 /* TODO: fold this minimum reinit into the regular reinit logic to make sure
  * it won't diverge in the future...
@@ -1622,6 +1756,15 @@ wlc_bsscfg_type_fixup(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bsscfg_type_t *typ
 		/* reset in case of a role change between Infra STA and IBSS STA */
 		else
 			cfg->flags &= ~(WLC_BSSCFG_HW_BCN | WLC_BSSCFG_HW_PRB);
+	}
+
+	/* In case of IBSS-STA/BSS-AP mode, BCMC SCBs are allocated */
+	if ((!(cfg->flags & WLC_BSSCFG_NOBCMC) &&
+		(BSSCFG_IBSS(cfg) || BSSCFG_AP(cfg))) &&
+		wlc_bsscfg_bcmcscballoc(wlc, cfg)) {
+		WL_ERROR(("wl%d: %s: wlc_bsscfg_handle_bcmcscb_alloc\n",
+		wlc->pub->unit, __FUNCTION__));
+		return BCME_NOMEM;
 	}
 
 	return BCME_OK;
@@ -1789,11 +1932,14 @@ wlc_bsscfg_alloc(wlc_info_t *wlc, int idx, wlc_bsscfg_type_t *type,
 		goto fail;
 	}
 
+	/* Initialize invalid iface_type */
+	bsscfg->iface_type = wlc->bcmh->iface_info_max;
+
 	return bsscfg;
 
 fail:
 	if (bsscfg != NULL)
-		wlc_bsscfg_free(wlc, bsscfg);
+		wlc_bsscfg_mfree(wlc, bsscfg);
 	return NULL;
 }
 
@@ -1844,16 +1990,14 @@ wlc_bsscfg_reset(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, wlc_bsscfg_type_t *type,
 static void
 wlc_bsscfg_bcmcscbfree(struct wlc_info *wlc, wlc_bsscfg_t *bsscfg)
 {
-	int ii;
+	if (!BSSCFG_HAS_BCMC_SCB(bsscfg))
+		return;
 
-	for (ii = 0; ii < MAXBANDS; ii++) {
-		if (bsscfg->bcmc_scb[ii]) {
-			WL_INFORM(("bcmc_scb: band %d: free internal scb for 0x%p\n",
-			           ii, OSL_OBFUSCATE_BUF(bsscfg->bcmc_scb[ii])));
-			wlc_bcmcscb_free(wlc, bsscfg->bcmc_scb[ii]);
-			bsscfg->bcmc_scb[ii] = NULL;
-		}
-	}
+	WL_INFORM(("bcmc_scb: free internal scb for 0x%p\n",
+	           OSL_OBFUSCATE_BUF(bsscfg->bcmc_scb)));
+
+	wlc_bcmcscb_free(wlc, bsscfg->bcmc_scb);
+	bsscfg->bcmc_scb = NULL;
 }
 
 void
@@ -1918,11 +2062,17 @@ wlc_bsscfg_free(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 	WL_APSTA_UPDN(("wl%d.%d: wlc_bsscfg_free: flags = 0x%x\n",
 	               wlc->pub->unit, WLC_BSSCFG_IDX(bsscfg), bsscfg->flags));
 
+	/* RSDB linked bsscfg should be freed via wlc_rsdb_bsscfg_delete() */
+	ASSERT((bsscfg->flags2 & WLC_BSSCFG_FL2_RSDB_LINKED) == 0);
+
 
 	wlc_bsscfg_deinit(wlc, bsscfg);
 
 	/* delete the upper-edge driver interface */
 	wlc_bsscfg_deinit_intf(wlc, bsscfg);
+
+	/* free all scbs */
+	wlc_bsscfg_bcmcscbfree(wlc, bsscfg);
 
 	/* free the wlc_bsscfg struct if it was an allocated one */
 	idx = bsscfg->_idx;
@@ -2000,7 +2150,7 @@ wlc_bsscfg_reinit(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, wlc_bsscfg_type_t *type
 }
 
 /* query type & subtype */
-static void
+void
 wlc_bsscfg_type_get(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bsscfg_type_t *type)
 {
 	type->type = cfg->type;
@@ -2159,27 +2309,33 @@ fail:
 wlc_bsscfg_t *
 wlc_bsscfg_find_by_wlcif(wlc_info_t *wlc, wlc_if_t *wlcif)
 {
+	wlc_bsscfg_t *ret = NULL; /**< return value */
+
 	/* wlcif being NULL implies primary interface hence primary bsscfg */
 	if (wlcif == NULL) {
 		if (wlc != NULL) {
-			return wlc_bsscfg_primary(wlc);
-		} else {
-			return NULL;
+			ret = wlc_bsscfg_primary(wlc);
+		}
+	} else {
+		switch (wlcif->type) {
+		case WLC_IFTYPE_BSS:
+			ret = wlcif->u.bsscfg;
+			break;
+#ifdef AP
+		case WLC_IFTYPE_WDS:
+			ret = SCB_BSSCFG(wlcif->u.scb);
+			break;
+#endif
+		default:
+			WL_ERROR(("wl%d: Unknown wlcif %p type %d\n",
+				wlc->pub->unit, OSL_OBFUSCATE_BUF(wlcif), wlcif->type));
+			break;
 		}
 	}
-	switch (wlcif->type) {
-	case WLC_IFTYPE_BSS:
-		return wlcif->u.bsscfg;
-#ifdef AP
-	case WLC_IFTYPE_WDS:
-		return SCB_BSSCFG(wlcif->u.scb);
-#endif
-	}
 
-	WL_ERROR(("wl%d: Unknown wlcif %p type %d\n",
-		wlc->pub->unit, OSL_OBFUSCATE_BUF(wlcif), wlcif->type));
-	return NULL;
-}
+	ASSERT(ret != NULL);
+	return ret;
+} /* wlc_bsscfg_find_by_wlcif */
 
 /* special bsscfg types */
 static bool
@@ -2405,48 +2561,51 @@ wlc_bsscfg_init_intf(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 }
 
 static int
-_wlc_bsscfg_bcmcscballoc(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, uint band)
+wlc_bsscfg_bcmcscbinit(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, uint band)
 {
-	ASSERT(bsscfg->bcmc_scb[band] == NULL);
+	ASSERT(bsscfg != NULL);
+	ASSERT(wlc != NULL);
 
-	if ((bsscfg->bcmc_scb[band] =
-	     wlc_bcmcscb_alloc(wlc, bsscfg, wlc->bandstate[band])) == NULL) {
-		WL_ERROR(("wl%d: %s: fail to alloc scb for bsscfg %d\n",
-		          wlc->pub->unit, __FUNCTION__, WLC_BSSCFG_IDX(bsscfg)));
+	if (!bsscfg->bcmc_scb) {
+		bsscfg->bcmc_scb =
+			wlc_bcmcscb_alloc(wlc, bsscfg, wlc->bandstate[band]);
+		WL_INFORM(("wl%d: wlc_bsscfg_bcmcscbinit: band %d: alloc internal scb 0x%p for "
+			   "bsscfg 0x%p\n", wlc->pub->unit, band, bsscfg->bcmc_scb, bsscfg));
+	}
+
+	if (!bsscfg->bcmc_scb) {
+		WL_ERROR(("wl%d: %s: fail to alloc scb for bsscfg 0x%p\n",
+		          wlc->pub->unit, __FUNCTION__, bsscfg));
 		return BCME_NOMEM;
 	}
 
-	return  BCME_OK;
+	return BCME_OK;
 }
 
 static int
 wlc_bsscfg_bcmcscballoc(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 {
-	int ret;
+	ASSERT(bsscfg != NULL);
+	ASSERT(wlc != NULL);
 
-	if (!(bsscfg->flags & WLC_BSSCFG_NOBCMC)) {
-		if (!IS_SINGLEBAND_5G(wlc->deviceid)) {
-			if (_wlc_bsscfg_bcmcscballoc(wlc, bsscfg, BAND_2G_INDEX)) {
-				WL_ERROR(("wl%d: %s: _wlc_bsscfg_bcmcscbinit failed for 2G\n",
-					wlc->pub->unit, __FUNCTION__));
-				ret = BCME_NOMEM;
-				goto err;
-			}
-		}
-		if (NBANDS(wlc) > 1 || IS_SINGLEBAND_5G(wlc->deviceid)) {
-			if (_wlc_bsscfg_bcmcscballoc(wlc, bsscfg, BAND_5G_INDEX)) {
-				WL_ERROR(("wl%d: %s: _wlc_bsscfg_bcmcscbinit failed for 5G\n",
-					wlc->pub->unit, __FUNCTION__));
-				ret = BCME_NOMEM;
-				goto err;
-			}
+	/* If BCMC SCB is allocated previously then do not allocate */
+	if (!BSSCFG_HAS_BCMC_SCB(bsscfg)) {
+		/* init the band index for the BCMC SCB */
+		uint8 band_idx = BAND_2G_INDEX;
+		if (IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap))
+			band_idx = BAND_5G_INDEX;
+
+		if (wlc_bsscfg_bcmcscbinit(wlc, bsscfg, band_idx)) {
+			WL_ERROR(("wl%d: %s: wlc_bsscfg_bcmcscbinit failed for band %d\n",
+				wlc->pub->unit, __FUNCTION__, band_idx));
+			return BCME_NOMEM;
 		}
 	}
 
-	return BCME_OK;
+	/* Initialize the band unit to the one corresponding to the wlc */
+	bsscfg->bcmc_scb->bandunit = wlc->band->bandunit;
 
-err:
-	return ret;
+	return BCME_OK;
 }
 
 #ifdef STA
@@ -2539,11 +2698,12 @@ wlc_bsscfg_SSID_set(wlc_bsscfg_t *bsscfg, const uint8 *SSID, int len)
 }
 
 static void
-wlc_bsscfg_update_ext_cap_len(wlc_bsscfg_t *bsscfg)
+wlc_bsscfg_update_ext_cap_len(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg)
 {
+	bsscfg_module_t *bcmh = wlc->bcmh;
 	int i;
 
-	for (i = DOT11_EXTCAP_LEN_MAX - 1; i >= 0; i--) {
+	for (i = bcmh->ext_cap_max - 1; i >= 0; i--) {
 		if (bsscfg->ext_cap[i] != 0)
 			break;
 	}
@@ -2554,7 +2714,8 @@ wlc_bsscfg_update_ext_cap_len(wlc_bsscfg_t *bsscfg)
 int
 wlc_bsscfg_set_ext_cap(wlc_bsscfg_t *bsscfg, uint32 bit, bool val)
 {
-	bsscfg_module_t *bcmh = bsscfg->wlc->bcmh;
+	wlc_info_t *wlc = bsscfg->wlc;
+	bsscfg_module_t *bcmh = wlc->bcmh;
 
 	if (((bit + 8) >> 3) > bcmh->ext_cap_max)
 		return BCME_RANGE;
@@ -2564,7 +2725,7 @@ wlc_bsscfg_set_ext_cap(wlc_bsscfg_t *bsscfg, uint32 bit, bool val)
 	else
 		clrbit(bsscfg->ext_cap, bit);
 
-	wlc_bsscfg_update_ext_cap_len(bsscfg);
+	wlc_bsscfg_update_ext_cap_len(wlc, bsscfg);
 
 	return BCME_OK;
 }
@@ -2748,6 +2909,7 @@ wlc_bsscfg_configure_from_bsscfg(wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg)
 	if (BSSCFG_AP(from_cfg)) {
 		to_cfg->current_bss->chanspec = from_cfg->current_bss->chanspec;
 		to_cfg->target_bss->chanspec = from_cfg->target_bss->chanspec;
+		to_cfg->target_bss->BSSID = from_cfg->target_bss->BSSID;
 	}
 
 #ifdef STA
@@ -2766,6 +2928,12 @@ wlc_bsscfg_configure_from_bsscfg(wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg)
 	to_cfg->is_WPS_enrollee = from_cfg->is_WPS_enrollee;
 	to_cfg->oper_mode = from_cfg->oper_mode;
 	to_cfg->oper_mode_enabled = from_cfg->oper_mode_enabled;
+
+	/* Copy IBSS up pending flag and reset it on from_cfg */
+	if (BSSCFG_IBSS(from_cfg)) {
+		to_cfg->ibss_up_pending = from_cfg->ibss_up_pending;
+		from_cfg->ibss_up_pending = FALSE;
+	}
 
 #if defined(BCMSUP_PSK) && defined(BCMINTSUP)
 	if (SUP_ENAB(from_wlc->pub)) {
@@ -2787,6 +2955,236 @@ wlc_bsscfg_configure_from_bsscfg(wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg)
 }
 #endif /* WLRSDB */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_cxn_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_cxn_t *cxn;
+
+	BCM_REFERENCE(ctx);
+
+	BCM_REFERENCE(ctx);
+
+	ASSERT(cfg != NULL);
+
+	cxn = cfg->cxn;
+	if (cxn == NULL)
+		return;
+
+	bcm_bprintf(b, "-------- connection states (%d) --------\n", WLC_BSSCFG_IDX(cfg));
+	bcm_bprintf(b, "ign_bcn_lost_det 0x%x\n", cxn->ign_bcn_lost_det);
+}
+
+static const struct {
+	bsscfg_type_t type;
+	char name[12];
+} bsscfg_type_names[] = {
+	{BSSCFG_TYPE_GENERIC, "GENERIC"},
+	{BSSCFG_TYPE_PSTA, "PSTA"},
+	{BSSCFG_TYPE_P2P, "P2P"},
+	{BSSCFG_TYPE_TDLS, "TDLS"},
+	{BSSCFG_TYPE_SLOTTED_BSS, "SLOTTED_BSS"},
+	{BSSCFG_TYPE_PROXD, "PROXD"},
+	{BSSCFG_TYPE_AIBSS, "AIBSS"},
+};
+
+static const char *
+_wlc_bsscfg_type_name(bsscfg_type_t type)
+{
+	uint i;
+
+	for (i = 0; i < ARRAYSIZE(bsscfg_type_names); i++) {
+		if (bsscfg_type_names[i].type == type)
+			return bsscfg_type_names[i].name;
+	}
+
+	return "UNKNOWN";
+}
+
+static const struct {
+	uint subtype;
+	char name[10];
+} bsscfg_subtype_names[] = {
+	{BSSCFG_GENERIC_AP, "AP"},
+	{BSSCFG_GENERIC_STA, "STA"},
+	{BSSCFG_GENERIC_IBSS, "IBSS"},
+	{BSSCFG_P2P_GO, "GO"},
+	{BSSCFG_P2P_GC, "GC"},
+	{BSSCFG_P2P_DISC, "DISC"},
+	{BSSCFG_SUBTYPE_AWDL, "AWDL"},
+	{BSSCFG_SUBTYPE_NAN_MGMT, "MGMT"},
+	{BSSCFG_SUBTYPE_NAN_DATA, "DATA"},
+	{BSSCFG_SUBTYPE_NAN_MGMT_DATA, "MGMT_DATA"},
+};
+
+static const char *
+_wlc_bsscfg_subtype_name(uint subtype)
+{
+	uint i;
+
+	for (i = 0; i < ARRAYSIZE(bsscfg_subtype_names); i++) {
+		if (bsscfg_subtype_names[i].subtype == subtype)
+			return bsscfg_subtype_names[i].name;
+	}
+
+	return "UNKNOWN";
+}
+
+static const bcm_bit_desc_t bsscfg_flags[] = {
+	{WLC_BSSCFG_PRESERVE, "PRESERVE"},
+	{WLC_BSSCFG_WME_DISABLE, "WME_DIS"},
+	{WLC_BSSCFG_PS_OFF_TRANS, "PSOFF_TRANS"},
+	{WLC_BSSCFG_SW_BCN, "SW_BCN"},
+	{WLC_BSSCFG_SW_PRB, "SW_PRB"},
+	{WLC_BSSCFG_HW_BCN, "HW_BCN"},
+	{WLC_BSSCFG_HW_PRB, "HW_PRB"},
+	{WLC_BSSCFG_NOIF, "NOIF"},
+	{WLC_BSSCFG_11N_DISABLE, "11N_DIS"},
+	{WLC_BSSCFG_11H_DISABLE, "11H_DIS"},
+	{WLC_BSSCFG_NATIVEIF, "NATIVEIF"},
+	{WLC_BSSCFG_P2P_DISC, "P2P_DISC"},
+	{WLC_BSSCFG_RSDB_CLONE, "RSDB_CLONE"},
+	{0, NULL}
+};
+
+static int
+_wlc_bsscfg_dump(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	char ssidbuf[SSID_FMT_BUF_LEN];
+	char bssbuf[ETHER_ADDR_STR_LEN];
+	char ifname[32];
+	int i;
+	int bsscfg_idx = WLC_BSSCFG_IDX(cfg);
+	bsscfg_module_t *bcmh = wlc->bcmh;
+	char flagstr[64];
+	wlc_bsscfg_type_t type;
+
+	bcm_bprintf(b, ">>>>>>>> BSS Config %d (0x%p) <<<<<<<<\n",
+		bsscfg_idx, OSL_OBFUSCATE_BUF(cfg));
+
+	wlc_format_ssid(ssidbuf, cfg->SSID, cfg->SSID_len);
+
+	strncpy(ifname, wl_ifname(wlc->wl, cfg->wlcif->wlif), sizeof(ifname));
+	ifname[sizeof(ifname) - 1] = '\0';
+
+	bcm_bprintf(b, "SSID): \"%s\" BSSID: %s\n",
+	            ssidbuf, bcm_ether_ntoa(&cfg->BSSID, bssbuf));
+	if (BSSCFG_STA(cfg) && cfg->BSS)
+		bcm_bprintf(b, "AID: 0x%x\n", cfg->AID);
+
+	bcm_bprintf(b, "_ap %d BSS %d enable %d. up %d. associated %d flags 0x%x\n",
+	            BSSCFG_AP(cfg), cfg->BSS, cfg->enable, cfg->up, cfg->associated, cfg->flags);
+	bcm_format_flags(bsscfg_flags, cfg->flags, flagstr, sizeof(flagstr));
+	bcm_bprintf(b, "flags: 0x%x [%s]\n", cfg->flags, flagstr);
+	wlc_bsscfg_type_get(wlc, cfg, &type);
+	bcm_bprintf(b, "type: %s (%s %s)\n", _wlc_bsscfg_type_name(cfg->type),
+	            _wlc_bsscfg_type_name(type.type), _wlc_bsscfg_subtype_name(type.subtype));
+	bcm_bprintf(b, "flags2: 0x%x\n", cfg->flags2);
+	bcm_bprintf(b, "bss_color: %d\n", cfg->bss_color);
+
+	/* allmulti and multicast lists */
+	bcm_bprintf(b, "allmulti %d\n", cfg->allmulti);
+	bcm_bprintf(b, "nmulticast %d\n", cfg->nmulticast);
+	if (cfg->nmulticast) {
+		for (i = 0; i < (int)cfg->nmulticast; i++)
+			bcm_bprintf(b, "%s ", bcm_ether_ntoa(&cfg->multicast[i], bssbuf));
+		bcm_bprintf(b, "\n");
+	}
+
+	bcm_bprintf(b, "cur_etheraddr %s\n", bcm_ether_ntoa(&cfg->cur_etheraddr, bssbuf));
+	bcm_bprintf(b, "wlcif: flags 0x%x wlif 0x%p \"%s\" qi 0x%p\n",
+	            cfg->wlcif->if_flags, OSL_OBFUSCATE_BUF(cfg->wlcif->wlif),
+			ifname, OSL_OBFUSCATE_BUF(cfg->wlcif->qi));
+	bcm_bprintf(b, "ap_isolate %d\n", cfg->ap_isolate);
+	bcm_bprintf(b, "nobcnssid %d nobcprbresp %d\n",
+		cfg->closednet_nobcnssid, cfg->closednet_nobcprbresp);
+	bcm_bprintf(b, "wsec 0x%x auth %d\n", cfg->wsec, cfg->auth);
+	bcm_bprintf(b, "WPA_auth 0x%x wsec_restrict %d eap_restrict %d",
+		cfg->WPA_auth, cfg->wsec_restrict, cfg->eap_restrict);
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "Extended Capabilities: ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_OBSS_COEX_MGMT))
+		bcm_bprintf(b, "obss_coex ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_SPSMP))
+		bcm_bprintf(b, "spsmp ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_PROXY_ARP))
+		bcm_bprintf(b, "proxy_arp ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_CIVIC_LOC))
+		bcm_bprintf(b, "civic_loc ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_LCI))
+		bcm_bprintf(b, "lci ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_BSSTRANS_MGMT))
+		bcm_bprintf(b, "bsstrans ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_IW))
+		bcm_bprintf(b, "inwk ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_SI))
+		bcm_bprintf(b, "si ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_OPER_MODE_NOTIF))
+		bcm_bprintf(b, "oper_mode ");
+#ifdef WL_FTM
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_FTM_RESPONDER))
+		bcm_bprintf(b, "ftm-rx ");
+	if (isset(cfg->ext_cap, DOT11_EXT_CAP_FTM_INITIATOR))
+		bcm_bprintf(b, "ftm-tx ");
+#endif /* WL_FTM */
+	bcm_bprintf(b, "\n");
+
+	wlc_cxn_bss_dump(wlc, cfg, b);
+
+	bcm_bprintf(b, "-------- bcmc scb --------\n");
+	if (cfg->bcmc_scb != NULL) {
+		wlc_scb_dump_scb(wlc, cfg, cfg->bcmc_scb, b, -1);
+	}
+
+	/* invoke bsscfg cubby dump function */
+	bcm_bprintf(b, "cfg base size: %u\n", sizeof(wlc_bsscfg_t));
+	bcm_bprintf(b, "-------- bsscfg cubbies --------\n");
+	wlc_cubby_dump(bcmh->cubby_info, cfg, NULL, NULL, b);
+
+	/* display bsscfg up/down callbacks */
+	bcm_bprintf(b, "-------- up/down notify list --------\n");
+	bcm_notif_dump_list(bcmh->up_down_notif_hdl, b);
+
+	/* display bsscfg state change callbacks */
+	bcm_bprintf(b, "-------- state change notify list --------\n");
+	bcm_notif_dump_list(bcmh->state_upd_notif_hdl, b);
+
+	/* display bss bcn/prbresp tempalte update callbacks */
+	bcm_bprintf(b, "-------- bcn/prbresp update notify list --------\n");
+	bcm_notif_dump_list(bcmh->tplt_upd_notif_hdl, b);
+
+	/* display bss mute update callbacks */
+	bcm_bprintf(b, "-------- mute notify list --------\n");
+	bcm_notif_dump_list(bcmh->mute_upd_notif_hdl, b);
+
+	/* display bss pretbtt query update callbacks */
+	bcm_bprintf(b, "-------- pretbtt query notify list ---------\n");
+	bcm_notif_dump_list(bcmh->pretbtt_query_hdl, b);
+
+	/* display bss bcn rx notify callbacks */
+	bcm_bprintf(b, "-------- bcn rx notify list --------\n");
+	bcm_notif_dump_list(bcmh->rxbcn_nh, b);
+
+	return BCME_OK;
+}
+
+static int
+wlc_bsscfg_dump(wlc_info_t *wlc, struct bcmstrbuf *b)
+{
+	int i;
+	wlc_bsscfg_t *bsscfg;
+
+	bcm_bprintf(b, "# of bsscfgs: %u\n", wlc_bss_count(wlc));
+
+	FOREACH_BSS(wlc, i, bsscfg) {
+		_wlc_bsscfg_dump(wlc, bsscfg, b);
+		bcm_bprintf(b, "\n");
+	}
+
+	return 0;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #if defined(WL_DATAPATH_LOG_DUMP)
 /**
@@ -3093,10 +3491,112 @@ wlc_bsscfg_get_wlc_from_wlcif(wlc_info_t *wlc, wlc_if_t *wlcif)
 	wlc_bsscfg_t *bsscfg;
 
 	bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
-	if (bsscfg) {
-		return (bsscfg->wlc);
+
+	return bsscfg->wlc;
+}
+
+/*
+ * Function: wlc_iface_create_generic_bsscfg
+ *
+ * Purpose:
+ *	This function creates generic bsscfg for AP or STA interface when interface_create IOVAR
+ *	is issued.
+ *
+ * Input Parameters:
+ *	wlc - wlc pointer
+ *	if_buf - Interface create buffer pointer
+ *	type - bsscfg type
+ * Return:
+ *	Success: newly created bsscfg pointer for the interface
+ *	Failure: NULL pointer
+ */
+wlc_bsscfg_t*
+wlc_iface_create_generic_bsscfg(wlc_info_t *wlc, wl_interface_create_t *if_buf,
+	wlc_bsscfg_type_t *type, int32 *err)
+{
+	int idx;
+	struct ether_addr *p_ether_addr;
+	wlc_bsscfg_t *cfg;
+#ifdef WLRSDB
+	uint32 wlc_index = 0;
+#endif
+
+	ASSERT((type->subtype == BSSCFG_GENERIC_AP) || (type->subtype == BSSCFG_GENERIC_STA));
+
+#ifdef WLRSDB
+	/*
+	 * If wlc_index is passed with -c option, honor it !
+	 */
+	/* In case if RSDB is enabled, use the wlc index from if_buf */
+	if (RSDB_ENAB(wlc->pub)) {
+		if (WLC_RSDB_IS_AUTO_MODE(wlc)) {
+			wlc = WLC_RSDB_GET_PRIMARY_WLC(wlc);
+		} else {
+			if (if_buf->flags & WL_INTERFACE_WLC_INDEX_USE) {
+				/* Create virtual interface on other WLC */
+				wlc_index = if_buf->wlc_index;
+
+				if (wlc_index >= MAX_RSDB_MAC_NUM) {
+					WL_ERROR(("wl%d: Invalid WLC Index %d \n",
+						wlc->pub->unit, wlc_index));
+					*err = BCME_BADARG;
+					return (NULL);
+				}
+				wlc = wlc->cmn->wlc[wlc_index];
+			} else {
+
+				wlc =  WLC_RSDB_GET_PRIMARY_WLC(wlc);
+			}
+		}
+	} /* end of RSDB_ENAB check */
+#endif /* WLRSDB */
+
+	/* get bsscfg index */
+	idx = wlc_bsscfg_get_free_idx(wlc);
+	if (idx < 0) {
+		WL_ERROR(("wl%d: no free bsscfg\n", WLCWLUNIT(wlc)));
+		*err = BCME_NORESOURCE;
+		return (NULL);
 	}
-	return NULL;
+
+	/* allocate bsscfg */
+	if (if_buf->flags & WL_INTERFACE_MAC_USE) {
+		p_ether_addr = &if_buf->mac_addr;
+	} else {
+		p_ether_addr = NULL;
+	}
+	cfg = wlc_bsscfg_alloc(wlc, idx, type, 0, p_ether_addr);
+	if (cfg == NULL) {
+		WL_ERROR(("wl%d: cannot allocate bsscfg\n", WLCWLUNIT(wlc)));
+		*err = BCME_NOMEM;
+		return (cfg);
+	}
+
+	*err = wlc_bsscfg_init(wlc, cfg);
+	if (*err != BCME_OK) {
+		WL_ERROR(("wl%d: cannot init bsscfg\n", WLCWLUNIT(wlc)));
+		wlc_bsscfg_free(wlc, cfg);
+		return (NULL);
+	}
+
+	return (cfg);
+}
+
+static void
+wlc_set_iface_info(wlc_bsscfg_t *cfg, wl_interface_info_t *wl_info, wl_interface_create_t *if_buf)
+{
+
+	/* Assign the interface name */
+	wl_info->bsscfgidx = cfg->_idx;
+	memcpy(&wl_info->ifname, wl_ifname(cfg->wlc->wl, cfg->wlcif->wlif),
+		sizeof(wl_info->ifname) - 1);
+	wl_info->ifname[sizeof(wl_info->ifname) - 1] = 0;
+
+	/* Copy the MAC addr */
+	memcpy(&wl_info->mac_addr.octet, &cfg->cur_etheraddr.octet, ETHER_ADDR_LEN);
+
+	/* Set the interface type */
+	cfg->iface_type = if_buf->iftype;
 }
 
 /* Get corresponding ether addr of wlcif */
@@ -3106,8 +3606,22 @@ wlc_bsscfg_get_ether_addr(wlc_info_t *wlc, wlc_if_t *wlcif)
 	wlc_bsscfg_t *bsscfg;
 
 	bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
-	if (bsscfg) {
-		return (&bsscfg->cur_etheraddr);
-	}
-	return NULL;
+
+	return &bsscfg->cur_etheraddr;
+}
+
+bool
+wlc_bsscfg_is_associated(wlc_bsscfg_t* bsscfg)
+{
+	return bsscfg->associated && !ETHER_ISNULLADDR(&bsscfg->current_bss->BSSID);
+}
+
+bool
+wlc_bsscfg_mfp_supported(wlc_bsscfg_t *bsscfg)
+{
+	bool ret = FALSE;
+	if (BSSCFG_INFRA_STA(bsscfg) || (PROXD_ENAB(bsscfg->wlc->pub) &&
+		BSSCFG_AWDL(bsscfg->wlc, bsscfg)))
+		ret = TRUE;
+	return ret;
 }

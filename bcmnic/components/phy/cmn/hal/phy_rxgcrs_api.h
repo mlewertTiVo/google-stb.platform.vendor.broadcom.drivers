@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rxgcrs_api.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_rxgcrs_api.h 657044 2016-08-30 21:37:55Z $
  */
 
 #ifndef _phy_rxgcrs_api_h_
@@ -38,4 +38,5 @@
  */
 extern void wlc_phy_set_locale(phy_info_t *pi, uint8 region_group);
 
+uint16 phy_rxgcrs_sel_classifier(phy_info_t *pi, uint16 class_mask);
 #endif /* _phy_rxgcrs_api_h_ */

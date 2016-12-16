@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_tpc_api.h 651513 2016-07-27 08:59:58Z mvermeid $
+ * $Id: phy_tpc_api.h 659833 2016-09-16 05:39:06Z $
  */
 
 #ifndef _phy_tpc_api_h_
@@ -20,6 +20,16 @@
 
 #include <typedefs.h>
 #include <phy_api.h>
+
+int32 phy_tpc_get_min_power_limit(wlc_phy_t *ppi);
+uint8 phy_tpc_get_target_min(wlc_phy_t *ppi);
+uint8 phy_tpc_get_target_max(wlc_phy_t *ppi);
+uint8 phy_tpc_get_power_backoff(wlc_phy_t *ppi);
+bool phy_tpc_ipa_ison(wlc_phy_t *ppi);
+#ifdef BCMDBG
+void phy_tpc_dump_txpower_limits(wlc_phy_t *ppi, ppr_t* txpwr);
+#endif /* BCM_DBG */
+void phy_tpc_set_txpower_hw_ctrl(wlc_phy_t *ppi, bool hwpwrctrl);
 
 /*
  * Compute power control cap.
@@ -29,6 +39,9 @@ int8 wlc_phy_calc_ppr_pwr_cap(wlc_phy_t *ppi, uint8 core);
 void wlc_phy_update_olpc_cal(wlc_phy_t *ppi, bool set, bool dbg);
 #endif
 void wlc_phy_txpower_limit_set(wlc_phy_t *ppi, ppr_t* txpwr, chanspec_t chanspec);
+#ifdef FCC_PWR_LIMIT_2G
+void wlc_phy_prev_chanspec_set(wlc_phy_t *ppi, chanspec_t prev_chanspec);
+#endif /* FCC_PWR_LIMIT_2G */
 int wlc_phy_txpower_set(wlc_phy_t *ppi, int8 qdbm, bool override, ppr_t *reg_pwr);
 void wlc_phy_txpower_recalc_target(phy_info_t *pi, ppr_t *txpwr_reg, ppr_t *txpwr_targets);
 int wlc_phy_txpower_get_current(wlc_phy_t *ppi, ppr_t *reg_pwr, phy_tx_power_t *power);
@@ -52,4 +65,12 @@ int wlc_phy_txpower_get(wlc_phy_t *ppi, int8 *qdbm, bool *override);
 int	wlc_phy_neg_txpower_set(wlc_phy_t *ppi, uint qdbm);
 extern void wlc_phy_set_country(wlc_phy_t *ppi, const char* ccode_ptr);
 extern int8 wlc_phy_maxtxpwr_lowlimit(wlc_phy_t *ppi);
+
+#ifdef WLTXPWR_CACHE
+tx_pwr_cache_entry_t* phy_tpc_get_txpwr_cache(wlc_phy_t *ppi);
+#if !defined(WLTXPWR_CACHE_PHY_ONLY)
+void phy_tpc_set_txpwr_cache(wlc_phy_t *ppi, void* cacheptr);
+#endif
+#endif	/* WLTXPWR_CACHE */
+
 #endif /* _phy_tpc_api_h_ */

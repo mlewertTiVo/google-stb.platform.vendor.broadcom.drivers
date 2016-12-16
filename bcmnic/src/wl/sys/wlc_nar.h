@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_nar.h 644608 2016-06-21 03:32:27Z $
+ * $Id: wlc_nar.h 650396 2016-07-21 06:27:18Z $
  *
  */
 
@@ -32,7 +32,7 @@
  */
 extern wlc_nar_info_t *wlc_nar_attach(wlc_info_t *);
 
-extern int wlc_nar_detach(wlc_nar_info_t *);
+extern void wlc_nar_detach(wlc_nar_info_t *);
 
 extern void wlc_nar_dotxstatus(wlc_nar_info_t *, struct scb *scb, void *sdu, tx_status_t *txs);
 

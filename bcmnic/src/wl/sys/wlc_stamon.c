@@ -249,9 +249,9 @@ wlc_stamon_sta_sniff_enab(wlc_stamon_info_t *ctxt,
 {
 	int8 cfg_idx = 0;
 
-#if defined(WLMSG_ERROR)
+#if defined(BCMDBG) || defined(WLMSG_ERROR)
 	char eabuf [ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_ERROR */
 
 	if (ctxt == NULL)
 		return BCME_UNSUPPORTED;
@@ -269,22 +269,22 @@ wlc_stamon_sta_sniff_enab(wlc_stamon_info_t *ctxt,
 	 * The MAC address must be valid unicast.
 					 */
 	if (ETHER_ISNULLADDR(ea) || ETHER_ISMULTI(ea)) {
-#if defined(WLMSG_ERROR)
+#if defined(BCMDBG) || defined(WLMSG_ERROR)
 		WL_ERROR(("wl%d: %s: Invalid MAC address %s.\n",
 			WLCUNIT(ctxt), __FUNCTION__,
 			bcm_ether_ntoa(ea, eabuf)));
-#endif 
+#endif /* BCMDBG || WLMSG_ERROR */
 		return BCME_BADARG;
 					}
 
 	/* Searching for corresponding entry in the STAs list. */
 	cfg_idx = wlc_stamon_sta_find(ctxt, ea);
 	if (cfg_idx < 0) {
-#if defined(WLMSG_ERROR)
+#if defined(BCMDBG) || defined(WLMSG_ERROR)
 		WL_ERROR(("wl%d: %s: STA %s not found.\n",
 			WLCUNIT(ctxt), __FUNCTION__,
 			bcm_ether_ntoa(ea, eabuf)));
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 		return BCME_NOTFOUND;
 	}
 
@@ -482,6 +482,9 @@ wlc_stamon_acksupr_is_duplicate(wlc_info_t *wlc, struct ether_addr *ea)
 	int i;
 	wlc_stamon_info_t *stamon_ctxt;
 	struct wlc_stamon_sta_cfg_entry *stacfg;
+#ifdef BCMDBG_ERR
+	char eabuf[20];
+#endif
 	if (!WLC_ACKSUPR(wlc))
 		return FALSE;
 

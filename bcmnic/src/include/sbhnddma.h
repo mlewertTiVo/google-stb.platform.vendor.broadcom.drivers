@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: sbhnddma.h 630022 2016-04-07 04:46:12Z $
+ * $Id: sbhnddma.h 650444 2016-07-21 11:20:12Z $
  */
 
 #ifndef	_sbhnddma_h_
@@ -423,6 +423,7 @@ typedef volatile struct {
 #define D64_RX_FRM_STS_LEN	0x0000ffff	/**< frame length mask */
 #define D64_RX_FRM_STS_OVFL	0x00800000	/**< RxOverFlow */
 #define D64_RX_FRM_STS_DSCRCNT	0x0f000000 /**< no. of descriptors used - 1, d11corerev >= 22 */
+#define D64_RX_FRM_STS_DSCRCNT_SHIFT   24      /* Shift for no .of dma descriptor field */
 #define D64_RX_FRM_STS_DATATYPE	0xf0000000	/**< core-dependent data type */
 
 /** receive frame status */

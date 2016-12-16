@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmutils.c 633667 2016-04-25 04:19:21Z $
+ * $Id: bcmutils.c 663529 2016-10-05 20:01:17Z $
  */
 
 #include <bcm_cfg.h>
@@ -90,10 +90,10 @@ int dscp2priomap[DCSP_MAX_VALUE]=
 
 #if !defined(BCMDONGLEHOST)
 /* Forward declarations */
-static char * getvar_internal(char *vars, const char *name);
-static int getintvar_internal(char *vars, const char *name);
-static int getintvararray_internal(char *vars, const char *name, int index);
-static int getintvararraysize_internal(char *vars, const char *name);
+char * getvar_internal(char *vars, const char *name);
+int getintvar_internal(char *vars, const char *name);
+int getintvararray_internal(char *vars, const char *name, int index);
+int getintvararraysize_internal(char *vars, const char *name);
 
 /* nvram vars cache */
 static char *nvram_vars = NULL;
@@ -110,7 +110,7 @@ getvar(char *vars, const char *name)
 	return getvar_internal(vars, name);
 }
 
-static char *
+char *
 getvar_internal(char *vars, const char *name)
 {
 	char *s;
@@ -125,9 +125,9 @@ getvar_internal(char *vars, const char *name)
 
 	/* first look in vars[] */
 	for (s = vars; s && *s;) {
-		if ((bcmp(s, name, len) == 0) && (s[len] == '='))
+		if ((bcmp(s, name, len) == 0) && (s[len] == '=')) {
 			return (&s[len+1]);
-
+		}
 		while (*s++)
 			;
 	}
@@ -147,7 +147,7 @@ getintvar(char *vars, const char *name)
 	return getintvar_internal(vars, name);
 }
 
-static int
+int
 getintvar_internal(char *vars, const char *name)
 {
 	char *val;
@@ -165,7 +165,7 @@ getintvararray(char *vars, const char *name, int index)
 	return getintvararray_internal(vars, name, index);
 }
 
-static int
+int
 getintvararray_internal(char *vars, const char *name, int index)
 {
 	char *buf, *endp;
@@ -198,7 +198,7 @@ getintvararraysize(char *vars, const char *name)
 	return getintvararraysize_internal(vars, name);
 }
 
-static int
+int
 getintvararraysize_internal(char *vars, const char *name)
 {
 	char *buf, *endp;
@@ -563,7 +563,7 @@ bcm_mdelay(uint ms)
 
 
 
-#if defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(DHD_DEBUG)
 /* pretty hex print a pkt buffer chain */
 void
 prpkt(const char *msg, osl_t *osh, void *p0)
@@ -576,7 +576,7 @@ prpkt(const char *msg, osl_t *osh, void *p0)
 	for (p = p0; p; p = PKTNEXT(osh, p))
 		prhex(NULL, PKTDATA(osh, p), PKTLEN(osh, p));
 }
-#endif	
+#endif	/* BCMDBG || DHD_DEBUG */
 
 /* Takes an Ethernet frame and sets out-of-bound PKTPRIO.
  * Also updates the inplace vlan tag if requested.
@@ -1748,6 +1748,26 @@ dll_pool_free_tail(dll_pool_t * dll_pool_p, void * elem_p)
 	dll_pool_p->free_count += 1;
 }
 
+#ifdef BCMDBG
+void
+dll_pool_dump(dll_pool_t * dll_pool_p, dll_elem_dump elem_dump)
+{
+	dll_t * elem_p;
+	dll_t * next_p;
+	printf("dll_pool<%p> free_count<%u> elems_max<%u> elem_size<%u>\n",
+		OSL_OBFUSCATE_BUF(dll_pool_p), dll_pool_p->free_count,
+		dll_pool_p->elems_max, dll_pool_p->elem_size);
+
+	for (elem_p = dll_head_p(&dll_pool_p->free_list);
+		 !dll_end(&dll_pool_p->free_list, elem_p); elem_p = next_p) {
+
+		next_p = dll_next_p(elem_p);
+		printf("\telem<%p>\n", OSL_OBFUSCATE_BUF(elem_p));
+		if (elem_dump != NULL)
+			elem_dump((void *)elem_p);
+	}
+}
+#endif /* BCMDBG */
 
 #endif 
 
@@ -1890,8 +1910,8 @@ bcm_find_vendor_ie(void *tlvs, int tlvs_len, const char *voui, uint8 *type, int 
 	return NULL;
 }
 
-#if defined(WLTINYDUMP) || defined(WLMSG_INFORM) || defined(WLMSG_ASSOC) || \
-	defined(WLMSG_PRPKT) || defined(WLMSG_WSEC)
+#if defined(WLTINYDUMP) || defined(BCMDBG) || defined(WLMSG_INFORM) || \
+	defined(WLMSG_ASSOC) || defined(WLMSG_PRPKT) || defined(WLMSG_WSEC)
 #define SSID_FMT_BUF_LEN	((4 * DOT11_MAX_SSID_LEN) + 1)
 
 int
@@ -1919,7 +1939,7 @@ bcm_format_ssid(char* buf, const uchar ssid[], uint ssid_len)
 
 	return (int)(p - buf);
 }
-#endif 
+#endif /* WLTINYDUMP || BCMDBG || WLMSG_INFORM || WLMSG_ASSOC || WLMSG_PRPKT */
 
 #endif /* BCMDRIVER || WL_UNITTEST */
 
@@ -1944,6 +1964,22 @@ bcm_ether_ntoa(const struct ether_addr *ea, char *buf)
 	*(p-1) = '\0';
 
 	return (buf);
+}
+
+/* Find the position of first bit set
+ * in the given number.
+ */
+int
+bcm_find_fsb(uint32 num)
+{
+	uint8 pos = 0;
+	if (!num)
+		return pos;
+	while (!(num & 1)) {
+		num >>= 1;
+		pos++;
+	}
+	return (pos+1);
 }
 
 char *
@@ -2044,10 +2080,10 @@ const unsigned char bcm_ctype[] = {
 	_BCM_L, _BCM_L, _BCM_L, _BCM_L, _BCM_L /* 240-255 */
 };
 
-ulong
-bcm_strtoul(const char *cp, char **endp, uint base)
+uint64
+bcm_strtoull(const char *cp, char **endp, uint base)
 {
-	ulong result, last_result = 0, value;
+	uint64 result, last_result = 0, value;
 	bool minus;
 
 	minus = FALSE;
@@ -2104,6 +2140,12 @@ bcm_strtoul(const char *cp, char **endp, uint base)
 		*endp = DISCARD_QUAL(cp, char);
 
 	return (result);
+}
+
+ulong
+bcm_strtoul(const char *cp, char **endp, uint base)
+{
+	return (ulong) bcm_strtoull(cp, endp, base);
 }
 
 int
@@ -3345,7 +3387,8 @@ bcm_parse_ordered_tlvs(void *buf, int buflen, uint key)
 }
 #endif	/* !BCMROMOFFLOAD_EXCLUDE_BCMUTILS_FUNCS */
 
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC) || \
+#if defined(BCMDBG) || defined(BCMDBG_ERR) || defined(WLMSG_PRHDRS) || \
+	defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC) || defined(BCMDBG_DUMP) || \
 	defined(DHD_DEBUG)
 int
 bcm_format_field(const bcm_bit_desc_ex_t *bd, uint32 flags, char* buf, int len)
@@ -3421,7 +3464,56 @@ bcm_format_flags(const bcm_bit_desc_t *bd, uint32 flags, char* buf, int len)
 
 	return (int)(p - buf);
 }
-#endif 
+
+/* print out whcih bits in octet array 'addr' are set. bcm_bit_desc_t:bit is a bit offset. */
+int
+bcm_format_octets(const bcm_bit_desc_t *bd, uint bdsz,
+	const uint8 *addr, uint size, char *buf, int len)
+{
+	uint i;
+	char *p = buf;
+	int slen = 0, nlen = 0;
+	uint32 bit;
+	const char* name;
+	bool more = FALSE;
+
+	BCM_REFERENCE(size);
+
+	if (len < 2 || !buf)
+		return 0;
+
+	buf[0] = '\0';
+
+	for (i = 0; i < bdsz; i++) {
+		bit = bd[i].bit;
+		name = bd[i].name;
+		if (isset(addr, bit)) {
+			nlen = strlen(name);
+			slen += nlen;
+			/* need SPACE - for simplicity */
+			slen += 1;
+			/* need NULL as well */
+			if (len < slen + 1) {
+				more = TRUE;
+				break;
+			}
+			memcpy(p, name, nlen);
+			p += nlen;
+			p[0] = ' ';
+			p += 1;
+			p[0] = '\0';
+		}
+	}
+
+	if (more) {
+		p[0] = '>';
+		p += 1;
+		p[0] = '\0';
+	}
+
+	return (int)(p - buf);
+}
+#endif /* BCMDBG || WLMSG_PRHDRS || WLMSG_PRPKT || WLMSG_ASSOC || BCMDBG_DUMP || DHD_DEBUG */
 
 /* print bytes formatted as hex to a string. return the resulting string length */
 int
@@ -3440,7 +3532,7 @@ bcm_format_hex(char *str, const void *bytes, int len)
 
 /* pretty hex print a contiguous buffer */
 void
-prhex(const char *msg, volatile uchar *buf, uint nbytes)
+prhex(const char *msg, const uchar *buf, uint nbytes)
 {
 	char line[128], *p;
 	int len = sizeof(line);
@@ -3505,6 +3597,18 @@ bcm_crypto_algo_name(uint algo)
 	return (algo < ARRAYSIZE(crypto_algo_names)) ? crypto_algo_names[algo] : "ERR";
 }
 
+#ifdef BCMDBG
+void
+deadbeef(void *p, uint len)
+{
+	static uint8 meat[] = { 0xde, 0xad, 0xbe, 0xef };
+
+	while (len-- > 0) {
+		*(uint8*)p = meat[((uintptr)p) & 3];
+		p = (uint8*)p + 1;
+	}
+}
+#endif /* BCMDBG */
 
 char *
 bcm_chipname(uint chipid, char *buf, uint len)
@@ -4440,3 +4544,171 @@ ipv6_tcp_hdr_cksum(uint8 *ipv6, uint8 *tcp, uint16 tcp_len)
 }
 
 void *_bcmutils_dummy_fn = NULL;
+
+/* GROUP 1 --- start
+ * These function under GROUP 1 are general purpose functions to do complex number
+ * calculations and square root calculation.
+ */
+void mult_cint32_cfixed(const cint32* in1, const cint32* in2, const uint8 prec,
+	cint32* out, bool conj) {
+	int32 i1 = in1->i, q1 = in1->q;
+	int32 i2 = in2->i, q2 = in2->q * (conj ? -1 : 1);
+	out->i = (i1*i2 - q1*q2) / (1 << prec);
+	out->q = (i1*q2 + i2*q1) / (1 << prec);
+}
+
+void add_cint32(const cint32* in1, const cint32* in2, cint32* out)
+{
+	out->i = in1->i + in2->i;
+	out->q = in1->q + in2->q;
+}
+
+void power_cint32(const cint32* in1, uint32* pwr)
+{
+	int32 re = in1->i;
+	int32 im = in1->q;
+	*(pwr) = (re*re + im*im);
+}
+
+void power_cint32_arr(const cint32* in1, const uint16* idx_arr, uint16 len, uint32* pwr)
+{
+	uint32 tmp_pwr = 0;
+	uint16 i = 0, idx;
+	*pwr = 0;
+	for (i = 0; i < len; i++) {
+		idx = *(idx_arr + i);
+		power_cint32((in1 + idx), &tmp_pwr);
+		*(pwr) += tmp_pwr;
+	}
+}
+
+uint32 sqrt_int(uint32 value)
+{
+	uint32 root = 0, shift = 0;
+
+	/* Compute integer nearest to square root of input integer value */
+	for (shift = 0; shift < 32; shift += 2) {
+		if (((0x40000000 >> shift) + root) <= value) {
+			value -= ((0x40000000 >> shift) + root);
+			root = (root >> 1) | (0x40000000 >> shift);
+		}
+		else {
+			root = root >> 1;
+		}
+	}
+
+	/* round to the nearest integer */
+	if (root < value) ++root;
+
+	return root;
+}
+/* GROUP 1 --- end */
+
+/* read/write field in a consecutive bits in an octet array.
+ * 'addr' is the octet array's start byte address
+ * 'size' is the octet array's byte size
+ * 'stbit' is the value's start bit offset
+ * 'nbits' is the value's bit size
+ * This set of utilities are for convenience. Don't use them
+ * in time critical/data path as there's a great overhead in them.
+ */
+void
+setbits(uint8 *addr, uint size, uint stbit, uint nbits, uint32 val)
+{
+	uint fbyte = stbit >> 3;		/* first byte */
+	uint lbyte = (stbit + nbits - 1) >> 3;	/* last byte */
+	uint fbit = stbit & 7;			/* first bit in the first byte */
+	uint rbits = (nbits > 8 - fbit ?
+	              nbits - (8 - fbit) :
+	              0) & 7;			/* remaining bits of the last byte when not 0 */
+	uint8 mask;
+	uint byte;
+
+	BCM_REFERENCE(size);
+
+	ASSERT(fbyte < size);
+	ASSERT(lbyte < size);
+	ASSERT(nbits <= (sizeof(val) << 3));
+
+	/* all bits are in the same byte */
+	if (fbyte == lbyte) {
+		mask = ((1 << nbits) - 1) << fbit;
+		addr[fbyte] &= ~mask;
+		addr[fbyte] |= (uint8)(val << fbit);
+		return;
+	}
+
+	/* first partial byte */
+	if (fbit > 0) {
+		mask = (0xff << fbit);
+		addr[fbyte] &= ~mask;
+		addr[fbyte] |= (uint8)(val << fbit);
+		val >>= (8 - fbit);
+		nbits -= (8 - fbit);
+		fbyte ++;	/* first full byte */
+	}
+
+	/* last partial byte */
+	if (rbits > 0) {
+		mask = (1 << rbits) - 1;
+		addr[lbyte] &= ~mask;
+		addr[lbyte] |= (uint8)(val >> (nbits - rbits));
+		lbyte --;	/* last full byte */
+	}
+
+	/* remaining full byte(s) */
+	for (byte = fbyte; byte <= lbyte; byte ++) {
+		addr[byte] = (uint8)val;
+		val >>= 8;
+	}
+}
+
+uint32
+getbits(const uint8 *addr, uint size, uint stbit, uint nbits)
+{
+	uint fbyte = stbit >> 3;		/* first byte */
+	uint lbyte = (stbit + nbits - 1) >> 3;	/* last byte */
+	uint fbit = stbit & 7;			/* first bit in the first byte */
+	uint rbits = (nbits > 8 - fbit ?
+	              nbits - (8 - fbit) :
+	              0) & 7;			/* remaining bits of the last byte when not 0 */
+	uint32 val = 0;
+	uint bits = 0;				/* bits in first partial byte */
+	uint8 mask;
+	uint byte;
+
+	BCM_REFERENCE(size);
+
+	ASSERT(fbyte < size);
+	ASSERT(lbyte < size);
+	ASSERT(nbits <= (sizeof(val) << 3));
+
+	/* all bits are in the same byte */
+	if (fbyte == lbyte) {
+		mask = ((1 << nbits) - 1) << fbit;
+		val = (addr[fbyte] & mask) >> fbit;
+		return val;
+	}
+
+	/* first partial byte */
+	if (fbit > 0) {
+		bits = 8 - fbit;
+		mask = (0xff << fbit);
+		val |= (addr[fbyte] & mask) >> fbit;
+		fbyte ++;	/* first full byte */
+	}
+
+	/* last partial byte */
+	if (rbits > 0) {
+		mask = (1 << rbits) - 1;
+		val |= (addr[lbyte] & mask) << (nbits - rbits);
+		lbyte --;	/* last full byte */
+	}
+
+	/* remaining full byte(s) */
+	for (byte = fbyte; byte <= lbyte; byte ++) {
+		val |= (addr[byte] << (((byte - fbyte) << 3) + bits));
+	}
+
+	return val;
+}

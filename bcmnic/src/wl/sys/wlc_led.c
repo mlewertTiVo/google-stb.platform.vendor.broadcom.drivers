@@ -158,6 +158,9 @@ static void wlc_led_activity_enab_upd(led_info_t *li);
 static void wlc_led_timer(void *arg);
 
 
+#ifdef BCMDBG
+static int wlc_led_dump(led_info_t *li, struct bcmstrbuf *b);
+#endif
 
 /* led iovar functionality */
 static int wlc_led_doiovar(void *hdl, uint32 actionid,
@@ -301,6 +304,9 @@ BCMATTACHFN(wlc_led_attach)(wlc_info_t *wlc)
 		}
 	}
 
+#ifdef BCMDBG
+	wlc_dump_register(pub, "led", (dump_fn_t)wlc_led_dump, (void *)li);
+#endif
 	/* init LED default blink rates */
 	li->led_on[LED_BLINKSLOW] = LED_SLOW_ON;
 	li->led_on[LED_BLINKMED] = LED_MED_ON;
@@ -481,6 +487,41 @@ wlc_led_timer(void *arg)
 	li->activity = FALSE;
 }
 
+#ifdef BCMDBG
+static int
+wlc_led_dump(led_info_t *li, struct bcmstrbuf *b)
+{
+	uint i;
+
+	if (li == NULL)
+		return BCME_OK;
+
+	bcm_bprintf(b, "led:  ");
+	for (i = 0; i < WL_LED_NUMGPIO; i++) {
+		bcm_bprintf(b, "%d%s=%d ", li->led[i].pin,
+			(li->led[i].activehi ? "" : "_l"), li->led[i].behavior);
+	}
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "led blink_sync:  ");
+	for (i = 0; i < WL_LED_NUMGPIO; i++)
+		bcm_bprintf(b, "%d=%d ", li->led[i].pin, li->led[i].blink_sync);
+	bcm_bprintf(b, "\n");
+
+	bcm_bprintf(b, "ledblinkslowon %d ledblinkslowoff %d\n",
+		li->led_on[LED_BLINKSLOW], li->led_off[LED_BLINKSLOW]);
+	bcm_bprintf(b, "ledblinkmedon %d ledblinkmedoff %d\n",
+		li->led_on[LED_BLINKMED], li->led_off[LED_BLINKMED]);
+	bcm_bprintf(b, "ledblinkfaston %d ledblinkfastoff %d\n",
+		li->led_on[LED_BLINKFAST], li->led_off[LED_BLINKFAST]);
+	bcm_bprintf(b, "ledblinkcustomon %d ledblinkcustomoff %d\n",
+		li->led_on[LED_BLINKCUSTOM], li->led_off[LED_BLINKCUSTOM]);
+	bcm_bprintf(b, "blink_pins 0x%x\n", li->blink_pins);
+
+	return 0;
+}
+
+#endif /* BCMDBG */
 
 static void
 wlc_led_blink(led_info_t *li, struct led *led, uint8 speed)

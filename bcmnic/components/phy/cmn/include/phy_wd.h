@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_wd.h 644994 2016-06-22 06:23:44Z vyass $
+ * $Id: phy_wd.h 656120 2016-08-25 08:17:57Z $
  */
 
 #ifndef _phy_wd_h_
@@ -71,7 +71,8 @@ typedef enum phy_wd_order {
 	PHY_WD_1TICK_PAPDCAL_WFDLL,
 	PHY_WD_1TICK_AC_HIRSSI_ELNABYPASS,
 	PHY_WD_1TICK_AC_RSSI_REPORT,
-	PHY_WD_1TICK_AC_BTCX_WARS
+	PHY_WD_1TICK_AC_BTCX_WARS,
+	PHY_WD_1TICK_HEALTH_CHECK
 } phy_wd_order_t;
 /*
  * WATCHDOG callback flags.
@@ -105,4 +106,7 @@ typedef enum phy_wd_flag {
 /* Add a watchdog callback fn. Return BCME_XXXX. */
 int phy_wd_add_fn(phy_wd_info_t *wi, phy_wd_fn_t fn, phy_wd_ctx_t *ctx,
 	phy_wd_prd_t prd, phy_wd_order_t order, phy_wd_flag_t flags);
+void phy_wd_override(phy_info_t *pi, bool val);
+void phy_watchdog_suspend(phy_info_t *pi);
+void phy_watchdog_resume(phy_info_t *pi);
 #endif /* _phy_wd_h_ */

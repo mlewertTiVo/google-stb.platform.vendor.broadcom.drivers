@@ -2,7 +2,7 @@
 
 include $(SRCBASE_ROUTER)/.config
 
-INCLUDE += -I. -I.. -I$(SRCBASE)/include ${WLAN_StdIncPathA} -I$(SRCBASE)/../components/shared -I$(SRCBASE)/common/include -I$(SRCBASE)/shared -I$(SRCBASE_ROUTER)/shared -I$(SRCBASE_ROUTER)/nas
+INCLUDE += -I. -I.. -I$(SRCBASE)/include ${WLAN_StdIncPathA} -I$(SRCBASE)/../components/shared -I$(SRCBASE)/common/include -I$(SRCBASE)/shared -I$(SRCBASE_ROUTER)/shared -I$(SRCBASE_ROUTER)/nas -I$(SRCBASE_ROUTER)/nas/nas_fbt
 
 CFLAGS += $(INCLUDE)
 CFLAGS += $(WLAN_ComponentIncPath)

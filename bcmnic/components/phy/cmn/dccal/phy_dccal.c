@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_dccal.c 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: phy_dccal.c 606042 2015-12-14 06:21:23Z $
  */
 
 #include <phy_cfg.h>

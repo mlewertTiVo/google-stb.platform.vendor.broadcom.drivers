@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_dccal.h 618979 2016-02-12 23:19:41Z qzhuang $
+ * $Id: phy_ac_dccal.h 618979 2016-02-12 23:19:41Z $
  */
 
 #ifndef _phy_ac_dccal_h_

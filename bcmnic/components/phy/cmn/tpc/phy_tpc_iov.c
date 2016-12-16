@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_tpc_iov.c 645659 2016-06-25 03:10:15Z vyass $
+ * $Id: phy_tpc_iov.c 666266 2016-10-20 11:18:34Z $
  */
 
 #include <phy_tpc.h>
@@ -43,21 +43,13 @@ static const bcm_iovar_t phy_tpc_iovars[] = {
 #ifdef WL_SARLIMIT
 	{"phy_sarlimit", IOV_PHY_SAR_LIMIT, 0, 0, IOVT_UINT32, 0},
 #endif /* WL_SARLIMIT */
-#ifdef WLTEST
-	{"fem2g", IOV_PHY_FEM2G, (IOVF_SET_DOWN | IOVF_MFG), 0, IOVT_BUFFER, 0},
-#ifdef BAND5G
-	{"fem5g", IOV_PHY_FEM5G, (IOVF_SET_DOWN | IOVF_MFG), 0, IOVT_BUFFER, 0},
-#endif /* BAND5G */
-#endif /* WLTEST */
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-	{"initbaseidx2g", IOV_INITBASEIDX2G, (IOVF_SET_UP|IOVF_GET_UP), 0, IOVT_UINT8, 0},
-	{"initbaseidx5g", IOV_INITBASEIDX5G, (IOVF_SET_UP|IOVF_GET_UP), 0, IOVT_UINT8, 0},
-	{"pavars", IOV_PAVARS,
-	(IOVF_SET_DOWN | IOVF_MFG), 0, IOVT_BUFFER, WL_PHY_PAVARS_LEN * sizeof(uint16)},
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
 #include <wlc_patch.h>
 
 static int
@@ -98,61 +90,6 @@ phy_tpc_doiovar(void *ctx, uint32 aid,
 		break;
 	}
 #endif /* WL_SARLIMIT */
-#ifdef WLTEST
-	case IOV_GVAL(IOV_PHY_FEM2G): {
-		bcopy(pi->fem2g, a, sizeof(srom_fem_t));
-		break;
-	}
-
-	case IOV_SVAL(IOV_PHY_FEM2G): {
-		bcopy(p, pi->fem2g, sizeof(srom_fem_t));
-		/* srom_fem2g.extpagain changed after attach time */
-		wlc_phy_txpower_ipa_upd(pi);
-		break;
-	}
-#ifdef BAND5G
-	case IOV_GVAL(IOV_PHY_FEM5G): {
-		bcopy(pi->fem5g, a, sizeof(srom_fem_t));
-		break;
-	}
-
-	case IOV_SVAL(IOV_PHY_FEM5G): {
-		bcopy(p, pi->fem5g, sizeof(srom_fem_t));
-		/* srom_fem5g.extpagain changed after attach time */
-		wlc_phy_txpower_ipa_upd(pi);
-		break;
-	}
-#endif /* BAND5G */
-#endif /* WLTEST */
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-	case IOV_GVAL(IOV_INITBASEIDX2G):
-	{
-		*ret_int_ptr = pi->tpci->data->cfg.initbaseidx2govrval;
-		break;
-	}
-	case IOV_SVAL(IOV_INITBASEIDX2G):
-	{
-		pi->tpci->data->cfg.initbaseidx2govrval = (uint8)int_val;
-		break;
-	}
-	case IOV_GVAL(IOV_INITBASEIDX5G):
-	{
-		*ret_int_ptr = pi->tpci->data->cfg.initbaseidx5govrval;
-		break;
-	}
-	case IOV_SVAL(IOV_INITBASEIDX5G):
-	{
-		pi->tpci->data->cfg.initbaseidx5govrval = (uint8)int_val;
-		break;
-	}
-	case IOV_GVAL(IOV_PAVARS):
-		phy_tpc_get_pavars(pi->tpci, a, p);
-		break;
-
-	case IOV_SVAL(IOV_PAVARS):
-		phy_tpc_set_pavars(pi->tpci, a, p);
-		break;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 	default:
 		err = BCME_UNSUPPORTED;
 		break;

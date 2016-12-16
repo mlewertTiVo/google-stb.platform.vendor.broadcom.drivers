@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rxgcrs.h 644994 2016-06-22 06:23:44Z vyass $
+ * $Id: phy_rxgcrs.h 657351 2016-08-31 23:00:22Z $
  */
 
 #ifndef _phy_rxgcrs_h_
@@ -39,10 +39,14 @@ int phy_rxgcrs_set_rxdesens(phy_info_t *pi, int32 int_val);
 #endif
 int wlc_phy_set_rx_gainindex(phy_info_t *pi, int32 gain_idx);
 int wlc_phy_get_rx_gainindex(phy_info_t *pi, int32 *gain_idx);
-#ifndef ATE_BUILD
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 int wlc_phy_iovar_forcecal_noise(phy_info_t *pi, void *a, bool set);
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
-#endif /* !ATE_BUILD */
+#endif 
+void phy_rxgcrs_stay_in_carriersearch(void *ctx, bool enable);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+int phy_rxgcrs_dump_chanest(void *ctx, struct bcmstrbuf *b);
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
+#if defined(DBG_BCN_LOSS)
+int phy_rxgcrs_dump_phycal_rx_min(void *ctx, struct bcmstrbuf *b);
+#endif /* DBG_BCN_LOSS */
 #endif /* _phy_rxgcrs_h_ */

@@ -17,7 +17,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_hrt.c 622672 2016-03-03 07:36:32Z $
+ * $Id: wlc_hrt.c 654442 2016-08-12 18:30:09Z $
  */
 
 #include <wlc_cfg.h>
@@ -35,6 +35,7 @@
 #include <wlc.h>
 #include <wlc_hrt.h>
 #include <wlc_dump.h>
+#include <wlc_hw_priv.h>
 
 /* timeout structure, storage provided by the user */
 struct wlc_hrt_to {
@@ -65,6 +66,9 @@ struct wlc_hrt_info {
 /* module */
 
 /* debug */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_hrt_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* rte timer callback */
 
@@ -101,6 +105,9 @@ BCMATTACHFN(wlc_hrt_attach)(wlc_info_t *wlc)
 	                           hrti,
 	                           (uint)(uint32)(~0));
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "hrt", wlc_hrt_dump, hrti);
+#endif
 
 	return hrti;
 
@@ -243,6 +250,29 @@ wlc_hrt_run_timeouts(wlc_hrt_info_t *hrti)
 	} while ((expired == TRUE) && (hrti->timer_armed == FALSE));
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_hrt_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_hrt_info_t *hrti = (wlc_hrt_info_t *)ctx;
+	wlc_hrt_to_t *this;
+
+	bcm_bprintf(b, "get_time %p set_timer %p act_timer %p context %p max_time 0x%x\n",
+	            OSL_OBFUSCATE_BUF(hrti->get_time), OSL_OBFUSCATE_BUF(hrti->set_timer),
+			OSL_OBFUSCATE_BUF(hrti->ack_timer),
+	            OSL_OBFUSCATE_BUF(hrti->ctx), hrti->max_timer_val);
+	bcm_bprintf(b, "timer_allowed %d timer_armed %d last_time 0x%x\n",
+	            hrti->timer_allowed, hrti->timer_armed, hrti->last_time);
+
+	for (this = hrti->timer_list.next; this != NULL; this = this->next) {
+		bcm_bprintf(b, "timer %p, fun %p, arg %p, %d TO units\n",
+		            OSL_OBFUSCATE_BUF(this), OSL_OBFUSCATE_BUF(this->fun),
+				OSL_OBFUSCATE_BUF(this->arg), this->timeout);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* Add timeout to the list */
 bool
@@ -400,7 +430,6 @@ void
 wlc_hrt_gptimer_set(wlc_info_t *wlc, uint us)
 {
 	ASSERT(wlc->pub->corerev >= 3); /* no gptimer in earlier revs */
-
 	W_REG(wlc->osh, &wlc->regs->gptimer, us);
 }
 
@@ -408,8 +437,14 @@ uint32
 wlc_hrt_gptimer_get(wlc_info_t *wlc)
 {
 	ASSERT(wlc->pub->corerev >= 3); /* no gptimer in earlier revs */
-
 	return (R_REG(wlc->osh, &wlc->regs->gptimer));
+}
+
+bool
+wlc_hrt_timer_empty(wlc_hrt_info_t *hrti)
+{
+	wlc_hrt_to_t *prev = &hrti->timer_list;
+	return (prev->next == NULL);
 }
 
 static uint

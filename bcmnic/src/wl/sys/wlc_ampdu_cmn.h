@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ampdu_cmn.h 551532 2015-04-23 12:39:19Z $
+ * $Id: wlc_ampdu_cmn.h 647832 2016-07-07 19:14:31Z $
 */
 
 
@@ -36,8 +36,13 @@ extern void wlc_scb_ampdu_disable(wlc_info_t *wlc, struct scb *scb);
 #define AMPDU_MAX_MCS 31                        /**< we don't deal with mcs 32 */
 #define AMPDU_MAX_VHT 48			/**< VHT rate 0-9 + prop 10-11, 4 streams for now */
 
+#ifdef BCMDBG
+#define AMPDUSCBCNTADD(cnt, upd) ((cnt) += (upd))
+#define AMPDUSCBCNTINCR(cnt) ((cnt)++)
+#else
 #define AMPDUSCBCNTADD(a, b) do { } while (0)
 #define AMPDUSCBCNTINCR(a)  do { } while (0)
+#endif
 
 #define AMPDU_VALIDATE_TID(ampdu, tid, str) \
 	if (tid >= AMPDU_MAX_SCB_TID) { \
@@ -79,5 +84,11 @@ extern void wlc_ampdu_agg_state_update_all(wlc_info_t *wlc, bool aggr);
 #if defined(WLPROPRIETARY_11N_RATES)
 extern uint8 mcs2idx(uint mcs); /**< maps mcs to array index for arrays[AMPDU_N_11N_MCS] */
 #endif /* WLPROPRIETARY_11N_RATES */
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
+extern int wlc_ampdu_stats_e_report(uint16 tag, uint16 type, uint16 len, uint32 *counters,
+	bool ec);
+extern void wlc_ampdu_stats_range(uint32 *stats, int max_counters, int *first, int *last);
+#endif 
 
 #endif /* _wlc_ampdu_ctl_h_ */

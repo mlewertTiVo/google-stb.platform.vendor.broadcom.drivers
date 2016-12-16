@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mcnx.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_mcnx.c 663980 2016-10-07 19:14:26Z $
  */
 
 #include <wlc_cfg.h>
@@ -28,6 +28,7 @@
 #include <siutils.h>
 #include <wlioctl.h>
 #include <bcmwpa.h>
+#include <hndd11.h>
 #include <d11.h>
 #include <wlc_rate.h>
 #include <wlc_pub.h>
@@ -51,6 +52,9 @@ enum {
 
 static const bcm_iovar_t mcnx_iovars[] = {
 	{"mcnx", IOV_MCNX, IOVF_SET_DOWN, 0, IOVT_BOOL, 0},
+#ifdef BCMDBG
+	{"mcnx_dbg", IOV_MCNX_DEBUG, 0, 0, IOVT_UINT32, 0},
+#endif
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -77,14 +81,37 @@ struct wlc_mcnx_info {
 	/* skip time update requests */
 	int		mac_suspends;
 /* ==== please keep these debug stuff at the bottom ==== */
+#ifdef BCMDBG
+	uint32		debug;
+#endif
 };
 
 /* debug */
+#ifdef BCMDBG
+/* printf */
+#define MCNX_DBG_TSF	0x1
+#define MCNX_DBG_INTR	0x2
+#endif
+#ifdef BCMDBG
+#define WL_MCNX_TSF(mcnx, x)	do {					\
+		if (WL_MCNX_ON() && ((mcnx)->debug & MCNX_DBG_TSF))	\
+			WL_PRINT(x);					\
+	} while (0)
+#define WL_MCNX_TSF_ON(mcnx)	(WL_MCNX_ON() && ((mcnx)->debug & MCNX_DBG_TSF))
+#define WL_MCNX_INTR(mcnx, x)	do {					\
+		if (WL_MCNX_ON() && ((mcnx)->debug & MCNX_DBG_INTR))	\
+			WL_PRINT(x);					\
+	} while (0)
+#define WL_MCNX_INTR_ON(mcnx)	(WL_MCNX_ON() && ((mcnx)->debug & MCNX_DBG_INTR))
+#else
 #define WL_MCNX_TSF(mcnx, x)
 #define WL_MCNX_TSF_ON(mcnx)	FALSE
 #define WL_MCNX_INTR(mcnx, x)
 #define WL_MCNX_INTR_ON(mcnx)	FALSE
-
+#endif /* BCMDBG */
+#if (defined(BCMDBG) || defined(WLMSG_MCNX))
+#define WL_MCNX_TS(wlc)	(wlc->clk ? R_REG(wlc->osh, &wlc->regs->tsf_timerlow) : 0xDEADDAED)
+#endif
 /* d11cbo - BSS allocation */
 #define D11_CBO_AVAIL	255	/**< BSS block is available */
 /* other values from 0 to 254 are valid bsscfg index */
@@ -132,6 +159,12 @@ typedef struct {
 	uint8           rcmta_alt_ra_idx;       /* RSDB, RA index which is used by other wlc. */
 
 /* ==== please keep these debug stuff at the bottom ==== */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+struct {
+	uint32 intr[M_P2P_I_BLK_SZ];
+	uint32 bcnadopt;
+} stats;
+#endif
 } bss_mcnx_info_t;
 
 /* mcnx info flags */
@@ -139,8 +172,13 @@ typedef struct {
 #define MCNX_BSS_INFO	0x2	/**< BSS info (TSF, BSS, etc.) in SHM is init'd */
 #define MCNX_FORCED_HPS	0x4	/**< h/w HPS bit(s) are set */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define INTRCNTINC(bmi, i)	((bmi)->stats.intr[i]++)
+#define BCNADCNTINC(bmi)	((bmi)->stats.bcnadopt++)
+#else
 #define INTRCNTINC(bmi, i)	BCM_REFERENCE(bmi)
 #define BCNADCNTINC(bmi)	BCM_REFERENCE(bmi)
+#endif
 
 /* bsscfg specific info access accessor */
 #define MCNX_BSSCFG_CUBBY_LOC(mcnx, cfg) ((bss_mcnx_info_t **)BSSCFG_CUBBY((cfg), (mcnx)->cfgh))
@@ -159,11 +197,19 @@ static int wlc_mcnx_up(void *ctx);
 static int wlc_mcnx_down(void *ctx);
 
 /* dump */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static uint16 wlc_mcnx_rcmta_type_get(wlc_mcnx_info_t *mcnx, int idx);
+static int wlc_mcnx_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* bsscfg cubby */
 static int wlc_mcnx_info_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_mcnx_info_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_mcnx_info_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_mcnx_info_dump NULL
+#endif
 
 /* callbacks */
 static void wlc_mcnx_bss_updn_cb(void *ctx, bsscfg_up_down_event_data_t *notif_data);
@@ -279,6 +325,9 @@ BCMATTACHFN(wlc_mcnx_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "mcnx", wlc_mcnx_dump, (void *)mcnx);
+#endif
 
 	/* ENABLE MCNX by default */
 	if (wlc_mcnx_cap(mcnx) &&
@@ -430,6 +479,11 @@ wlc_mcnx_doiovar(void *ctx, uint32 actionid,
 	case IOV_SVAL(IOV_MCNX):
 		err = wlc_mcnx_enab(mcnx, int_val != 0);
 		break;
+#ifdef BCMDBG
+	case IOV_SVAL(IOV_MCNX_DEBUG):
+		mcnx->debug = (uint)int_val;
+		break;
+#endif
 	default:
 		err = BCME_UNSUPPORTED;
 		break;
@@ -548,6 +602,20 @@ wlc_mcnx_down(void *ctx)
 	BCM_REFERENCE(ctx);
 
 	return BCME_OK;
+}
+
+/* return base beacon offset or 0 based on bmi->bcn_offset_ok */
+uint32
+wlc_get_bmi_bcn_offset(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg)
+{
+	bss_mcnx_info_t *bmi;
+
+	ASSERT(cfg != NULL);
+	bmi = BSS_MCNX_INFO(mcnx, cfg);
+	ASSERT(bmi != NULL);
+	if (!bmi->bcn_offset_ok)
+		return (bmi->bcn_offset);
+	return 0;
 }
 
 /* suspend/resume TSF, TBTT, pre-TBTT, NoA, CTWindow, etc related h/w and ucode */
@@ -742,14 +810,14 @@ wlc_mcnx_hps_upd(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg, uint8 what, bool enab
 	else
 		hps &= ~what;
 
-#if defined(WLMSG_PS)
+#if defined(BCMDBG) || defined(WLMSG_PS)
 	if (!hps)
 		WL_PS(("wl%d.%d: PM-MODE: clear HPS (P2P no sleep and no PM)\n",
 		       wlc->pub->unit, WLC_BSSCFG_IDX(cfg)));
 	if (hps)
 		WL_PS(("wl%d.%d: PM-MODE: set HPS 0x%x (P2P permit sleep and enable PM)\n",
 		       wlc->pub->unit, WLC_BSSCFG_IDX(cfg), hps));
-#endif	
+#endif	/* BCMDBG || WLMSG_PS */
 
 	wlc_mcnx_write_shm(mcnx, M_P2P_HPS_OFFSET(wlc), hps);
 	mcnx->hps = hps;
@@ -948,7 +1016,7 @@ wlc_mcnx_bcn_offset_adjust(wlc_mcnx_info_t *mcnx, uint32 bcn_offset,
 	/* (uint32)(wlc->bcn_wait_prd - 1) */
 	if (((bcn_offset >> 10) > MAX_P2P_BCN_OFFSET_MS)) {
 		bool short_preamble = ((wrxh->rxhdr.lt80.PhyRxStatus_0 & PRXS0_SHORTH) != 0);
-		ratespec_t rspec = wlc_recv_compute_rspec(wrxh, plcp);
+		ratespec_t rspec = wlc_recv_compute_rspec(wlc->d11_info, wrxh, plcp);
 		uint32 bcn_tsf_offset = wlc_compute_bcntsfoff(wlc, rspec, short_preamble, FALSE);
 		uint32 bcn_offset_diff = 0;
 
@@ -1096,7 +1164,7 @@ wlc_mcnx_tbtt_calc_bcn(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg,
 	uint32 hdratime;
 
 	/* local TSF at beacon reception */
-	rspec = wlc_recv_compute_rspec(wrxh, plcp);
+	rspec = wlc_recv_compute_rspec(wlc->d11_info, wrxh, plcp);
 
 	/* 802.11 header airtime */
 	hdratime = wlc_compute_bcn_payloadtsfoff(wlc, rspec);
@@ -1404,6 +1472,10 @@ _wlc_mcnx_tbtt_upd(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg, bool set)
 		/* remotel TSF time */
 		wlc_mcnx_read_tsf64(mcnx, cfg, &rtsf_h, &rtsf_l);
 		offset = wlc_calc_tbtt_offset(bcnint, rtsf_h, rtsf_l);
+		if (!bmi->bcn_offset_ok) {
+			offset = (offset > bmi->bcn_offset) ?
+				offset - bmi->bcn_offset : offset;
+		}
 		rtbtt_h = rtsf_h;
 		rtbtt_l = rtsf_l;
 		wlc_uint64_sub(&rtbtt_h, &rtbtt_l, 0, offset);
@@ -2299,6 +2371,13 @@ wlc_mcnx_alt_ra_unset(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg)
 	       return BCME_BADARG;
 	}
 
+	/* No ALT RA allocation for any primary config. Both wlc's primary config should have
+	 * same mac address.
+	 */
+	if (cfg == wlc_bsscfg_primary(cfg->wlc)) {
+	       return BCME_BADARG;
+	}
+
 	bmi = BSS_MCNX_INFO(mcnx, cfg);
 	ASSERT(bmi != NULL);
 
@@ -2802,6 +2881,279 @@ wlc_mcnx_shm_bss_idx_set(wlc_mcnx_info_t *mcnx, int bss_idx)
 }
 
 /* debug... */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_mcnx_BSS_dump(wlc_mcnx_info_t *mcnx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = mcnx->wlc;
+	uint bss;
+	uint offset;
+	uint16 val;
+	uint i;
+	const char *p2p_bss[] = {
+		"BCN_INT",
+		"DTIM_PRD",
+		"ST",
+		"N_PRE_TBTT",
+		"CTW",
+		"N_CTW_END",
+		"NOA_CNT",
+		"N_NOA",
+		"NOA_DUR",
+		"NOA_TD",
+		"NOA_OFS",
+		"DTIM_CNT",
+	};
+
+	if (!wlc->clk)
+		return;
+
+	bss = wlc_mcnx_BSS_idx(mcnx, cfg);
+	ASSERT(bss < M_P2P_BSS_MAX);
+
+	bcm_bprintf(b, "\tSHM BSS: %u\n", bss);
+	for (i = 0; i < M_P2P_BSS_BLK_SZ; i ++) {
+		offset = M_P2P_BSS(wlc, bss, i);
+		val = wlc_mcnx_read_shm(mcnx, offset);
+		bcm_bprintf(b, "\t\t%04x(%04x:%04x): %04x %s\n",
+		            mcnx->d11shm + offset, offset, offset >> 1, val,
+		            i < ARRAYSIZE(p2p_bss) ? p2p_bss[i] : "unknown");
+	}
+	offset = M_P2P_PRE_TBTT(wlc, bss);
+	val = wlc_mcnx_read_shm(mcnx, offset);
+	bcm_bprintf(b, "\t\t%04x(%04x:%04x): %04x %s\n",
+	            mcnx->d11shm + offset, offset, offset >> 1, val,
+	            "PRE_TBTT");
+	bcm_bprintf(b, "\tSHM INTR: %u\n", bss);
+	for (i = 0; i < M_P2P_I_BLK_SZ; i ++) {
+		offset = M_P2P_I(wlc, bss, i);
+		val = wlc_mcnx_read_shm(mcnx, offset);
+		bcm_bprintf(b, "\t\t%04x(%04x:%04x): %04x\n",
+		            mcnx->d11shm + offset, offset, offset >> 1, val);
+	}
+	bcm_bprintf(b, "\tSHM TSF: %u\n", bss);
+	offset = M_P2P_TSF(wlc, bss, 0);
+	bcm_bprintf(b, "\t\t%04x(%04x:%04x): %04x%04x%04x%04x (remote - local)\n",
+	            mcnx->d11shm + offset, offset, offset >> 1,
+	            wlc_mcnx_read_shm(mcnx, M_P2P_TSF(wlc, bss, 3)),
+	            wlc_mcnx_read_shm(mcnx, M_P2P_TSF(wlc, bss, 2)),
+	            wlc_mcnx_read_shm(mcnx, M_P2P_TSF(wlc, bss, 1)),
+	            wlc_mcnx_read_shm(mcnx, M_P2P_TSF(wlc, bss, 0)));
+}
+
+static uint16
+wlc_mcnx_rcmta_type_get(wlc_mcnx_info_t *mcnx, int idx)
+{
+	uint16 ret_val = 0;
+	wlc_info_t *wlc = mcnx->wlc;
+
+
+	ASSERT(idx >= mcnx->p2p_start_idx && idx < mcnx->p2p_max_idx);
+
+	if (D11REV_GE(wlc->pub->corerev, 40))
+		ret_val = wlc_read_amtinfo_by_idx(wlc, idx);
+	else
+		ret_val = wlc_mcnx_read_shm(mcnx, M_ADDR_BMP_BLK(wlc, idx - mcnx->p2p_start_idx));
+	return ret_val;
+}
+
+static void
+wlc_mcnx_rcmta_dump(wlc_mcnx_info_t *mcnx, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = mcnx->wlc;
+	int i;
+	struct ether_addr ea;
+	char eabuf[ETHER_ADDR_STR_LEN];
+
+	if (!wlc->clk)
+		return;
+
+	for (i = mcnx->p2p_start_idx; i < mcnx->p2p_max_idx; i ++) {
+		uint16 type;
+		char typestr[64];
+		uint16 attr;
+		const bcm_bit_desc_t at_flags[] = {
+			{ADDR_BMP_RA, "RA"},
+			{ADDR_BMP_TA, "TA"},
+			{ADDR_BMP_BSSID, "BSSID"},
+			{ADDR_BMP_AP, "AP"},
+			{ADDR_BMP_STA, "STA"},
+			{ADDR_BMP_P2P_GO, "GO"},
+			{ADDR_BMP_P2P_GC, "GC"},
+			{ADDR_BMP_P2P_DISC, "DISC"},
+			{0, NULL}
+		};
+
+		type = wlc_mcnx_rcmta_type_get(mcnx, i);
+
+		wlc_get_addrmatch(wlc, i, &ea, &attr);
+		if (ETHER_ISNULLADDR(&ea) && type == 0 &&
+		    !isset(mcnx->d11rao, i - mcnx->p2p_start_idx))
+			continue;
+
+		bcm_format_flags(at_flags, type, typestr, sizeof(typestr));
+		bcm_bprintf(b, "\t%d %s %d 0x%04x[%s]\n",
+		            i, bcm_ether_ntoa(&ea, eabuf),
+		            i - mcnx->p2p_start_idx, type, typestr);
+	}
+}
+
+static const char *intr_names[] = {
+	"pretbtt",
+	"ctwend",
+	"abs",
+	"psc"
+};
+
+static void
+wlc_mcnx_info_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_mcnx_info_t *mcnx = (wlc_mcnx_info_t *)ctx;
+	wlc_info_t *wlc = mcnx->wlc;
+	char flagstr[64];
+	uint32 tsfo_l = 0, tsfo_h = 0;
+	bss_mcnx_info_t *bmi;
+	uint i;
+	const bcm_bit_desc_t cfg_flags[] = {
+		{MCNX_TBTT_INFO, "tbtt"},
+		{MCNX_BSS_INFO, "bss"},
+		{MCNX_FORCED_HPS, "hps"},
+		{0, NULL}
+	};
+
+	ASSERT(cfg != NULL);
+
+	bmi = BSS_MCNX_INFO(mcnx, cfg);
+	if (bmi == NULL)
+		return;
+
+	bcm_bprintf(b, "\tRA rcmta: %d", bmi->rcmta_ra_idx);
+	if (wlc->clk &&
+	    bmi->rcmta_ra_idx >= mcnx->p2p_start_idx && bmi->rcmta_ra_idx < mcnx->p2p_max_idx) {
+		bcm_bprintf(b, " type: 0x%x", wlc_mcnx_rcmta_type_get(mcnx, bmi->rcmta_ra_idx));
+	}
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\tBSSID rcmta: %d", bmi->rcmta_bssid_idx);
+	if (wlc->clk &&
+	    bmi->rcmta_bssid_idx >= mcnx->p2p_start_idx &&
+	    bmi->rcmta_bssid_idx < mcnx->p2p_max_idx) {
+		bcm_bprintf(b, " type: 0x%x", wlc_mcnx_rcmta_type_get(mcnx, bmi->rcmta_bssid_idx));
+	}
+	bcm_bprintf(b, "\n");
+
+	/* bsscfg flags */
+	bcm_format_flags(cfg_flags, bmi->flags, flagstr, sizeof(flagstr));
+	bcm_bprintf(b, "\tflags: 0x%x [%s]\n", bmi->flags, flagstr);
+	/* cached TBTT in local TSF time */
+	bcm_bprintf(b, "\ttbtt: 0x%x%08x (local)\n", bmi->tbtt_h, bmi->tbtt_l);
+	/* extrapolated TBTT (verify the code is correct...) */
+	if (wlc->clk && cfg->associated && bmi->bcn_prd != 0) {
+		uint32 tbtt_l, tbtt_h, tbtt_o;
+		wlc_read_tsf(wlc, &tbtt_l, &tbtt_h);
+		wlc_mcnx_l2r_tsf64(mcnx, cfg, tbtt_h, tbtt_l, &tbtt_h, &tbtt_l);
+		tbtt_o = wlc_calc_tbtt_offset(bmi->bcn_prd, tbtt_h, tbtt_l);
+		wlc_uint64_sub(&tbtt_h, &tbtt_l, 0, tbtt_o);
+		wlc_uint64_add(&tbtt_h, &tbtt_l, 0, bmi->bcn_prd << 10);
+		wlc_mcnx_r2l_tsf64(mcnx, cfg, tbtt_h, tbtt_l, &tbtt_h, &tbtt_l);
+		bcm_bprintf(b, "\tnext tbtt: 0x%x%08x (local)\n", tbtt_h, tbtt_l);
+	}
+	/* cached TSF offsets */
+	bcm_bprintf(b, "\ttsfo: 0x%x%08x (local - remote)\n", bmi->tsfo_h, bmi->tsfo_l);
+	wlc_uint64_sub(&tsfo_h, &tsfo_l, bmi->tsfo_h, bmi->tsfo_l);
+	bcm_bprintf(b, "\ttsfo: 0x%x%08x (remote - local)\n", tsfo_h, tsfo_l);
+	/* extrapolated times */
+	if (wlc->clk && cfg->associated) {
+		uint32 tsf_l, tsf_h;
+		wlc_read_tsf(wlc, &tsf_l, &tsf_h);
+		bcm_bprintf(b, "\ttsf: 0x%x%08x (local)\n", tsf_h, tsf_l);
+		wlc_mcnx_l2r_tsf64(mcnx, cfg, tsf_h, tsf_l, &tsf_h, &tsf_l);
+		bcm_bprintf(b, "\ttsf: 0x%x%08x (remote)\n", tsf_h, tsf_l);
+	}
+	/* s/w stats */
+	bcm_bprintf(b, "\t");
+	for (i = 0; i < M_P2P_I_BLK_SZ; i ++)
+		bcm_bprintf(b, "%s: %u ", intr_names[i], bmi->stats.intr[i]);
+	bcm_bprintf(b, "\n");
+	bcm_bprintf(b, "\tbcnadopt: %u\n", bmi->stats.bcnadopt);
+
+	/* SHM BSS block */
+	wlc_mcnx_BSS_dump(mcnx, cfg, b);
+}
+
+static int
+wlc_mcnx_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_mcnx_info_t *mcnx = (wlc_mcnx_info_t *)ctx;
+	wlc_info_t *wlc = mcnx->wlc;
+	int idx;
+	wlc_bsscfg_t *cfg;
+	char eabuf[ETHER_ADDR_STR_LEN];
+
+	bcm_bprintf(b, "<INFO>\n");
+	bcm_bprintf(b, "\tmcnx: %d\n", MCNX_ENAB(wlc->pub));
+	bcm_bprintf(b, "\tsuspend: %d\n", mcnx->mac_suspends);
+	bcm_bprintf(b, "<RESOURCE>\n");
+	for (idx = 0; idx < (int)sizeof(mcnx->d11cbo); idx ++)
+		bcm_bprintf(b, "\td11cbo[%d]: 0x%x\n", idx, mcnx->d11cbo[idx]);
+	for (idx = 0; idx < (int)sizeof(mcnx->d11rao); idx ++)
+		bcm_bprintf(b, "\td11rao[%d]: 0x%x\n", idx, mcnx->d11rao[idx]);
+	bcm_bprintf(b, "\td11shm: 0x%04x(0x%04x)\n", mcnx->d11shm, mcnx->d11shm >> 1);
+
+	/* Power Save */
+	bcm_bprintf(b, "<Power Save>\n");
+	bcm_bprintf(b, "\thps: %04x\n", mcnx->hps);
+	if (wlc->clk) {
+		uint offset = M_P2P_HPS_OFFSET(wlc);
+		uint16 val = wlc_mcnx_read_shm(mcnx, offset);
+		bcm_bprintf(b, "\tSHM HPS:\n");
+		bcm_bprintf(b, "\t\t%04x(%04x:%04x): %04x\n",
+		            mcnx->d11shm + offset, offset, offset >> 1, val);
+	}
+
+	/* SHM GO channel */
+	bcm_bprintf(b, "<Channel>\n");
+	if (wlc->clk) {
+		uint offset = M_P2P_GO_CHANNEL(wlc);
+		uint16 val = wlc_mcnx_read_shm(mcnx, offset);
+		bcm_bprintf(b, "\tSHM CHANNEL:\n");
+		bcm_bprintf(b, "\t\t%04x(%04x:%04x): %04x\n",
+		            mcnx->d11shm + offset, offset, offset >> 1, val);
+	}
+
+	/* RCMTA and ADDR_BMP */
+	bcm_bprintf(b, "<RCMTA>\n");
+	wlc_mcnx_rcmta_dump(mcnx, b);
+
+	/* group owners SHM BSS blocks */
+	FOREACH_BSS(wlc, idx, cfg) {
+		if (!P2P_GO(wlc, cfg))
+			continue;
+		bcm_bprintf(b, "<GO %s bsscfg %d>\n",
+		            bcm_ether_ntoa(&cfg->cur_etheraddr, eabuf), WLC_BSSCFG_IDX(cfg));
+		wlc_mcnx_info_dump(mcnx, cfg, b);
+	}
+
+	/* clients SHM BSS blocks */
+	FOREACH_BSS(wlc, idx, cfg) {
+		if (!P2P_CLIENT(wlc, cfg))
+			continue;
+		bcm_bprintf(b, "<Client %s bsscfg %d>\n",
+		            bcm_ether_ntoa(&cfg->cur_etheraddr, eabuf), WLC_BSSCFG_IDX(cfg));
+		wlc_mcnx_info_dump(mcnx, cfg, b);
+	}
+
+	/* non-p2p SHM BSS blocks */
+	FOREACH_BSS(wlc, idx, cfg) {
+		if (P2P_IF(wlc, cfg))
+			continue;
+		bcm_bprintf(b, "<WLAN %s bsscfg %d>\n",
+		            bcm_ether_ntoa(&cfg->cur_etheraddr, eabuf), WLC_BSSCFG_IDX(cfg));
+		wlc_mcnx_info_dump(mcnx, cfg, b);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 #ifdef DTS_DBG
 	#define DTS_INFO(x) printf x

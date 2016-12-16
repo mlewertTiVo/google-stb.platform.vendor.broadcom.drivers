@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scandb.h 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_scandb.h 652783 2016-08-03 13:02:45Z $
  */
 #ifndef _WLC_SCANDB_H_
 #define _WLC_SCANDB_H_
@@ -36,7 +36,7 @@ typedef void (*scandb_iter_fn_t)(void *arg1, void *arg2, uint timestamp,
 
 #ifdef WLSCANCACHE
 
-extern wlc_scandb_t* wlc_scandb_create(osl_t *osh, uint unit);
+extern wlc_scandb_t* wlc_scandb_create(osl_t *osh, uint unit, uint max_cache);
 extern void wlc_scandb_free(wlc_scandb_t *sdb);
 
 #else /* WLSCANCACHE */
@@ -63,5 +63,8 @@ extern int wlc_scandb_iterate(wlc_scandb_t *sdb,
                               int BSS_type, const chanspec_t *chanspec_list, uint chanspec_num,
                               scandb_iter_fn_t fn, void *fn_arg1, void *fn_arg2);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+extern int wlc_scandb_dump(void *handle, struct bcmstrbuf *b);
+#endif
 
 #endif /* _WLC_SCANDB_H_ */

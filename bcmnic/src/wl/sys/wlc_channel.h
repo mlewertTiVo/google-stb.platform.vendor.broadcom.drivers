@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_channel.h 633968 2016-04-26 09:01:47Z $
+ * $Id: wlc_channel.h 660741 2016-09-21 20:10:24Z $
  */
 
 #ifndef _WLC_CHANNEL_H_
@@ -29,6 +29,9 @@ struct wlc_info;
 
 #define MAX_CLMVER_STRLEN 128
 
+#define MAXRCLIST_REG	2
+#define WLC_RCLIST_80	0
+#define WLC_RCLIST_160	1
 
 /*
  * CHSPEC_IS40()/CHSPEC_IS40_UNCOND
@@ -81,10 +84,10 @@ struct wlc_info;
 #define CHSPEC_IS160(chspec)	0
 #endif /* WL11AC */
 
-#define WLC_SAME_CTLCHAN(c1, c2) (wf_chspec_ctlchan((c1)) == wf_chspec_ctlchan((c2)))
+#define WLC_CHAN_COEXIST(c1, c2) (wf_chspec_coexist(c1, c2))
 
 #define MAXRCLISTSIZE	32
-#define MAXREGCLASS	40
+#define MAXREGCLASS	130
 #define MAXRCTBL	24
 #define MAXRCVEC	CEIL(MAXREGCLASS, NBBY)
 
@@ -93,6 +96,18 @@ struct wlc_info;
 #define WLC_RCLIST_20	0
 #define WLC_RCLIST_40L	1
 #define WLC_RCLIST_40U	2
+
+/* Global Regulatory Class list */
+#define MAXGBLRCLIST	3
+#define WLC_GBL_RCLIST_20	0
+#define WLC_GBL_RCLIST_40L	1
+#define WLC_GBL_RCLIST_40U	2
+
+#define MAXRCGBLLIST_REG	2
+#define WLC_RCGBLLIST_80	0
+#define WLC_RCGBLLIST_160	1
+
+#define MAXRCBW	10
 
 /** regulatory bitvec */
 typedef struct {
@@ -110,6 +125,18 @@ typedef struct {
 	uint8 len;		/**< number of entry */
 	chan_rc_t rctbl[MAXRCTBL];	/**< regulatory class table */
 } rcinfo_t;
+
+/** regclass and bandwidth */
+typedef struct {
+	uint8 rclass;
+	uint16 bw;
+} rcbw_t;
+
+typedef struct {
+	uint8 cnt;
+	rcbw_t rcbwtbl[MAXRCBW];
+} rcbwinfo_t;
+
 
 /* maxpwr mapping to 5GHz band channels:
  * maxpwr[0] - channels [34-48]
@@ -197,9 +224,8 @@ typedef struct {
 #define WLC_DFS_CSA_BEACONS	8	/**< minimum 8 beacons for csa */
 #define WLC_CHANBLOCK_FOREVER   0xffffffff  /* special define for specific nop requirements */
 
-#ifdef WL_RESTRICTED_APSTA
-#define RAPSTA_2G_START_CHANNEL 1
-#endif
+#define BAND_2G_START_CHANNEL 1
+#define BAND_5G_START_CHANNEL 36
 
 extern const chanvec_t chanvec_all_2G;
 extern const chanvec_t chanvec_all_5G;
@@ -306,8 +332,8 @@ extern chanspec_t wlc_next_chanspec(wlc_cm_info_t *wlc_cm, chanspec_t cur_ch, in
 #if defined(WL_RESTRICTED_APSTA)
 extern bool wlc_channel_apsta_restriction(wlc_cm_info_t *wlc_cm, chanspec_t cur_chspec,
 	chanspec_t tar_chspec);
-extern chanspec_t wlc_channel_2g_chanspec(wlc_cm_info_t *wlc_cmi);
 #endif /* WL_RESTRICTED_APSTA */
+extern chanspec_t wlc_default_chanspec_by_band(wlc_cm_info_t *wlc_cmi, uint bandunit);
 extern bool wlc_radar_chanspec(wlc_cm_info_t *wlc_cm, chanspec_t chanspec);
 extern bool wlc_restricted_chanspec(wlc_cm_info_t *wlc_cm, chanspec_t chspec);
 extern void wlc_clr_restricted_chanspec(wlc_cm_info_t *wlc_cm, chanspec_t chspec);
@@ -356,6 +382,8 @@ extern int8 wlc_get_reg_max_power_for_channel_ex(wlc_cm_info_t *wlc_cm,
 extern int8 wlc_get_reg_max_power_for_channel(wlc_cm_info_t *wlc_cm, int chan, bool external);
 extern void wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cm, wl_uint32_list_t *list,
 	uint bw, bool band2G, const char *abbrev);
+extern bool wlc_valid_chanspec_cntry(wlc_cm_info_t *wlc_cm, const char *country_abbrev,
+	chanspec_t	home_chanspec);
 
 extern uint8 wlc_get_regclass(wlc_cm_info_t *wlc_cm, chanspec_t chanspec);
 extern uint8 wlc_rclass_get_channel_list(wlc_cm_info_t *wlc_cm, const char *abbrev, uint8 rclass,

@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_vht.c 639965 2016-05-25 13:11:10Z $
+ * $Id: wlc_vht.c 665318 2016-10-17 12:56:50Z $
  */
 
 
@@ -57,7 +57,6 @@
 #include <wlc_bmac.h>
 #include <wlc_stf.h>
 #include <wlc_tx.h>
-#include <wlc_ulb.h>
 #include <phy_tpc_api.h>
 #ifdef WL_MODESW
 #include <wlc_modesw.h>
@@ -122,6 +121,23 @@ struct wlc_vht_scb_cubby {
 	(struct wlc_vht_scb_cubby*)(SCB_CUBBY((scb), (vhti)->scb_handle))
 #define SCB_VHT_INFO(vhti, scb) (SCB_VHT_CUBBY(vhti, scb))->vht_scb_info
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static const bcm_bit_desc_t vht_scb_flags[] =
+{
+	{SCB_VHT_LDPCCAP, "LDPC"},
+	{SCB_SGI80, "SGI80"},
+	{SCB_SGI160, "SGI160"},
+	{SCB_VHT_TX_STBCCAP, "TX_STBC"},
+	{SCB_VHT_RX_STBCCAP, "RX_STBC"},
+	{SCB_SU_BEAMFORMER, "SU_BEAMFORMER"},
+	{SCB_SU_BEAMFORMEE, "SU_BEANFORMEE"},
+	{SCB_MU_BEAMFORMER, "MU_BEAMFORMER"},
+	{SCB_MU_BEAMFORMEE, "MU_BEANFORMEE"},
+	{SCB_VHT_TXOP_PS, "TXOP_PS"},
+	{SCB_HTC_VHT_CAP, "HTC_VHT"},
+	{0, NULL}
+};
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static void wlc_vht_scb_dump(void *ctx, struct scb *scbptr, struct bcmstrbuf *b);
 static int wlc_vht_scb_init(void *context, struct scb *scb);
@@ -164,15 +180,21 @@ static uint wlc_vht_tdls_calc_brcm_ie_len(void * ctx, wlc_iem_calc_data_t * data
 static int wlc_vht_tdls_write_brcm_ie(void *ctx, wlc_iem_build_data_t *data);
 static uint wlc_vht_tdls_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data);
 #endif
+#if defined(WL_NAN)
+static uint wlc_vht_nan_calc_cap_ie_len(void *ctx, wlc_iem_calc_data_t *data);
+static int wlc_vht_nan_write_cap_ie(void *ctx, wlc_iem_build_data_t *data);
+static uint wlc_vht_nan_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data);
+static int wlc_vht_nan_write_op_ie(void *ctx, wlc_iem_build_data_t *data);
+#endif /* defined(WL_NAN) */
 
 /* VHT config management */
 static int wlc_vht_set_mode(wlc_vht_info_t *vhti, bool enable);
 static int wlc_vht_setup_mode(wlc_vht_info_t *vhti, bool enable);
 static uint8 wlc_get_oper_mode(wlc_vht_info_t *vhti, wlc_bsscfg_t *cfg);
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC) || \
-	defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || \
+	defined(WLMSG_ASSOC) || defined(BCMDBG_DUMP) || defined(DHD_DEBUG)
 static int wlc_vht_dump_cap(wlc_info_t *wlc, struct bcmstrbuf *b);
-#endif 
+#endif /* BCMDBG */
 static void
 wlc_vht_upd_rate_mcsmap_ex(wlc_vht_info_t *vhti, struct scb *scb, uint16 rxmcsmap);
 static void
@@ -185,12 +207,12 @@ wlc_read_oper_mode_notif_ie(wlc_vht_info_t *vhti, uint8 *tlvs, int tlvs_len,
 #endif /* WLTDLS */
 
 
-#if defined(BCMCONDITIONAL_LOGGING)
+#if defined(BCMDBG) || defined(BCMCONDITIONAL_LOGGING)
 /* Rx mcsmap */
 static uint16 wlc_vht_get_scb_rxmcsmap(wlc_vht_info_t *vhti, struct scb *scb);
 /* Tx mcsmap */
 static uint16 wlc_vht_get_tx_mcsmap(wlc_vht_info_t *vhti);
-#endif 
+#endif /* BCMDBG || BCMCONDITIONAL_LOGGING */
 
 /* finish going up */
 static int wlc_vht_up(void *vhti);
@@ -430,6 +452,24 @@ BCMATTACHFN(wlc_vht_attach)(wlc_info_t *wlc)
 	}
 #endif /* defined(WLTDLS) */
 
+#if defined(WL_NAN)
+	if (wlc_ier_add_build_fn(wlc->ier_nan_elmt_cntr, DOT11_MNG_VHT_CAP_ID,
+			wlc_vht_nan_calc_cap_ie_len,
+			wlc_vht_nan_write_cap_ie, vhti) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_iem_add_build_fn failed, vht cap ie "
+			"in nan element container\n", wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+
+	if (wlc_ier_add_build_fn(wlc->ier_nan_elmt_cntr, DOT11_MNG_VHT_OPERATION_ID,
+			wlc_vht_nan_calc_op_ie_len,
+			wlc_vht_nan_write_op_ie, vhti) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_iem_add_build_fn failed, vht op ie "
+			"in nan element container\n", wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif /* defined(WL_NAN) */
+
 	/* parse */
 #ifdef AP
 	/* assocreq/reassocreq */
@@ -595,10 +635,10 @@ BCMATTACHFN(wlc_vht_attach)(wlc_info_t *wlc)
 		          wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC) || \
-	defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || \
+	defined(WLMSG_ASSOC) || defined(BCMDBG_DUMP) || defined(DHD_DEBUG)
 	wlc_dump_register(wlc->pub, "vhtcap", (dump_fn_t)wlc_vht_dump_cap, (void *)wlc);
-#endif 
+#endif /* BCMDBG etc. */
 
 	return vhti;
 fail:
@@ -609,6 +649,34 @@ fail:
 static void
 wlc_vht_scb_dump(void *ctx, struct scb *scbptr, struct bcmstrbuf *b)
 {
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* dump cubby */
+	char vhtflagsstr[64];
+	struct wlc_vht_info *vhti = (struct wlc_vht_info *)ctx;
+	wlc_vht_scb_info_t *cubby_info =
+		(wlc_vht_scb_info_t *)SCB_VHT_INFO(vhti, scbptr);
+
+	bcm_format_flags(vht_scb_flags, cubby_info->flags, vhtflagsstr, 64);
+	if (SCB_VHT_CAP(scbptr)) {
+		bcm_bprintf(b, "     VHT Flags:0x%x\n", cubby_info->flags);
+		bcm_bprintf(b, "     VHT rxmcsmap:0x%x", cubby_info->rxmcsmap);
+		if (vhtflagsstr[0] != '\0')
+			bcm_bprintf(b, " (%s)", vhtflagsstr);
+		bcm_bprintf(b, "\n");
+	}
+	if (cubby_info->stbc_num > 0) {
+		bcm_bprintf(b, "     stbc num = %d", cubby_info->stbc_num);
+	}
+	if (VHT_ENAB_BAND(vhti->wlc->pub, vhti->wlc->band->bandtype) &&
+	    SCB_VHT_CAP(scbptr)) {
+		bcm_bprintf(b, "     VHT ratemask: 0x%x\n", cubby_info->ratemask);
+		wlc_dump_vht_mcsmap("     VHT mcsmap:", scbptr->rateset.vht_mcsmap, b);
+		bcm_bprintf(b, "\n");
+		wlc_dump_vht_mcsmap_prop("     VHT mcsmap_prop:",
+			scbptr->rateset.vht_mcsmap_prop, b);
+		bcm_bprintf(b, "\n");
+	}
+#endif /* BCMDBG || BCMDBG_DUMP */
 	BCM_REFERENCE(ctx);
 	BCM_REFERENCE(scbptr);
 	BCM_REFERENCE(b);
@@ -805,7 +873,7 @@ wlc_vht_doiovar(void *context, uint32 actionid,
 				/* Check for Proprietary rate support in PHY */
 				err = BCME_BADOPTION;
 				break;
-			} else if ((IS_SINGLEBAND_5G(wlc->deviceid)) &&
+			} else if ((IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)) &&
 				(int_val & WLC_VHT_FEATURES_2G_ENAB)) {
 				/* Abort if we try to enable 2G VHT on a singleband 5G device */
 				err = BCME_BADOPTION;
@@ -1301,11 +1369,11 @@ wlc_write_vht_cap_ie(wlc_bsscfg_t *cfg, vht_cap_ie_t *cap_ie)
 	ASSERT(&vhti->vht_cap != cap_ie);
 
 	BCM_REFERENCE(wlc);
-	cap = vhti->vht_cap.vht_cap_info;
 #ifdef WL_BEAMFORMING
 	if (TXBF_ENAB(wlc->pub))
-		wlc_txbf_vht_upd_bfr_bfe_cap(wlc->txbf, cfg, &cap);
+		wlc_txbf_vht_upd_bfr_bfe_cap(wlc->txbf, cfg, &(vhti->vht_cap.vht_cap_info));
 #endif
+	cap = vhti->vht_cap.vht_cap_info;
 
 #ifdef WL_MU_RX
 	/* Can only act as an MU receiver in one BSS. Check if that BSS has
@@ -1447,7 +1515,7 @@ wlc_write_vht_transmit_power_envelope_ie(wlc_vht_info_t *vhti,
 
 	vht_transmit_power_ie->local_max_transmit_power_20 = min_pwr;
 
-	if (WLC_ULB_CHSPEC_ISLE20(wlc, chspec)) {
+	if (CHSPEC_IS20(chspec)) {
 		vht_transmit_power_ie->transmit_power_info = 0;
 	} else if (CHSPEC_IS40(chspec)) {
 		vht_transmit_power_ie->transmit_power_info = 1;
@@ -1698,7 +1766,7 @@ wlc_vht_ie_len_power_envelope(wlc_bsscfg_t *cfg, uint32 flags)
 
 	chspec = cfg->current_bss->chanspec;
 
-	if (WLC_ULB_CHSPEC_ISLE20(cfg->wlc, chspec)) {
+	if (CHSPEC_IS20(chspec)) {
 		ielen = 0;
 	} else if (CHSPEC_IS40(chspec)) {
 		ielen = 1;
@@ -1733,7 +1801,7 @@ wlc_vht_ie_len_csa_wrapper(wlc_bsscfg_t *cfg, uint32 flags)
 	ielen = sizeof(dot11_vht_transmit_power_envelope_ie_t);
 
 	/* wb_csa_ie not present in 2.5/5/10/20MHz channels */
-	if (!WLC_ULB_CHSPEC_ISLE20(cfg->wlc, chspec)) {
+	if (!CHSPEC_IS20(chspec)) {
 		ielen += sizeof(dot11_wide_bw_chan_switch_ie_t);
 	}
 
@@ -1987,18 +2055,8 @@ wlc_vht_chanspec(wlc_vht_info_t *vhti, vht_op_ie_t *op_ie,
 	BCM_REFERENCE(oper_mode_enab);
 	BCM_REFERENCE(oper_mode);
 
-#ifdef WL11ULB
-	/* If ULB operations are enabled then chan-width is forced to VHT_OP_CHAN_WIDTH_20_40,
-	 * this will ensure that the chanspec set in this function is forced to input ht_chanspec
-	 * value. Note that ht_chanspec is already handled to set to ULB chanspec in
-	 * wlc_ht_chanspec()
-	 */
-	if (cfg && BSSCFG_ULB_ENAB(vhti->wlc, cfg))
-		width = VHT_OP_CHAN_WIDTH_20_40;
-#endif /* WL11ULB */
 	BCM_REFERENCE(cfg);
 
-	/* Assuming that during ULB operation width should indicate VHT_OP_CHAN_WIDTH_20_40 */
 	if (width == VHT_OP_CHAN_WIDTH_20_40) {
 		chanspec = ht_chanspec;
 	} else if (width == VHT_OP_CHAN_WIDTH_80) {
@@ -2166,6 +2224,48 @@ wlc_vht_write_cap_ie(void *ctx, wlc_iem_build_data_t *data)
 	return BCME_OK;
 }
 
+#if defined(WL_NAN)
+static uint
+wlc_vht_nan_calc_cap_ie_len(void *ctx, wlc_iem_calc_data_t *data)
+{
+	wlc_vht_info_t *vhti = (wlc_vht_info_t *)ctx;
+	wlc_iem_ft_cbparm_t *ftcbparm = data->cbparm->ft;
+
+	if (!data->cbparm->vht) {
+		return 0;
+	}
+
+	if (!ftcbparm->nan.dual_band && BAND_2G(vhti->wlc->band->bandtype)) {
+		return 0;
+	}
+
+	return TLV_HDR_LEN + VHT_CAP_IE_LEN;
+}
+
+static int
+wlc_vht_nan_write_cap_ie(void *ctx, wlc_iem_build_data_t *data)
+{
+	wlc_vht_info_t *vhti = (wlc_vht_info_t *)ctx;
+	wlc_bsscfg_t *cfg = data->cfg;
+	wlc_iem_ft_cbparm_t *ftcbparm = data->cbparm->ft;
+	vht_cap_ie_t vht_cap;
+
+	if (!data->cbparm->vht) {
+		return BCME_OK;
+	}
+
+	if (!ftcbparm->nan.dual_band && BAND_2G(vhti->wlc->band->bandtype)) {
+		return BCME_OK;
+	}
+
+	wlc_write_vht_cap_ie(cfg, &vht_cap);
+
+	bcm_write_tlv(DOT11_MNG_VHT_CAP_ID, &vht_cap, VHT_CAP_IE_LEN, data->buf);
+
+	return BCME_OK;
+}
+#endif /* defined(WL_NAN) */
+
 #ifdef AP
 static int
 wlc_vht_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data)
@@ -2251,6 +2351,57 @@ wlc_vht_write_op_ie(void *ctx, wlc_iem_build_data_t *data)
 	bcm_write_tlv(DOT11_MNG_VHT_OPERATION_ID, &wlc->vhti->vht_op, VHT_OP_IE_LEN, data->buf);
 	return BCME_OK;
 }
+
+#if defined(WL_NAN)
+static uint
+wlc_vht_nan_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data)
+{
+	wlc_vht_info_t *vhti = (wlc_vht_info_t *)ctx;
+	wlc_info_t *wlc = vhti->wlc;
+	wlc_iem_ft_cbparm_t *ftcbparm = data->cbparm->ft;
+
+	if (!data->cbparm->vht) {
+		return 0;
+	}
+
+	if (!ftcbparm->nan.vht_op_ie) {
+		return 0;
+	}
+
+	if (!ftcbparm->nan.dual_band && BAND_2G(wlc->band->bandtype)) {
+		return 0;
+	}
+
+	return TLV_HDR_LEN + VHT_OP_IE_LEN;
+}
+
+static int
+wlc_vht_nan_write_op_ie(void *ctx, wlc_iem_build_data_t *data)
+{
+	wlc_vht_info_t *vhti = (wlc_vht_info_t *)ctx;
+	wlc_info_t *wlc = vhti->wlc;
+	wlc_bsscfg_t *cfg = data->cfg;
+	wlc_iem_ft_cbparm_t *ftcbparm = data->cbparm->ft;
+
+	if (!data->cbparm->vht) {
+		return BCME_OK;
+	}
+
+	if (!ftcbparm->nan.vht_op_ie) {
+		return BCME_OK;
+	}
+
+	if (!ftcbparm->nan.dual_band && BAND_2G(wlc->band->bandtype)) {
+		return BCME_OK;
+	}
+
+	wlc_write_vht_op_ie(cfg, &wlc->vhti->vht_op);
+
+	bcm_write_tlv(DOT11_MNG_VHT_OPERATION_ID, &wlc->vhti->vht_op, VHT_OP_IE_LEN, data->buf);
+
+	return BCME_OK;
+}
+#endif /* defined(WL_NAN) */
 
 #ifdef AP
 static int
@@ -2540,8 +2691,7 @@ wlc_vht_calc_oper_mode_ie_len(void *ctx, wlc_iem_calc_data_t *data)
 
 	BCM_REFERENCE(ctx);
 
-	if (!wlc_vht_oper_mode_ie_allowed(wlc_iem_calc_get_ft(data),
-			wlc_iem_calc_get_parm(data))) {
+	if (!wlc_vht_oper_mode_ie_allowed(data->ft, data->cbparm)) {
 		return 0;
 	}
 
@@ -2571,8 +2721,7 @@ wlc_vht_write_oper_mode_ie(void *ctx, wlc_iem_build_data_t *data)
 	wlc_bsscfg_t *cfg = data->cfg;
 	bool narrow_bw = FALSE;
 
-	if (!wlc_vht_oper_mode_ie_allowed(wlc_iem_build_get_ft(data),
-		wlc_iem_build_get_parm(data))) {
+	if (!wlc_vht_oper_mode_ie_allowed(data->ft, data->cbparm)) {
 		return BCME_OK;
 	}
 
@@ -2733,7 +2882,7 @@ wlc_frameaction_vht(wlc_vht_info_t *vhti, uint action_id, struct scb *scb,
 		oper_mode = ((struct dot11_action_vht_oper_mode *)body)->mode;
 		wlc_vht_update_scb_oper_mode(vhti, scb, oper_mode);
 #ifdef WL_MU_TX
-		wlc_mutx_bw_policy_update(wlc->mutx);
+		wlc_mutx_bw_policy_update(wlc->mutx, scb->bsscfg, FALSE);
 #endif
 		break;
 	case DOT11_VHT_ACTION_GID_MGMT:
@@ -3351,40 +3500,38 @@ wlc_vht_update_scb_state(wlc_vht_info_t *vhti, int band, struct scb *scb,
 	/* beamforming caps */
 #ifdef WL_BEAMFORMING
 	if (TXBF_ENAB(wlc->pub)) {
+		/* peer should be SU beamformer as well to become MU beamformer */
 		if (vht_cap_ie->vht_cap_info & VHT_CAP_INFO_SU_BEAMFMR) {
 			 cubby_info->flags |= SCB_SU_BEAMFORMER;
+			if (vht_cap_ie->vht_cap_info & VHT_CAP_INFO_MU_BEAMFMR)
+				cubby_info->flags |= SCB_MU_BEAMFORMER;
 		}
 
+		/* peer should be SU beamformee as well to become MU beamformee */
 		if (vht_cap_ie->vht_cap_info & VHT_CAP_INFO_SU_BEAMFMEE) {
 			 cubby_info->flags |= SCB_SU_BEAMFORMEE;
-		}
-
-		if (vht_cap_ie->vht_cap_info & VHT_CAP_INFO_MU_BEAMFMR) {
-			 cubby_info->flags |= SCB_MU_BEAMFORMER;
-		}
-
 #ifdef WL_MU_TX
-		if (vht_cap_ie->vht_cap_info & VHT_CAP_INFO_MU_BEAMFMEE) {
-			if (VHT_MCS_MAP_GET_MCS_PER_SS(3, cubby_info->rxmcsmap) ==
-				VHT_CAP_MCS_MAP_NONE) {
-				cubby_info->flags |= SCB_MU_BEAMFORMEE;
+			if (vht_cap_ie->vht_cap_info & VHT_CAP_INFO_MU_BEAMFMEE) {
+				uint8 nrx = wlc_mutx_get_muclient_nrx(wlc->mutx);
+				if (VHT_MCS_MAP_GET_MCS_PER_SS((nrx + 1),
+					scb->rateset.vht_mcsmap) == VHT_CAP_MCS_MAP_NONE) {
+					cubby_info->flags |= SCB_MU_BEAMFORMEE;
+				}
 			}
-		}
 #endif /* WL_MU_TX */
+		}
 		wlc_txbf_scb_state_upd(wlc->txbf, scb, vht_cap_ie->vht_cap_info);
 
 #ifdef WL_MU_TX
 		/* If MU-MIMO transmit is enabled, notify MU-MIMO module of capabilities update. */
-		if (MU_TX_ENAB(wlc)) {
-			wlc_mutx_update_vht_cap(wlc->mutx, scb);
-		}
+		wlc_mutx_update_vht_cap(wlc->mutx, scb);
 #endif
 	}
 #endif /*  WL_BEAMFORMING */
 }
 
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC) || \
-	defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || \
+	defined(WLMSG_ASSOC) || defined(BCMDBG_DUMP) || defined(DHD_DEBUG)
 static int
 wlc_vht_dump_cap(wlc_info_t *wlc, struct bcmstrbuf *b)
 {
@@ -3506,7 +3653,7 @@ wlc_vht_dump_cap(wlc_info_t *wlc, struct bcmstrbuf *b)
 	bcm_bprintf(b, "\n");
 	return 0;
 }
-#endif 
+#endif /* BCMDBG etc. */
 
 void
 wlc_vht_bcn_scb_upd(wlc_vht_info_t *vhti, int band, struct scb *scb,
@@ -3556,6 +3703,9 @@ wlc_vht_update_scb_oper_mode(wlc_vht_info_t *vhti, struct scb *scb, uint8 oper_m
 
 	uint8 type;
 
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG || WLMSG_INFORM */
 
 	if (cubby_info->oper_mode_enabled && (oper_mode == cubby_info->oper_mode)) {
 		/* oper_mode was enabled and the same oper_mode is being set again.
@@ -3571,6 +3721,11 @@ wlc_vht_update_scb_oper_mode(wlc_vht_info_t *vhti, struct scb *scb, uint8 oper_m
 		return;
 	}
 
+#if defined(BCMDBG)
+	WL_MODE_SWITCH(("wl%d: updating oper mode: old=%x, new=%x, for scb addr %s\n",
+		WLCWLUNIT(wlc), cubby_info->oper_mode, oper_mode,
+		bcm_ether_ntoa(&scb->ea, eabuf)));
+#endif /* BCMDBG */
 
 	cubby_info->oper_mode = oper_mode;
 	cubby_info->oper_mode_enabled = TRUE;
@@ -3601,7 +3756,7 @@ wlc_vht_get_scb_flags(wlc_vht_info_t *vhti, struct scb *scb)
 	}
 }
 
-#if defined(BCMCONDITIONAL_LOGGING)
+#if defined(BCMDBG) || defined(BCMCONDITIONAL_LOGGING)
 static uint16
 wlc_vht_get_scb_rxmcsmap(wlc_vht_info_t *vhti, struct scb *scb)
 {
@@ -3619,7 +3774,7 @@ wlc_vht_get_tx_mcsmap(wlc_vht_info_t *vhti)
 {
 	return vhti->vht_cap.tx_mcs_map;
 }
-#endif 
+#endif /* BCMDBG || BCMCONDITIONAL_LOGGING */
 
 bool
 wlc_vht_get_scb_opermode_enab(wlc_vht_info_t *vhti, struct scb *scb)
@@ -3733,27 +3888,28 @@ wlc_vht_prep_rate_info(wlc_vht_info_t *vhti, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 	ratespec_t rspec, struct wl_rxsts *sts)
 {
 	wlc_info_t *wlc = vhti->wlc;
+
 	if (D11REV_GE(wlc->pub->corerev, 40)) {
-		if (PRXS5_ACPHY_DYNBWINNONHT(&wrxh->rxhdr))
+		if (PRXS_PHY_DYNBWINNONHT(wlc->pub->corerev, &wrxh->rxhdr))
 			sts->vhtflags |= WL_RXS_VHTF_DYN_BW_NONHT;
 		else
 			sts->vhtflags &= ~WL_RXS_VHTF_DYN_BW_NONHT;
 
-		switch (PRXS5_ACPHY_CHBWINNONHT(&wrxh->rxhdr)) {
-		case PRXS5_ACPHY_CHBWINNONHT_20MHZ:
-			sts->bw_nonht = WLC_20_MHZ;
-			break;
-		case PRXS5_ACPHY_CHBWINNONHT_40MHZ:
-			sts->bw_nonht = WLC_40_MHZ;
-			break;
-		case PRXS5_ACPHY_CHBWINNONHT_80MHZ:
-			sts->bw_nonht = WLC_80_MHZ;
-			break;
-		case PRXS5_ACPHY_CHBWINNONHT_160MHZ:
-			sts->bw_nonht = WLC_160_MHZ;
-			break;
-		default:
-			ASSERT(FALSE);
+		switch (PRXS_PHY_CHBWINNONHT(wlc->pub->corerev, &wrxh->rxhdr)) {
+			case PRXS5_ACPHY_CHBWINNONHT_20MHZ:
+				sts->bw_nonht = WLC_20_MHZ;
+				break;
+			case PRXS5_ACPHY_CHBWINNONHT_40MHZ:
+				sts->bw_nonht = WLC_40_MHZ;
+				break;
+			case PRXS5_ACPHY_CHBWINNONHT_80MHZ:
+				sts->bw_nonht = WLC_80_MHZ;
+				break;
+			case PRXS5_ACPHY_CHBWINNONHT_160MHZ:
+				sts->bw_nonht = WLC_160_MHZ;
+				break;
+			default:
+				ASSERT(FALSE);
 		}
 	}
 
@@ -3769,31 +3925,31 @@ wlc_vht_prep_rate_info(wlc_vht_info_t *vhti, wlc_d11rxhdr_t *wrxh, uint8 *plcp,
 		if (CHSPEC_IS8080(sts->chanspec) || CHSPEC_IS160(sts->chanspec)) {
 			if (bw == RSPEC_BW_20MHZ) {
 				switch (CHSPEC_CTL_SB(sts->chanspec)) {
-				default:
-				case WL_CHANSPEC_CTL_SB_LLL:
-					sts->bw = WL_RXS_VHT_BW_20LLL;
-					break;
-				case WL_CHANSPEC_CTL_SB_LLU:
-					sts->bw = WL_RXS_VHT_BW_20LLU;
-					break;
-				case WL_CHANSPEC_CTL_SB_LUL:
-					sts->bw = WL_RXS_VHT_BW_20LUL;
-					break;
-				case WL_CHANSPEC_CTL_SB_LUU:
-					sts->bw = WL_RXS_VHT_BW_20LUU;
-					break;
-				case WL_CHANSPEC_CTL_SB_ULL:
-					sts->bw = WL_RXS_VHT_BW_20ULL;
-					break;
-				case WL_CHANSPEC_CTL_SB_ULU:
-					sts->bw = WL_RXS_VHT_BW_20ULU;
-					break;
-				case WL_CHANSPEC_CTL_SB_UUL:
-					sts->bw = WL_RXS_VHT_BW_20UUL;
-					break;
-				case WL_CHANSPEC_CTL_SB_UUU:
-					sts->bw = WL_RXS_VHT_BW_20UUU;
-					break;
+					default:
+					case WL_CHANSPEC_CTL_SB_LLL:
+						sts->bw = WL_RXS_VHT_BW_20LLL;
+						break;
+					case WL_CHANSPEC_CTL_SB_LLU:
+						sts->bw = WL_RXS_VHT_BW_20LLU;
+						break;
+					case WL_CHANSPEC_CTL_SB_LUL:
+						sts->bw = WL_RXS_VHT_BW_20LUL;
+						break;
+					case WL_CHANSPEC_CTL_SB_LUU:
+						sts->bw = WL_RXS_VHT_BW_20LUU;
+						break;
+					case WL_CHANSPEC_CTL_SB_ULL:
+						sts->bw = WL_RXS_VHT_BW_20ULL;
+						break;
+					case WL_CHANSPEC_CTL_SB_ULU:
+						sts->bw = WL_RXS_VHT_BW_20ULU;
+						break;
+					case WL_CHANSPEC_CTL_SB_UUL:
+						sts->bw = WL_RXS_VHT_BW_20UUL;
+						break;
+					case WL_CHANSPEC_CTL_SB_UUU:
+						sts->bw = WL_RXS_VHT_BW_20UUU;
+						break;
 				}
 			} else if (bw == RSPEC_BW_40MHZ) {
 				if (ctl_sb == WL_CHANSPEC_CTL_SB_LLL ||

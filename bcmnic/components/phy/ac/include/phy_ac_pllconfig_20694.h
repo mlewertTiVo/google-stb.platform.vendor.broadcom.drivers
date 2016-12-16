@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_pllconfig_20694.h 587569 2015-09-21 12:59:29Z nahegde $
+ * $Id: phy_ac_pllconfig_20694.h 587569 2015-09-21 12:59:29Z $
  */
 
 #ifndef _PHY_AC_20694_PLLCONFIG_H
@@ -137,7 +137,6 @@
 #define LOGEN_MODE					0
 
 #define XTAL_FREQ					37400000
-#define USE_5G_PLL_FOR_2G				0
 
 /* No of fraction bits */
 #define NF0	0

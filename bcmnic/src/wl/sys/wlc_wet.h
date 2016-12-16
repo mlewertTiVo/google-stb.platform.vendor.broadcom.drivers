@@ -45,5 +45,8 @@ extern int wlc_wet_send_proc(wlc_wet_info_t *weth, void *sdu, void **new);
 /* Process frames in receive direction */
 extern int wlc_wet_recv_proc(wlc_wet_info_t *weth, void *sdu);
 
+#ifdef BCMDBG
+extern int wlc_wet_dump(wlc_wet_info_t *weth, struct bcmstrbuf *b);
+#endif /* BCMDBG */
 
 #endif	/* _wlc_wet_h_ */

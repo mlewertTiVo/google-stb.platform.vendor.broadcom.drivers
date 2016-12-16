@@ -17,7 +17,7 @@
  *
  *  $ ./merge_regs.py --always-add-macro --max 70 --macro (rev) --compare-template (RADIO20693_MAJORREV(rev) >= ${ver}) --non-register-regex JTAG_ --extended-version-checks RF_20693_REV_ID -o src/wl/phy/wlc_radioreg_20693.h ./data/radio_regs/20693_majorrev0_registers.h ./data/radio_regs/20693_majorrev1_registers.h ./data/radio_regs/20693_majorrev2_registers.h
  *
- * $Id: wlc_radioreg_20693.h 641332 2016-06-02 07:27:45Z ajith $
+ * $Id: wlc_radioreg_20693.h 641332 2016-06-02 07:27:45Z $
  */
 /* FILE-CSTYLED */
 

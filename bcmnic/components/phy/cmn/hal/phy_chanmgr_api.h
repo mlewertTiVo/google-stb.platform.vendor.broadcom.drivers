@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_chanmgr_api.h 610412 2016-01-06 23:43:14Z vyass $
+ * $Id: phy_chanmgr_api.h 659938 2016-09-16 16:47:54Z $
  */
 
 #ifndef _phy_chanmgr_api_h_
@@ -35,6 +35,10 @@
 #include <bcmwifi_channels.h>
 #include <phy_api.h>
 
+/* add the feature to take out the BW RESET duriny the BW change  0: disable 1: enable */
+#define BW_RESET 1
+
+#ifdef PHYCAL_CACHING
 /*
  * Create/Destroy an operating chanspec context for radio 'chanspec'.
  */
@@ -53,9 +57,20 @@ int phy_chanmgr_set_oper(phy_info_t *pi, chanspec_t chanspec);
  * operating chanspec context if any.
  */
 int phy_chanmgr_set(phy_info_t *pi, chanspec_t chanspec);
+#endif /* PHYCAL_CACHING */
 
 void wlc_phy_chanspec_set(wlc_phy_t *ppi, chanspec_t chanspec);
 void wlc_phy_chanspec_radio_set(wlc_phy_t *ppi, chanspec_t newch);
 bool wlc_phy_is_txbfcal(wlc_phy_t *ppi);
 
+/* band specific init */
+int phy_chanmgr_bsinit(phy_info_t *pi, chanspec_t chanspec, bool forced);
+/* band width init */
+int phy_chanmgr_bwinit(phy_info_t *pi, chanspec_t chanspec);
+
+/*     VSDB, RVSDB Module related definitions         */
+uint8 phy_chanmgr_vsdb_sr_attach_module(wlc_phy_t *ppi, chanspec_t chan0, chanspec_t chan1);
+int phy_chanmgr_vsdb_sr_detach_module(wlc_phy_t *pi);
+uint8 phy_chanmgr_vsdb_sr_set_chanspec(wlc_phy_t *pi, chanspec_t chanspec, uint8 * last_chan_saved);
+int phy_chanmgr_vsdb_force_chans(wlc_phy_t *pi, uint16 * chans, uint8 set);
 #endif /* _phy_chanmgr_api_h_ */

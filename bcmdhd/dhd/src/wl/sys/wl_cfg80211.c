@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.c 639820 2016-05-25 01:29:47Z $
+ * $Id: wl_cfg80211.c 652488 2016-08-02 06:10:58Z $
  */
 /* */
 #include <typedefs.h>
@@ -6648,7 +6648,13 @@ wl_cfg80211_send_action_frame(struct wiphy *wiphy, struct net_device *dev,
 			WL_ERR(("couldn't find peer's channel.\n"));
 			wl_cfgp2p_print_actframe(true, action_frame->data, action_frame->len,
 				af_params->channel);
-			goto exit;
+			/* Even if we couldn't find peer channel, try to send the frame
+			 * out. P2P cert 5.1.14 testbed device (realtek) doesn't seem to
+			 * respond to probe request (Ideally it has to be in listen and
+			 * responsd to probe request). However if we send Go neg req, the
+			 * peer is sending GO-neg resp. So instead of giving up here, just
+			 * proceed and attempt sending out the action frame.
+			 */
 		}
 
 		wl_clr_drv_status(cfg, SCANNING, cfg->afx_hdl->dev);
@@ -6667,7 +6673,14 @@ wl_cfg80211_send_action_frame(struct wiphy *wiphy, struct net_device *dev,
 		}
 
 		/* update channel */
-		af_params->channel = cfg->afx_hdl->peer_chan;
+		if (cfg->afx_hdl->peer_chan != WL_INVALID) {
+			af_params->channel = cfg->afx_hdl->peer_chan;
+			WL_ERR(("Attempt tx on peer listen channel:%d ",
+				cfg->afx_hdl->peer_chan));
+		} else {
+			WL_ERR(("Attempt tx with the channel provided by userspace."
+			"Channel: %d\n", af_params->channel));
+		}
 	}
 
 #ifdef VSDB
@@ -12511,7 +12524,7 @@ static s32 wl_escan_handler(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 
 	}
 	if (!ndev || (!wl_get_drv_status(cfg, SCANNING, ndev) && !cfg->sched_scan_running)) {
-		WL_ERR(("escan is not ready ndev %p drv_status 0x%x e_type %d e_states %d\n",
+		WL_DBG(("escan is not ready ndev %p drv_status 0x%x e_type %d e_states %d\n",
 			ndev, wl_get_drv_status(cfg, SCANNING, ndev),
 			ntoh32(e->event_type), ntoh32(e->status)));
 		goto exit;

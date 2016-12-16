@@ -21,7 +21,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: event_log_payload.h 641295 2016-06-02 03:29:43Z $
+ * $Id: event_log_payload.h 664253 2016-10-11 21:39:06Z $
  */
 
 #ifndef _EVENT_LOG_PAYLOAD_H_
@@ -30,6 +30,7 @@
 #include <typedefs.h>
 #include <bcmutils.h>
 #include <proto/ethernet.h>
+#include <proto/event_log_tag.h>
 
 #define EVENT_LOG_XTLV_ID_STR                   0  /**< XTLV ID for a string */
 #define EVENT_LOG_XTLV_ID_TXQ_SUM               1  /**< XTLV ID for txq_summary_t */
@@ -265,63 +266,402 @@ struct wl_scan_summary {
  * Host may map the following structure on channel switch event log record
  * received from dongle. Note that all payload entries in event log record are
  * uint32/int32.
- * THIS IS HTE SAME AS wl_chansw_event_log (as in src/include/wlioctl.h)!!!
  */
-typedef struct wl_chansw_event_log {
+typedef struct wl_chansw_event_log_record {
 	uint32 time;			/* Time in us */
 	uint32 old_chanspec;		/* Old channel spec */
 	uint32 new_chanspec;		/* New channel spec */
 	uint32 chansw_reason;		/* Reason for channel change */
 	int32 dwell_time;
-} wl_chansw_event_log_t;
+} wl_chansw_event_log_record_t;
 
 /* Sub-block type for EVENT_LOG_TAG_AMPDU_DUMP */
-#define WL_AMPDU_STATS_CNT_RXMCSx1	0	/* RX MCS rate (Nss = 1) */
-#define WL_AMPDU_STATS_CNT_RXMCSx2	1
-#define WL_AMPDU_STATS_CNT_RXMCSx3	2
-#define WL_AMPDU_STATS_CNT_RXMCSx4	3
-#define WL_AMPDU_STATS_CNT_RXVHTx1	4	/* RX VHT rate (Nss = 1) */
-#define WL_AMPDU_STATS_CNT_RXVHTx2	5
-#define WL_AMPDU_STATS_CNT_RXVHTx3	6
-#define WL_AMPDU_STATS_CNT_RXVHTx4	7
-#define WL_AMPDU_STATS_CNT_TXMCSx1	8	/* TX MCS rate (Nss = 1) */
-#define WL_AMPDU_STATS_CNT_TXMCSx2	9
-#define WL_AMPDU_STATS_CNT_TXMCSx3	10
-#define WL_AMPDU_STATS_CNT_TXMCSx4	11
-#define WL_AMPDU_STATS_CNT_TXVHTx1	12	/* TX VHT rate (Nss = 1) */
-#define WL_AMPDU_STATS_CNT_TXVHTx2	13
-#define WL_AMPDU_STATS_CNT_TXVHTx3	14
-#define WL_AMPDU_STATS_CNT_TXVHTx4	15
-#define WL_AMPDU_STATS_CNT_RXMCSSGI	16	/* RX SGI usage (for all MCS rates) */
-#define WL_AMPDU_STATS_CNT_TXMCSSGI	17	/* TX SGI usage (for all MCS rates) */
-#define WL_AMPDU_STATS_CNT_RXVHTSGI	18	/* RX SGI usage (for all VHT rates) */
-#define WL_AMPDU_STATS_CNT_TXVHTSGI	19	/* TX SGI usage (for all VHT rates) */
-#define WL_AMPDU_STATS_CNT_RXMCSPER	20	/* RX PER (for all MCS rates) */
-#define WL_AMPDU_STATS_CNT_TXMCSPER	21	/* TX PER (for all MCS rates) */
-#define WL_AMPDU_STATS_CNT_RXVHTPER	22	/* RX PER (for all VHT rates) */
-#define WL_AMPDU_STATS_CNT_TXVHTPER	23	/* TX PER (for all VHT rates) */
-#define WL_AMPDU_STATS_CNT_RXDENS	24	/* RX AMPDU density */
-#define WL_AMPDU_STATS_CNT_TXDENS	25	/* TX AMPDU density */
-#define WL_AMPDU_STATS_CNT_RXMCSOK	26	/* RX all MCS rates */
-#define WL_AMPDU_STATS_CNT_RXVHTOK	27	/* RX all VHT rates */
-#define WL_AMPDU_STATS_CNT_TXMCSALL	28	/* TX all MCS rates */
-#define WL_AMPDU_STATS_CNT_TXVHTALL	29	/* TX all VHT rates */
-#define WL_AMPDU_STATS_CNT_TXMCSOK	30	/* TX all MCS rates */
-#define WL_AMPDU_STATS_CNT_TXVHTOK	31	/* TX all VHT rates */
+#define WL_AMPDU_STATS_TYPE_RXMCSx1	0	/* RX MCS rate (Nss = 1) */
+#define WL_AMPDU_STATS_TYPE_RXMCSx2	1
+#define WL_AMPDU_STATS_TYPE_RXMCSx3	2
+#define WL_AMPDU_STATS_TYPE_RXMCSx4	3
+#define WL_AMPDU_STATS_TYPE_RXVHTx1	4	/* RX VHT rate (Nss = 1) */
+#define WL_AMPDU_STATS_TYPE_RXVHTx2	5
+#define WL_AMPDU_STATS_TYPE_RXVHTx3	6
+#define WL_AMPDU_STATS_TYPE_RXVHTx4	7
+#define WL_AMPDU_STATS_TYPE_TXMCSx1	8	/* TX MCS rate (Nss = 1) */
+#define WL_AMPDU_STATS_TYPE_TXMCSx2	9
+#define WL_AMPDU_STATS_TYPE_TXMCSx3	10
+#define WL_AMPDU_STATS_TYPE_TXMCSx4	11
+#define WL_AMPDU_STATS_TYPE_TXVHTx1	12	/* TX VHT rate (Nss = 1) */
+#define WL_AMPDU_STATS_TYPE_TXVHTx2	13
+#define WL_AMPDU_STATS_TYPE_TXVHTx3	14
+#define WL_AMPDU_STATS_TYPE_TXVHTx4	15
+#define WL_AMPDU_STATS_TYPE_RXMCSSGI	16	/* RX SGI usage (for all MCS rates) */
+#define WL_AMPDU_STATS_TYPE_TXMCSSGI	17	/* TX SGI usage (for all MCS rates) */
+#define WL_AMPDU_STATS_TYPE_RXVHTSGI	18	/* RX SGI usage (for all VHT rates) */
+#define WL_AMPDU_STATS_TYPE_TXVHTSGI	19	/* TX SGI usage (for all VHT rates) */
+#define WL_AMPDU_STATS_TYPE_RXMCSPER	20	/* RX PER (for all MCS rates) */
+#define WL_AMPDU_STATS_TYPE_TXMCSPER	21	/* TX PER (for all MCS rates) */
+#define WL_AMPDU_STATS_TYPE_RXVHTPER	22	/* RX PER (for all VHT rates) */
+#define WL_AMPDU_STATS_TYPE_TXVHTPER	23	/* TX PER (for all VHT rates) */
+#define WL_AMPDU_STATS_TYPE_RXDENS	24	/* RX AMPDU density */
+#define WL_AMPDU_STATS_TYPE_TXDENS	25	/* TX AMPDU density */
+#define WL_AMPDU_STATS_TYPE_RXMCSOK	26	/* RX all MCS rates */
+#define WL_AMPDU_STATS_TYPE_RXVHTOK	27	/* RX all VHT rates */
+#define WL_AMPDU_STATS_TYPE_TXMCSALL	28	/* TX all MCS rates */
+#define WL_AMPDU_STATS_TYPE_TXVHTALL	29	/* TX all VHT rates */
+#define WL_AMPDU_STATS_TYPE_TXMCSOK	30	/* TX all MCS rates */
+#define WL_AMPDU_STATS_TYPE_TXVHTOK	31	/* TX all VHT rates */
 
-#define WL_AMPDU_STATS_CNT_MAX		64
+#define WL_AMPDU_STATS_MAX_CNTS		64
 
 typedef struct {
 	uint16	type;		/* AMPDU statistics sub-type */
 	uint16	len;		/* Number of 32-bit counters */
-	uint32	counters[WL_AMPDU_STATS_CNT_MAX];
-} wl_ampdu_stats_cnt_generic_t;
+	uint32	counters[WL_AMPDU_STATS_MAX_CNTS];
+} wl_ampdu_stats_generic_t;
 
 typedef struct {
 	uint16	type;		/* AMPDU statistics sub-type */
 	uint16	len;		/* Number of 32-bit counters + 2 */
 	uint32	total_ampdu;
 	uint32	total_mpdu;
-	uint32	aggr_dist[WL_AMPDU_STATS_CNT_MAX + 1];
-} wl_ampdu_stats_cnt_aggrsz_t;
+	uint32	aggr_dist[WL_AMPDU_STATS_MAX_CNTS + 1];
+} wl_ampdu_stats_aggrsz_t;
+
+/* Sub-block type for EVENT_LOG_TAG_MSCHPROFILE */
+#define WL_MSCH_PROFILER_START		0	/* start event check */
+#define WL_MSCH_PROFILER_EXIT		1	/* exit event check */
+#define WL_MSCH_PROFILER_REQ		2	/* request event */
+#define WL_MSCH_PROFILER_CALLBACK	3	/* call back event */
+#define WL_MSCH_PROFILER_MESSAGE	4	/* message event */
+#define WL_MSCH_PROFILER_PROFILE_START	5
+#define WL_MSCH_PROFILER_PROFILE_END	6
+#define WL_MSCH_PROFILER_REQ_HANDLE	7
+#define WL_MSCH_PROFILER_REQ_ENTITY	8
+#define WL_MSCH_PROFILER_CHAN_CTXT	9
+#define WL_MSCH_PROFILER_EVENT_LOG	10
+#define WL_MSCH_PROFILER_REQ_TIMING	11
+#define WL_MSCH_PROFILER_TYPE_MASK	0x00ff
+#define WL_MSCH_PROFILER_WLINDEX_SHIFT	8
+#define WL_MSCH_PROFILER_WLINDEX_MASK	0x0f00
+#define WL_MSCH_PROFILER_VER_SHIFT	12
+#define WL_MSCH_PROFILER_VER_MASK	0xf000
+
+/* MSCH Event data current verion */
+#define WL_MSCH_PROFILER_VER		2
+
+/* msch version history */
+#define WL_MSCH_PROFILER_RSDB_VER	1
+#define WL_MSCH_PROFILER_REPORT_VER	2
+
+/* msch collect header size */
+#define WL_MSCH_PROFILE_HEAD_SIZE	OFFSETOF(msch_collect_tlv_t, value)
+
+/* msch event log header size */
+#define WL_MSCH_EVENT_LOG_HEAD_SIZE	OFFSETOF(msch_event_log_profiler_event_data_t, data)
+
+/* MSCH data buffer size */
+#define WL_MSCH_PROFILER_BUFFER_SIZE	512
+
+/* request type used in wlc_msch_req_param_t struct */
+#define WL_MSCH_RT_BOTH_FIXED	0	/* both start and end time is fixed */
+#define WL_MSCH_RT_START_FLEX	1	/* start time is flexible and duration is fixed */
+#define WL_MSCH_RT_DUR_FLEX	2	/* start time is fixed and end time is flexible */
+#define WL_MSCH_RT_BOTH_FLEX	3	/* Both start and duration is flexible */
+
+/* Flags used in wlc_msch_req_param_t struct */
+#define WL_MSCH_REQ_FLAGS_CHAN_CONTIGUOUS  (1 << 0) /* Don't break up channels in chanspec_list */
+#define WL_MSCH_REQ_FLAGS_MERGE_CONT_SLOTS (1 << 1)  /* No slot end if slots are continous */
+#define WL_MSCH_REQ_FLAGS_PREMTABLE        (1 << 2) /* Req can be pre-empted by PREMT_CURTS req */
+#define WL_MSCH_REQ_FLAGS_PREMT_CURTS      (1 << 3) /* Pre-empt request at the end of curts */
+#define WL_MSCH_REQ_FLAGS_PREMT_IMMEDIATE  (1 << 4) /* Pre-empt cur_ts immediately */
+
+/* Requested slot Callback states
+ * req->pend_slot/cur_slot->flags
+ */
+#define WL_MSCH_RC_FLAGS_ONCHAN_FIRE		(1 << 0)
+#define WL_MSCH_RC_FLAGS_START_FIRE_DONE	(1 << 1)
+#define WL_MSCH_RC_FLAGS_END_FIRE_DONE		(1 << 2)
+#define WL_MSCH_RC_FLAGS_ONFIRE_DONE		(1 << 3)
+#define WL_MSCH_RC_FLAGS_SPLIT_SLOT_START	(1 << 4)
+#define WL_MSCH_RC_FLAGS_SPLIT_SLOT_END		(1 << 5)
+#define WL_MSCH_RC_FLAGS_PRE_ONFIRE_DONE	(1 << 6)
+
+/* Request entity flags */
+#define WL_MSCH_ENTITY_FLAG_MULTI_INSTANCE	(1 << 0)
+
+/* Request Handle flags */
+#define WL_MSCH_REQ_HDL_FLAGS_NEW_REQ		(1 << 0) /* req_start callback */
+
+/* MSCH state flags (msch_info->flags) */
+#define	WL_MSCH_STATE_IN_TIEMR_CTXT		0x1
+#define WL_MSCH_STATE_SCHD_PENDING		0x2
+
+/* MSCH callback type */
+#define	WL_MSCH_CT_REQ_START		0x1
+#define	WL_MSCH_CT_ON_CHAN		0x2
+#define	WL_MSCH_CT_SLOT_START		0x4
+#define	WL_MSCH_CT_SLOT_END		0x8
+#define	WL_MSCH_CT_SLOT_SKIP		0x10
+#define	WL_MSCH_CT_OFF_CHAN		0x20
+#define WL_MSCH_CT_OFF_CHAN_DONE	0x40
+#define	WL_MSCH_CT_REQ_END		0x80
+#define	WL_MSCH_CT_PARTIAL		0x100
+#define	WL_MSCH_CT_PRE_ONCHAN		0x200
+#define	WL_MSCH_CT_PRE_REQ_START	0x400
+
+/* MSCH command bits */
+#define WL_MSCH_CMD_ENABLE_BIT		0x01
+#define WL_MSCH_CMD_PROFILE_BIT		0x02
+#define WL_MSCH_CMD_CALLBACK_BIT	0x04
+#define WL_MSCH_CMD_REGISTER_BIT	0x08
+#define WL_MSCH_CMD_ERROR_BIT		0x10
+#define WL_MSCH_CMD_DEBUG_BIT		0x20
+#define WL_MSCH_CMD_INFOM_BIT		0x40
+#define WL_MSCH_CMD_TRACE_BIT		0x80
+#define WL_MSCH_CMD_ALL_BITS		0xfe
+#define WL_MSCH_CMD_SIZE_MASK		0x00ff0000
+#define WL_MSCH_CMD_SIZE_SHIFT		16
+#define WL_MSCH_CMD_VER_MASK		0xff000000
+#define WL_MSCH_CMD_VER_SHIFT		24
+
+/* maximum channels returned by the get valid channels iovar */
+#define WL_MSCH_NUMCHANNELS		64
+
+typedef struct msch_collect_tlv {
+	uint16	type;
+	uint16	size;
+	char	value[1];
+} msch_collect_tlv_t;
+
+typedef struct msch_profiler_event_data {
+	uint32	time_lo;		/* Request time */
+	uint32	time_hi;
+} msch_profiler_event_data_t;
+
+typedef struct msch_start_profiler_event_data {
+	uint32	time_lo;		/* Request time */
+	uint32	time_hi;
+	uint32	status;
+} msch_start_profiler_event_data_t;
+
+typedef struct msch_message_profiler_event_data {
+	uint32	time_lo;		/* Request time */
+	uint32	time_hi;
+	char	message[1];		/* message */
+} msch_message_profiler_event_data_t;
+
+typedef struct msch_event_log_profiler_event_data {
+	uint32	time_lo;		/* Request time */
+	uint32	time_hi;
+	event_log_hdr_t hdr;		/* event log header */
+	uint32	data[9];		/* event data */
+} msch_event_log_profiler_event_data_t;
+
+typedef struct msch_req_param_profiler_event_data {
+	uint16  flags;			/* Describe various request properties */
+	uint8	req_type;		/* Describe start and end time flexiblilty */
+	uint8	priority;		/* Define the request priority */
+	uint32	start_time_l;		/* Requested start time offset in us unit */
+	uint32	start_time_h;
+	uint32	duration;		/* Requested duration in us unit */
+	uint32	interval;		/* Requested periodic interval in us unit,
+					 * 0 means non-periodic
+					 */
+	union {
+		uint32	dur_flex;	/* MSCH_REG_DUR_FLEX, min_dur = duration - dur_flex */
+		struct {
+			uint32 min_dur;	/* min duration for traffic, maps to home_time */
+			uint32 max_away_dur; /* max acceptable away dur, maps to home_away_time */
+			uint32 hi_prio_time_l;
+			uint32 hi_prio_time_h;
+			uint32 hi_prio_interval; /* repeated high priority interval */
+		} bf;
+	} flex;
+} msch_req_param_profiler_event_data_t;
+
+typedef struct msch_req_timing_profiler_event_data {
+	uint32 p_req_timing;
+	uint32 p_prev;
+	uint32 p_next;
+	uint16 flags;
+	uint16 timeslot_ptr;
+	uint32 fire_time_l;
+	uint32 fire_time_h;
+	uint32 pre_start_time_l;
+	uint32 pre_start_time_h;
+	uint32 start_time_l;
+	uint32 start_time_h;
+	uint32 end_time_l;
+	uint32 end_time_h;
+	uint32 p_timeslot;
+} msch_req_timing_profiler_event_data_t;
+
+typedef struct msch_chan_ctxt_profiler_event_data {
+	uint32 p_chan_ctxt;
+	uint32 p_prev;
+	uint32 p_next;
+	uint16 chanspec;
+	uint16 bf_sch_pending;
+	uint32 bf_link_prev;
+	uint32 bf_link_next;
+	uint32 onchan_time_l;
+	uint32 onchan_time_h;
+	uint32 actual_onchan_dur_l;
+	uint32 actual_onchan_dur_h;
+	uint32 pend_onchan_dur_l;
+	uint32 pend_onchan_dur_h;
+	uint16 req_entity_list_cnt;
+	uint16 req_entity_list_ptr;
+	uint16 bf_entity_list_cnt;
+	uint16 bf_entity_list_ptr;
+	uint32 bf_skipped_count;
+} msch_chan_ctxt_profiler_event_data_t;
+
+typedef struct msch_req_entity_profiler_event_data {
+	uint32 p_req_entity;
+	uint32 req_hdl_link_prev;
+	uint32 req_hdl_link_next;
+	uint32 chan_ctxt_link_prev;
+	uint32 chan_ctxt_link_next;
+	uint32 rt_specific_link_prev;
+	uint32 rt_specific_link_next;
+	uint32 start_fixed_link_prev;
+	uint32 start_fixed_link_next;
+	uint32 both_flex_list_prev;
+	uint32 both_flex_list_next;
+	uint16 chanspec;
+	uint16 priority;
+	uint16 cur_slot_ptr;
+	uint16 pend_slot_ptr;
+	uint16 pad;
+	uint16 chan_ctxt_ptr;
+	uint32 p_chan_ctxt;
+	uint32 p_req_hdl;
+	uint32 bf_last_serv_time_l;
+	uint32 bf_last_serv_time_h;
+	uint16 onchan_chn_idx;
+	uint16 cur_chn_idx;
+	uint32 flags;
+	uint32 actual_start_time_l;
+	uint32 actual_start_time_h;
+	uint32 curts_fire_time_l;
+	uint32 curts_fire_time_h;
+} msch_req_entity_profiler_event_data_t;
+
+typedef struct msch_req_handle_profiler_event_data {
+	uint32 p_req_handle;
+	uint32 p_prev;
+	uint32 p_next;
+	uint32 cb_func;
+	uint32 cb_ctxt;
+	uint16 req_param_ptr;
+	uint16 req_entity_list_cnt;
+	uint16 req_entity_list_ptr;
+	uint16 chan_cnt;
+	uint32 flags;
+	uint16 chanspec_list;
+	uint16 chanspec_cnt;
+	uint16 chan_idx;
+	uint16 last_chan_idx;
+	uint32 req_time_l;
+	uint32 req_time_h;
+} msch_req_handle_profiler_event_data_t;
+
+typedef struct msch_profiler_profiler_event_data {
+	uint32 time_lo;			/* Request time */
+	uint32 time_hi;
+	uint32 free_req_hdl_list;
+	uint32 free_req_entity_list;
+	uint32 free_chan_ctxt_list;
+	uint32 free_chanspec_list;
+	uint16 cur_msch_timeslot_ptr;
+	uint16 next_timeslot_ptr;
+	uint32 p_cur_msch_timeslot;
+	uint32 p_next_timeslot;
+	uint32 cur_armed_timeslot;
+	uint32 flags;
+	uint32 ts_id;
+	uint32 service_interval;
+	uint32 max_lo_prio_interval;
+	uint16 flex_list_cnt;
+	uint16 msch_chanspec_alloc_cnt;
+	uint16 msch_req_entity_alloc_cnt;
+	uint16 msch_req_hdl_alloc_cnt;
+	uint16 msch_chan_ctxt_alloc_cnt;
+	uint16 msch_timeslot_alloc_cnt;
+	uint16 msch_req_hdl_list_cnt;
+	uint16 msch_req_hdl_list_ptr;
+	uint16 msch_chan_ctxt_list_cnt;
+	uint16 msch_chan_ctxt_list_ptr;
+	uint16 msch_req_timing_list_cnt;
+	uint16 msch_req_timing_list_ptr;
+	uint16 msch_start_fixed_list_cnt;
+	uint16 msch_start_fixed_list_ptr;
+	uint16 msch_both_flex_req_entity_list_cnt;
+	uint16 msch_both_flex_req_entity_list_ptr;
+	uint16 msch_start_flex_list_cnt;
+	uint16 msch_start_flex_list_ptr;
+	uint16 msch_both_flex_list_cnt;
+	uint16 msch_both_flex_list_ptr;
+	uint32 slotskip_flag;
+} msch_profiler_profiler_event_data_t;
+
+typedef struct msch_req_profiler_event_data {
+	uint32 time_lo;			/* Request time */
+	uint32 time_hi;
+	uint16 chanspec_cnt;
+	uint16 chanspec_ptr;
+	uint16 req_param_ptr;
+	uint16 pad;
+} msch_req_profiler_event_data_t;
+
+typedef struct msch_callback_profiler_event_data {
+	uint32 time_lo;			/* Request time */
+	uint32 time_hi;
+	uint16 type;			/* callback type */
+	uint16 chanspec;		/* actual chanspec, may different with requested one */
+	uint32 start_time_l;		/* time slot start time low 32bit */
+	uint32 start_time_h;		/* time slot start time high 32bit */
+	uint32 end_time_l;		/* time slot end time low 32 bit */
+	uint32 end_time_h;		/* time slot end time high 32 bit */
+	uint32 timeslot_id;		/* unique time slot id */
+	uint32 p_req_hdl;
+	uint32 onchan_idx;		/* Current channel index */
+	uint32 cur_chan_seq_start_time_l; /* start time of current sequence */
+	uint32 cur_chan_seq_start_time_h;
+} msch_callback_profiler_event_data_t;
+
+typedef struct msch_timeslot_profiler_event_data {
+	uint32 p_timeslot;
+	uint32 timeslot_id;
+	uint32 pre_start_time_l;
+	uint32 pre_start_time_h;
+	uint32 end_time_l;
+	uint32 end_time_h;
+	uint32 sch_dur_l;
+	uint32 sch_dur_h;
+	uint32 p_chan_ctxt;
+	uint32 fire_time_l;
+	uint32 fire_time_h;
+	uint32 state;
+} msch_timeslot_profiler_event_data_t;
+
+typedef struct msch_register_params	{
+	uint16 wlc_index;		/* Optional wlc index */
+	uint16 flags;			/* Describe various request properties */
+	uint32 req_type;		/* Describe start and end time flexiblilty */
+	uint16 id;			/* register id */
+	uint16 priority;		/* Define the request priority */
+	uint32 start_time;		/* Requested start time offset in ms unit */
+	uint32 duration;		/* Requested duration in ms unit */
+	uint32 interval;		/* Requested periodic interval in ms unit,
+					 * 0 means non-periodic
+					 */
+	uint32 dur_flex;		/* MSCH_REG_DUR_FLEX, min_dur = duration - dur_flex */
+	uint32 min_dur;			/* min duration for traffic, maps to home_time */
+	uint32 max_away_dur;		/* max acceptable away dur, maps to home_away_time */
+	uint32 hi_prio_time;
+	uint32 hi_prio_interval;	/* repeated high priority interval */
+	uint32 chanspec_cnt;
+	uint16 chanspec_list[WL_MSCH_NUMCHANNELS];
+} msch_register_params_t;
+
 #endif /* _EVENT_LOG_PAYLOAD_H_ */

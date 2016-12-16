@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ampdu_rx.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_ampdu_rx.c 664258 2016-10-11 22:25:28Z $
  */
 
 /**
@@ -74,15 +74,16 @@
 #ifdef WL_MU_RX
 #include <wlc_murx.h>
 #endif	/* WL_MU_RX */
-#ifdef EVENT_LOG_COMPILE
+#if defined(EVENT_LOG_COMPILE)
 #include <event_log.h>
+#if defined(ECOUNTERS)
+#include <ecounters.h>
 #endif
+#endif /* EVENT_LOG_COMPILE */
 #include <event_trace.h>
-#ifdef WLCXO_CTRL
-#include <wlc_cxo_rsc.h>
-#endif
 
 #include <wlc_log.h>
+#include <phy_api.h>
 
 /* iovar table */
 enum {
@@ -328,6 +329,24 @@ typedef struct scb_ampdu_tid_resp_off {
 	uint8 ampdu_cnt;	/**< number of secs during which ampdus are recd */
 } scb_ampdu_tid_resp_off_t;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+typedef struct scb_ampdu_cnt_rx {
+	uint32 rxunexp;
+	uint32 rxholes;
+	uint32 rxstuck;
+	uint32 txaddbaresp;
+	uint32 sduretry;
+	uint32 sdurejected;
+	uint32 noba;
+	uint32 rxampdu;
+	uint32 rxmpdu;
+	uint32 rxlegacy;
+	uint32 rxdup;
+	uint32 rxoow;
+	uint32 rxdelba;
+	uint32 rxbar;
+} scb_ampdu_cnt_rx_t;
+#endif	/* BCMDBG */
 
 /**
  * Scb cubby structure, so related to a specific remote party. ini and resp are dynamically
@@ -338,7 +357,9 @@ typedef struct scb_ampdu_rx {
 	scb_ampdu_tid_resp_t *resp[AMPDU_MAX_SCB_TID];	/**< responder info */
 	scb_ampdu_tid_resp_off_t resp_off[AMPDU_MAX_SCB_TID];	/**< info when resp is off */
 	ampdu_rx_info_t *ampdu_rx;	/**< back ref to main ampdu_rx */
-	int16 resp_cnt;			/**< CXO: count of resp reorder queues */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	scb_ampdu_cnt_rx_t cnt;
+#endif	/* BCMDBG */
 } scb_ampdu_rx_t;
 
 
@@ -374,8 +395,13 @@ static int wlc_ampdu_free_flow_id(ampdu_rx_info_t *ampdu, scb_ampdu_tid_resp_t *
 #define wlc_ampdu_free_flow_id(a, b, c)		0
 #endif /* WLAMPDU_HOSTREORDER */
 
+#ifdef BCMDBG
+#define AMPDUSCBCNTADD(cnt, upd) ((cnt) += (upd))
+#define AMPDUSCBCNTINCR(cnt) ((cnt)++)
+#else
 #define AMPDUSCBCNTADD(a, b) do { } while (0)
 #define AMPDUSCBCNTINCR(a)  do { } while (0)
+#endif
 
 struct ampdu_rx_cubby {
 	scb_ampdu_rx_t *scb_rx_cubby;
@@ -399,6 +425,8 @@ void wlc_ampdu_rxcfg_init(wlc_info_t *wlc, ampdu_rx_config_t *ampdu_rx_cfg);
 /* scb cubby */
 static int scb_ampdu_rx_init(void *context, struct scb *scb);
 static void scb_ampdu_rx_deinit(void *context, struct scb *scb);
+static int scb_ampdu_rx_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg);
+
 /* bsscfg cubby */
 static int bsscfg_ampdu_rx_init(void *context, wlc_bsscfg_t *bsscfg);
 static void bsscfg_ampdu_rx_deinit(void *context, wlc_bsscfg_t *bsscfg);
@@ -414,6 +442,8 @@ static INLINE void wlc_ampdu_release_all_ordered(wlc_info_t *wlc, scb_ampdu_rx_t
 static void ampdu_create_f(wlc_info_t *wlc, struct scb *scb, struct wlc_frminfo *f,
 	void *p, wlc_d11rxhdr_t *wrxh);
 
+static void wlc_ampdu_rx_cleanup(ampdu_rx_info_t *ampdu_rx, wlc_bsscfg_t *bsscfg,
+	uint16 conf_TID_bmap);
 
 static void wlc_ampdu_resp_timeout(void *arg);
 
@@ -423,7 +453,8 @@ static void wlc_ampdu_resp_timeout(void *arg);
  */
 #include <wlc_patch.h>
 
-#if (defined(BCM47XX_CA9) && defined(WL_PL310_WAR))
+#if defined(BCMDBG_ASSERT) || defined(BCMASSERT_LOG) || (defined(BCM47XX_CA9) && \
+	defined(WL_PL310_WAR))
 /** given a packet, returns sequence control number as specified per 802.11 */
 static INLINE uint16
 pkt_h_seqnum(wlc_info_t *wlc, void *p)
@@ -432,230 +463,7 @@ pkt_h_seqnum(wlc_info_t *wlc, void *p)
 	h = (struct dot11_header *)PKTDATA(wlc->osh, p);
 	return (ltoh16(h->seq) >> SEQNUM_SHIFT);
 }
-#endif 
-
-#ifdef WLCXO_CTRL
-/**
- * Data plane has its own 'variant' of the ctrl plane 'struct scb_ampdu_tid_resp', named
- * 'struct wlc_cx_tid_resp'. This function initializes the latter using the former. It does not
- * communicate with the data plane.
- */
-void
-wlc_cxo_ctrl_rsc_ampdu_rx_init(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 tid,
-		wlc_cx_tid_resp_t *cx_resp)
-{
-	scb_ampdu_rx_t *scb_ampdu;
-	scb_ampdu_tid_resp_t *resp;
-
-	ASSERT(scb != NULL);
-
-	scb_ampdu = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
-	ASSERT(scb_ampdu != NULL);
-
-	/* Initialize responder state and control information */
-	resp = scb_ampdu->resp[tid];
-	if ((resp != NULL) && (cx_resp != NULL)) {
-		cx_resp->tid = tid;
-		cx_resp->exp_seq = resp->exp_seq;
-#ifdef WLCXO_OFLD_REORDER
-		cx_resp->ba_wsize = resp->ba_wsize;
-#endif
-		WL_CXO(("%s: Init cx_resp %p tid %d exp_seq %d\n",
-		        __FUNCTION__, cx_resp, tid, resp->exp_seq));
-	}
-}
-
-/**
- * Data plane has its own 'variant' of the ctrl plane 'struct scb_ampdu_tid_resp', named
- * 'struct wlc_cx_tid_resp'. This function copies information from a data plane structures to ctrl
- * plane structures. It does not communicate with the data plane.
- */
-void
-wlc_cxo_ctrl_ses_ctx_ampdu_resp_upd(ampdu_rx_info_t *ampdu_rx, struct scb *scb,
-                               wlc_cx_ses_ctx_t *ctx)
-{
-	int32 i = ctx->prio;
-	scb_ampdu_rx_t *scb_ampdu;
-	scb_ampdu_tid_resp_t *resp;
-
-	ASSERT(scb != NULL);
-
-	scb_ampdu = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
-	if (scb_ampdu == NULL)
-		return;
-
-	/* Update the state information */
-	resp = scb_ampdu->resp[i];
-	if (resp == NULL)
-		return;
-
-	resp->alive = ctx->ampdu_resp.alive;
-	resp->exp_seq = ctx->ampdu_resp.exp_seq;
-
-	WL_CXO(("%s: Update from ofld, host resp %p tid %d exp_seq %d\n",
-	        __FUNCTION__, resp, i, resp->exp_seq));
-}
-
-/**
- * Data plane has its own 'variant' of the ctrl plane 'struct scb_ampdu_tid_resp', named
- * 'struct wlc_cx_tid_resp'. This function copies information from (this) ctrl plane structures to
- * data plane structures. It does not communicate with the data plane.
- */
-static int32
-wlc_cxo_ctrl_ses_ctx_ampdu_resp_get(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 tid,
-                               wlc_cx_ses_ctx_t *ctx)
-{
-	scb_ampdu_rx_t *scb_ampdu;
-	scb_ampdu_tid_resp_t *resp;
-
-	ASSERT(scb != NULL);
-
-	scb_ampdu = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
-	if (scb_ampdu == NULL)
-		return BCME_ERROR;
-
-	/* Update the state information */
-	resp = scb_ampdu->resp[tid];
-	WL_CXO(("%s: scb_ampdu %p resp %p\n", __FUNCTION__, scb_ampdu, resp));
-	if (resp == NULL)
-		return BCME_ERROR;
-
-	WL_CXO(("%s: tid %d exp_seq %d\n", __FUNCTION__, tid, resp->exp_seq));
-	ctx->ampdu_resp.alive = resp->alive;
-	ctx->ampdu_resp.exp_seq = resp->exp_seq;
-
-	return BCME_OK;
-}
-
-/** Adds a CxO receive cache entry given remote party and QoS. Informs the data plane on this. */
-static void
-wlc_cxo_ctrl_scb_rsc_add(wlc_info_t *wlc, struct scb *scb, uint8 tid)
-{
-	ampdu_rx_info_t *ampdu_rx = wlc->ampdu_rx;
-	scb_ampdu_rx_t *scb_ampdu_rx;
-	scb_ampdu_tid_resp_t *resp;
-
-	scb_ampdu_rx = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
-	ASSERT(scb_ampdu_rx);
-	ASSERT(WLCXO_ENAB(wlc->pub));
-
-	resp = scb_ampdu_rx->resp[tid];
-
-	if (resp == NULL)
-		return;
-	ASSERT(resp->tid == tid);
-
-	if (SCB_CXO_ENABLED(scb)) {
-		uint16 bssidx;
-		wlc_cx_ses_ctx_t ctx;
-		wlc_cx_tid_resp_t cx_resp;
-
-		bssidx = WLC_BSSCFG_IDX(scb->bsscfg);
-
-		if (scb_ampdu_rx->resp_cnt++ == 0) {
-			wlc_cx_rsc_t *rsc;
-
-			rsc = MALLOC(wlc->osh, sizeof(*rsc));
-			if (rsc == NULL)
-				return;
-
-			wlc_cxo_ctrl_rsc_init(wlc, scb, tid, rsc);
-			WL_CXO(("%s: Adding RSC entry, bssidx %d aid %d tid %d\n",
-				__FUNCTION__, bssidx, scb->aid, tid));
-			__wlc_cxo_c2d_rsc_add(wlc->ipc, wlc, rsc);
-
-			/* Free the local temporary struct */
-			MFREE(wlc->osh, rsc, sizeof(*rsc));
-		}
-
-		/* Get the host responder info */
-		bzero(&cx_resp, sizeof(cx_resp));
-		wlc_cxo_ctrl_rsc_ampdu_rx_init(ampdu_rx, scb, tid, &cx_resp);
-
-		/* Add responder info to RSC */
-		__wlc_cxo_c2d_rsc_add_resp(wlc->ipc, wlc, bssidx, scb->aid, &cx_resp);
-
-		bzero(&ctx, sizeof(ctx));
-
-		/* Get the context information for responder and update
-		 * it to offload driver.
-		 */
-		ctx.bss_idx = bssidx;
-		ctx.aid = scb->aid;
-		ctx.prio = tid;
-		wlc_cxo_ctrl_ses_ctx_ampdu_resp_get(ampdu_rx, scb, tid, &ctx);
-		wlc_cxo_ctrl_ses_ctx_scb_get(wlc, scb, tid, TRUE, &ctx);
-
-		/* Sync the context information before updating state */
-		WL_CXO(("%s: Updating resp ctx from host to ofld\n", __FUNCTION__));
-		/* rx, ctrl plane -> data plane */
-		__wlc_cxo_c2d_session_ctx_upd(wlc->ipc, wlc, &ctx, TRUE, FALSE);
-		__wlc_cxo_c2d_rsc_state_set(wlc->ipc, wlc, ctx.bss_idx, ctx.aid, tid,
-			WLCXO_STATE_EST);
-	}
-} /* wlc_cxo_ctrl_scb_rsc_add */
-
-/**
- * Adds a CxO receive cache entry for a remote party for every QoS class. Informs the data plane on
- * this.
- */
-void
-wlc_cxo_ctrl_scb_rx_ses_add(wlc_info_t *wlc, struct scb *scb)
-{
-	int8 i;
-
-	for (i = 0; i < AMPDU_MAX_SCB_TID; i++) {
-		wlc_cxo_ctrl_scb_rsc_add(wlc, scb, i);
-	}
-}
-
-/**
- * Ctrl and data planes have to be kept in sync. When the ctrl plane handled an ampdu receive, the
- * structures in the data plane have to be updated accordingly.
- */
-static void
-wlc_cxo_ctrl_ofld_resp_upd(wlc_info_t *wlc, struct scb *scb, uint8 tid)
-{
-	ampdu_rx_info_t *ampdu_rx = wlc->ampdu_rx;
-	scb_ampdu_rx_t *scb_ampdu_rx;
-	scb_ampdu_tid_resp_t *resp;
-
-	scb_ampdu_rx = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
-	ASSERT(scb_ampdu_rx);
-
-	resp = scb_ampdu_rx->resp[tid];
-
-	if (resp == NULL)
-		return;
-	ASSERT(resp->tid == tid);
-	ASSERT(WLCXO_ENAB(wlc->pub));
-
-	/* All the frames are released, update the state of the responder
-	 * in offload driver so that it can resume handling frames.
-	 */
-	if (SCB_CXO_ENABLED(scb) && (resp->queued == 0)) {
-		wlc_cx_ses_ctx_t ctx;
-
-		bzero(&ctx, sizeof(ctx));
-
-		/* Get the context information for responder and update
-		 * it to offload driver.
-		 */
-		ctx.bss_idx = WLC_BSSCFG_IDX(scb->bsscfg);
-		ctx.aid = scb->aid;
-		ctx.prio = tid;
-		wlc_cxo_ctrl_ses_ctx_ampdu_resp_get(wlc->ampdu_rx, scb, tid, &ctx);
-		ctx.ampdu_resp.state = WLCXO_STATE_EST;
-		wlc_cxo_ctrl_ses_ctx_scb_get(wlc, scb, tid, TRUE, &ctx);
-
-		/* Sync the context information before updating state */
-		WL_CXO(("%s: Updating resp ctx from host to ofld, tid %d exp_seq %d\n",
-			__FUNCTION__, tid, resp->exp_seq));
-		/* rx, ctrl plane -> data plane */
-		__wlc_cxo_c2d_session_ctx_upd(wlc->ipc, wlc, &ctx, TRUE, FALSE);
-	}
-}
-#endif /* WLCXO_CTRL */
+#endif /* BCMDBG_ASSERT || BCMASSERT_LOG || (defined(BCM47XX_CA9) && defined(WL_PL310_WAR)) */
 
 /**
  * Called on packet reception. MPDU's can be received out-of-order, this function forwards, if
@@ -693,7 +501,7 @@ wlc_ampdu_release_ordered(wlc_info_t *wlc, scb_ampdu_rx_t *scb_ampdu, uint8 tid)
 			AMPDU_RXQ_CLRPKT(resp, indx); /* free rxq[indx] slot */
 #if defined(BCM47XX_CA9) && defined(WL_PL310_WAR)
 			if (resp->exp_seq != pkt_h_seqnum(wlc, p)) {
-				WL_ERROR(("wl%d: %s: sequence number mismatched\n",
+				WL_AMPDU_ERR(("wl%d: %s: sequence number mismatched\n",
 					wlc->pub->unit, __FUNCTION__));
 				PKTFREE(wlc->osh, p, FALSE);
 				resp->alive = TRUE;
@@ -703,9 +511,7 @@ wlc_ampdu_release_ordered(wlc_info_t *wlc, scb_ampdu_rx_t *scb_ampdu, uint8 tid)
 				return;
 			}
 #else
-			if (!WLCXO_ENAB(wlc->pub) ||
-				(WLPKTTAG(p)->flags & WLF_CXO_PKT) == 0)
-				ASSERT(resp->exp_seq == pkt_h_seqnum(wlc, p));
+			ASSERT(resp->exp_seq == pkt_h_seqnum(wlc, p));
 #endif /* defined(BCM47XX_CA9) && defined(WL_PL310_WAR) */
 		}
 		resp->alive = TRUE;
@@ -724,39 +530,28 @@ wlc_ampdu_release_ordered(wlc_info_t *wlc, scb_ampdu_rx_t *scb_ampdu, uint8 tid)
 		WL_AMPDU_RX(("wl%d: wlc_ampdu_release_ordered: releasing seq 0x%x\n",
 			wlc->pub->unit, resp->exp_seq));
 
-#if defined(WLCXO_CTRL) && defined(PKTC)
-		if (WLCXO_ENAB(wlc->pub) && WLPKTTAG(p)->flags & WLF_CXO_PKT) {
-			if (!AMPDU_IS_PKT_PENDING(wlc, resp, NEXT_RX_INDEX(indx)))
-				WLPKTTAG(p)->flags &= ~WLF_CXO_HOST_RXR_PKT;
-			PKTPUSH(wlc->osh, p, (uint32)PKTDATA(wlc->osh, p) -
-			        (uint32)AMPDU_GET_WRXH(resp, indx, p));
-			wlc_sendup_chain(wlc, p);
-		} else
-#endif
-		{
-			/* create the fields of frminfo f */
-			ampdu_create_f(wlc, scb, &f, p, AMPDU_GET_WRXH(resp, indx, p));
+		/* create the fields of frminfo f */
+		ampdu_create_f(wlc, scb, &f, p, AMPDU_GET_WRXH(resp, indx, p));
 
-			bsscfg = scb->bsscfg;
-			bandunit = scb->bandunit;
-			bcopy(&scb->ea, &ea, ETHER_ADDR_LEN);
+		bsscfg = scb->bsscfg;
+		bandunit = scb->bandunit;
+		bcopy(&scb->ea, &ea, ETHER_ADDR_LEN);
 
-			wlc_recvdata_ordered(wlc, scb, &f);
+		wlc_recvdata_ordered(wlc, scb, &f);
 
-			/* validate that the scb is still around and some path in
-			 * wlc_recvdata_ordered() did not free it
-			 */
-			newscb = wlc_scbfindband(wlc, bsscfg, &ea, bandunit);
-			if ((newscb == NULL) || (newscb != scb)) {
-				WL_ERROR(("wl%d: %s: scb freed; bail out\n",
-					wlc->pub->unit, __FUNCTION__));
-				return;
-			}
-
-			/* Make sure responder was not freed when we gave up the lock in sendup */
-			if ((resp = scb_ampdu->resp[tid]) == NULL)
-				return;
+		/* validate that the scb is still around and some path in
+		 * wlc_recvdata_ordered() did not free it
+		 */
+		newscb = wlc_scbfindband(wlc, bsscfg, &ea, bandunit);
+		if ((newscb == NULL) || (newscb != scb)) {
+			WL_AMPDU_ERR(("wl%d: %s: scb freed; bail out\n",
+				wlc->pub->unit, __FUNCTION__));
+			return;
 		}
+
+		/* Make sure responder was not freed when we gave up the lock in sendup */
+		if ((resp = scb_ampdu->resp[tid]) == NULL)
+			return;
 	}
 } /* wlc_ampdu_release_ordered */
 
@@ -789,6 +584,12 @@ wlc_ampdu_release_n_ordered(wlc_info_t *wlc, scb_ampdu_rx_t *scb_ampdu, uint8 ti
 #ifdef WL_TXQ_STALL
 			resp->timestamp = wlc->pub->now;
 #endif
+			/*	To make sure ampdu queue being flushing correctly in
+			 *	response timeout function,alive flag should be set
+			 *	only if pending ampdu packets are freed and expected
+			 *	sequence packets are received.
+			 */
+			resp->alive = TRUE;
 
 #ifdef  WLAMPDU_HOSTREORDER
 			if (AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
@@ -806,7 +607,7 @@ wlc_ampdu_release_n_ordered(wlc_info_t *wlc, scb_ampdu_rx_t *scb_ampdu, uint8 ti
 
 #if defined(BCM47XX_CA9) && defined(WL_PL310_WAR)
 				if (resp->exp_seq != pkt_h_seqnum(wlc, p)) {
-					WL_ERROR(("wl%d: %s: sequence number mismatched\n",
+					WL_AMPDU_ERR(("wl%d: %s: sequence number mismatched\n",
 						wlc->pub->unit, __FUNCTION__));
 					PKTFREE(wlc->osh, p, FALSE);
 					resp->alive = TRUE;
@@ -819,51 +620,39 @@ wlc_ampdu_release_n_ordered(wlc_info_t *wlc, scb_ampdu_rx_t *scb_ampdu, uint8 ti
 				ASSERT(resp->exp_seq == pkt_h_seqnum(wlc, p));
 #endif /* defined(BCM47XX_CA9) && defined(WL_PL310_WAR) */
 
-#if defined(WLCXO_CTRL) && defined(PKTC)
-				if (WLCXO_ENAB(wlc->pub) &&
-					(WLPKTTAG(p)->flags & WLF_CXO_PKT)) {
-					WLPKTTAG(p)->flags &= ~WLF_CXO_HOST_RXR_PKT;
-					PKTPUSH(wlc->osh, p, (uint32)PKTDATA(wlc->osh, p) -
-					        (uint32)AMPDU_GET_WRXH(resp, indx, p));
-					wlc_sendup_chain(wlc, p);
-				} else
-#endif
-				{
-					/* set the fields of frminfo f */
-					ampdu_create_f(wlc, scb, &f, p,
-						AMPDU_GET_WRXH(resp, indx, p));
+				/* set the fields of frminfo f */
+				ampdu_create_f(wlc, scb, &f, p,
+					AMPDU_GET_WRXH(resp, indx, p));
 
-					bsscfg = scb->bsscfg;
-					bandunit = scb->bandunit;
-					bcopy(&scb->ea, &ea, ETHER_ADDR_LEN);
-					WL_AMPDU_RX(("wl%d: %s: released seq 0x%x\n",
-						wlc->pub->unit, __FUNCTION__, resp->exp_seq));
+				bsscfg = scb->bsscfg;
+				bandunit = scb->bandunit;
+				bcopy(&scb->ea, &ea, ETHER_ADDR_LEN);
+				WL_AMPDU_RX(("wl%d: %s: released seq 0x%x\n",
+					wlc->pub->unit, __FUNCTION__, resp->exp_seq));
 
 
-					wlc_recvdata_ordered(wlc, scb, &f);
+				wlc_recvdata_ordered(wlc, scb, &f);
 
-					/* validate that the scb is still around and some path in
-					 * wlc_recvdata_ordered() did not free it
-					 */
-					newscb = wlc_scbfindband(wlc, bsscfg, &ea, bandunit);
-					if ((newscb == NULL) || (newscb != scb)) {
-						WL_ERROR(("wl%d: %s: scb freed; bail out\n",
-							wlc->pub->unit, __FUNCTION__));
-						return;
-					}
-
-					/* Make sure responder was not freed when we gave up
-					 * the lock in sendup
-					 */
-					if ((resp = scb_ampdu->resp[tid]) == NULL)
-						return;
+				/* validate that the scb is still around and some path in
+				 * wlc_recvdata_ordered() did not free it
+				 */
+				newscb = wlc_scbfindband(wlc, bsscfg, &ea, bandunit);
+				if ((newscb == NULL) || (newscb != scb)) {
+					WL_AMPDU_ERR(("wl%d: %s: scb freed; bail out\n",
+						wlc->pub->unit, __FUNCTION__));
+					return;
 				}
+
+				/* Make sure responder was not freed when we gave up
+				 * the lock in sendup
+				 */
+				if ((resp = scb_ampdu->resp[tid]) == NULL)
+					return;
 			}
 		} else {
 			WLCNTINCR(wlc->ampdu_rx->cnt->rxholes);
 			AMPDUSCBCNTINCR(scb_ampdu->cnt.rxholes);
 		}
-		resp->alive = TRUE;
 		resp->exp_seq = NEXT_SEQ(resp->exp_seq);
 	}
 } /* wlc_ampdu_release_n_ordered */
@@ -900,15 +689,6 @@ wlc_ampdu_release_all_ordered(wlc_info_t *wlc, scb_ampdu_rx_t *scb_ampdu, uint8 
 		offset = MODSUB_POW2(max_seq, resp->exp_seq, SEQNUM_MAX) + 1;
 		wlc_ampdu_release_n_ordered(wlc, scb_ampdu, tid, offset);
 	}
-
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(wlc->pub)) {
-		/* If all the frames are released, update the state of the responder
-		 * in offload driver so that it can resume handling frames.
-		 */
-		wlc_cxo_ctrl_ofld_resp_upd(wlc, scb_ampdu->scb, tid);
-	}
-#endif /* WLCXO_CTRL */
 } /* wlc_ampdu_release_all_ordered */
 
 /** Data structures need to be initialized during system initialization */
@@ -961,6 +741,7 @@ ampdu_rx_info_t *
 BCMATTACHFN(wlc_ampdu_rx_attach)(wlc_info_t *wlc)
 {
 	ampdu_rx_info_t *ampdu_rx;
+	scb_cubby_params_t ampdu_rx_cubby_params;
 
 	/* some code depends on packed structures */
 	STATIC_ASSERT(sizeof(struct dot11_bar) == DOT11_BAR_LEN);
@@ -1027,9 +808,16 @@ BCMATTACHFN(wlc_ampdu_rx_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-	/* reserve cubby in the scb container */
-	ampdu_rx->scb_handle = wlc_scb_cubby_reserve(wlc, sizeof(struct ampdu_rx_cubby),
-		scb_ampdu_rx_init, scb_ampdu_rx_deinit, NULL, (void *)ampdu_rx);
+	/* reserve some space in scb container */
+	bzero(&ampdu_rx_cubby_params, sizeof(ampdu_rx_cubby_params));
+
+	ampdu_rx_cubby_params.context = ampdu_rx;
+	ampdu_rx_cubby_params.fn_init = scb_ampdu_rx_init;
+	ampdu_rx_cubby_params.fn_deinit = scb_ampdu_rx_deinit;
+	ampdu_rx_cubby_params.fn_update = scb_ampdu_rx_update;
+
+	ampdu_rx->scb_handle = wlc_scb_cubby_reserve_ext(wlc, sizeof(struct ampdu_rx_cubby),
+		&ampdu_rx_cubby_params);
 
 	if (ampdu_rx->scb_handle < 0) {
 		WL_ERROR(("wl%d: wlc_scb_cubby_reserve() failed\n", wlc->pub->unit));
@@ -1042,7 +830,8 @@ BCMATTACHFN(wlc_ampdu_rx_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-#if defined(BCMDBG_AMPDU) || defined(WL_LINKSTAT)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU) || \
+	defined(WL_LINKSTAT)
 	if (!(ampdu_rx->amdbg = (ampdu_rx_dbg_t *)MALLOCZ(wlc->osh, sizeof(ampdu_rx_dbg_t)))) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
 			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
@@ -1130,7 +919,7 @@ BCMATTACHFN(wlc_ampdu_rx_detach)(ampdu_rx_info_t *ampdu_rx)
 		MFREE(ampdu_rx->wlc->osh, ampdu_rx->dngl_reorder_bufs,
 			sizeof(struct ampdu_reorder_info *) * 256);
 #endif
-#if defined(BCMDBG_AMPDU) || defined(WL_LINKSTAT)
+#if defined(BCMDBG) || defined(BCMDBG_AMPDU) || defined(WL_LINKSTAT)
 	if (ampdu_rx->amdbg) {
 		MFREE(wlc->osh, ampdu_rx->amdbg, sizeof(ampdu_rx_dbg_t));
 		ampdu_rx->amdbg = NULL;
@@ -1139,6 +928,17 @@ BCMATTACHFN(wlc_ampdu_rx_detach)(ampdu_rx_info_t *ampdu_rx)
 
 	wlc_module_unregister(wlc->pub, "ampdu_rx", ampdu_rx);
 	MFREE(wlc->osh, ampdu_rx, sizeof(ampdu_rx_info_t));
+}
+
+static int
+scb_ampdu_rx_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg)
+{
+	ampdu_rx_info_t *ampdu_rx = (ampdu_rx_info_t *)context;
+	wlc_info_t *new_wlc = new_cfg->wlc;
+	struct ampdu_rx_cubby *cubby_info = SCB_AMPDU_INFO(ampdu_rx, scb);
+	scb_ampdu_rx_t *scb_ampdu = cubby_info->scb_rx_cubby;
+	scb_ampdu->ampdu_rx = new_wlc->ampdu_rx;
+	return BCME_OK;
 }
 
 /** Allocate and initialize structure related to a specific remote party */
@@ -1353,10 +1153,10 @@ wlc_ampdu_resp_timeout(void *arg)
 					(ampdu_rx_cfg->resp_timeout_nb / AMPDU_RESP_TIMEOUT);
 
 				if (resp->dead_cnt >= lim) {
-					WL_ERROR(("wl%d: %s: cleaning up resp tid %d waiting for"
-						"seq 0x%x for %d ms\n",
-						wlc->pub->unit, __FUNCTION__, tid, resp->exp_seq,
-						lim*AMPDU_RESP_TIMEOUT));
+					WL_AMPDU_ERR(("wl%d: %s: cleaning up resp tid %d waiting"
+							"for seq 0x%x for %d ms\n", wlc->pub->unit,
+							__FUNCTION__, tid, resp->exp_seq,
+							lim*AMPDU_RESP_TIMEOUT));
 					WLCNTINCR(ampdu_rx->cnt->rxstuck);
 					AMPDUSCBCNTINCR(scb_ampdu->cnt.rxstuck);
 					wlc_ampdu_rx_handle_resp_dead(wlc, scb, resp, scb_ampdu,
@@ -1450,7 +1250,7 @@ wlc_ampdu_rx_watchdog(void *hdl)
 				resp_off->ampdu_cnt++;
 				if (resp_off->ampdu_cnt >= AMPDU_RESP_NO_BAPOLICY_TIMEOUT) {
 					resp_off->ampdu_cnt = 0;
-					WL_ERROR(("wl%d: %s: ampdus recd for"
+					WL_AMPDU_ERR(("wl%d: %s: ampdus recd for"
 						" tid %d with no BA policy in effect\n",
 						ampdu_rx->wlc->pub->unit, __FUNCTION__, tid));
 					wlc_ampdu_rx_send_delba(ampdu_rx, scb, tid,
@@ -1721,7 +1521,11 @@ ampdu_create_f(wlc_info_t *wlc, struct scb *scb, struct wlc_frminfo *f, void *p,
 		f->pbody += DOT11_QOS_LEN;
 		offset += DOT11_QOS_LEN;
 	}
-	f->ht = ((wrxh->rxhdr.lt80.PhyRxStatus_0 & PRXS0_FT_MASK) == PRXS0_PREN) &&
+
+	f->phyrx_ft = (D11RXHDR_ACCESS_VAL(&wrxh->rxhdr, wlc->pub->corerev,
+		PhyRxStatus_0) & PRXS_FT_MASK(wlc->pub->corerev));
+
+	f->ht = (f->phyrx_ft == PRXS0_PREN) &&
 		((f->fc & FC_ORDER) && FC_SUBTYPE_ANY_QOS(f->subtype));
 	if (f->ht) {
 		f->pbody += DOT11_HTC_LEN;
@@ -1801,13 +1605,14 @@ wlc_ampdu_update_rxcounters(ampdu_rx_info_t *ampdu_rx, uint32 ft, struct scb *sc
 			AMPDUSCBCNTINCR(scb_ampdu->cnt.rxampdu);
 			AMPDUSCBCNTINCR(scb_ampdu->cnt.rxmpdu);
 			WLCNTCONDINCR(!WLC_IS_MIMO_PLCP_AMPDU(plcp), ampdu_rx->cnt->rxht);
-#if defined(BCMDBG_AMPDU) || defined(WL_LINKSTAT)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU) || \
+	defined(WL_LINKSTAT)
 			if (ampdu_rx->amdbg && VALID_MCS(plcp[0] & MIMO_PLCP_MCS_MASK))
 				ampdu_rx->amdbg->rxmcs[MCS2IDX(plcp[0] & MIMO_PLCP_MCS_MASK)]++;
 #endif
 			if (PLCP3_ISSGI(plcp[3])) {
 				WLCNTINCR(ampdu_rx->cnt->rxampdu_sgi);
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
 			if (ampdu_rx->amdbg && VALID_MCS(plcp[0] & MIMO_PLCP_MCS_MASK))
 					ampdu_rx->amdbg->rxmcssgi[
 						MCS2IDX(plcp[0] & MIMO_PLCP_MCS_MASK)]++;
@@ -1815,7 +1620,7 @@ wlc_ampdu_update_rxcounters(ampdu_rx_info_t *ampdu_rx, uint32 ft, struct scb *sc
 			}
 			if (PLCP3_ISSTBC(plcp[3])) {
 				WLCNTINCR(ampdu_rx->cnt->rxampdu_stbc);
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
 				if (ampdu_rx->amdbg && VALID_MCS(plcp[0] & MIMO_PLCP_MCS_MASK))
 					ampdu_rx->amdbg->rxmcsstbc[
 						MCS2IDX(plcp[0] & MIMO_PLCP_MCS_MASK)]++;
@@ -1826,7 +1631,8 @@ wlc_ampdu_update_rxcounters(ampdu_rx_info_t *ampdu_rx, uint32 ft, struct scb *sc
 	}
 #ifdef WL11AC
 	 else if (ft == FT_VHT) {
-#if defined(BCMDBG_AMPDU) || defined(WL_LINKSTAT)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU) || \
+	defined(WL_LINKSTAT)
 		uint8  vht = 0;
 #endif
 		if ((plcp[0] | plcp[1] | plcp[2])) {
@@ -1834,7 +1640,8 @@ wlc_ampdu_update_rxcounters(ampdu_rx_info_t *ampdu_rx, uint32 ft, struct scb *sc
 			WLCNTINCR(ampdu_rx->cnt->rxmpdu);
 			AMPDUSCBCNTINCR(scb_ampdu->cnt.rxampdu);
 			AMPDUSCBCNTINCR(scb_ampdu->cnt.rxmpdu);
-#if defined(BCMDBG_AMPDU) || defined(WL_LINKSTAT)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU) || \
+	defined(WL_LINKSTAT)
 			if (ampdu_rx->amdbg) {
 				vht = wlc_vht_get_rate_from_plcp(plcp);
 				ASSERT(vht & 0x80);
@@ -1844,14 +1651,14 @@ wlc_ampdu_update_rxcounters(ampdu_rx_info_t *ampdu_rx, uint32 ft, struct scb *sc
 #endif
 			if (VHT_PLCP3_ISSGI(plcp[3])) {
 				WLCNTINCR(ampdu_rx->cnt->rxampdu_sgi);
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
 				if (ampdu_rx->amdbg)
 					ampdu_rx->amdbg->rxvhtsgi[vht]++;
 #endif
 			}
 			if (VHT_PLCP0_ISSTBC(plcp[0])) {
 				WLCNTINCR(ampdu_rx->cnt->rxampdu_stbc);
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
 				if (ampdu_rx->amdbg)
 					ampdu_rx->amdbg->rxvhtstbc[vht]++;
 #endif
@@ -1916,7 +1723,7 @@ wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminf
 		(void) wlc_keymgmt_get_scb_key(wlc->keymgmt, scb, WLC_KEY_ID_PAIRWISE,
 		                               WLC_KEY_FLAG_NONE, &key_info);
 		if (key_info.algo != CRYPTO_ALGO_OFF) {
-			WL_ERROR((
+			WL_AMPDU_ERR((
 			"wl%d.%d: %s: fc=0x%x FC_WEP bit is not set in an encrypted frame.\n",
 			wlc->pub->unit, WLC_BSSCFG_IDX(scb->bsscfg), __FUNCTION__, f->fc));
 			PKTFREE(wlc->osh, f->p, FALSE);
@@ -1927,22 +1734,24 @@ wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminf
 
 	plcp = ((uint8 *)(f->h)) - D11_PHY_HDR_LEN;
 
-	wlc_ampdu_update_rxcounters(ampdu_rx, f->rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK,
-	                            scb, f->h);
+	wlc_ampdu_update_rxcounters(ampdu_rx, (D11RXHDR_ACCESS_VAL(f->rxh,
+		wlc->pub->corerev, PhyRxStatus_0) &
+		PRXS_FT_MASK(wlc->pub->corerev)), scb, f->h);
 
-#if defined(WL_MU_RX) && defined(WLCNT) && (defined(WLDUMP) || defined(BCMDBG_MU))
+#if defined(WL_MU_RX) && defined(WLCNT) && (defined(BCMDBG) || defined(WLDUMP) || \
+	defined(BCMDBG_MU) || defined(BCMDBG_DUMP))
 	if (MU_RX_ENAB(wlc)) {
-		wlc_murx_update_rxcounters(wlc->murx, f->rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK,
-			scb, f->h);
+		wlc_murx_update_rxcounters(wlc->murx, (D11RXHDR_ACCESS_VAL(f->rxh,
+			wlc->pub->corerev, PhyRxStatus_0) &
+			PRXS_FT_MASK(wlc->pub->corerev)), scb, f->h);
 	}
-#endif  
+#endif  /* WL_MU_RX && WLCNT && (BCMDBG || WLDUMP || BCMDBG_MU || BCMDBG_DUMP) */
 
 	resp = scb_ampdu->resp[tid];
 
 	/* return if ampdu_rx not enabled on TID */
 	if (resp == NULL) {
-		if (((f->rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK) == PRXS0_PREN) &&
-			WLC_IS_MIMO_PLCP_AMPDU(plcp)) {
+		if (f->ht && WLC_IS_MIMO_PLCP_AMPDU(plcp)) {
 			scb_ampdu->resp_off[tid].ampdu_recd = TRUE;
 			WLCNTINCR(ampdu_rx->cnt->rxnobapol);
 		}
@@ -1951,8 +1760,7 @@ wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminf
 	}
 
 	/* track if receiving aggregates from non-HT device */
-	if (!SCB_HT_CAP(scb) &&
-	    ((f->rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK) == PRXS0_PREN) &&
+	if (!SCB_HT_CAP(scb) && f->ht &&
 	    WLC_IS_MIMO_PLCP_AMPDU(plcp)) {
 		scb_ampdu->resp_off[tid].ampdu_recd = TRUE;
 		WLCNTINCR(ampdu_rx->cnt->rxnobapol);
@@ -1960,7 +1768,7 @@ wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminf
 
 	/* fragments not allowed */
 	if (f->seq & FRAGNUM_MASK) {
-		WL_ERROR(("wl%d: %s: unexp frag seq 0x%x, exp seq 0x%x\n",
+		WL_AMPDU_ERR(("wl%d: %s: unexp frag seq 0x%x, exp seq 0x%x\n",
 			wlc->pub->unit, __FUNCTION__, f->seq, resp->exp_seq));
 		toss_reason = WLC_RX_STS_TOSS_FRAG_NOT_ALLOWED;
 		goto toss;
@@ -2007,7 +1815,7 @@ wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminf
 			*/
 			newscb = wlc_scbfindband(wlc, bsscfg, &ea, bandunit);
 			if ((newscb == NULL) || (newscb != scb)) {
-				WL_ERROR(("wl%d: %s: scb freed; bail out\n",
+				WL_AMPDU_ERR(("wl%d: %s: scb freed; bail out\n",
 					wlc->pub->unit, __FUNCTION__));
 				return;
 			}
@@ -2025,12 +1833,6 @@ wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminf
 #endif
 
 		wlc_ampdu_release_ordered(wlc, scb_ampdu, tid);
-
-#ifdef WLCXO_CTRL
-		if (WLCXO_ENAB(wlc->pub)) {
-			wlc_cxo_ctrl_ofld_resp_upd(wlc, scb, tid);
-		}
-#endif
 
 #ifdef  WLAMPDU_HOSTREORDER
 		if (AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
@@ -2139,11 +1941,6 @@ wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminf
 			}
 		}
 		wlc_ampdu_release_ordered(wlc, scb_ampdu, tid);
-#ifdef WLCXO_CTRL
-		if (WLCXO_ENAB(wlc->pub)) {
-			wlc_cxo_ctrl_ofld_resp_upd(wlc, scb, tid);
-		}
-#endif
 
 #ifdef  WLAMPDU_HOSTREORDER
 		if (AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
@@ -2216,229 +2013,6 @@ toss:
 	wlc_ampdu_rx_send_delba(ampdu_rx, scb, tid, FALSE, DOT11_RC_UNSPECIFIED);
 } /* wlc_ampdu_recvdata */
 
-#if defined(WLCXO_CTRL) && defined(PKTC)
-void BCMFASTPATH
-wlc_cxo_ctrl_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, void *p, struct scb *scb,
-                            wlc_d11rxhdr_t *wrxh, uint8 *plcp, struct dot11_header *h)
-{
-	scb_ampdu_rx_t *scb_ampdu;
-	scb_ampdu_tid_resp_t *resp;
-	wlc_info_t *wlc;
-	uint16 seq, offset, indx, delta;
-	uint8 tid = PKTPRIO(p);
-	uint8  vht = 0;
-	d11rxhdr_t *rxh = &wrxh->rxhdr;
-	bool last_rxrpkt = FALSE;
-
-#ifdef WLAMPDU_HOSTREORDER
-	bool new_hole = FALSE;
-	BCM_REFERENCE(new_hole);
-#endif
-	BCM_REFERENCE(vht);
-
-	wlc = ampdu_rx->wlc;
-
-	ASSERT(scb);
-	ASSERT(SCB_AMPDU(scb));
-	ASSERT(tid < AMPDU_MAX_SCB_TID);
-
-	scb_ampdu = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
-	ASSERT(scb_ampdu);
-
-	wlc_ampdu_update_rxcounters(ampdu_rx, rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK, scb, h);
-
-	resp = scb_ampdu->resp[tid];
-	ASSERT(resp != NULL);
-
-	/* track if receiving aggregates from non-HT device */
-	if (!SCB_HT_CAP(scb) &&
-	    ((rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK) == PRXS0_PREN) &&
-	    WLC_IS_MIMO_PLCP_AMPDU(plcp)) {
-		scb_ampdu->resp_off[tid].ampdu_recd = TRUE;
-		WLCNTINCR(ampdu_rx->cnt->rxnobapol);
-	}
-
-	/* fragments not allowed */
-	seq = ltoh16(h->seq);
-	if (seq & FRAGNUM_MASK) {
-		WL_ERROR(("wl%d: %s: unexp frag seq 0x%x, exp seq 0x%x\n",
-			wlc->pub->unit, __FUNCTION__, seq, resp->exp_seq));
-		goto toss;
-	}
-
-	seq = seq >> SEQNUM_SHIFT;
-	indx = RX_SEQ_TO_INDEX(ampdu_rx, seq);
-
-	WL_AMPDU_RX(("wl%d: %s: receiving seq 0x%x tid %d, exp seq %x indx %d\n",
-	          wlc->pub->unit, __FUNCTION__, seq, tid, resp->exp_seq, indx));
-
-	WLPKTTAGSCBSET(p, scb);
-
-	if ((WLPKTTAG(p)->flags & (WLF_CXO_PKT | WLF_CXO_HOST_RXR_PKT)) == WLF_CXO_PKT)
-		last_rxrpkt = TRUE;
-
-	/* send up if expected seq */
-	if (seq == resp->exp_seq) {
-		bool update_host = FALSE;
-
-		if (AMPDU_HOST_REORDER_ENAB(wlc->pub))
-			ASSERT(!AMPDU_CHECK_HOST_HASPKT(resp, indx));
-		else
-			ASSERT(!resp->rxq[indx]);
-		resp->alive = TRUE;
-		resp->exp_seq = NEXT_SEQ(resp->exp_seq);
-
-		if (!AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
-			if (!AMPDU_IS_PKT_PENDING(wlc, resp,
-			           RX_SEQ_TO_INDEX(wlc->ampdu_rx, resp->exp_seq)))
-				WLPKTTAG(p)->flags &= ~WLF_CXO_HOST_RXR_PKT;
-			PKTPUSH(wlc->osh, p, (uint32)PKTDATA(wlc->osh, p) - (uint32)wrxh);
-			wlc_sendup_chain(wlc, p);
-		}
-		/* release pending ordered packets */
-		WL_AMPDU_RX(("wl%d: %s: Releasing pending %d packets of tid %d\n",
-			wlc->pub->unit, __FUNCTION__, resp->queued, tid));
-		if (AMPDU_HOST_REORDER_ENAB(wlc->pub) && resp->queued)
-			update_host = TRUE;
-
-		wlc_ampdu_release_ordered(wlc, scb_ampdu, tid);
-
-		/* If all the frames are released and if this is the last rxr
-		 * pkt being handled then update the state of the responder
-		 * in offload driver so that it can resume handling frames.
-		 */
-		if (last_rxrpkt)
-			wlc_cxo_ctrl_ofld_resp_upd(wlc, scb, tid);
-
-		if (AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
-			/* exp_seq is updated now, cur is known,
-			 * set the right flags and call wlc_recvdata_ordered
-			*/
-			if (update_host) {
-				wlc_ampdu_setpkt_hostreorder_info(wlc, resp, p, indx, NO_NEWHOLE,
-					NO_DEL_FLOW, NO_FLUSH_ALL);
-			}
-			PKTPUSH(wlc->osh, p, (uint32)PKTDATA(wlc->osh, p) - (uint32)wrxh);
-			wlc_sendup_chain(wlc, p);
-		}
-		return;
-	}
-
-	/* out of order packet; validate and enq */
-	offset = MODSUB_POW2(seq, resp->exp_seq, SEQNUM_MAX);
-
-	/* check for duplicate or beyond half the sequence space */
-	if (((offset < resp->ba_wsize) && AMPDU_IS_PKT_PENDING(wlc, resp, indx)) ||
-		(offset > (SEQNUM_MAX >> 1)))
-	{
-		WL_AMPDU_RX(("wl%d: %s: duplicate seq 0x%x(dropped)\n",
-			wlc->pub->unit, __FUNCTION__, seq));
-		PKTFREE(wlc->osh, p, FALSE);
-		WLCNTINCR(ampdu_rx->cnt->rxdup);
-		AMPDUSCBCNTINCR(scb_ampdu->cnt.rxdup);
-		return;
-	}
-
-	if (resp->queued == 0) {
-#ifdef WLAMPDU_HOSTREORDER
-		new_hole = TRUE;
-#endif
-	}
-
-
-	/* move the start of window if acceptable out of window pkts */
-	if (offset >= resp->ba_wsize) {
-		delta = offset - resp->ba_wsize + 1;
-		WL_AMPDU_RX(("wl%d: %s: out of window pkt with"
-			" seq 0x%x delta %d (exp seq 0x%x): moving window fwd\n",
-			wlc->pub->unit, __FUNCTION__, seq, delta, resp->exp_seq));
-
-		wlc_ampdu_release_n_ordered(wlc, scb_ampdu, tid, delta);
-
-		/* recalc resp since may have been freed while releasing frames */
-		if ((resp = scb_ampdu->resp[tid])) {
-			if (AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
-				ASSERT(!AMPDU_CHECK_HOST_HASPKT(resp, indx));
-				/* set the index to say pkt is pending */
-				AMPDU_SET_HOST_HASPKT(resp, indx, wlc->osh, p);
-			}
-			else {
-				ASSERT(!resp->rxq[indx]);
-				AMPDU_RXQ_SETPKT(resp, indx, p);
-				AMPDU_SET_WRXH(resp, indx, p, wrxh);
-			}
-			resp->queued++;
-			if (ampdu_rx->resp_timer_running == FALSE) {
-				ampdu_rx->resp_timer_running = TRUE;
-				wl_add_timer(wlc->wl, ampdu_rx->resp_timer,
-					AMPDU_RESP_TIMEOUT, TRUE);
-			}
-		}
-
-		wlc_ampdu_release_ordered(wlc, scb_ampdu, tid);
-
-		/* If all the frames are released and if this is the last rxr
-		 * pkt being handled then update the state of the responder
-		 * in offload driver so that it can resume handling frames.
-		 */
-		if (last_rxrpkt)
-			wlc_cxo_ctrl_ofld_resp_upd(wlc, scb, tid);
-
-		if (AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
-			if (delta >  resp->ba_wsize) {
-				wlc_ampdu_setpkt_hostreorder_info(wlc, resp, p, indx, new_hole,
-					NO_DEL_FLOW, FLUSH_ALL);
-			}
-			else {
-				wlc_ampdu_setpkt_hostreorder_info(wlc, resp, p, indx, new_hole,
-					NO_DEL_FLOW, NO_FLUSH_ALL);
-			}
-			PKTPUSH(wlc->osh, p, (uint32)PKTDATA(wlc->osh, p) - (uint32)wrxh);
-			wlc_sendup_chain(wlc, p);
-		}
-
-		WLCNTINCR(ampdu_rx->cnt->rxoow);
-		AMPDUSCBCNTINCR(scb_ampdu->cnt.rxoow);
-		return;
-	}
-
-	WL_AMPDU_RX(("wl%d: %s: q out of order seq 0x%x(exp 0x%x)\n",
-		wlc->pub->unit, __FUNCTION__, seq, resp->exp_seq));
-
-	resp->queued++;
-	if (AMPDU_HOST_REORDER_ENAB(wlc->pub)) {
-		ASSERT(!AMPDU_CHECK_HOST_HASPKT(resp, indx));
-		/* set the index to say pkt is pending */
-		AMPDU_SET_HOST_HASPKT(resp, indx, wlc->osh, p);
-		wlc_ampdu_setpkt_hostreorder_info(wlc, resp, p, indx, new_hole,
-			NO_DEL_FLOW, NO_FLUSH_ALL);
-		PKTPUSH(wlc->osh, p, (uint32)PKTDATA(wlc->osh, p) - (uint32)wrxh);
-		wlc_sendup_chain(wlc, p);
-	}
-	else {
-		ASSERT(!resp->rxq[indx]);
-		AMPDU_RXQ_SETPKT(resp, indx, p);
-		AMPDU_SET_WRXH(resp, indx, p, wrxh);
-	}
-	if (ampdu_rx->resp_timer_running == FALSE) {
-		ampdu_rx->resp_timer_running = TRUE;
-		wl_add_timer(wlc->wl, ampdu_rx->resp_timer, AMPDU_RESP_TIMEOUT, TRUE);
-	}
-
-	WLCNTINCR(ampdu_rx->cnt->rxqed);
-
-	return;
-
-toss:
-	WL_AMPDU_RX(("wl%d: %s: Received some unexpected packets\n", wlc->pub->unit, __FUNCTION__));
-	PKTFREE(wlc->osh, p, FALSE);
-	WLCNTINCR(ampdu_rx->cnt->rxunexp);
-
-	/* AMPDUXXX: protocol failure, send delba */
-	wlc_ampdu_rx_send_delba(ampdu_rx, scb, tid, FALSE, DOT11_RC_UNSPECIFIED);
-}
-#endif /* WLCXO_CTRL && PKTC */
-
 /**
  * Called when setting up or tearing down an AMPDU connection with a remote party (scb) for a
  * specific traffic class (tid).
@@ -2494,16 +2068,6 @@ ampdu_cleanup_tid_resp(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 tid)
 		wl_del_timer(ampdu_rx->wlc->wl, ampdu_rx->resp_timer);
 		ampdu_rx->resp_timer_running = FALSE;
 	}
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(ampdu_rx->wlc->pub) && SCB_CXO_ENABLED(scb)) {
-		WL_CXO(("%s: Deleting RSC (scb %p cx_scb %p)\n",
-		        __FUNCTION__, scb, WLC_SCB_C2D(scb)));
-		if (__wlc_cxo_c2d_rsc_delete_resp(ampdu_rx->wlc->ipc, ampdu_rx->wlc,
-		                          scb->bsscfg->_idx, scb->aid, tid) == BCME_OK)
-			scb_ampdu->resp_cnt--;
-		ASSERT(scb_ampdu->resp_cnt >= 0);
-	}
-#endif
 } /* ampdu_cleanup_tid_resp */
 
 /** remote party (scb) requests us to set up an AMPDU connection */
@@ -2518,9 +2082,6 @@ wlc_ampdu_recv_addba_req_resp(ampdu_rx_info_t *ampdu_rx, struct scb *scb,
 	uint16 param_set, timeout, start_seq;
 	uint8 tid, wsize, policy;
 	void *tohost_ctrlpkt = NULL;
-#ifdef WLCXO_CTRL
-	wlc_info_t *wlc = ampdu_rx->wlc;
-#endif
 
 	BCM_REFERENCE(tohost_ctrlpkt);
 	BCM_REFERENCE(body_len);
@@ -2593,6 +2154,12 @@ wlc_ampdu_recv_addba_req_resp(ampdu_rx_info_t *ampdu_rx, struct scb *scb,
 		wlc_send_addba_resp(ampdu_rx->wlc, scb, DOT11_SC_FAILURE,
 			addba_req->token, timeout, param_set);
 		WLCNTINCR(ampdu_rx->cnt->txaddbaresp);
+#ifdef WLAMPDU_HOSTREORDER
+		/* free resp if not NULL */
+		if (AMPDU_HOST_REORDER_ENAB(ampdu_rx->wlc->pub) && resp) {
+			MFREE(ampdu_rx->wlc->osh, resp, sizeof(scb_ampdu_tid_resp_t));
+		}
+#endif /* WLAMPDU_HOSTREORDER */
 		return;
 	}
 
@@ -2614,10 +2181,6 @@ wlc_ampdu_recv_addba_req_resp(ampdu_rx_info_t *ampdu_rx, struct scb *scb,
 	param_set |= (wsize << DOT11_ADDBA_PARAM_BSIZE_SHIFT) & DOT11_ADDBA_PARAM_BSIZE_MASK;
 
 	scb_ampdu_rx->resp[tid] = resp;
-
-	if (WLCXO_ENAB(wlc->pub)) {
-		resp->tid = tid;
-	}
 
 	resp->exp_seq = start_seq >> SEQNUM_SHIFT;
 	resp->ba_wsize = wsize;
@@ -2653,12 +2216,6 @@ wlc_ampdu_recv_addba_req_resp(ampdu_rx_info_t *ampdu_rx, struct scb *scb,
 
 	ampdu_rx->resp_cnt++;
 
-#ifdef WLCXO_CTRL
-	if (WLCXO_ENAB(wlc->pub)) {
-		/* Add rsc, resp and change state to ESTABLISHED */
-		wlc_cxo_ctrl_scb_rsc_add(wlc, scb, tid);
-	}
-#endif
 } /* wlc_ampdu_recv_addba_req_resp */
 
 /**
@@ -2682,7 +2239,7 @@ wlc_ampdu_rx_recv_delba(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 tid, u
 	ASSERT(scb_ampdu_rx);
 
 	if (category & DOT11_ACTION_CAT_ERR_MASK) {
-		WL_ERROR(("wl%d: %s: unexp error action frame\n",
+		WL_AMPDU_ERR(("wl%d: %s: unexp error action frame\n",
 			wlc->pub->unit, __FUNCTION__));
 		WLCNTINCR(ampdu_rx->cnt->rxunexp);
 		return;
@@ -2693,7 +2250,7 @@ wlc_ampdu_rx_recv_delba(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 tid, u
 	WLCNTINCR(ampdu_rx->cnt->rxdelba);
 	AMPDUSCBCNTINCR(scb_ampdu_rx->cnt.rxdelba);
 
-	WL_ERROR(("wl%d: %s: AMPDU OFF: tid %d initiator %d reason %d\n",
+	WL_AMPDU_ERR(("wl%d: %s: AMPDU OFF: tid %d initiator %d reason %d\n",
 		wlc->pub->unit, __FUNCTION__, tid, initiator, reason));
 }
 
@@ -2782,15 +2339,6 @@ wlc_ampdu_recv_bar(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 *body, int 
 	/* release more pending ordered packets if possible */
 	wlc_ampdu_release_ordered(ampdu_rx->wlc, scb_ampdu_rx, tid);
 
-#ifdef WLCXO_CTRL
-	/* If all the frames are released, update the state of the responder
-	 * in offload driver so that it can resume handling frames.
-	 */
-	if (WLCXO_ENAB(ampdu_rx->wlc->pub)) {
-		wlc_cxo_ctrl_ofld_resp_upd(ampdu_rx->wlc, scb, tid);
-	}
-#endif /* WLCXO_CTRL */
-
 #ifdef WLAMPDU_HOSTREORDER
 	if (AMPDU_HOST_REORDER_ENAB(ampdu_rx->wlc->pub)) {
 		if (BCMPCIEDEV_ENAB()) {
@@ -2820,28 +2368,13 @@ wlc_ampdu_rx_send_delba(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 tid,
 {
 	ampdu_cleanup_tid_resp(ampdu_rx, scb, tid);
 
-	WL_ERROR(("wl%d: %s: tid %d initiator %d reason %d\n",
+	WL_AMPDU_ERR(("wl%d: %s: tid %d initiator %d reason %d\n",
 		ampdu_rx->wlc->pub->unit, __FUNCTION__, tid, initiator, reason));
 
 	wlc_send_delba(ampdu_rx->wlc, scb, tid, initiator, reason);
 
 	WLCNTINCR(ampdu_rx->cnt->txdelba);
 }
-
-#ifdef WLCXO_CTRL
-#ifdef WLCXO_OFLD_REORDER
-void
-wlc_cxo_host_send_delba(wlc_info_t *wlc, wlc_cx_scb_t *scb_cx, uint8 tid,
-	uint16 initiator, uint16 reason)
-{
-	struct scb *scb;
-
-	ASSERT(scb_cx);
-	scb = WLC_SCB_D2C(scb_cx);
-	wlc_ampdu_rx_send_delba(wlc->ampdu_rx, scb, tid, initiator, reason);
-}
-#endif /* WLCXO_OFLD_REORDER */
-#endif /* WLCXO_CTRL */
 
 /** called during system initialization and as a result of a 'wl' command */
 int
@@ -2968,7 +2501,113 @@ bool wlc_scb_ampdurx_on_tid(struct scb *scb, uint8 prio)
 	return FALSE;
 }
 
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
+#if defined(EVENT_LOG_COMPILE)
+/* Return the size of report data */
+int
+wlc_ampdu_rxmcs_counter_report(ampdu_rx_info_t *ampdu_rx, uint16 tag)
+{
+	int i, j, first, last;
+	int err = BCME_OK;
+	const uint16 MCS_RATE_TYPE[4] = {WL_AMPDU_STATS_TYPE_RXMCSx1,
+			WL_AMPDU_STATS_TYPE_RXMCSx2,
+			WL_AMPDU_STATS_TYPE_RXMCSx3,
+			WL_AMPDU_STATS_TYPE_RXMCSx4};
+#ifdef WL11AC
+	const uint16 VHT_RATE_TYPE[4] = {WL_AMPDU_STATS_TYPE_RXVHTx1,
+			WL_AMPDU_STATS_TYPE_RXVHTx2,
+			WL_AMPDU_STATS_TYPE_RXVHTx3,
+			WL_AMPDU_STATS_TYPE_RXVHTx4};
+#endif /* WL11AC */
+
+	wlc_ampdu_stats_range(ampdu_rx->amdbg->rxmcs,
+		ARRAYSIZE(ampdu_rx->amdbg->rxmcs), &first, &last);
+	for (i = 0, j = 0; (first >= 0) && (i <= last); i += 8, j++) {
+		if (err == BCME_OK && first < (i + 8)) {
+			err = wlc_ampdu_stats_e_report(tag,
+				MCS_RATE_TYPE[j], 8, &ampdu_rx->amdbg->rxmcs[i], FALSE);
+		}
+	}
+
+#ifdef WL11AC
+	wlc_ampdu_stats_range(ampdu_rx->amdbg->rxvht,
+		ARRAYSIZE(ampdu_rx->amdbg->rxvht), &first, &last);
+	for (i = 0, j = 0; (first >= 0) && (i <= last); i += 10, j++) {
+		if (err == BCME_OK && first < (i + 10)) {
+			err = wlc_ampdu_stats_e_report(tag,
+				VHT_RATE_TYPE[j], 10, &ampdu_rx->amdbg->rxvht[i], FALSE);
+		}
+	}
+#endif /* WL11AC */
+	return err;
+}
+
+#ifdef ECOUNTERS
+int
+wlc_ampdu_ecounter_rx_dump(ampdu_rx_info_t *ampdu_rx, uint16 tag)
+{
+	int mcs_first, mcs_last, len;
+#ifdef WL11AC
+	int vht_first, vht_last;
+#endif
+#ifdef WLCNT
+	wl_ampdu_stats_aggrsz_t rx_aggrsz;
+#endif
+	int err = BCME_OK;
+
+	wlc_ampdu_stats_range(ampdu_rx->amdbg->rxmcs,
+		ARRAYSIZE(ampdu_rx->amdbg->rxmcs), &mcs_first, &mcs_last);
+#ifdef WL11AC
+	wlc_ampdu_stats_range(ampdu_rx->amdbg->rxvht,
+		ARRAYSIZE(ampdu_rx->amdbg->rxvht), &vht_first, &vht_last);
+#endif
+
+	/* MCS rate */
+	if (err == BCME_OK && mcs_first >= 0) {
+		err = wlc_ampdu_stats_e_report(tag,
+			WL_AMPDU_STATS_TYPE_RXMCSOK, mcs_last + 1,
+			ampdu_rx->amdbg->rxmcs, TRUE);
+	}
+#ifdef WL11AC
+	/* VHT rate */
+	if (err == BCME_OK && vht_first >= 0) {
+		err = wlc_ampdu_stats_e_report(tag,
+			WL_AMPDU_STATS_TYPE_RXVHTOK, vht_last + 1,
+			ampdu_rx->amdbg->rxvht, TRUE);
+	}
+#endif /* WL11AC */
+
+	/* MCS SGI */
+	if (err == BCME_OK && mcs_first >= 0) {
+		err = wlc_ampdu_stats_e_report(tag,
+			WL_AMPDU_STATS_TYPE_RXMCSSGI, mcs_last + 1,
+			ampdu_rx->amdbg->rxmcssgi, TRUE);
+	}
+#ifdef WL11AC
+	/* VHT SGI */
+	if (err == BCME_OK && vht_first >= 0) {
+		err = wlc_ampdu_stats_e_report(tag,
+			WL_AMPDU_STATS_TYPE_RXVHTSGI, vht_last + 1,
+			ampdu_rx->amdbg->rxvhtsgi, TRUE);
+	}
+#endif /* WL11AC */
+
+#ifdef WLCNT
+	if (err == BCME_OK) {
+		rx_aggrsz.type = WL_AMPDU_STATS_TYPE_RXDENS;
+		rx_aggrsz.len = 2 * sizeof(uint32);
+		rx_aggrsz.total_ampdu = ampdu_rx->cnt->rxampdu;
+		rx_aggrsz.total_mpdu = ampdu_rx->cnt->rxmpdu;
+		len = sizeof(rx_aggrsz.type) + sizeof(rx_aggrsz.len) + rx_aggrsz.len;
+		err = ecounters_write(tag, (void *)(&rx_aggrsz), len);
+	}
+#endif
+
+	return err;
+}
+#endif /* ECOUNTERS */
+#endif /* EVENT_LOG_COMPILE */
+
 int
 wlc_ampdu_rx_dump(ampdu_rx_info_t *ampdu_rx, struct bcmstrbuf *b)
 {
@@ -3082,33 +2721,6 @@ wlc_ampdu_rx_dump(ampdu_rx_info_t *ampdu_rx, struct bcmstrbuf *b)
 		}
 #endif /* WL11AC */
 		bcm_bprintf(b, "\n");
-
-		if (WLCISLCNPHY(ampdu_rx->wlc->band))
-		{
-			bcm_bprintf(b, "RX MCS STBC:");
-			for (i = 0, max_val = 0; i <= AMPDU_HT_MCS_LAST_EL; i++)
-				max_val += ampdu_rx->amdbg->rxmcsstbc[i];
-
-			if (max_val) {
-				for (i = 0; i <= 7; i++)
-					bcm_bprintf(b, "  %d(%d%%)", ampdu_rx->amdbg->rxmcsstbc[i],
-						(ampdu_rx->amdbg->rxmcsstbc[i] * 100) / max_val);
-			}
-			bcm_bprintf(b, "\n");
-#ifdef WL11AC
-			for (i = 0, max_val = 0; i < AMPDU_MAX_VHT; i++)
-				max_val += ampdu_rx->amdbg->rxvhtstbc[i];
-
-			bcm_bprintf(b, "RX VHT STBC:");
-			if (max_val) {
-				for (i = 0; i < MAX_VHT_RATES; i++) {
-					bcm_bprintf(b, "  %d(%d%%)", ampdu_rx->amdbg->rxvhtstbc[i],
-					(ampdu_rx->amdbg->rxvhtstbc[i] * 100) / max_val);
-				}
-			}
-			bcm_bprintf(b, "\n");
-#endif /* WL11AC */
-		}
 	}
 
 	bcm_bprintf(b, "\n");
@@ -3116,6 +2728,16 @@ wlc_ampdu_rx_dump(ampdu_rx_info_t *ampdu_rx, struct bcmstrbuf *b)
 		if (SCB_AMPDU(scb)) {
 			scb_ampdu = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
 			bcm_bprintf(b, "%s: \n", bcm_ether_ntoa(&scb->ea, eabuf));
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+
+	bcm_bprintf(b, "\trxampdu %u rxmpdu %u rxlegacy %u rxbar %u rxdelba %u\n"
+			            "\trxholes %u rxstuck %u rxoow %u rxdup %u\n",
+			            scb_ampdu->cnt.rxampdu, scb_ampdu->cnt.rxmpdu,
+			            scb_ampdu->cnt.rxlegacy, scb_ampdu->cnt.rxbar,
+			            scb_ampdu->cnt.rxdelba, scb_ampdu->cnt.rxholes,
+			            scb_ampdu->cnt.rxstuck, scb_ampdu->cnt.rxoow,
+			            scb_ampdu->cnt.rxdup);
+#endif /* BCMDBG  || BCMDBG_DUMP */
 		}
 	}
 
@@ -3186,11 +2808,16 @@ wlc_send_addba_resp(wlc_info_t *wlc, struct scb *scb, uint16 status,
 	return 0;
 }
 
-#if defined(WLPKTDLYSTAT) || defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(WLPKTDLYSTAT) || defined(BCMDBG_AMPDU)
 #ifdef WLCNT
 void
 wlc_ampdu_clear_rx_dump(ampdu_rx_info_t *ampdu_rx)
 {
+#ifdef BCMDBG
+	struct scb *scb;
+	struct scb_iter scbiter;
+	scb_ampdu_rx_t *scb_ampdu_rx;
+#endif /* BCMDBG */
 
 	/* zero the counters */
 	bzero(ampdu_rx->cnt, sizeof(wlc_ampdu_rx_cnt_t));
@@ -3218,6 +2845,15 @@ wlc_ampdu_clear_rx_dump(ampdu_rx_info_t *ampdu_rx)
 		}
 #endif /* WLAMPDU_MAC */
 
+#ifdef BCMDBG
+	FOREACHSCB(ampdu_rx->wlc->scbstate, &scbiter, scb) {
+		if (SCB_AMPDU(scb)) {
+			/* reset the per-SCB statistics */
+			scb_ampdu_rx = SCB_AMPDU_RX_CUBBY(ampdu_rx, scb);
+			bzero(&scb_ampdu_rx->cnt, sizeof(scb_ampdu_cnt_rx_t));
+		}
+	}
+#endif /* BCMDBG */
 }
 #endif /* WLCNT */
 #endif 
@@ -3274,8 +2910,8 @@ static int
 wlc_ampdu_alloc_flow_id(ampdu_rx_info_t *ampdu_rx)
 {
 	if (!AMPDU_HOST_REORDER_ENAB(ampdu_rx->wlc->pub)) {
-		WL_ERROR(("%s: ERROR: AMPDU Host reordering not enabled, so shouldn't be here\n",
-			__FUNCTION__));
+		WL_AMPDU_ERR(("%s: ERROR: AMPDU Host reordering not"
+				"enabled, so shouldn't be here\n", __FUNCTION__));
 		ASSERT(0);
 		return -1;
 	}
@@ -3293,8 +2929,8 @@ wlc_ampdu_free_flow_id(ampdu_rx_info_t *ampdu_rx, scb_ampdu_tid_resp_t *resp, st
 	void *p;
 
 	if (!AMPDU_HOST_REORDER_ENAB(ampdu_rx->wlc->pub)) {
-		WL_ERROR(("%s: ERROR: AMPDU Host reordering not enabled, so shouldn't be here\n",
-			__FUNCTION__));
+		WL_AMPDU_ERR(("%s: ERROR: AMPDU Host reordering not"
+				"enabled, so shouldn't be here\n", __FUNCTION__));
 		ASSERT(0);
 		return -1;
 	}
@@ -3311,7 +2947,8 @@ wlc_ampdu_free_flow_id(ampdu_rx_info_t *ampdu_rx, scb_ampdu_tid_resp_t *resp, st
 
 	if (p == NULL) {
 		/* serious case ...what to do */
-		WL_ERROR(("error couldn't alloc packet to cleanup the ampdu host reorder flow\n"));
+		WL_ERROR(("error couldn't alloc packet to cleanup"
+				"the ampdu host reorder flow\n"));
 		return -1;
 	}
 	PKTPULL(ampdu_rx->wlc->osh, p, TXOFF);
@@ -3334,8 +2971,8 @@ wlc_ampdu_setpkt_hostreorder_info(wlc_info_t *wlc, scb_ampdu_tid_resp_t *resp, v
 	if (!AMPDU_HOST_REORDER_ENAB(wlc->pub))
 #endif
 	{
-		WL_ERROR(("%s: ERROR: AMPDU Host reordering not enabled, so shouldn't be here\n",
-			__FUNCTION__));
+		WL_AMPDU_ERR(("%s: ERROR: AMPDU Host reordering not enabled,"
+				"so shouldn't be here\n", __FUNCTION__));
 		ASSERT(0);
 		return;
 	}
@@ -3538,7 +3175,7 @@ wlc_ampdu_frwd_handle_host_reorder(ampdu_rx_info_t *ampdu_rx, void *pkt, bool fo
 
 			ptr->resp = wlc_ampdu_get_resp_ptr(ampdu_rx, pkttag->_scb, pkt);
 			if (ptr->resp == NULL) {
-				WL_ERROR(("wl%d: %s: No AMPDU response\n", WLCWLUNIT(wlc),
+				WL_AMPDU_ERR(("wl%d: %s: No AMPDU response\n", WLCWLUNIT(wlc),
 					__FUNCTION__));
 				MFREE(wlc->osh, ptr, sizeof(ampdu_reorder_info_t));
 				return pkt;
@@ -3894,4 +3531,56 @@ int wlc_ampdu_rx_queued_pkts(ampdu_rx_info_t * ampdu_rx,
 	}
 
 	return 0;
+}
+
+void wlc_ampdu_rx_dump_queued_pkts(ampdu_rx_info_t * ampdu_rx,
+	struct scb * scb, int tid, struct bcmstrbuf *b)
+{
+
+	struct ampdu_rx_cubby * rx_cubby;
+	scb_ampdu_rx_t * scb_rx_cubby;
+
+	if ((ampdu_rx == NULL) || (scb == NULL) ||
+		(tid < 0) || (tid >= AMPDU_MAX_SCB_TID)) {
+		return;
+	}
+
+	rx_cubby = (struct ampdu_rx_cubby *)SCB_AMPDU_INFO(ampdu_rx, scb);
+
+	if ((rx_cubby == NULL) ||
+		(rx_cubby->scb_rx_cubby == NULL)) {
+		return;
+	}
+
+	scb_rx_cubby = rx_cubby->scb_rx_cubby;
+
+	if (scb_rx_cubby->resp[tid] && scb_rx_cubby->resp[tid]->queued) {
+		int i, seq, indx, number = 0;
+		void *p;
+		scb_ampdu_tid_resp_t *resp = scb_rx_cubby->resp[tid];
+#ifdef WL_TXQ_STALL
+		bcm_bprintf(b,
+			"\t\t\t\tSCB RX AMPDU Q: TID %d, queued %d at %u current %u\n",
+			tid, resp->queued, resp->timestamp, ampdu_rx->wlc->pub->now);
+#else
+		bcm_bprintf(b,
+			"\t\t\t\tSCB RX AMPDU Q: TID %d, queued %d\n", tid, resp->queued);
+#endif
+		bcm_bprintf(b,
+			"\t\t\t\tExp seq: %6d, wsize:%2d, alive:%s dead_cnt:%2d\n",
+			resp->exp_seq, resp->ba_wsize, resp->alive? "TRUE":"FALSE", resp->dead_cnt);
+		for (i = 0, seq = resp->exp_seq;
+			i < ampdu_rx->config->ba_max_rx_wsize;
+			i++, seq = NEXT_SEQ(seq)) {
+			indx = RX_SEQ_TO_INDEX(ampdu_rx, seq);
+			if (AMPDU_RXQ_HASPKT(resp, indx)) {
+				number ++;
+				p = AMPDU_RXQ_GETPKT(resp, indx);
+				bcm_bprintf(b,
+					"\t\t\t\t#%02d, Pkt Seq:%6d indx:%2d\n",
+					number, WLPKTTAG(p)->seq >> SEQNUM_SHIFT, indx);
+			}
+		}
+	}
+	return;
 }

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_papdcal.c 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_papdcal.c 657373 2016-09-01 01:08:38Z $
  */
 
 #include <phy_cfg.h>
@@ -32,7 +32,6 @@
 struct phy_papdcal_priv_info {
 	phy_info_t				*pi;		/* PHY info ptr */
 	phy_type_papdcal_fns_t	*fns;		/* Function ptr */
-	uint8	papdcal_indexdelta_default;
 };
 
 /* module private states memory layout */
@@ -80,8 +79,6 @@ BCMATTACHFN(phy_papdcal_attach)(phy_info_t *pi)
 #else
 	pi->ff->_wbpapd = FALSE;
 #endif /* WL_WBPAPD */
-	cmn_info->priv->papdcal_indexdelta_default = 4;
-
 
 	/* register init fn */
 	if (phy_init_add_init_fn(pi->initi, phy_papdcal_init_cb, cmn_info,
@@ -193,7 +190,7 @@ phy_papdcal_epapd(phy_papdcal_info_t *papdcali)
 	return PHY_EPAPD(papdcali->priv->pi);
 }
 
-#if defined(WLTEST) || defined(BCMDBG)
+#if defined(BCMDBG)
 void
 phy_papdcal_epa_dpd_set(phy_info_t *pi, uint8 enab_epa_dpd, bool in_2g_band)
 {
@@ -208,7 +205,7 @@ phy_papdcal_epa_dpd_set(phy_info_t *pi, uint8 enab_epa_dpd, bool in_2g_band)
 		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
 	}
 }
-#endif /* defined(WLTEST) || defined(BCMDBG) */
+#endif 
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
 static int
@@ -218,7 +215,7 @@ phy_papdcal_dump(void *ctx, struct bcmstrbuf *b)
 }
 #endif
 
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 bool
 wlc_phy_isperratedpden(wlc_phy_t *ppi)
 {
@@ -254,45 +251,10 @@ wlc_phy_perratedpdset(wlc_phy_t *ppi, bool enable)
 	if (fns->perratedpdset != NULL)
 		(fns->perratedpdset)(fns->ctx, enable);
 }
-#endif /* WLTEST || BCMINTERNAL || WLPKTENG */
+#endif 
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-int phy_papdcal_get_lut_idx0(phy_info_t *pi, int32* idx)
-{
-	phy_type_papdcal_fns_t *fns = pi->papdcali->priv->fns;
-	if (fns->get_idx0 != NULL) {
-		return (fns->get_idx0)(fns->ctx, idx);
-	} else {
-		return BCME_UNSUPPORTED;
-	}
-}
 
-int phy_papdcal_get_lut_idx1(phy_info_t *pi, int32* idx)
-{
-	phy_type_papdcal_fns_t *fns = pi->papdcali->priv->fns;
-	if (fns->get_idx1 != NULL) {
-		return (fns->get_idx1)(fns->ctx, idx);
-	} else {
-		return BCME_UNSUPPORTED;
-	}
-}
-
-int
-phy_papdcal_set_idx(phy_info_t *pi, int8 idx)
-{
-	phy_type_papdcal_fns_t *fns = pi->papdcali->priv->fns;
-
-	if (fns->set_idx != NULL) {
-		return (fns->set_idx)(fns->ctx, idx);
-	} else {
-		return BCME_UNSUPPORTED;
-	}
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-#ifndef ATE_BUILD
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 int
 phy_papdcal_set_skip(phy_info_t *pi, uint8 skip)
 {
@@ -314,8 +276,7 @@ phy_papdcal_get_skip(phy_info_t *pi, int32* skip)
 		return BCME_UNSUPPORTED;
 	}
 }
-#endif /* !ATE_BUILD */
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
+#endif 
 
 #if defined(WFD_PHY_LL)
 int
@@ -340,3 +301,14 @@ phy_papdcal_get_wfd_ll_enable(phy_papdcal_info_t *papdcali, int32 *ret_int_ptr)
 	}
 }
 #endif /* WFD_PHY_LL */
+
+/* Convert epsilon table value to complex number */
+int
+phy_papdcal_decode_epsilon(uint32 epsilon, int32 *eps_real, int32 *eps_imag)
+{
+	if ((*eps_imag = (epsilon>>13)) > 0xfff)
+		*eps_imag -= 0x2000; /* Sign extend */
+	if ((*eps_real = (epsilon & 0x1fff)) > 0xfff)
+		*eps_real -= 0x2000; /* Sign extend */
+	return BCME_OK;
+}

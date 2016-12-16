@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_mu.c 647004 2016-07-01 15:56:22Z kriedte $
+ * $Id: phy_ac_mu.c 649031 2016-07-14 14:04:36Z $
  */
 
 #include <phy_cfg.h>

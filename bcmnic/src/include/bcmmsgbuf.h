@@ -21,7 +21,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmmsgbuf.h 621644 2016-02-26 19:37:30Z $
+ * $Id: bcmmsgbuf.h 648010 2016-07-08 20:06:25Z $
  */
 #ifndef _bcmmsgbuf_h_
 #define	_bcmmsgbuf_h_
@@ -336,6 +336,9 @@ typedef struct info_buf_payload_hdr_s {
 	uint16 length;
 } info_buf_payload_hdr_t;
 
+#define PCIE_DMA_XFER_FLG_D11_LPBK_MASK	0x00000001
+#define PCIE_DMA_XFER_FLG_D11_LPBK_SHIFT	0
+
 typedef struct pcie_dma_xfer_params {
 	/** common message header */
 	cmn_msg_hdr_t	cmn_hdr;
@@ -352,7 +355,8 @@ typedef struct pcie_dma_xfer_params {
 	uint32		srcdelay;
 	/** delay before doing the dest txfer */
 	uint32		destdelay;
-	uint32		rsvd;
+	uint8		rsvd[3];
+	uint8		flags;
 } pcie_dma_xfer_params_t;
 
 /** Complete msgbuf hdr for flow ring update from host to dongle */

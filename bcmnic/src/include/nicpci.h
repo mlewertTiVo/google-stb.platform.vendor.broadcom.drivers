@@ -51,7 +51,15 @@
 #define pcicore_pcieserdesreg(a, b, c, d, e) (0)
 #define pcicore_pciereg(a, b, c, d, e) (0)
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define pcicore_dump_pcieregs(a, b) (0)
+#define pcicore_dump_pcieinfo(a, b) (0)
+#endif
 
+#ifdef BCMDBG
+#define pcie_lcreg(a, b, c) (0)
+#define pcicore_dump(a, b)	do { } while (0)
+#endif
 
 #define pcicore_pmecap_fast(a)	(FALSE)
 #define pcicore_pmeen(a)	do { } while (0)
@@ -120,7 +128,14 @@ extern uint32 pcicore_pcieserdesreg(void *pch, uint32 mdioslave, uint32 offset,
 
 extern uint32 pcicore_pciereg(void *pch, uint32 offset, uint32 mask, uint32 val, uint type);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+extern int pcicore_dump_pcieinfo(void *pch, struct bcmstrbuf *b);
+extern int pcicore_dump_pcieregs(void *pch, struct bcmstrbuf *b);
+#endif
 
+#ifdef BCMDBG
+extern void pcicore_dump(void *pch, struct bcmstrbuf *b);
+#endif
 
 extern bool pcicore_pmecap_fast(osl_t *osh);
 extern void pcicore_pmeen(void *pch);

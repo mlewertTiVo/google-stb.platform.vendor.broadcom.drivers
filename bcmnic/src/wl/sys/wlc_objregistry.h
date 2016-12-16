@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_objregistry.h 641815 2016-06-06 10:17:42Z $
+ * $Id: wlc_objregistry.h 665171 2016-10-15 15:40:29Z $
  */
 
 /**
@@ -56,7 +56,6 @@ typedef enum obj_registry_key {
 	OBJR_RSDB_CMN_INFO, /* RSDB common info */
 	OBJR_BWTE_INFO,     /* BT tunnel engine info */
 	OBJR_TBOW_INFO,     /* tbow info */
-	OBJR_NAN_FAM_INFO,  /* nan fam info */
 	OBJR_NAN_SCHED_INFO, /* nan sched info */
 	OBJR_ASDB_INFO, /* ASDB info */
 	OBJR_ANQPO_CMN, /* ANQPO shared info */
@@ -69,7 +68,6 @@ typedef enum obj_registry_key {
 	OBJR_TDLS_CMN_INFO, /* TDLS common info */
 	OBJR_SCB_HANDLE_MAP, /* scb handle info */
 	OBJR_NAN_DP_INFO, /* nan data path info */
-	OBJR_NAN_MGMT_INFO, /* nan mgmt info */
 	OBJR_NAN_NDP_INFO, /* nan ndp info */
 	OBJR_NAN_NDL_INFO, /* nan ndl info */
 	OBJR_NATOE_CMN_INFO, /* NATOE common info */
@@ -77,6 +75,23 @@ typedef enum obj_registry_key {
 	OBJR_AWDL_CMN_INFO,  /* awdl cmn info */
 	OBJR_AWDL_TMR_INFO,  /* awdl timer info */
 	OBJR_MBO_CMN_DATA,   /* shared mbo data */
+	OBJR_NAN_FSM_REG, /* nan fsm registry */
+	OBJR_SCANDB_CMN, /* common info for scandb */
+	OBJR_NAN_AVAIL_INFO,  /* nan avail info */
+	OBJR_OCE_CMN_INFO, /* oce common info */
+	OBJR_CAC_CMN_INFO, /* CAC common info */
+	OBJR_FTM_CMN_INFO,   /* ftm cmmon info */
+	OBJR_PKT_FILTER,	/* packet filter */
+	OBJR_KEEPALIVE_CMN_INFO, /* keep_alive_cmn info */
+	OBJR_NAN_RANGE_INFO,
+	OBJR_NAN_DAM_INFO,	/* nan dam info */
+	OBJR_SLOTTED_BSS_CMN_INFO, /* slotted bss cmn info */
+	OBJR_TEST_CMN_INFO,	/* test common info */
+	OBJR_BTC_PROFILE_INFO,	/* BTC profile info */
+	OBJR_EVENT_CMN_INFO,
+	OBJR_MBO_OCE_INFO, /* mbo-oce info */
+	OBJR_TKO_CMN,           /* TKO common data */
+	OBJR_IFACE_CREATE_INFO,	/* Interface create info */
 	OBJR_MAX_KEYS
 } obj_registry_key_t;
 
@@ -132,6 +147,10 @@ int obj_registry_islast(wlc_obj_registry_t *objr);
 
 void obj_registry_disable(wlc_obj_registry_t *wlc_objr, obj_registry_key_t key);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* Debug function to dump out all contents of the registry */
+int wlc_dump_objr(wlc_obj_registry_t *objr, struct bcmstrbuf *b);
+#endif
 
 #else /* WL_OBJ_REGISTRY */
 

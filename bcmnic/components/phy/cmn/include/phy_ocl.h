@@ -19,16 +19,27 @@
 
 #include <typedefs.h>
 #include <phy_api.h>
-
+#include <wlc_phy_shim.h>
 
 /* forward declaration */
 typedef struct phy_ocl_info phy_ocl_info_t;
 
 #ifdef OCL
+	#if defined(WL_ENAB_RUNTIME_CHECK)
+		#define PHY_OCL_ENAB(physhim)		(wlapi_ocl_enab_check(physhim))
+	#elif defined(OCL_DISABLED)
+		#define PHY_OCL_ENAB(physhim)		(0)
+	#else
+		#define PHY_OCL_ENAB(physhim)		(wlapi_ocl_enab_check(physhim))
+	#endif
+#else
+	#define PHY_OCL_ENAB(physhim)			(0)
+#endif /* OCL */
+
+#ifdef OCL
 /* attach/detach */
 phy_ocl_info_t* phy_ocl_attach(phy_info_t *pi);
 void phy_ocl_detach(phy_ocl_info_t *ri);
-void wlc_phy_ocl_enable(phy_info_t *pi, bool enable);
 #endif /* OCL */
 
 #endif /* _phy_ocl_h_ */

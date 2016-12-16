@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_akm_ie.h 593626 2015-10-18 23:18:10Z $
+ * $Id: wlc_akm_ie.h 663406 2016-10-05 07:22:04Z $
  */
 
 #ifndef _wlc_akm_ie_h_
@@ -22,5 +22,5 @@ extern wlc_akm_info_t *wlc_akm_attach(wlc_info_t *wlc);
 extern void wlc_akm_detach(wlc_akm_info_t *akm);
 
 extern uint8 wlc_wpa_mcast_cipher(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
-
+extern uint wlc_akm_calc_rsn_ie_len(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 #endif /* _wlc_akm_ie_h_ */

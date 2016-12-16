@@ -63,6 +63,9 @@ static int wlc_bsscfg_viel_doiovar(void *ctx, uint32 actionid,
 /* bsscfg cubby */
 static int wlc_bsscfg_viel_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_bsscfg_viel_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_bsscfg_viel_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#endif
 static int wlc_bsscfg_viel_bss_get(void *ctx, wlc_bsscfg_t *cfg, uint8 *data, int *len);
 static int wlc_bsscfg_viel_bss_set(void *ctx, wlc_bsscfg_t *cfg, const uint8 *data, int len);
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
@@ -96,6 +99,9 @@ BCMATTACHFN(wlc_bsscfg_viel_attach)(wlc_info_t *wlc)
 	cubby_params.context = vieli;
 	cubby_params.fn_init = wlc_bsscfg_viel_bss_init;
 	cubby_params.fn_deinit = wlc_bsscfg_viel_bss_deinit;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = wlc_bsscfg_viel_bss_dump;
+#endif
 	cubby_params.fn_get = wlc_bsscfg_viel_bss_get;
 	cubby_params.fn_set = wlc_bsscfg_viel_bss_set;
 
@@ -310,6 +316,22 @@ wlc_bsscfg_viel_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	*pviel = NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_bsscfg_viel_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_bsscfg_viel_info_t *vieli = (wlc_bsscfg_viel_info_t *)ctx;
+	vndr_ie_listel_t *viel = BSS_VNDR_IE_LIST(vieli, cfg);
+
+	for (; viel != NULL; viel = viel->next_el) {
+		bcm_tlv_t *ie = (bcm_tlv_t *)&viel->vndr_ie_infoel.vndr_ie_data;
+
+		bcm_bprintf(b, "flags: %08x ", viel->vndr_ie_infoel.pktflag);
+		wlc_dump_ie(vieli->wlc, ie, b);
+		bcm_bprintf(b, "\n");
+	}
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static int
 wlc_bsscfg_viel_bss_get(void *ctx, wlc_bsscfg_t *cfg, uint8 *data, int *len)

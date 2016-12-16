@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_cache.h 595511 2015-10-27 23:12:01Z svjoshi $
+ * $Id: phy_type_cache.h 595511 2015-10-27 23:12:01Z $
  */
 
 #ifndef _phy_type_cache_h_

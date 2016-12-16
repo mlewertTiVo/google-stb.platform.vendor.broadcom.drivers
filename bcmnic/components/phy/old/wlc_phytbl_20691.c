@@ -17,7 +17,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  * All Rights Reserved.
  *
- * $Id: wlc_phytbl_20691.c 614873 2016-01-25 06:02:55Z aswath $
+ * $Id: wlc_phytbl_20691.c 614873 2016-01-25 06:02:55Z $
  */
 
 #include <wlc_cfg.h>
@@ -28,8 +28,8 @@
 #include "wlc_phytbl_20691.h"
 
 /* 20691 register dumping and initialization tables */
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 
 const radio_20xx_dumpregs_t dumpregs_20691_rev68[] = {
 	{ RF0_20691_REV_ID(68)},
@@ -1983,7 +1983,7 @@ const radio_20xx_dumpregs_t dumpregs_20691_rev129[] = {
 	{ 0xFFFF,               }
 };
 
-#endif /* BCMDBG, BCMDBG_DUMP, BCMINTERNAL, DBG_PHY_IOV, BCMDBG_PHYDUMP */
+#endif 
 
 const radio_20xx_prefregs_t prefregs_20691_rev68[] = {
 	{ RF0_20691_PLL_XTAL3(68),       0x388},

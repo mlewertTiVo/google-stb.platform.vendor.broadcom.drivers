@@ -96,6 +96,20 @@ typedef struct {
 	bool active;			/**< is timer armed? */
 	bool req_adj;			/**< request to update tbtt */
 /* ==== please keep these debug stuff at the bottom ==== */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* stats */
+	uint collision;			/**< schedule conflict */
+	uint pretbtt;			/**< pretbtt interrupt */
+	uint tbtt;			/**< tbtt interrupt (simulated) */
+	uint pretbttlate;		/**< pretbtt interrupt arrived late */
+	uint pretbttlatemin;
+	uint pretbttearly;		/**< pretbtt interrupt arrived early */
+	uint pretbttearlymax;
+	uint pretbttfake;		/**< pretbtt is past tbtt but still before the toss point */
+	uint pretbttfakemax;
+	uint pretbtttoss;		/**< pretbtt is past tbtt and is too late so it is tossed */
+	uint pretbtttossmax;
+#endif
 } wlc_tbtt_ent_t;
 
 /* tbtt entry states accessor */
@@ -104,6 +118,15 @@ typedef struct {
 #define TBTT_ENT(ti, cfg) TBTT_BSSCFG_CUBBY(ti, cfg)
 
 /* debug/stats macros */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#define COLCNTINC(te)		((te)->collision++)
+#define PRETBTTCNTINC(te)	((te)->pretbtt++)
+#define PRETBTTLATECNTINC(te)	((te)->pretbttlate++)
+#define PRETBTTEARLYCNTINC(te)	((te)->pretbttearly++)
+#define TBTTCNTINC(te)		((te)->tbtt++)
+#define PRETBTTFAKECNTINC(te)	((te)->pretbttfake++)
+#define PRETBTTTOSSCNTINC(te)	((te)->pretbtttoss++)
+#else
 #define COLCNTINC(te)
 #define PRETBTTCNTINC(te)
 #define PRETBTTLATECNTINC(te)
@@ -111,9 +134,13 @@ typedef struct {
 #define TBTTCNTINC(te)
 #define PRETBTTFAKECNTINC(te)
 #define PRETBTTTOSSCNTINC(te)
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* local functions */
 /* module entries */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_tbtt_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* callbacks */
 static void wlc_tbtt_bss_updn_cb(void *ctx, bsscfg_up_down_event_data_t *notif_data);
@@ -122,7 +149,11 @@ static void wlc_tbtt_tbtt_cb(void *arg);
 
 /* bsscfg cubby */
 static void wlc_tbtt_ent_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_tbtt_ent_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_tbtt_ent_dump NULL
+#endif
 
 /* module entries */
 wlc_tbtt_info_t *
@@ -160,6 +191,9 @@ BCMATTACHFN(wlc_tbtt_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "tbtt", wlc_tbtt_dump, (void *)ti);
+#endif
 
 	return ti;
 
@@ -185,6 +219,25 @@ BCMATTACHFN(wlc_tbtt_detach)(wlc_tbtt_info_t *ti)
 	MFREE(wlc->osh, ti, sizeof(wlc_tbtt_info_t));
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_tbtt_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_tbtt_info_t *ti = (wlc_tbtt_info_t *)ctx;
+	wlc_info_t *wlc = ti->wlc;
+	int idx;
+	wlc_bsscfg_t *cfg;
+
+	bcm_bprintf(b, "tbtt: cfgh %d\n", ti->cfgh);
+
+	FOREACH_BSS(wlc, idx, cfg) {
+		bcm_bprintf(b, "bsscfg > %d\n", WLC_BSSCFG_IDX(cfg));
+		wlc_tbtt_ent_dump(ti, cfg, b);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 void
 wlc_tbtt_ent_init(wlc_tbtt_info_t *ti, wlc_bsscfg_t *cfg)
@@ -212,6 +265,12 @@ wlc_tbtt_ent_init(wlc_tbtt_info_t *ti, wlc_bsscfg_t *cfg)
 	/* abnormal preTBTT interrupt arrival time after expected TBTT time */
 	te->fake_pre_tbtt_max = 3000;
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	te->pretbttlatemin = te->pre_tbtt_cfg - te->norm_pre_tbtt_max;
+	te->pretbttearlymax = 0;
+	te->pretbttfakemax = 0;
+	te->pretbtttossmax = 0;
+#endif
 }
 
 /* tbtt entity allocation/deletion */
@@ -294,6 +353,32 @@ wlc_tbtt_ent_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	MFREE(wlc->osh, te, sizeof(wlc_tbtt_ent_t));
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_tbtt_ent_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_tbtt_info_t *ti = (wlc_tbtt_info_t *)ctx;
+	wlc_tbtt_ent_t *te;
+
+	ASSERT(cfg != NULL);
+
+	te = TBTT_ENT(ti, cfg);
+	if (te == NULL)
+		return;
+
+	bcm_bprintf(b, "\tenabled %d active %d tsfadj %d\n",
+	            te->enabled, te->active, te->tsf_adj);
+	bcm_bprintf(b, "\tpretbtt %u tbtt %u\n", te->pretbtt, te->tbtt);
+	bcm_bprintf(b, "\tcollision %u late %u early %u fake %u miss %u\n",
+	            te->collision, te->pretbttlate, te->pretbttearly,
+	            te->pretbttfake, te->pretbtttoss);
+	bcm_bprintf(b, "\tlatemin %u earlymax %u fakemax %u missmax %u\n",
+	            te->pretbttlatemin, te->pretbttearlymax,
+	            te->pretbttfakemax, te->pretbtttossmax);
+	bcm_bprintf(b, "\tpretbtt config %u normal pretbtt max %u fake pretbtt max %u\n",
+	            te->pre_tbtt_cfg, te->norm_pre_tbtt_max, te->fake_pre_tbtt_max);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* enable/disable the entry */
 static void
@@ -439,6 +524,11 @@ wlc_tbtt_bss_updn_cb(void *ctx, bsscfg_up_down_event_data_t *notif_data)
 	}
 }
 
+#ifdef BCMDBG
+static uint32 last_pre_tbtt = 0;
+#define WL_TBTT_P(x) WL_NONE(x)
+#define WL_TBTT_PP(x) WL_NONE(x)
+#endif
 
 /* pretbtt interrupt handler */
 static void
@@ -482,16 +572,29 @@ wlc_tbtt_pre_tbtt_cb(void *ctx, wlc_mcnx_intr_data_t *notif_data)
 	wlc_mcnx_next_l_tbtt64(mcnx, cfg, tsf_h, tsf_l, &tbtt_h, &tbtt_l);
 	/* distance between the next tbtt and the tsf */
 	tt_next_tbtt = U32_DUR(tsf_l, tbtt_l);
+#ifdef BCMDBG
+	WL_TBTT_P(("%s: now at %u, to next tbtt %u, interval %u\n", __FUNCTION__,
+	           tsf_l, tt_next_tbtt, U32_DUR(last_pre_tbtt, tsf_l)));
+	last_pre_tbtt = tsf_l;
+#endif
 	/* the preTBTT comes at different time point... */
 	/* after normal pretbtt range... */
 	if (tt_next_tbtt > 0 &&
 	    tt_next_tbtt <= te->pre_tbtt_cfg - te->norm_pre_tbtt_max) {
 		PRETBTTLATECNTINC(te);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+		if (tt_next_tbtt < te->pretbttlatemin)
+			te->pretbttlatemin = tt_next_tbtt;
+#endif
 	}
 	/* before pretbtt... */
 	else if (tt_next_tbtt > te->pre_tbtt_cfg &&
 	         tt_next_tbtt <= te->pre_tbtt_cfg + te->norm_pre_tbtt_max) {
 		PRETBTTEARLYCNTINC(te);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+		if (tt_next_tbtt > te->pretbttearlymax)
+			te->pretbttearlymax = tt_next_tbtt;
+#endif
 	}
 
 	/* consider all above cases "normal" preTBTT too */
@@ -526,13 +629,37 @@ wlc_tbtt_pre_tbtt_cb(void *ctx, wlc_mcnx_intr_data_t *notif_data)
 
 		wlc_tbtt_tbtt_cb(te);
 		PRETBTTFAKECNTINC(te);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+		if (tf_last_tbtt > te->pretbttfakemax)
+			te->pretbttfakemax = tf_last_tbtt;
+#endif
 		return;
 	}
 
 	/* preTBTT comes way too late... */
 	PRETBTTTOSSCNTINC(te);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	if (tf_last_tbtt > te->pretbtttossmax)
+		te->pretbtttossmax = tf_last_tbtt;
+#endif
+#ifdef BCMDBG
+{
+	wlc_mcnx_next_l_tbtt64(mcnx, cfg, tsf_h, tsf_l, &tbtt_h, &tbtt_l);
+	WL_TBTT_PP(("%s: bss %d problem at tick %x (local) %x (remote) offset %u "
+	            "to tbtt %x (local) %x (remote)\n",
+	            __FUNCTION__,
+	            wlc_mcnx_BSS_idx(mcnx, cfg),
+	            tsf_l, wlc_mcnx_l2r_tsf32(mcnx, cfg, tsf_l),
+	            tt_next_tbtt,
+	            tbtt_l, wlc_mcnx_l2r_tsf32(mcnx, cfg, tbtt_l)));
+}
+#endif
 }
 
+#ifdef BCMDBG
+static uint32 last_tbtt = 0;
+#define WL_TBTT_I(x) WL_NONE(x)
+#endif
 
 /* tbtt interrupt handler */
 static void
@@ -552,6 +679,13 @@ wlc_tbtt_tbtt_cb(void *arg)
 
 	wlc_read_tsf(wlc, &tsf_l, &tsf_h);
 
+#ifdef BCMDBG
+{
+	WL_TBTT_I(("%s: now at %u, interval %u\n",
+	           __FUNCTION__, tsf_l, U32_DUR(last_tbtt, tsf_l)));
+	last_tbtt = tsf_l;
+}
+#endif
 
 	wlc_gptimer_wake_upd(wlc, WLC_GPTIMER_AWAKE_TBTT, FALSE);
 	te->active = FALSE;

@@ -46,33 +46,35 @@ phy_ac_rssi_doiovar(void *ctx, uint32 aid,
 	int32 int_val = 0;
 	int err = BCME_OK;
 	int32 *ret_int_ptr = (int32 *)a;
+	phy_ac_rssi_info_t *rssii = pi->u.pi_acphy->rssii;
+	phy_ac_rssi_data_t *data = phy_ac_rssi_get_data(rssii);
 
 	if (plen >= (uint)sizeof(int_val))
 		bcopy(p, &int_val, sizeof(int_val));
 
 	switch (aid) {
 		case IOV_SVAL(IOV_PHY_RSSI_CAL_REV):
-			pi->u.pi_acphy->rssi_cal_rev = (bool)int_val;
+			err = phy_ac_rssi_set_cal_rev(rssii, (bool) int_val);
 			break;
 
 		case IOV_GVAL(IOV_PHY_RSSI_CAL_REV):
-			*ret_int_ptr = pi->u.pi_acphy->rssi_cal_rev;
+			*ret_int_ptr = data->rssi_cal_rev;
 			break;
 
 		case IOV_SVAL(IOV_PHY_RSSI_QDB_EN):
-			err = phy_ac_rssi_set_qdb_en(pi->u.pi_acphy->rssii, (bool) int_val);
+			err = phy_ac_rssi_set_qdb_en(rssii, (bool) int_val);
 			break;
 
 		case IOV_GVAL(IOV_PHY_RSSI_QDB_EN):
-			err = phy_ac_rssi_get_qdb_en(pi->u.pi_acphy->rssii, ret_int_ptr);
+			*ret_int_ptr = data->rssi_qdB_en;
 			break;
 
 		case IOV_SVAL(IOV_PHY_RXGAIN_RSSI):
-			pi->u.pi_acphy->rxgaincal_rssical = (bool)int_val;
+			err = phy_ac_rssi_set_cal_rxgain(rssii, (bool) int_val);
 			break;
 
 		case IOV_GVAL(IOV_PHY_RXGAIN_RSSI):
-			*ret_int_ptr = pi->u.pi_acphy->rxgaincal_rssical;
+			*ret_int_ptr = data->rxgaincal_rssical;
 			break;
 
 		default:

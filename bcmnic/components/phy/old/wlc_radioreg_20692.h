@@ -17,7 +17,7 @@
  *
  *  $ ./merge_regs.py --always-add-macro --max 70 --macro (rev) --compare-template (RADIO20692_MAJORREV(rev) >= ${ver}) --non-register-regex JTAG_ --extended-version-checks RF_20692_REV_ID -o /projects/hnd_phy_mob/sreenu/43430/driver/src/wl/phy/wlc_radioreg_20692.h ./data/radio_regs/20692_majorrev0_registers.h
  *
- * $Id: wlc_radioreg_20692.h 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: wlc_radioreg_20692.h 606042 2015-12-14 06:21:23Z $
  */
 /* FILE-CSTYLED */
 

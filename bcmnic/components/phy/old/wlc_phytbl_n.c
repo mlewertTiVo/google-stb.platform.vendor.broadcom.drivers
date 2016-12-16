@@ -17,7 +17,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  * All Rights Reserved.
  *
- * $Id: wlc_phytbl_n.c 606042 2015-12-14 06:21:23Z jqliu $
+ * $Id: wlc_phytbl_n.c 606042 2015-12-14 06:21:23Z $
  */
 /* FILE-CSTYLED */
 

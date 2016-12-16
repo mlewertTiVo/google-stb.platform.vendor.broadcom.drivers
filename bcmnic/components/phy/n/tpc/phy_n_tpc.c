@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_tpc.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_n_tpc.c 659961 2016-09-16 18:46:01Z $
  */
 
 #include <typedefs.h>
@@ -52,10 +52,16 @@ static bool phy_n_tpc_hw_ctrl_get(phy_type_tpc_ctx_t *ctx);
 static void phy_n_tpc_set(phy_type_tpc_ctx_t *ctx, ppr_t *reg_pwr);
 static void phy_n_tpc_set_flags(phy_type_tpc_ctx_t *ctx, phy_tx_power_t *power);
 static void phy_n_tpc_set_max(phy_type_tpc_ctx_t *ctx, phy_tx_power_t *power);
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-static int phy_n_tpc_set_pavars(phy_type_tpc_ctx_t *ctx, void* a, void* p);
-static int phy_n_tpc_get_pavars(phy_type_tpc_ctx_t *ctx, void* a, void* p);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+static void phy_n_tpc_ipa_upd(phy_type_tpc_ctx_t *ctx);
+static bool phy_n_tpc_ipa_ison(phy_type_tpc_ctx_t *ctx);
+static int
+phy_n_tpc_get_est_pout(phy_type_tpc_ctx_t *ctx,
+	uint8* est_Pout, uint8* est_Pout_adj, uint8* est_Pout_cck);
+static void phy_n_tpc_set_hw_ctrl(phy_type_tpc_ctx_t *ctx, bool hwpwrctrl);
+static void phy_n_tpc_copy_ofdm_to_mcs_powers(ppr_ofdm_rateset_t* ofdm_limits,
+	ppr_ht_mcs_rateset_t* mcs_limits);
+static void phy_n_tpc_copy_mcs_to_ofdm_powers(ppr_ht_mcs_rateset_t* mcs_limits,
+	ppr_ofdm_rateset_t* ofdm_limits);
 
 /* Register/unregister NPHY specific implementation to common layer */
 phy_n_tpc_info_t *
@@ -86,11 +92,13 @@ BCMATTACHFN(phy_n_tpc_register_impl)(phy_info_t *pi, phy_n_info_t *ni, phy_tpc_i
 	fns.set = phy_n_tpc_set;
 	fns.setflags = phy_n_tpc_set_flags;
 	fns.setmax = phy_n_tpc_set_max;
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-	fns.set_pavars = phy_n_tpc_set_pavars;
-	fns.get_pavars = phy_n_tpc_get_pavars;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+	fns.ipa_upd = phy_n_tpc_ipa_upd;
+	fns.ipa_ison = phy_n_tpc_ipa_ison;
+	fns.get_est_pout = phy_n_tpc_get_est_pout;
+	fns.set_hwctrl = phy_n_tpc_set_hw_ctrl;
 	fns.ctx = info;
+
+	phy_n_tpc_ipa_upd(info);
 
 	phy_tpc_register_impl(ti, &fns);
 
@@ -153,7 +161,7 @@ wlc_phy_txpower_recalc_target_n_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_targe
 		 */
 		ppr_set_cmn_val(tx_pwr_target, info->ti->data->tx_user_target);
 
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(WL_EXPORT_TXPOWER)
+#if defined(WL_EXPORT_TXPOWER)
 		/* Only allow tx power override for internal or test builds. */
 		if (!info->ti->data->txpwroverride)
 #endif
@@ -254,9 +262,6 @@ wlc_phy_txpower_recalc_target_n_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_targe
 	 * PHY_ERROR(("#####The final power offset limit########\n"));
 	 * ppr_mcs_printf(pi->tx_power_offset);
 	 */
-	ppr_delete(pi->sh->osh, reg_txpwr_limit);
-	ppr_delete(pi->sh->osh, tx_pwr_target);
-	ppr_delete(pi->sh->osh, srom_max_txpwr);
 	/* Common Code End */
 }
 
@@ -341,7 +346,7 @@ wlc_phy_txpwr_apply_srom8(phy_info_t *pi, uint8 band,
 
 
 		/* for 20MHz Mapping Legacy OFDM SISo to MCS0-7 SISO */
-		wlc_phy_copy_ofdm_to_mcs_powers(&ofdm20_offset_siso, &mcs20_offset_siso);
+		phy_n_tpc_copy_ofdm_to_mcs_powers(&ofdm20_offset_siso, &mcs20_offset_siso);
 
 		/* for mcs_20IN20 SISO: S1x1  */
 		wlc_phy_ppr_set_mcs_srom8(tx_srom_max_pwr, WL_TX_BW_20, WL_TX_NSS_1,
@@ -365,7 +370,7 @@ wlc_phy_txpwr_apply_srom8(phy_info_t *pi, uint8 band,
 		}
 
 		/* for 20MHz Mapping MCS0-7 CDD to Legacy OFDM CDD  */
-		wlc_phy_copy_mcs_to_ofdm_powers(&mcs20_offset_cdd, &ofdm20_offset_cdd);
+		phy_n_tpc_copy_mcs_to_ofdm_powers(&mcs20_offset_cdd, &ofdm20_offset_cdd);
 
 		if (PHYCORENUM(pi->pubpi->phy_corenum) > 1) {
 			/* for ofdm_20IN20 CDD:  S1x2  */
@@ -437,7 +442,7 @@ wlc_phy_txpwr_apply_srom8(phy_info_t *pi, uint8 band,
 			WL_TX_MODE_NONE, WL_TX_CHAINS_1, &mcs40_offset_siso);
 
 		/* for 40MHz Mapping MCS0-7 SISO to Legacy OFDM SISO	*/
-		wlc_phy_copy_mcs_to_ofdm_powers(&mcs40_offset_siso, &ofdm40_offset_siso);
+		phy_n_tpc_copy_mcs_to_ofdm_powers(&mcs40_offset_siso, &ofdm40_offset_siso);
 
 		/* for ofdm_40 SISO: S1x1, */
 		wlc_phy_ppr_set_ofdm_srom8(tx_srom_max_pwr, WL_TX_BW_40, WL_TX_MODE_NONE,
@@ -464,7 +469,7 @@ wlc_phy_txpwr_apply_srom8(phy_info_t *pi, uint8 band,
 				WL_TX_NSS_1, WL_TX_MODE_CDD, WL_TX_CHAINS_2, &mcs40_offset_cdd);
 		}
 		/* for 40MHz Mapping MCS0-7 CDD to Legacy OFDM CDD	*/
-		wlc_phy_copy_mcs_to_ofdm_powers(&mcs40_offset_cdd, &ofdm40_offset_cdd);
+		phy_n_tpc_copy_mcs_to_ofdm_powers(&mcs40_offset_cdd, &ofdm40_offset_cdd);
 
 		if (PHYCORENUM(pi->pubpi->phy_corenum) > 1) {
 			/* for ofdm_40 CDD: S1x2, */
@@ -509,6 +514,22 @@ wlc_phy_txpwr_apply_srom8(phy_info_t *pi, uint8 band,
 	}
 }
 #endif /* Compiling out sromrev 8 code for 4324 */
+
+static void phy_n_tpc_ipa_upd(phy_type_tpc_ctx_t *ctx)
+{
+	phy_n_tpc_info_t *info = (phy_n_tpc_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+	pi->ipa2g_on = (pi->fem2g->extpagain == 2);
+	pi->ipa5g_on = (pi->fem5g->extpagain == 2);
+}
+
+static bool
+phy_n_tpc_ipa_ison(phy_type_tpc_ctx_t *ctx)
+{
+	phy_n_tpc_info_t *tpc_info = (phy_n_tpc_info_t *) ctx;
+	BCM_REFERENCE(tpc_info);
+	return PHY_IPA(tpc_info->pi);
+}
 
 static void
 wlc_phy_txpower_sromlimit_get_nphy(phy_type_tpc_ctx_t *ctx, chanspec_t chanspec, ppr_t *max_pwr,
@@ -644,8 +665,8 @@ static void phy_n_tpc_reg_limit_calc(phy_type_tpc_ctx_t *ctx, ppr_t *txpwr,
 
 		ppr_get_ht_mcs(txpwr, bw, WL_TX_NSS_1, mode, chains, mcs_limits);
 		ppr_get_ofdm(txpwr, bw, mode, chains, &ofdm_limits);
-		wlc_phy_copy_mcs_to_ofdm_powers(mcs_limits, &ofdm_from_mcs_limits);
-		wlc_phy_copy_ofdm_to_mcs_powers(&ofdm_limits, &mcs_from_ofdm_limits);
+		phy_n_tpc_copy_mcs_to_ofdm_powers(mcs_limits, &ofdm_from_mcs_limits);
+		phy_n_tpc_copy_ofdm_to_mcs_powers(&ofdm_limits, &mcs_from_ofdm_limits);
 
 		for (i = 0; i < WL_RATESET_SZ_OFDM; i++) {
 			if (ofdm_from_mcs_limits.pwr[i] == WL_RATE_DISABLED)
@@ -713,55 +734,128 @@ phy_n_tpc_set_max(phy_type_tpc_ctx_t *ctx, phy_tx_power_t *power)
 	}
 }
 
-#if (defined(BCMINTERNAL) || defined(WLTEST))
+
 static int
-phy_n_tpc_set_pavars(phy_type_tpc_ctx_t *ctx, void *a, void *p)
+phy_n_tpc_get_est_pout(phy_type_tpc_ctx_t *ctx,
+	uint8* est_Pout, uint8* est_Pout_adj, uint8* est_Pout_cck)
 {
-	phy_n_tpc_info_t *tpci = (phy_n_tpc_info_t *)ctx;
-	uint16 inpa[WL_PHY_PAVARS_LEN];
-	uint j = 3; /* PA parameters start from offset 3 */
-	srom_pwrdet_t *pwrdet = tpci->pi->pwrdet;
+	phy_n_tpc_info_t *tpc_info = (phy_n_tpc_info_t *) ctx;
+	phy_info_t *pi = tpc_info->pi;
 
-	bcopy(p, inpa, sizeof(inpa));
+	uint32 est_pout;
 
-	if (inpa[0] != PHY_TYPE_N) {
-		return BCME_BADARG;
-	}
+	*est_Pout_cck = 0;
 
-	if (inpa[2] > 1) {
-		return BCME_BADARG;
-	}
+	/* fill the est_Pout array */
 
-	pwrdet->pwrdet_a1[inpa[2]][inpa[1]] = inpa[j++];
-	pwrdet->pwrdet_b0[inpa[2]][inpa[1]] = inpa[j++];
-	pwrdet->pwrdet_b1[inpa[2]][inpa[1]] = inpa[j++];
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+	phy_utils_phyreg_enter(pi);
+	if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3))
+		est_pout = wlc_phy_txpower_est_power_lcnxn_rev3(pi);
+	else
+		est_pout = wlc_phy_txpower_est_power_nphy(pi);
+	phy_utils_phyreg_exit(pi);
+	wlapi_enable_mac(pi->sh->physhim);
+
+	/* Store the adjusted  estimated powers */
+	est_Pout_adj[0] = (est_pout >> 8) & 0xff;
+	est_Pout_adj[1] = est_pout & 0xff;
+
+	/* Store the actual estimated powers without adjustment */
+	est_Pout[0] = est_pout >> 24;
+	est_Pout[1] = (est_pout >> 16) & 0xff;
+
+	/* if invalid, return 0 */
+	if (est_Pout[0] == 0x80)
+		est_Pout[0] = 0;
+	if (est_Pout[1] == 0x80)
+		est_Pout[1] = 0;
+
+	/* if invalid, return 0 */
+	if (est_Pout_adj[0] == 0x80)
+		est_Pout_adj[0] = 0;
+	if (est_Pout_adj[1] == 0x80)
+		est_Pout_adj[1] = 0;
 
 	return BCME_OK;
 }
 
-static int
-phy_n_tpc_get_pavars(phy_type_tpc_ctx_t *ctx, void *a, void *p)
+static void
+phy_n_tpc_set_hw_ctrl(phy_type_tpc_ctx_t *ctx, bool hwpwrctrl)
 {
-	phy_n_tpc_info_t *tpci = (phy_n_tpc_info_t *)ctx;
-	uint16 *outpa = a;
-	uint16 inpa[WL_PHY_PAVARS_LEN];
-	uint j = 3; /* PA parameters start from offset 3 */
-	srom_pwrdet_t *pwrdet = tpci->pi->pwrdet;
+	phy_n_tpc_info_t *tpc_info = (phy_n_tpc_info_t *) ctx;
+	phy_info_t *pi = tpc_info->pi;
+	bool suspend;
 
-	bcopy(p, inpa, sizeof(inpa));
+	suspend = !(R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC);
+	if (!suspend)
+		wlapi_suspend_mac_and_wait(pi->sh->physhim);
 
-	outpa[0] = inpa[0]; /* Phy type */
-	outpa[1] = inpa[1]; /* Band range */
-	outpa[2] = inpa[2]; /* Chain */
-
-	if (inpa[0] != PHY_TYPE_N) {
-		outpa[0] = PHY_TYPE_NULL;
-		return BCME_BADARG;
+	/* turn on/off power control */
+	wlc_phy_txpwrctrl_enable_nphy(pi, pi->nphy_txpwrctrl);
+	if (pi->nphy_txpwrctrl == PHY_TPC_HW_OFF) {
+		wlc_phy_txpwr_fixpower_nphy(pi);
+	} else {
+		/* restore the starting txpwr index */
+		phy_utils_mod_phyreg(pi, NPHY_TxPwrCtrlCmd,
+			NPHY_TxPwrCtrlCmd_pwrIndex_init_MASK, pi->saved_txpwr_idx);
 	}
-	outpa[j++] = pwrdet->pwrdet_a1[inpa[2]][inpa[1]];	/* a1 */
-	outpa[j++] = pwrdet->pwrdet_b0[inpa[2]][inpa[1]];	/* b0 */
-	outpa[j++] = pwrdet->pwrdet_b1[inpa[2]][inpa[1]];	/* b1 */
 
-	return BCME_OK;
+	if (!suspend)
+		wlapi_enable_mac(pi->sh->physhim);
 }
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+
+/* The following two functions phy_n_tpc_copy_ofdm_to_mcs_powers() and
+ * phy_n_tpc_copy_mcs_to_ofdm_powers() make use of the following mapping between the
+ * constellation/coding rates of Legacy OFDM (11a/g) and 11n rates:
+ *
+ * -----------------------------------------------------------------
+ * Constellation and coding rate        Legacy Rate     HT-OFDM rate
+ * -----------------------------------------------------------------
+ * BPSK, code rate 1/2			6 Mbps		mcs-0
+ * BPSK, code rate 3/4			9 Mbps		Not used
+ * QPSK, code rate 1/2			12 Mbps		mcs-1
+ * QPSK, code rate 3/4			18 Mbps		mcs-2
+ * 16 QAM, code rate 1/2		24 Mbps		mcs-3
+ * 16 QAM, code rate 3/4		36 Mbps		mcs-4
+ * 64 QAM, rate 2/3			48 Mbps		mcs-5
+ * 64 QAM rate 3/4			54 Mbps		mcs-6
+ * 64 QAM, rate 5/6			Not used	mcs-7
+ * -----------------------------------------------------------------
+ */
+
+/* Map Legacy OFDM powers-per-rate to MCS 0-7 powers-per-rate by matching the
+ * constellation and coding rate of the corresponding Legacy OFDM and MCS rates. The power
+ * of 9 Mbps Legacy OFDM is used for MCS-0 (same as 6 Mbps power) since no equivalent
+ * of 9 Mbps exists in the 11n standard in terms of constellation and coding rate.
+ */
+static void
+phy_n_tpc_copy_ofdm_to_mcs_powers(ppr_ofdm_rateset_t* ofdm_limits,
+	ppr_ht_mcs_rateset_t* mcs_limits)
+{
+	uint rate1;
+	uint rate2;
+
+	for (rate1 = 0, rate2 = 1; rate1 < WL_RATESET_SZ_OFDM-1; rate1++, rate2++) {
+		mcs_limits->pwr[rate1] = ofdm_limits->pwr[rate2];
+	}
+	mcs_limits->pwr[rate1] = mcs_limits->pwr[rate1 - 1];
+}
+
+/* Map MCS 0-7 powers-per-rate to Legacy OFDM powers-per-rate by matching the
+ * constellation and coding rate of the corresponding Legacy OFDM and MCS rates. The power
+ * of 9 Mbps Legacy OFDM is set to the power of MCS-0 (same as 6 Mbps power) since no equivalent
+ * of 9 Mbps exists in the 11n standard in terms of constellation and coding rate.
+ */
+static void
+phy_n_tpc_copy_mcs_to_ofdm_powers(ppr_ht_mcs_rateset_t* mcs_limits,
+	ppr_ofdm_rateset_t* ofdm_limits)
+{
+	uint rate1;
+	uint rate2;
+
+	ofdm_limits->pwr[0] = mcs_limits->pwr[0];
+	for (rate1 = 1, rate2 = 0; rate1 < WL_RATESET_SZ_OFDM; rate1++, rate2++) {
+		ofdm_limits->pwr[rate1] = mcs_limits->pwr[rate2];
+	}
+}

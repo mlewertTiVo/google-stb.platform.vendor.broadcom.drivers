@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_rssi.c 646150 2016-06-28 17:04:40Z jqliu $
+ * $Id: phy_n_rssi.c 663069 2016-10-04 01:20:17Z $
  */
 
 #include <typedefs.h>
@@ -29,6 +29,8 @@
 #include <phy_rssi_iov.h>
 #include <phy_utils_reg.h>
 #include <wlc_phyreg_n.h>
+#include <phy_stf.h>
+#include <phy_noise_api.h>
 
 #ifndef ALL_NEW_PHY_MOD
 /* < TODO: all these are going away... */
@@ -53,10 +55,6 @@ static int phy_n_rssi_dump(phy_type_rssi_ctx_t *ctx, struct bcmstrbuf *b);
 #else
 #define phy_n_rssi_dump NULL
 #endif
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int phy_n_rssi_get_pkteng_stats(phy_type_rssi_ctx_t *ctx, void *a, int alen,
-	wl_pkteng_stats_t stats);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 static int phy_n_rssi_set_gain_delta_2g(phy_type_rssi_ctx_t *ctx, uint32 aid, int8 *deltaValues);
 static int phy_n_rssi_get_gain_delta_2g(phy_type_rssi_ctx_t *ctx, uint32 aid, int8 *deltaValues);
 static int phy_n_rssi_set_gain_delta_5g(phy_type_rssi_ctx_t *ctx, uint32 aid, int8 *deltaValues);
@@ -86,9 +84,6 @@ BCMATTACHFN(phy_n_rssi_register_impl)(phy_info_t *pi, phy_n_info_t *ni, phy_rssi
 	fns.compute = phy_n_rssi_compute;
 	fns.init_gain_err = _phy_n_rssi_init_gain_err;
 	fns.dump = phy_n_rssi_dump;
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	fns.get_pkteng_stats = phy_n_rssi_get_pkteng_stats;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 	fns.set_gain_delta_2g = phy_n_rssi_set_gain_delta_2g;
 	fns.get_gain_delta_2g = phy_n_rssi_get_gain_delta_2g;
 	fns.set_gain_delta_5g = phy_n_rssi_set_gain_delta_5g;
@@ -133,6 +128,9 @@ phy_n_rssi_compute(phy_type_rssi_ctx_t *ctx, wlc_d11rxhdr_t *wrxh)
 	int32 rssi = 0;
 	int32 ii;
 	uint8 core = 0;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
 
 	/* mode = 0: rxpwr = max(rxpwr0, rxpwr1)
 	 * mode = 1: rxpwr = min(rxpwr0, rxpwr1)
@@ -163,18 +161,17 @@ phy_n_rssi_compute(phy_type_rssi_ctx_t *ctx, wlc_d11rxhdr_t *wrxh)
 	/* only 2 antennas are valid for now */
 	wrxh->rxpwr[0] = (int8)rxpwr0;
 	wrxh->rxpwr[1] = (int8)rxpwr1;
-	wrxh->do_rssi_ma = 0;
 
 	if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 4) && (!CHIPID_4324X_MEDIA_FAMILY(pi))) {
 		rxpwr = wlc_phy_swrssi_compute_nphy(pi, &rxpwr0, &rxpwr1);
 		wrxh->rxpwr[0] = (int8)rxpwr0;
 		wrxh->rxpwr[1] = (int8)rxpwr1;
 	} else {
-		if (pi->sh->phyrxchain == 0x1)
+		if (stf_shdata->phyrxchain == 0x1)
 			rxpwr = rxpwr0;
-		else if (pi->sh->phyrxchain == 0x2)
+		else if (stf_shdata->phyrxchain == 0x2)
 			rxpwr = rxpwr1;
-		else if (pi->sh->phyrxchain == pi->sh->hw_phyrxchain) {
+		else if (stf_shdata->phyrxchain == stf_shdata->hw_phyrxchain) {
 			if (CHIPID(pi->sh->chip) == BCM43239_CHIP_ID) {
 				core = (phy_utils_read_phyreg(pi,
 					NPHY_debugReg104L) & 0Xff);
@@ -293,49 +290,6 @@ phy_n_rssi_dump(phy_type_rssi_ctx_t *ctx, struct bcmstrbuf *b)
 }
 #endif /* BCMDBG || BCMDBG_DUMP */
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int
-phy_n_rssi_get_pkteng_stats(phy_type_rssi_ctx_t *ctx, void *a, int alen, wl_pkteng_stats_t stats)
-{
-	phy_n_rssi_info_t *rssii = (phy_n_rssi_info_t *)ctx;
-	phy_info_t *pi = rssii->pi;
-	uint16 rxstats_base;
-	int i;
-
-	if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 4) &&
-		(!CHIPID_4324X_MEDIA_FAMILY(pi))) {
-		int16 rxpwr0, rxpwr1;
-		rxpwr0 = R_REG(pi->sh->osh, &pi->regs->rssi) & 0xff;
-		rxpwr1 = (R_REG(pi->sh->osh, &pi->regs->rssi) >> 8) & 0xff;
-		/* Sign extend */
-		if (rxpwr0 > 127) {
-			rxpwr0 -= 256;
-		}
-		if (rxpwr1 > 127) {
-			rxpwr1 -= 256;
-		}
-		stats.rssi = wlc_phy_swrssi_compute_nphy(pi, &rxpwr0, &rxpwr1);
-	} else {
-		stats.rssi = R_REG(pi->sh->osh, &pi->regs->rssi) & 0xff;
-		if (stats.rssi > 127) {
-			stats.rssi -= 256;
-		}
-	}
-	stats.snr = stats.rssi - PHY_NOISE_FIXED_VAL_NPHY;
-
-	/* rx pkt stats */
-	rxstats_base = wlapi_bmac_read_shm(pi->sh->physhim, M_RXSTATS_BLK_PTR(pi));
-	for (i = 0; i <= NUM_80211_RATES; i++) {
-		stats.rxpktcnt[i] =
-			wlapi_bmac_read_shm(pi->sh->physhim, 2*(rxstats_base+i));
-	}
-
-	bcopy(&stats, a,
-		(sizeof(wl_pkteng_stats_t) < (uint)alen) ? sizeof(wl_pkteng_stats_t) : (uint)alen);
-
-	return BCME_OK;
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 
 static int
 phy_n_rssi_set_gain_delta_2g(phy_type_rssi_ctx_t *ctx, uint32 aid, int8 *deltaValues)

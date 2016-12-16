@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_vcocal_iov.c 619527 2016-02-17 05:54:49Z renukad $
+ * $Id: phy_vcocal_iov.c 658512 2016-09-08 07:03:22Z $
  */
 
 #include <phy_vcocal_iov.h>
@@ -20,35 +20,31 @@
 #include <wlc_iocv_reg.h>
 
 static const bcm_iovar_t phy_vcocal_iovars[] = {
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	{"phy_vcocal", IOV_PHY_VCOCAL, (IOVF_SET_UP | IOVF_MFG), 0, IOVT_UINT8, 0},
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 	{NULL, 0, 0, 0, 0, 0}
 };
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 static int
 phy_vcocal_doiovar(void *ctx, uint32 aid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
 {
-#if defined(BCMINTERNAL) || defined(WLTEST)
 	phy_info_t *pi = (phy_info_t *)ctx;
 	int err = BCME_OK;
 
-	switch (aid) {
-	case IOV_GVAL(IOV_PHY_VCOCAL):
-	case IOV_SVAL(IOV_PHY_VCOCAL):
-		phy_vcocal_force(pi);
-		break;
+	BCM_REFERENCE(pi);
 
+	switch (aid) {
 	default:
-		err = BCME_UNSUPPORTED;
+		err = BCME_OK;
 		break;
 	}
 
 	return err;
-#else
-	return BCME_UNSUPPORTED;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
 }
 
 /* register iovar table to the system */

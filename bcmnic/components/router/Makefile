@@ -18,7 +18,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 642882 2016-06-10 13:59:23Z $
+# $Id: Makefile 665479 2016-10-18 03:46:46Z $
 #
 
 ifneq (true,$(parallel))
@@ -244,7 +244,9 @@ ifeq ($(CONFIG_TRAFFIC_MGMT_RSSI_POLICY),y)
 export CFLAGS += -DTRAFFIC_MGMT_RSSI_POLICY
 endif
 
+#if !defined(BCMDBG)
 obj-$(CONFIG_UTELNETD) += utelnetd
+#endif
 
 MNL_CFLAGS:="-I$(LIBMNL_DIR)/install/include"
 MNL_LIBS:="-L$(LIBMNL_DIR)/install/lib -lmnl"
@@ -332,6 +334,10 @@ ifeq ($(LINUX_VERSION),2_6_36)
 ifeq ($(CONFIG_BCMASPMD),y)
 export CFLAGS += -DBCM_ASPMD
 endif
+endif
+
+ifeq ($(CONFIG_FBT),y)
+export	CFLAGS += -DWLHOSTFBT
 endif
 
 export CC := $(CROSS_COMPILE)gcc
@@ -445,8 +451,14 @@ obj-$(CONFIG_WL_ACI) += aci
 ifeq (2_6,$(LINUX_VERSION))
 obj-y += udev
 obj-y += hotplug2
+#if defined(BCMDBG)
+obj-$(CONFIG_NVRAM) += crashlog
+#endif
 endif
 obj-$(CONFIG_LLD2D) += lltd/wrt54g-linux
+#if defined(BCMDBG)
+obj-$(CONFIG_UTELNETD) += utelnetd
+#endif
 #if defined(ENVRAM)
 obj-$(CONFIG_ENVRAM_UTILITY) += envram
 #endif
@@ -561,6 +573,7 @@ endif
 export CONFIG_MFP
 export CONFIG_HSPOT
 export CONFIG_WNM
+export CONFIG_FBT
 
 all: version check_kernel_config obj_prelibs
 	+$(MAKE) $(MAKE_ARGS) post_preplibs
@@ -693,7 +706,7 @@ ifneq (2_4,$(LINUX_VERSION))
 else
 	$(MAKE) -C $(LINUXDIR) $(SUBMAKE_SETTINGS) clean
 endif
-	$(MAKE) -C $(SRCBASE)/cfe/build/broadcom/bcm947xx ARCH=$(ARCH) clean
+	$(MAKE) -C $(BASEDIR)/components/cfe/build/broadcom/bcm947xx ARCH=$(ARCH) clean
 	[ ! -f $(SRCBASE)/tools/misc/Makefile ] || $(MAKE) -C $(SRCBASE)/tools/misc clean
 
 distclean mrproper: clean
@@ -1042,7 +1055,11 @@ endif
 ifeq ($(WLTEST),1)
 BMAC_FIRM =ag-nodis-mfgtest
 else
+#ifdef BCMDBG
+BMAC_FIRM =ag-nodis-debug
+#else
 BMAC_FIRM =ag-nodis
+#endif
 endif
 
 DNGLBLDDIR := $(SRCBASE)/../build/dongle

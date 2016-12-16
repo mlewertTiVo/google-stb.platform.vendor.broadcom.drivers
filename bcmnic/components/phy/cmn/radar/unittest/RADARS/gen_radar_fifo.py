@@ -11,6 +11,25 @@ import numpy as np
 import sys,os
 import random
 import copy
+from optparse import OptionParser,OptionValueError
+
+description = "Parses case file and returns case numbers that match re argumenets"
+
+parser = OptionParser(usage = "usage: %prog [options] arg1 arg2", description=description)
+
+parser.add_option("-v", "--version",
+                  dest="version", default=1, type=int,
+                  help = "PHY version to emulate",
+                  action="store")
+ 
+parser.add_option("-s", "--seed",
+                  dest = "seed", default = 1, type = int,
+                  help = "Seed for random number generator",
+                  action="store")
+
+(options, args) = parser.parse_args()
+
+
 
 def FCCRoundUp(I): return np.ceil(19e6/360./I)
 
@@ -21,7 +40,23 @@ def midN(A,N,S=1):
     #print A.size,mid,N,S, range(mid-d, mid+d+S, S)
     return  A[range(mid-d, mid+d+S, S)]
 
-maxpulses = 128
+
+PHYINFO = {
+1: {'FIFO_SIZE':512, 'wordsperpulse':4},
+2: {'FIFO_SIZE':512, 'wordsperpulse':6}
+}
+
+if options.version==1:  fprefix = "radar" 
+else:  fprefix = "radar%d" %options.version
+
+FIFO_SIZE = PHYINFO[options.version]['FIFO_SIZE']
+wordsperpulse = PHYINFO[options.version]['wordsperpulse']
+maxpulses = np.floor(FIFO_SIZE/wordsperpulse)
+# Temp fix to ensure identical common data for both phy revs.
+# Generating different num of pulses causes randomness to vary for the variables adjusted.
+# Not a valid fix when uncommon data makes calls to random.
+maxpulses = 128  
+
 
 BRI_default = int(3/20.*1e6) # must be  > 75ms and < 3/20sec
 # Provide some variation on TOA and PW measurement between antennas/cores
@@ -146,14 +181,13 @@ rspec['kor-4'] = { 'PW':[[],[1],[]],     'PRI':[[],[333],[]],  'NP':[[],[0,0,0,3
 
 
 
-pulsedesc = np.dtype([('T0', 'uint32'), ('T2', 'uint16'), ('FM', 'uint16') ])
-pulses = np.rec.array(np.zeros(shape=(maxpulses,)), dtype=pulsedesc )
-fifo = np.zeros(shape=(maxpulses, 4), dtype=np.dtype('uint16'))
-
+pulsedesc = np.dtype([('T0', 'uint32'), ('T2', 'uint16'), ('FM', 'uint16') , ('FC', 'uint16'), ('CHIRP', 'uint16'), ('TIMENOTRADAR', 'uint16') ])
+pulses = np.zeros(shape=(maxpulses,), dtype=pulsedesc )
+fifo = np.zeros(shape=(maxpulses, wordsperpulse), dtype=np.dtype('uint16'))
 
 bw = 20
 ant = 0
-rlog = open('radar-gen.log', 'wb')
+rlog = open('%s-gen.log' %fprefix, 'wb')
 
 
 
@@ -250,10 +284,13 @@ for r in rdrs:
   random.seed(int(radarsgen[r]['seed']))
   np.random.seed(int(radarsgen[r]['seed']))
  else:
-  random.seed(int(sys.argv[1]))
-  np.random.seed(int(sys.argv[1]))
+  random.seed(options.seed)
+  np.random.seed(options.seed)
  for bw in [ 20, 40, 80]:
-   bwk = (bw/20)
+   if options.version == 1:
+       bwk = (bw/20)
+   else:
+       bwk = 1
    # Ensure near identical pulse patterns are seen by each antenna
    STAG_N = 1
    STAG_PAT = ''
@@ -264,13 +301,26 @@ for r in rdrs:
     STAGPRI = random.sample(radarsgen[r]['PRI'], STAG_N)
    else:
     PRI = random.choice(radarsgen[r]['PRI'])
-   toa_start = np.random.randint(1<<32) + noise
+   # toa in units of time. 
+   # Is converted to clock counts in 'T0'
+   # FIXME: No mechanism/testing of/for overflow 
+   # Allow 12 bits for scaling to clock counts and num_pulses*PRI/BRI
+   toa_start = np.random.randint(1<<20)
+   print r,"0x%x" %toa_start
    for ant in range(2):
     # print r,bw,ant
     burst_start = toa = toa_start
     T0 = []
     T2 = []
     FM = []
+    # NEW measurements  4366c0 160MHz ++
+    FC = []  
+    CHIRP = []
+    TIMENOTRADAR = []
+    fc = 0x012
+    chirp =  9 # FIXME Temporary values
+    timenotradar = 500 #  FIXME Temporary values
+    #
     pcnt = 0
     PRF_CNT = 0
     PW = random.choice(radarsgen[r]['PW'])
@@ -282,7 +332,8 @@ for r in rdrs:
         if 'FM' in radarsgen[r].keys():
           fm = int(random.choice(radarsgen[r]['FM'])) # FM det tends to limit. Scaling non-sensical.
         else:
-          fm = np.random.randint(206,256) # FW filters pulses  if  '< -50' or (uint)206-256
+          fm = np.random.randint(257,400) # FW filters pulses  if  '< 0' or (uint)206-256. Now 1..114  
+          #fm = np.random.randint(206,256) # FW filters pulses  if  '< 0' or (uint)206-256.
         # TONEDETECTION = 1 always so table values are offset 256
         if STAG_PAT== 'alt':
           PRI = STAGPRI[pcnt % STAG_N]
@@ -293,9 +344,14 @@ for r in rdrs:
         else:
           print "ERROR: STAG_PAT? for %s" %r
           exit(-1)
-        T0.append(toa*bw + np.random.randint(-noise,noise+1)) # assume sampling at BW(MHz)
-        T2.append(PW*bw + np.random.randint(-noise,noise+1))
+        T0.append(toa*20*bwk + bwk*np.random.randint(-noise,noise+1)) # assume sampling at BW(MHz)
+        T2.append(PW*20*bwk + bwk*np.random.randint(-noise,noise+1))
         FM.append(fm)
+        # NEW measurements  4366c0 160MHz ++
+        FC.append(fc)
+        CHIRP.append(chirp)
+        TIMENOTRADAR.append(timenotradar)
+
         # rlog.write( "%s: TOA: %d,Pulse: %d, PW: %d, PRI: %d, NP: %d, FM: %d\n" %(r, toa,pcnt, PW,PRI, NP,fm) )
         pcnt += 1
         toa += PRI
@@ -322,7 +378,12 @@ for r in rdrs:
     pulses['T0'] = np.array(T0, dtype=np.dtype('uint32'))
     pulses['T2'] = np.array(T2, dtype=np.dtype('uint16'))
     pulses['FM'] = np.array(FM, dtype=np.dtype('uint16'))
-    ff = open( "radar_%s_bw%d_ant%d.bin" %(r,bw,ant), 'wb' )
+    # New stuff version 2
+    pulses['FC'] = np.array(FC, dtype=np.dtype('uint16'))
+    pulses['CHIRP'] = np.array(CHIRP, dtype=np.dtype('uint16'))
+    pulses['TIMENOTRADAR'] = np.array(TIMENOTRADAR, dtype=np.dtype('uint16'))
+    #
+    ff = open( "%s_%s_bw%d_ant%d.bin" %(fprefix,r,bw,ant), 'wb' )
     # pack fifo using T0 T2 and FM
     # (bits High to Low)
     # First Word:	Time0[31:16]
@@ -332,7 +393,15 @@ for r in rdrs:
     fifo[:,0] = (pulses['T0'] & 0xffff0000) >> 16
     fifo[:,1] = (pulses['T2'] & 0xF )<<12 | (pulses['T0'] & 0xFFF0) >> 4
     fifo[:,2] = (pulses['FM'] & 0xFF )<<8 | (pulses['T2'] & 0xFF0) >> 4
-    fifo[:,3] = (pulses['FM'] & 0x100 )>>3 | (pulses['T2'] & 0x1000) >> 8 | (pulses['T0'] & 0xF)
+    if options.version == 1:
+        fifo[:,3] = (pulses['FM'] & 0x100 )>>3 | (pulses['T2'] & 0x1000) >> 8 | (pulses['T0'] & 0xF)
+    elif options.version == 2:
+        fifo[:,3] = (pulses['FM'] & 0x100 )>>3 | (pulses['T2'] & 0x1000) >> 8 | (pulses['T0'] & 0xF) | (pulses['CHIRP'] & 0x1FF) << 6
+        fifo[:,4] =  pulses['FC'] & 0x01FF
+        fifo[:,5] =  (pulses['TIMENOTRADAR'] & 0x01FFF) << 3
+    else:
+        print "Unknown version to pack into FIFO" # Should never get here anyway!
+        exit()
     ff.write(np.ravel(fifo).tostring())
     ff.close()
 rlog.close()

@@ -309,6 +309,10 @@ config CONFIG_NFC
        depends on CONFIG_NVRAM && CONFIG_SHARED && CONFIG_WPS
        default n
 
+config CONFIG_FBT
+       bool "FAST BSS Transition (802.11r FBT) support"
+       default n
+
 #ifdef BCMWFI
 config CONFIG_WFI
        bool "Wifi Invite Support"

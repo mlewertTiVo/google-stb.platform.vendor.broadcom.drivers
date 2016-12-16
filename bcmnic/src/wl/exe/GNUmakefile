@@ -12,7 +12,7 @@
 #
 #  <<Broadcom-WL-IPTag/Proprietary:>>
 #
-# $Id: GNUmakefile 645600 2016-06-24 19:13:41Z $
+# $Id: GNUmakefile 668064 2016-11-01 17:00:45Z $
 
 WLAN_ComponentsInUse := bcmwifi ppr
 ifeq ($(CONFIG_WLEXE),y)
@@ -100,7 +100,6 @@ endif
 
 ifneq ($(findstring $(TARGETENV), "linux linuxmips linuxmips_be linuxarm linuxarm_le android android_ndk_r6b freebsd freebsd_be"),)
 
-
 #ifdef WLP2P
   CFLAGS += -DWLP2P
 #endif
@@ -171,15 +170,11 @@ endif
 #endif
 
 #ifdef WL_NAN
-CFLAGS += -DWL_NAN
+#CFLAGS += -DWL_NAN
 #endif
 
 #ifdef WLRSDB
 CFLAGS += -DWLRSDB
-#endif
-
-#ifdef WL_NAN_PD_P2P
-CFLAGS += -DWL_NAN_PD_P2P
 #endif
 
 #ifdef WL_NATOE
@@ -199,6 +194,22 @@ CFLAGS += -DWLRCC
 #endif
 #ifdef WL_MBO
 CFLAGS += -DWL_MBO
+#endif
+#ifdef WL_MBO_WFA_CERT
+CFLAGS += -DWL_MBO_WFA_CERT
+#endif
+
+
+#ifdef ECOUNTERS
+  CFLAGS += -DECOUNTERS
+#endif
+
+#ifdef WLADPS
+CFLAGS += -DWLADPS
+#endif
+
+#ifdef WL_LEAKY_AP_STATS
+  CFLAGS += -DWL_LEAKY_AP_STATS
 #endif
 
 # extra warnings
@@ -267,9 +278,9 @@ endif
 endif
 # $(TARGETARCH) is set based on TARGETENV in src/Makerules.* files
 ifneq (,$(findstring freebsd, $(TARGETENV)))
-WL_OBJS      := wlu.o wlu_common.o wlu_bsd.o wlu_cmd.o wlu_iov.o wlu_rates_matrix.o miniopt.o bcmutils.o bcmwifi_channels.o bcm_app_utils.o wlc_ppr.o bcmxtlv.o bcmbloom.o sha256.o
+WL_OBJS      := wlu.o wlu_common.o wlu_bsd.o wlu_cmd.o wlu_iov.o wlu_rates_matrix.o miniopt.o bcmutils.o bcmwifi_channels.o bcm_app_utils.o wlc_ppr.o bcmxtlv.o bcmbloom.o sha256.o wlu_subcounters.o
 else
-WL_OBJS      := wlu.o wlu_common.o wlu_linux.o bcmutils.o bcmwifi_channels.o wlu_cmd.o wlu_iov.o wlu_client_shared.o wlu_pipe_linux.o wlu_pipe.o miniopt.o bcm_app_utils.o wlu_rates_matrix.o wlc_ppr.o bcmxtlv.o bcmbloom.o sha256.o
+WL_OBJS      := wlu.o wlu_common.o wlu_linux.o bcmutils.o bcmwifi_channels.o wlu_cmd.o wlu_iov.o wlu_client_shared.o wlu_pipe_linux.o wlu_pipe.o miniopt.o bcm_app_utils.o wlu_rates_matrix.o wlc_ppr.o bcmxtlv.o bcmbloom.o sha256.o wlu_subcounters.o
 endif
 SERVER_OBJS  := wlu_server_linux.o wlu_pipe_linux.o wlu_pipe.o wlu_server_shared.o shellproc_linux.o
 WLM_OBJS     := $(WL_OBJS) wlm.o
@@ -324,10 +335,6 @@ endif
 
 ifneq ($(findstring WLEXTLOG, $(CFLAGS)),)
 WL_OBJS += wluc_extlog.o
-endif
-
-ifneq ($(findstring WLBTAMP, $(CFLAGS)),)
-WL_OBJS += wluc_bta.o
 endif
 
 ifneq ($(findstring BCMSDIO, $(CFLAGS)),)
@@ -396,12 +403,27 @@ endif
 
 WL_OBJS += wluc_he.o
 
-ifneq ($(findstring WLAWDL, $(CFLAGS)),)
-WL_OBJS += wluc_awdl.o
-endif
 
 ifneq ($(findstring WL_MBO, $(CFLAGS)),)
 WL_OBJS += wluc_mbo.o
+endif
+
+ifneq ($(findstring ECOUNTERS, $(CFLAGS)),)
+WL_OBJS += wluc_ecounters.o
+endif
+
+ifneq ($(findstring WLADPS, $(CFLAGS)),)
+WL_OBJS += wluc_adps.o
+endif
+
+ifneq ($(findstring WL_LEAKY_AP_STATS, $(CFLAGS)),)
+WL_OBJS += wluc_leakyapstats.o
+endif
+
+ifneq ($(wildcard ../../../components/hml),)
+CFLAGS += -DHOFFLOAD_MODULES
+CFLAGS += -I ../../../components/hml/include -I ../../pciedev
+WL_OBJS += wluc_hoffload.o
 endif
 
 # include build settings for nl80211 support
@@ -606,7 +628,7 @@ WL_EXE		:= $(OBJDIR)/wl
 SERVER_SOCKET	:= $(OBJDIR)/socket/wl_server_socket
 SERVER_WIFI	:= $(OBJDIR)/wifi/wl_server_wifi
 
-WL_OBJS := $(addprefix $(OBJDIR)/,wlu.o wlu_common.o wlu_macos.o bcmutils.o bcmwifi_channels.o wlu_cmd.o wlu_iov.o miniopt.o bcm_app_utils.o wlu_rates_matrix.o wlc_ppr.o bcmxtlv.o)
+WL_OBJS := $(addprefix $(OBJDIR)/,wlu.o wlu_common.o wlu_macos.o bcmutils.o bcmwifi_channels.o wlu_cmd.o wlu_iov.o miniopt.o bcm_app_utils.o wlu_rates_matrix.o wlc_ppr.o bcmxtlv.o wlu_subcounters.o)
 SERVER_OBJS := wlu_server_macos.o  wlu_pipe_linux.o wlu_pipe.o wlu_server_shared.o shellproc_linux.o
 SOCKET_OBJS := $(SERVER_OBJS:%.o=$(OBJDIR)/socket/%.o)
 WIFI_OBJS := $(SERVER_OBJS:%.o=$(OBJDIR)/wifi/%.o)
@@ -639,6 +661,23 @@ else
 endif
 endif
 endif
+
+
+#ifdef WLTKO
+GCDEFS += -DWLTKO
+#endif
+
+#ifdef WLNDOE
+GCDEFS += -DWLNDOE
+#endif
+
+#ifdef WLBDO
+GCDEFS += -DWLBDO
+#endif
+
+#ifdef WLRSDB
+GCDEFS += -DWLRSDB
+#endif
 
 WL_OBJS += $(OBJDIR)/wluc_phy.o
 WL_OBJS += $(OBJDIR)/wluc_wnm.o
@@ -702,11 +741,6 @@ ifneq ($(or $(findstring WLEXTLOG, $(GCDEFS)),\
 WL_OBJS += $(OBJDIR)/wluc_extlog.o
 endif
 
-ifneq ($(or $(findstring WLBTAMP, $(GCDEFS)),\
-	    $(findstring WLBTAMP, $(CFLAGS))),)
-WL_OBJS += $(OBJDIR)/wluc_bta.o
-endif
-
 ifneq ($(or $(findstring BCMSDIO, $(GCDEFS)),\
 	    $(findstring BCMSDIO, $(CFLAGS))),)
 WL_OBJS += $(OBJDIR)/wluc_sdio.o
@@ -765,9 +799,16 @@ ifneq ($(or $(findstring WL_MSCH, $(GCDEFS)),\
 	    $(findstring WL_MSCH, $(CFLAGS))),)
 WL_OBJS += $(OBJDIR)/wluc_msch.o
 endif
-ifneq ($(or $(findstring WLAWDL, $(GCDEFS)),\
-	    $(findstring WLAWDL, $(CFLAGS))),)
-WL_OBJS += $(OBJDIR)/wluc_awdl.o
+
+
+ifneq ($(or $(findstring ECOUNTERS, $(GCDEFS)),\
+	    $(findstring ECOUNTERS, $(CFLAGS))),)
+WL_OBJS += $(OBJDIR)/wluc_ecounters.o
+endif
+
+ifneq ($(or $(findstring WLADPS, $(GCDEFS)),\
+	    $(findstring WLADPS, $(CFLAGS))),)
+WL_OBJS += $(OBJDIR)/wluc_adps.o
 endif
 
 WL_OBJS += $(OBJDIR)/wluc_he.o

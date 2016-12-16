@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_common.c 639820 2016-05-25 01:29:47Z $
+ * $Id: dhd_common.c 648647 2016-07-13 06:54:27Z $
  */
 #include <typedefs.h>
 #include <osl.h>
@@ -2568,6 +2568,16 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 		}
 		/* fall through */
 #endif
+
+#ifdef UPDATE_LINK_STATE
+		/* Update interface state in kernel network layer. RB 95630. */
+		if (flags & WLC_EVENT_MSG_LINK) {
+				dhd_link_up(dhd_pub->info, ifidx);
+		} else {
+				dhd_link_down(dhd_pub->info, ifidx);
+		}
+#endif /* UPDATE_LINK_STATE */
+
 	case WLC_E_DEAUTH:
 	case WLC_E_DEAUTH_IND:
 	case WLC_E_DISASSOC:
@@ -2599,6 +2609,13 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 		}
 #endif /* PCIE_FULL_DONGLE */
 		/* fall through */
+
+#ifdef UPDATE_LINK_STATE
+	/* Update link state in kernel network layer */
+	if ((type == WLC_E_DEAUTH_IND) || (type == WLC_E_DISASSOC_IND)) {
+			dhd_link_down(dhd_pub->info, ifidx);
+	}
+#endif /* UPDATE_LINK_STATE */
 
 	default:
 		*ifidx = dhd_ifname2idx(dhd_pub->info, event->ifname);

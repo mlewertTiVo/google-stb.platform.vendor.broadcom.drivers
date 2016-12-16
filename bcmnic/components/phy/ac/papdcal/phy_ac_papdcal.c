@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_papdcal.c 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_papdcal.c 658200 2016-09-07 01:03:02Z $
  */
 #include <phy_cfg.h>
 #include <typedefs.h>
@@ -42,6 +42,7 @@
 #include <hndd11.h>
 #include <fcbs.h>
 #include <phy_rstr.h>
+#include <phy_stf.h>
 
 uint16 papd_gainctrl_pga[PHY_CORE_MAX];
 
@@ -107,7 +108,8 @@ struct phy_ac_papdcal_info {
 	phy_info_t			*pi;
 	phy_ac_info_t		*aci;
 	phy_papdcal_info_t	*cmn_info;
-/* add other variable size variables here at the end */
+	phy_ac_papdcal_params_t *papd_params;
+	phy_ac_papdcal_radioregs_t *papd_radioregs;
 	int16	acphy_papd_epsilon_offset[PHY_CORE_MAX];
 	uint16	papd_cal_time;
 	uint8	papdmode;
@@ -127,8 +129,6 @@ struct phy_ac_papdcal_info {
 	int8	pacalopt;
 	int8	patoneidx2g;
 	int8	patoneidx5g[4];
-	phy_ac_papdcal_params_t *papd_params;
-	phy_ac_papdcal_radioregs_t *papd_radioregs;
 	int8	pacalshift5ga0[12];
 	int8	pacalshift5ga1[12];
 	uint8   papdpwrctrl;
@@ -144,6 +144,7 @@ struct phy_ac_papdcal_info {
 	bool	_apapd;
 	bool	perratedpd2g;			/* Per Rate DPD */
 	bool	perratedpd5g;
+/* add other variable size variables here at the end */
 };
 #ifdef WL_APAPD
 	#define DO_PAPD_GAINCTRL 0
@@ -152,18 +153,10 @@ struct phy_ac_papdcal_info {
 #endif /* WL_PAPD */
 
 /* Analytic PAPD Support */
-#ifndef DONGLEBUILD
 	#ifndef WL_APAPD
 		#define WL_APAPD
 		#define APAPD_ENAB(papdcali)	(papdcali->_apapd)
 	#endif /* WL_APAPD */
-#else
-	#ifdef WL_APAPD
-		#define APAPD_ENAB(papdcali)	(papdcali->_apapd)
-	#else
-		#define APAPD_ENAB(papdcali)	(0)
-	#endif /* WL_APAPD */
-#endif /* !DONGLEBUILD */
 
 static const char BCMATTACHDATA(rstr_pacalshift2g)[] = "pacalshift2g";
 static const char BCMATTACHDATA(rstr_pacalshift5g)[] = "pacalshift5g";
@@ -207,10 +200,10 @@ static const char BCMATTACHDATA(rstr_nb_bbmult)[] = "nb_bbmult";
 static const char BCMATTACHDATA(rstr_nb_tia_gain_mode)[] = "nb_tia_gain_mode";
 
 /* local functions */
-#if defined(WLTEST) || defined(BCMDBG)
+#if defined(BCMDBG)
 static void wlc_phy_epa_dpd_set_acphy(phy_type_papdcal_ctx_t *ctx, uint8 enab_epa_dpd,
 	bool in_2g_band);
-#endif /* defined(WLTEST) || defined(BCMDBG) */
+#endif 
 static void phy_ac_papd_phy_setup(phy_info_t *pi, uint8 core);
 static void phy_ac_papd_phy_setup_majorrev36(phy_info_t *pi, uint8 core);
 static void phy_ac_papd_cal(phy_info_t *pi, uint16 num_iter, uint8 core, uint16 startindex,
@@ -239,22 +232,14 @@ static int phy_ac_papdcal_set_wfd_ll_enable(phy_type_papdcal_ctx_t *ctx, uint8 i
 static int phy_ac_papdcal_get_wfd_ll_enable(phy_type_papdcal_ctx_t *ctx, int32 *ret_int_ptr);
 #endif /* WFD_PHY_LL */
 
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 static bool wlc_phy_isperratedpden_acphy(phy_type_papdcal_ctx_t *ctx);
 static void wlc_phy_perratedpdset_acphy(phy_type_papdcal_ctx_t *ctx, bool enable);
 #endif
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int phy_ac_papdcal_get_lut_idx0(phy_type_papdcal_ctx_t *ctx, int32* idx);
-static int phy_ac_papdcal_get_lut_idx1(phy_type_papdcal_ctx_t *ctx, int32* idx);
-static int phy_ac_papdcal_set_idx(phy_type_papdcal_ctx_t *ctx, int8 idx);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-#ifndef ATE_BUILD
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 static int phy_ac_papdcal_set_skip(phy_type_papdcal_ctx_t *ctx, uint8 skip);
 static int phy_ac_papdcal_get_skip(phy_type_papdcal_ctx_t *ctx, int32 *skip);
-#endif /* !ATE_BUILD */
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
+#endif 
 
 static void phy_ac_papdcal_nvram_attach_old(phy_ac_papdcal_info_t *ac_info);
 
@@ -273,18 +258,25 @@ BCMATTACHFN(phy_ac_papdcal_nvram_attach)(phy_info_t *pi, phy_ac_papdcal_info_t *
 	for (i = 0; i < 3; i++) {
 		ac_info->pacalshift2g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
 			(pi, rstr_pacalshift2g, i, 0));
-		ac_info->pacalshift5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
-			(pi, rstr_pacalshift5g, i, 0));
-		ac_info->pacalindex5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
-			(pi, rstr_pacalindex5g, i, -1));
 	}
-	/* For 4350 */
-	for (i = 0; i < 12; i++) {
-		ac_info->pacalshift5ga0[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
-			(pi, rstr_pacalshift5ga0, i, 0));
-		ac_info->pacalshift5ga1[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
-			(pi, rstr_pacalshift5ga1, i, 0));
+
+	if (PHY_BAND5G_ENAB(pi)) {
+		for (i = 0; i < 3; i++) {
+			ac_info->pacalshift5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
+				(pi, rstr_pacalshift5g, i, 0));
+			ac_info->pacalindex5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
+				(pi, rstr_pacalindex5g, i, -1));
+		}
+
+		/* For 4350 */
+		for (i = 0; i < 12; i++) {
+			ac_info->pacalshift5ga0[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
+				(pi, rstr_pacalshift5ga0, i, 0));
+			ac_info->pacalshift5ga1[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
+				(pi, rstr_pacalshift5ga1, i, 0));
+		}
 	}
+
 	ac_info->pacalindex2g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_pacalindex2g, -1));
 	ac_info->pacalpwr2g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_pacalpwr2g, -99));
 	ac_info->papdpwrctrl = (uint8) (PHY_GETINTVAR_DEFAULT(pi, rstr_papdpwrctrl, 0));
@@ -301,24 +293,29 @@ BCMATTACHFN(phy_ac_papdcal_nvram_attach)(phy_info_t *pi, phy_ac_papdcal_info_t *
 				(pi, rstr_pacalpwr5g80, i, -99));
 		}
 	} else {
-		/* For 4345 and others */
-		for (i = 0; i < 4; i++) {
-			ac_info->pacalpwr5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
-				(pi, rstr_pacalpwr5g, i, -99));
+		if (PHY_BAND5G_ENAB(pi)) {
+			/* For 4345 and others */
+			for (i = 0; i < 4; i++) {
+				ac_info->pacalpwr5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
+					(pi, rstr_pacalpwr5g, i, -99));
+			}
 		}
 	}
 
 	ac_info->parfps2g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_parfps2g, -1));
-	ac_info->parfps5g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_parfps5g, -1));
 	ac_info->papdbbmult2g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_papdbbmult2g, -1));
-	ac_info->papdbbmult5g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_papdbbmult5g, -1));
 	ac_info->pacalmode = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_pacalmode, -1));
 	ac_info->pacalopt = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_pacalopt, -1));
 	ac_info->patoneidx2g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_patoneidx2g, -1));
 
-	for (i = 0; i < 4; i++) {
-		ac_info->patoneidx5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
-			(pi, rstr_patoneidx5g, i, -1));
+	if (PHY_BAND5G_ENAB(pi)) {
+		ac_info->parfps5g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_parfps5g, -1));
+		ac_info->papdbbmult5g = (int8) (PHY_GETINTVAR_DEFAULT(pi, rstr_papdbbmult5g, -1));
+
+		for (i = 0; i < 4; i++) {
+			ac_info->patoneidx5g[i] = (int8) (PHY_GETINTVAR_ARRAY_DEFAULT
+				(pi, rstr_patoneidx5g, i, -1));
+		}
 	}
 }
 
@@ -353,26 +350,18 @@ BCMATTACHFN(phy_ac_papdcal_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 
 	/* register PHY type specific implementation */
 	bzero(&fns, sizeof(fns));
-#if defined(WLTEST) || defined(BCMDBG)
+#if defined(BCMDBG)
 	fns.epa_dpd_set = wlc_phy_epa_dpd_set_acphy;
-#endif /* defined(WLTEST) || defined(BCMDBG) */
+#endif 
 	fns.ctx = ac_info;
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 	fns.isperratedpden = wlc_phy_isperratedpden_acphy;
 	fns.perratedpdset = wlc_phy_perratedpdset_acphy;
 #endif
-#if defined(BCMINTERNAL) || defined(WLTEST)
-	fns.get_idx0 = phy_ac_papdcal_get_lut_idx0;
-	fns.get_idx1 = phy_ac_papdcal_get_lut_idx1;
-	fns.set_idx = phy_ac_papdcal_set_idx;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-#ifndef ATE_BUILD
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 	fns.set_skip = phy_ac_papdcal_set_skip;
 	fns.get_skip = phy_ac_papdcal_get_skip;
-#endif /* !ATE_BUILD */
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
+#endif 
 #if defined(WFD_PHY_LL)
 	fns.wd_wfd_ll = phy_ac_wd_wfd_ll;
 	fns.set_wfd_ll_enable = phy_ac_papdcal_set_wfd_ll_enable;
@@ -620,7 +609,7 @@ fail:
 
 }
 
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 static bool
 wlc_phy_isperratedpden_acphy(phy_type_papdcal_ctx_t *ctx)
 {
@@ -642,36 +631,10 @@ wlc_phy_perratedpdset_acphy(phy_type_papdcal_ctx_t *ctx, bool enable)
 	/* Set the new value */
 	MOD_PHYREG(pi, PapdEnable0, papd_compEnb0, enable);
 }
-#endif /* WLTEST || BCMINTERNAL || WLPKTENG */
+#endif 
 
-#if defined(BCMINTERNAL) || defined(WLTEST)
-static int
-phy_ac_papdcal_get_lut_idx0(phy_type_papdcal_ctx_t *ctx, int32* idx)
-{
-	phy_ac_papdcal_info_t *info = (phy_ac_papdcal_info_t *)ctx;
-	*idx = (int32)info->papd_lut0_cal_idx;
-	return BCME_OK;
-}
 
-static int
-phy_ac_papdcal_get_lut_idx1(phy_type_papdcal_ctx_t *ctx, int32* idx)
-{
-	phy_ac_papdcal_info_t *info = (phy_ac_papdcal_info_t *)ctx;
-	*idx = (int32)info->papd_lut1_cal_idx;
-	return BCME_OK;
-}
-
-static int phy_ac_papdcal_set_idx(phy_type_papdcal_ctx_t *ctx, int8 idx)
-{
-	phy_ac_papdcal_info_t *info = (phy_ac_papdcal_info_t *)ctx;
-	info->pacalidx_iovar = idx;
-	return BCME_OK;
-}
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
-
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-#ifndef ATE_BUILD
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 static int
 phy_ac_papdcal_set_skip(phy_type_papdcal_ctx_t *ctx, uint8 skip)
 {
@@ -687,8 +650,7 @@ phy_ac_papdcal_get_skip(phy_type_papdcal_ctx_t *ctx, int32 *skip)
 	*skip = (int32)info->acphy_papd_skip;
 	return BCME_OK;
 }
-#endif /* !ATE_BUILD */
-#endif /* BCMINTERNAL || WLTEST || DBG_PHY_IOV || WFD_PHY_LL_DEBUG */
+#endif 
 
 void
 phy_ac_papdcal_get_gainparams(phy_ac_papdcal_info_t *papdcali, uint8 *Gainoverwrite, uint8 *PAgain)
@@ -730,7 +692,6 @@ static uint16 phy_ac_papd_gen_load_samples(phy_info_t *pi, int32 f_kHz, uint16 m
 static void assign_sample80_buffer(math_cint32 *tone_buf, int16 t);
 static void assign_sample40_buffer(math_cint32 *tone_buf, int16 t);
 static void assign_sample20_buffer(math_cint32 *tone_buf, int16 t);
-static uint8 phy_ac_papd_get_txpwr_idx(phy_info_t *pi, uint8 core);
 static void phy_ac_get_tx_gain(phy_info_t *pi, uint8 core_no, acphy_txgains_t *target_gain);
 static void phy_ac_papd_smooth(phy_info_t *pi, uint8 core,
 	uint32 winsz, uint32 start, uint32 end);
@@ -899,7 +860,7 @@ phy_ac_papd_gain_ctrl_acradio(phy_info_t *pi, uint16 num_iter, uint8 core, uint1
 		    yrefindex, stopindex);
 		wlc_phy_table_read_acphy_dac_war(pi, epsilon_table_ids[core], 1, 63, 32,
 			&eps_complex, core);
-		wlc_phy_papd_decode_epsilon(eps_complex, &eps_re, &eps_im);
+		phy_papdcal_decode_epsilon(eps_complex, &eps_re, &eps_im);
 		tempclip =   ((4095+eps_re)*(4095+eps_re))+  (eps_im*eps_im);
 		if (tempclip >= clipthreshold)
 		    clipping_flag = 1;
@@ -1089,7 +1050,7 @@ phy_ac_papd_write_tx_gain(phy_info_t *pi, uint8 core, acphy_txgains_t *target_ga
 }
 #endif /* PAPD_GAIN_CTRL */
 
-#if defined(WLTEST) || defined(BCMDBG)
+#if defined(BCMDBG)
 static void
 wlc_phy_epa_dpd_set_acphy(phy_type_papdcal_ctx_t *ctx, uint8 enab_epa_dpd, bool in_2g_band)
 {
@@ -1126,7 +1087,7 @@ wlc_phy_epa_dpd_set_acphy(phy_type_papdcal_ctx_t *ctx, uint8 enab_epa_dpd, bool 
 		}
 	}
 }
-#endif /* defined(WLTEST) || defined(BCMDBG) */
+#endif 
 static void
 phy_ac_papd_radio_lpbk_cleanup_acradio(phy_info_t *pi, uint8 core)
 {
@@ -1135,7 +1096,7 @@ phy_ac_papd_radio_lpbk_cleanup_acradio(phy_info_t *pi, uint8 core)
 
 	ASSERT(RADIOID_IS(pi->pubpi->radioid, BCM2069_ID));
 
-/* CAL PER CORE - FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) */
+/* CAL PER CORE - FOREACH_ACTV_CORE(pi, phy_stf_get_data(pi->stfi)->phyrxchain, core) */
 	{
 		radio_rev_id = READ_RADIO_REGC(pi, RF, REV_ID, core);
 
@@ -1204,7 +1165,7 @@ phy_ac_papd_radio_lpbk_setup_acradio(phy_info_t *pi, uint16 tx_atten, uint16 rx_
 
 	ASSERT(RADIOID_IS(pi->pubpi->radioid, BCM2069_ID));
 
-	/* CAL PER CORE - FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) */
+	/* CAL PER CORE - FOREACH_ACTV_CORE(pi, phy_stf_get_data(pi->stfi)->phyrxchain, core) */
 	{
 		radio_rev_id = READ_RADIO_REGC(pi, RF, REV_ID, core);
 
@@ -1470,18 +1431,6 @@ assign_sample20_buffer(math_cint32 *tone_buf, int16 t)
 
 	tone_buf[t].q = (imSamp20[t]);
 	tone_buf[t].i = (realSamp20[t]);
-}
-
-static uint8
-phy_ac_papd_get_txpwr_idx(phy_info_t *pi, uint8 core)
-{
-	uint16 pwrCtrlStatus = READ_PHYREGCE(pi, TxPwrCtrlStatus_path, core);
-	uint8 pwrIndex = 128;
-
-	if (pwrCtrlStatus & 0xF000) {
-		pwrIndex = ((pwrCtrlStatus & 0x07F0)>>8);
-	}
-	return (pwrIndex);
 }
 
 static void
@@ -2023,7 +1972,6 @@ phy_ac_papd_set_tia_gain_tiny(phy_info_t *pi, uint16 gain, uint8 core)
 static void
 wlc_phy_txpwr_papd_cal_run_acphy(phy_info_t *pi, uint8 tx_pre_cal_pwr_ctrl_state)
 {
-	phy_info_acphy_t *pi_acphy = NULL;
 	bool suspend = TRUE, suspend_flag = FALSE;
 	uint8 tx_pwr_ctrl_state;
 	uint8 core;
@@ -2047,11 +1995,12 @@ wlc_phy_txpwr_papd_cal_run_acphy(phy_info_t *pi, uint8 tx_pre_cal_pwr_ctrl_state
 	int16 pgag = 0, eps_offset = 0;
 	uint16 numIterLMS_papd = 0x10, startindex = 5, yrefindex = 5, stopindex = 63;
 	acphy_txgains_t txgains[3] = {{0, 0, 0, 0, 0}, {0, 0, 0, 0, 0}, {0, 0, 0, 0, 0}};
-	uint8 saved_pwr_idx[3] = {0, 0, 0};
 	int8 tx_idx = 20, tx_idx_pwr[PHY_CORE_MAX] = {0};
 	txgain_setting_t txgain_settings;
 	phy_ac_papdcal_info_t *papdi = pi->u.pi_acphy->papdcali;
-	pi_acphy = pi->u.pi_acphy;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
 
 	if (papdi->acphy_papd_skip == 1)
 		return;
@@ -2098,15 +2047,14 @@ wlc_phy_txpwr_papd_cal_run_acphy(phy_info_t *pi, uint8 tx_pre_cal_pwr_ctrl_state
 	/* Disable BT as it affects PAPD CAL */
 	wlc_btcx_override_enable(pi);
 	/* Disable CRS */
-	wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	/* Turn off the txpowercontrol and save the txindex */
 	tx_pwr_ctrl_state = pi->acphy_txpwrctrl;
 	wlc_phy_txpwrctrl_enable_acphy(pi, PHY_TPC_HW_OFF);
 
 	/* Make it work for both 4335 and 4360 */
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
-		saved_pwr_idx[core] = phy_ac_papd_get_txpwr_idx(pi, core);
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		/* initialize scaler table */
 		wlc_phy_table_write_acphy(pi, scalar_table_ids[core], 64, 0, 32,
 			acphy_papd_scaltbl);
@@ -2119,12 +2067,12 @@ wlc_phy_txpwr_papd_cal_run_acphy(phy_info_t *pi, uint8 tx_pre_cal_pwr_ctrl_state
 
 	/* Call power control before radio/phy set up to not mess with papd setup */
 	if (PHY_EPAPD(pi) && (papdi->papdpwrctrl)) {
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+		FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 			tx_idx_pwr[core] = wlc_phy_tone_pwrctrl(pi, 20, core);
 		}
 	}
 
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		/* acphy_papd_cal_phy_setup */
 		phy_ac_papd_phy_setup(pi, core);
 
@@ -2221,12 +2169,7 @@ wlc_phy_txpwr_papd_cal_run_acphy(phy_info_t *pi, uint8 tx_pre_cal_pwr_ctrl_state
 	/* restore tx pwr index to original power index */
 	/* wlc_phy_txpwrctrl_enable_acphy(pi, PHY_TPC_HW_OFF); */
 	wlc_phy_txpwrctrl_enable_acphy(pi, tx_pwr_ctrl_state);
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
-		if (CHSPEC_IS5G(pi->radio_chanspec)) {
-			pi_acphy->acphy_txpwr_idx_5G[core] = saved_pwr_idx[core];
-		} else {
-			pi_acphy->acphy_txpwr_idx_2G[core] = saved_pwr_idx[core];
-		}
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		MOD_PHYREGCEE(pi, PapdEnable, core, papd_compEnb, 1);
 		MOD_PHYREGCEE(pi, PapdCalShifts, core, papd_calEnb, 0);
 	}
@@ -2234,7 +2177,7 @@ wlc_phy_txpwr_papd_cal_run_acphy(phy_info_t *pi, uint8 tx_pre_cal_pwr_ctrl_state
 	/* Disabling BTCX Override */
 	wlc_phy_btcx_override_disable(pi);
 	/* Enable CRS */
-	wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 	/* If the mac was suspended from this function, enable it */
 	if (suspend_flag)
 		wlapi_enable_mac(pi->sh->physhim);
@@ -2250,15 +2193,18 @@ wlc_phy_papd_dump_eps_trace_acphy(phy_info_t *pi, struct bcmstrbuf *b)
 	int32 eps_re, eps_im;
 	uint8 epsilon_table_ids[] = { ACPHY_TBL_ID_EPSILON0, ACPHY_TBL_ID_EPSILON1,
 		ACPHY_TBL_ID_EPSILON2};
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
 
-	FOREACH_ACTV_CORE(pi, pi->sh->phytxchain, core) {
+	BCM_REFERENCE(stf_shdata);
+
+	FOREACH_ACTV_CORE(pi, stf_shdata->phytxchain, core) {
 		wlc_phy_table_read_acphy_dac_war(pi, epsilon_table_ids[core],
 			ACPHY_PAPD_EPS_TBL_SIZE, 0, 32, eps_table, core);
 
 		PHY_CAL(("core %d\n", core));
 		bcm_bprintf(b, "  PAPD Epsilon Table  Real Image CORE %d \n", core);
 		for (j = 0; j < ACPHY_PAPD_EPS_TBL_SIZE; j++) {
-			wlc_phy_papd_decode_epsilon(eps_table[j], &eps_re, &eps_im);
+			phy_papdcal_decode_epsilon(eps_table[j], &eps_re, &eps_im);
 			PHY_CAL(("{%d %d} ", eps_re, eps_im));
 			bcm_bprintf(b, "{%d %d}\n ", eps_re, eps_im);
 		}
@@ -2304,7 +2250,7 @@ phy_ac_papd_smooth(phy_info_t *pi, uint8 core, uint32 winsz, uint32 start, uint3
 		eps_imag = 0;
 
 		do {
-			wlc_phy_papd_decode_epsilon(src[win_end], &eps_r, &eps_i);
+			phy_papdcal_decode_epsilon(src[win_end], &eps_r, &eps_i);
 			eps_real += eps_r;
 			eps_imag += eps_i;
 		} while (win_end-- != win_start);
@@ -2333,6 +2279,9 @@ phy_ac_papd_rx_gain_ctrl(phy_info_t *pi)
 	int16 SAVE_tia_cfg12_wrssi3_ref_mid_sel, SAVE_tia_cfg13_wrssi3_ref_low_sel;
 	uint8 rx_attn = 0, tx_attn = 0, max_attn = 0;
 	phy_info_acphy_t *pi_ac = (phy_info_acphy_t *)pi->u.pi_acphy;
+	uint8 phyrxchain;
+
+	BCM_REFERENCE(phyrxchain);
 
 	ASSERT(ACMAJORREV_3(pi->pubpi->phy_rev));
 	ASSERT(RADIOID_IS(pi->pubpi->radioid, BCM20691_ID));
@@ -2346,12 +2295,13 @@ phy_ac_papd_rx_gain_ctrl(phy_info_t *pi)
 	clip_det_sel = READ_PHYREGFLD(pi, RxSdFeConfig6, rx_farrow_rshift_0);
 	/* tcl has a loop for this */
 	/* return from Deaf */
-	if (pi_ac->deaf_count > 0) {
-		wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+	if (phy_ac_rxgcrs_get_deaf_count(pi_ac->rxgcrsi) > 0) {
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 	}
 
 	/* start tone with full scale at DAC */
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+	FOREACH_ACTV_CORE(pi, phyrxchain, core) {
 		wlc_phy_get_tx_bbmult_acphy(pi, &(bbmult_orig[core]), core);
 		wlc_phy_tx_tone_acphy(pi, 2000, 450, 0, 0, FALSE);
 		wlc_phy_set_tx_bbmult_acphy(pi, &bbmult_orig[core], core);
@@ -2449,7 +2399,7 @@ phy_ac_papd_rx_gain_ctrl(phy_info_t *pi)
 	wlc_phy_stopplayback_acphy(pi);
 
 	/* beDeaf */
-	wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 }
 
 static void
@@ -2482,7 +2432,7 @@ BCMATTACHFN(phy_ac_papdcal_nvram_attach_old)(phy_ac_papdcal_info_t *papdcal_info
 		papdcal_info->srom_pagc5g_ovr = 0x0;
 	}
 
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 	/* Read the per rate dpd enable param */
 	papdcal_info->perratedpd2g = (bool)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_perratedpd2g, 0);
 	papdcal_info->perratedpd5g = (bool)PHY_GETINTVAR_DEFAULT_SLICE(pi, rstr_perratedpd5g, 0);
@@ -2509,9 +2459,13 @@ wlc_phy_papd_set_rfpwrlut(phy_info_t *pi)
 	uint8 subbandidx = 0;
 	phy_ac_papdcal_info_t *papdi = pi->u.pi_acphy->papdcali;
 	uint8 papdmode = papdi->papdmode;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
+
 	PHY_PAPD((" ------- In RFPWRLUT ------- \n"));
 
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		if (ACMAJORREV_2(pi->pubpi->phy_rev)) {
 			/* 4354A0 */
 			if (CHSPEC_IS2G(pi->radio_chanspec)) {
@@ -2670,11 +2624,14 @@ wlc_phy_papd_set_rfpwrlut_phymaj_rev36(phy_info_t *pi)
 #endif /* BCMDBG */
 	const uint16 *gaintblptr = wlc_phy_get_txgain_tbl_20695(pi);
 	uint8 bbmult;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
 
 	PHY_PAPD((" ------- In RFPWRLUT ------- \n"));
 	/* Point to the epsilon offset array */
 
-	FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+	FOREACH_ACTV_CORE(pi, stf_shdata->phyrxchain, core) {
 		for (idx = 0; idx < 128; idx++)
 		{
 			bbmult = (gaintblptr[idx*3] & 0x00ff);
@@ -2718,7 +2675,7 @@ wlc_phy_papd_set_rfpwrlut_tiny(phy_info_t *pi)
 
 	/* acphy_beDeaf??? */
 	wlapi_suspend_mac_and_wait(pi->sh->physhim);
-	wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	FOREACH_CORE(pi, core) {
 		for (idx = 0; idx < 128; idx++)  {
@@ -2757,7 +2714,7 @@ wlc_phy_papd_set_rfpwrlut_tiny(phy_info_t *pi)
 				16, &radiogainqdb);
 		}
 	}
-	wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 	wlapi_enable_mac(pi->sh->physhim);
 }
 
@@ -2788,7 +2745,7 @@ phy_ac_papd_phy_cleanup(phy_info_t *pi, uint8 core)
 	WRITE_PHYREG(pi, RfctrlCoreGlobalPus, porig->RfctrlCoreGlobalPus);
 	WRITE_PHYREG(pi, RfctrlOverrideGlobalPus, porig->RfctrlOverrideGlobalPus);
 
-/* CAL PER CORE - FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) */
+/* CAL PER CORE - FOREACH_ACTV_CORE(pi, phy_stf_get_data(pi->stfi)->phyrxchain, core) */
 	{
 
 		/* Are the following three statements redundant?
@@ -2947,7 +2904,7 @@ phy_ac_papd_phy_setup(phy_info_t *pi, uint8 core)
 	porig->RfctrlOverrideGlobalPus = READ_PHYREG(pi, RfctrlOverrideGlobalPus);
 	porig->RfctrlCoreGlobalPus = READ_PHYREG(pi, RfctrlCoreGlobalPus);
 
-	/* CAL PER CORE - FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) */
+	/* CAL PER CORE - FOREACH_ACTV_CORE(pi, phy_stf_get_data(pi->stfi)->phyrxchain, core) */
 	{
 		porig->txpwridx[core] = pi->u.pi_acphy->txpwrindex[core];
 
@@ -2971,7 +2928,7 @@ phy_ac_papd_phy_setup(phy_info_t *pi, uint8 core)
 		porig->RfseqCoreActv2059 = READ_PHYREG(pi, RfseqCoreActv2059);
 
 
-	/* MOD_PHYREG(pi, RfseqCoreActv2059, EnTx, pi->sh->phyrxchain); */
+	/* MOD_PHYREG(pi, RfseqCoreActv2059, EnTx, phy_stf_get_data(pi->stfi)->phyrxchain); */
 	MOD_PHYREG(pi, RfseqCoreActv2059, EnTx, (ACMAJORREV_4(pi->pubpi->phy_rev) ? 7 : 1 << core));
 	MOD_PHYREG(pi, RfseqCoreActv2059, DisRx, (ACMAJORREV_4(pi->pubpi->phy_rev) ? 7 :
 		~(1 << core)));
@@ -2980,7 +2937,7 @@ phy_ac_papd_phy_setup(phy_info_t *pi, uint8 core)
 		MOD_PHYREG(pi, lbFarrowCtrl, lb_decimator_output_shift, 2);
 	}
 
-/* CAL PER CORE - FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) */
+/* CAL PER CORE - FOREACH_ACTV_CORE(pi, phy_stf_get_data(pi->stfi)->phyrxchain, core) */
 	{
 
 		/* acphy_rfctrlintc_override  ext_pa 1  $core */
@@ -3151,27 +3108,19 @@ wlc_phy_txpwr_papd_cal_run_tiny(phy_info_t *pi,	uint8 tx_pre_cal_pwr_ctrl_state)
 		ACPHY_TBL_ID_EPSILON2};
 
 	phy_info_acphy_t *aci = (phy_info_acphy_t *)pi->u.pi_acphy;
-	phy_ac_papdcal_params_t *params	= pi->u.pi_acphy->papdcali->papd_params;
+	phy_ac_papdcal_params_t *params	= aci->papdcali->papd_params;
 
-	uint8  orig_dac_mode = aci->ulp_tx_mode;
-	uint8  orig_adc_mode = aci->ulp_adc_mode;
+	uint8  orig_dac_mode = phy_ac_radio_get_data(aci->radioi)->ulp_tx_mode;
+	uint8  orig_adc_mode = phy_ac_radio_get_data(aci->radioi)->ulp_adc_mode;
 	BCM_REFERENCE(aci);
 
 	/* Setup DAC, ADC and Farrow */
-	aci->ulp_tx_mode = params->cal_dac_mode;
-	aci->ulp_adc_mode = params->cal_adc_mode;
+	phy_ac_radio_set_modes(aci->radioi, params->cal_dac_mode, params->cal_adc_mode);
 
-#ifdef ATE_BUILD
-	printf("===> Running PAPD cal\n");
-#endif /* ATE_BUILD */
 
+	/* ADC cal is removed for 180mz ADC mode in 43012 */
+	/* ADC cal coeff for 40mhz mode should be good for 180mhz as well */
 	wlc_phy_dac_rate_mode_acphy(pi, 1);
-	if (WBPAPD_ENAB(pi)) {
-		/* In case of WBCAL since we are changing ADC mode.
-		 * Do cal again
-		 */
-		wlc_phy_radio_afecal(pi);
-	}
 
 	FOREACH_CORE(pi, core) {
 		/* clear eps table  */
@@ -3234,7 +3183,7 @@ wlc_phy_txpwr_papd_cal_run_tiny(phy_info_t *pi,	uint8 tx_pre_cal_pwr_ctrl_state)
 	wlc_btcx_override_enable(pi);
 
 	/* Disable CRS */
-	wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 
 	FOREACH_CORE(pi, core) {
@@ -3271,7 +3220,7 @@ wlc_phy_txpwr_papd_cal_run_tiny(phy_info_t *pi,	uint8 tx_pre_cal_pwr_ctrl_state)
 	}
 
 	/* Enable CRS */
-	wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 	/* Enable BT */
 	wlc_phy_btcx_override_disable(pi);
 
@@ -3294,20 +3243,10 @@ wlc_phy_txpwr_papd_cal_run_tiny(phy_info_t *pi,	uint8 tx_pre_cal_pwr_ctrl_state)
 
 	/* Restore the original DAC mode back */
 	if (ACMAJORREV_36(pi->pubpi->phy_rev)) {
-		aci->ulp_tx_mode = orig_dac_mode;
-		aci->ulp_adc_mode = orig_adc_mode;
+		phy_ac_radio_set_modes(aci->radioi, orig_dac_mode, orig_adc_mode);
 		wlc_phy_dac_rate_mode_acphy(pi, 1);
-		if (WBPAPD_ENAB(pi)) {
-			/* In case of WBCAL since we are changing ADC mode.
-			 * Do cal again
-			 */
-			wlc_phy_radio_afecal(pi);
-		}
 	}
 
-#ifdef ATE_BUILD
-		printf("===> Finished PAPD cal\n");
-#endif /* ATE_BUILD */
 
 }
 
@@ -3331,9 +3270,6 @@ wlc_phy_do_papd_cal_acphy(phy_info_t *pi)
 		band = phy_ac_chanmgr_get_chan_freq_range(pi, 0, PRIMARY_FREQ_SEGMENT);
 	}
 
-	/* Explicitly Turn PAPD off if not enabled
-	 * (JIRA: SWWLAN-66077)
-	 */
 	if (!PHY_PAPDEN(pi)) {
 		uint8 core = 0;
 
@@ -3431,7 +3367,8 @@ wlc_phy_get_papd_cal_pwr_acphy(phy_info_t *pi, int8 *targetpwr, int8 *returned_t
 		/* core_freq_segment_map is only required for 80P80 mode.
 		For other modes, it is ignored
 		*/
-		core_freq_segment_map = pi->u.pi_acphy->core_freq_mapping[core];
+		core_freq_segment_map =
+			phy_ac_chanmgr_get_data(aci->chanmgri)->core_freq_mapping[core];
 
 		/* Get current subband information */
 		band = phy_ac_chanmgr_get_chan_freq_range(pi, 0, core_freq_segment_map);
@@ -3851,8 +3788,8 @@ phy_ac_papd_cal_mode0_1(phy_info_t *pi, acphy_papdCalParams_t *calParams,  uint8
 				starting point for next eps
 				*/
 
-				wlc_phy_papd_decode_epsilon(eps_pre, &epspre_r, &epspre_i);
-				wlc_phy_papd_decode_epsilon(eps, &eps_r, &eps_i);
+				phy_papdcal_decode_epsilon(eps_pre, &epspre_r, &epspre_i);
+				phy_papdcal_decode_epsilon(eps, &eps_r, &eps_i);
 				if (mtable_idx == startindex) {
 					epsnext_r = eps_r;
 					epsnext_i = eps_i;
@@ -3943,6 +3880,8 @@ phy_ac_wbcal_run(phy_info_t *pi, uint8 core)
 	uint8 wbcal_gfrac_bits = CHSPEC_IS2G(pi->radio_chanspec) ?
 		(params->wbcal_gfrac_bits & 0x0F) :
 		((params->wbcal_gfrac_bits >> 4) & 0x0F);
+	uint8 papd_calidx = CHSPEC_IS2G(pi->radio_chanspec) ?
+		params->papd_calidx_2g : params->papd_calidx_5g;
 
 	struct write_regs reg_list [WBPAPD_REGLIST_SIZE] = {
 		{ ACPHY_REG(pi, wbcal_ctl_50), WBPAPD_REFDB_BASE  + ((ref_dB)*WBPAPD_REFDB_STEP) },
@@ -4008,8 +3947,8 @@ phy_ac_wbcal_run(phy_info_t *pi, uint8 core)
 	MOD_PHYREGCEE(pi, PapdEnable, core, papd_compEnb, 0);
 
 	/* Set index and bbmult */
-	wlc_phy_txpwr_by_index_acphy(pi, (uint8)1, params->papd_calidx_2g);
-	wlc_phy_set_tx_bbmult_acphy(pi, &bbmult, 0);
+	wlc_phy_txpwr_by_index_acphy(pi, (uint8)(1 << core), papd_calidx);
+	wlc_phy_set_tx_bbmult_acphy(pi, &bbmult, core);
 
 	/* disable Stalls  before mac play and restore it later */
 	stall_val = READ_PHYREGFLD(pi, RxFeCtrl1, disable_stalls);
@@ -4018,22 +3957,18 @@ phy_ac_wbcal_run(phy_info_t *pi, uint8 core)
 
 	/* Transmit packet from MAC FIFO */
 	/* sizeof gives sizeof array in bytes and we want it in words */
-	if (ACMAJORREV_36(pi->pubpi->phy_rev) && ACMINORREV_1(pi)) {
-		macplay_wfm_ptr = NULL;
-		params->wbcal_waveform_sz = SZ_WBPAPD_WAVEFORM;
-	} else {
-		macplay_wfm_ptr = get_wbpapd_wfm_43012(pi);
-	}
-	err = phy_ac_papd_mac_play(pi, macplay_wfm_ptr, params->wbcal_waveform_sz, ON);
-	if (err != BCME_OK) {
-		PHY_ERROR(("%s: MAC-PLAY START FAILED\n", __FUNCTION__));
-		goto fail;
-	}
+	macplay_wfm_ptr = get_wbpapd_wfm_43012(pi);
 
 	/* Enable WBCAL */
 	MOD_PHYREG(pi, wbcal_ctl_00, wbcal_en, 1);
 	MOD_PHYREG(pi, wbcal_ctl_00, wbcal_on, 1);
 	MOD_PHYREG(pi, wbcal_ctl_00, wbcal_trig, 1);
+
+	err = phy_ac_papd_mac_play(pi, macplay_wfm_ptr, params->wbcal_waveform_sz, ON);
+	if (err != BCME_OK) {
+		PHY_ERROR(("%s: MAC-PLAY START FAILED\n", __FUNCTION__));
+		goto fail;
+	}
 
 	/* Wait for 300 microseconds */
 	OSL_DELAY(750);
@@ -4101,10 +4036,10 @@ phy_ac_papd_mac_play(phy_info_t *pi, const uint32* buf, uint16 len, bool start)
 	uint32 startidx = params->wbcal_macbuf_offset;
 
 	if (start) {
-		if (ACMAJORREV_36(pi->pubpi->phy_rev) && ACMINORREV_1(pi)) {
-#ifdef BCMFCBS
+		if (ACMAJORREV_36(pi->pubpi->phy_rev) && !ACMINORREV_0(pi)) {
+#ifdef USE_FCBS_ROM
 			int32 fcbs_val;
-			/* In case of 43012 B0 */
+			/* In case of 43012 B0 and later */
 			/* Get Data pointer to FCBS ROM or RAM */
 			fcbs_val = fcbs_rom_metadata(FCBSROM_PAPD_WAVEFORM, params->ft);
 
@@ -4123,7 +4058,18 @@ phy_ac_papd_mac_play(phy_info_t *pi, const uint32* buf, uint16 len, bool start)
 				PHY_ERROR(("%s: WBPAPD Waveform not found \n", __FUNCTION__));
 				ASSERT(0);
 			}
-#endif /* BCMFCBS */
+#else
+		if (ACMINORREV_1(pi)) {
+			/* ROM address in 43012B0 is hardcoded here without enabling USE_FCBS_ROM */
+			startidx = WPAPD_MAC_PLAY_ROM_ADDR_43012B0;
+		} else {
+			/* Load the waveform into MAC buffer */
+			ASSERT(buf != NULL);
+			/* multiply len by 4 since function expects length in bytes */
+			wlapi_bmac_write_template_ram(pi->sh->physhim, startidx,
+					len*sizeof(uint32), buf);
+		}
+#endif /* USE_FCBS_ROM */
 		} else {
 			/* Load the waveform into MAC buffer */
 			ASSERT(buf != NULL);
@@ -4152,7 +4098,6 @@ phy_ac_papd_mac_play(phy_info_t *pi, const uint32* buf, uint16 len, bool start)
 				ACPHY_macbasedDACPlay_macBasedDACPlayMode_MASK(phy_rev) & (0x1 <<
 				ACPHY_macbasedDACPlay_macBasedDACPlayMode_SHIFT(phy_rev)));
 			}
-			printf("Else part\n");
 		} else {
 			/* In case of 43012 */
 			/*
@@ -4209,8 +4154,8 @@ phy_ac_papd_mac_play(phy_info_t *pi, const uint32* buf, uint16 len, bool start)
 		/* Stop MAC play  by setting macBasedDACPlayEn to 0 */
 		phy_utils_write_phyreg(pi, ACPHY_macbasedDACPlay(phy_rev), 0x4);
 	}  /* End of start */
-	return BCME_OK;
 
+	return BCME_OK;
 }
 
 
@@ -4897,8 +4842,27 @@ const uint32 *
 BCMRAMFN(get_wbpapd_wfm_43012)(phy_info_t *pi)
 {
 	phy_ac_papdcal_params_t *params	= pi->u.pi_acphy->papdcali->papd_params;
-	params->wbcal_waveform_sz = ARRAYSIZE(acphy_wbpapd_waveform);
-	return (const uint32 *)&acphy_wbpapd_waveform[0];
+
+	if (ACMAJORREV_36(pi->pubpi->phy_rev) && !ACMINORREV_0(pi)) {
+#ifdef USE_FCBS_ROM
+		params->wbcal_waveform_sz = SZ_WBPAPD_WAVEFORM;
+		return NULL;
+#else
+		if (ACMINORREV_1(pi)) {
+			/* in 43012 B0 use ROM address even when USE_FCBS_ROM is */
+			/* disabled as enabling USE_FCBS_ROM abandons some other code */
+			params->wbcal_waveform_sz = SZ_WBPAPD_WAVEFORM;
+			return NULL;
+		} else {
+			params->wbcal_waveform_sz = ARRAYSIZE(acphy_wbpapd_waveform);
+			return (const uint32 *)&acphy_wbpapd_waveform[0];
+		}
+#endif /* USE_FCBS_ROM */
+	} else {
+		/* In case of 43012a0 there was no PAPD data in FCBS ROM */
+		params->wbcal_waveform_sz = ARRAYSIZE(acphy_wbpapd_waveform);
+		return (const uint32 *)&acphy_wbpapd_waveform[0];
+	}
 }
 
 void
@@ -4920,13 +4884,55 @@ phy_ac_papdcal_cal_init(phy_info_t *pi)
 				cal_exec_time += pi->u.pi_acphy->papdcali->papd_cal_time;
 			}
 		}
-		wlc_phy_susp2tx_cts2self(pi, cal_exec_time);
+		if (ACMAJORREV_32(pi->pubpi->phy_rev) || ACMAJORREV_33(pi->pubpi->phy_rev)) {
+			if (pi->sh->up) {
+				wlc_phy_susp2tx_cts2self(pi, cal_exec_time);
+			}
+		} else {
+			wlc_phy_susp2tx_cts2self(pi, cal_exec_time);
+		}
 	}
 }
+
+#ifdef PHYCAL_CACHING
+void
+phy_ac_papdcal_save_cache(phy_ac_papdcal_info_t *papdcali, ch_calcache_t *ctx)
+{
+	phy_info_t *pi = papdcali->pi;
+	acphy_ram_calcache_t *ctx_ac = ctx->u_ram_cache.acphy_ram_calcache;
+	uint32 *epsilon_cache;
+	uint16 *epstbl_offset_cache;
+	uint32 epsilon_table_ids[] =
+		{ACPHY_TBL_ID_EPSILON0, ACPHY_TBL_ID_EPSILON1, ACPHY_TBL_ID_EPSILON2};
+	uint32 rfpwrlut_table_ids[] =
+		{ACPHY_TBL_ID_RFPWRLUTS0, ACPHY_TBL_ID_RFPWRLUTS1, ACPHY_TBL_ID_RFPWRLUTS2};
+	uint8 core;
+
+	epsilon_cache = ctx->u.acphy_cache.papd_eps;
+	epstbl_offset_cache = ctx->u.acphy_cache.eps_offset_cache;
+	/* save the calibration to cache */
+	FOREACH_CORE(pi, core) {
+		/* save PAPD epsilon offsets */
+		ctx_ac->epsilon_offset[core] = READ_PHYREGFLDCEE(pi,
+			EpsilonTableAdjust, core, epsilonOffset);
+		ctx_ac->papd_comp_en[core] = READ_PHYREGFLDCEE(pi, PapdEnable,
+			core, papd_compEnb);
+		wlc_phy_table_read_acphy_dac_war(pi, epsilon_table_ids[core],
+			ACPHY_PAPD_EPS_TBL_SIZE, 0, 32, epsilon_cache, core);
+		epsilon_cache += ACPHY_PAPD_EPS_TBL_SIZE;
+		wlc_phy_table_read_acphy(pi, rfpwrlut_table_ids[core],
+			ACPHY_PAPD_RFPWRLUT_TBL_SIZE, 0, 16, epstbl_offset_cache);
+		epstbl_offset_cache += ACPHY_PAPD_RFPWRLUT_TBL_SIZE;
+	}
+}
+#endif /* PHYCAL_CACHING */
 
 void
 phy_ac_papdcal(phy_info_t *pi)
 {
+#ifdef PHYCAL_CACHING
+	ch_calcache_t *ctx = wlc_phy_get_chanctx(pi, pi->radio_chanspec);
+#endif /* PHYCAL_CACHING */
 	wlc_phy_cals_mac_susp_en_other_cr(pi, TRUE);
 	if (ACMAJORREV_1(pi->pubpi->phy_rev) &&
 		ACMINORREV_2(pi) && PHY_PAPDEN(pi)) {
@@ -4946,6 +4952,11 @@ phy_ac_papdcal(phy_info_t *pi)
 	if (PHY_PAPDEN(pi)) {
 		wlc_phy_susp2tx_cts2self(pi, pi->u.pi_acphy->papdcali->papd_cal_time);
 		wlc_phy_do_papd_cal_acphy(pi);
+#ifdef PHYCAL_CACHING
+		if (ctx) {
+			phy_ac_papdcal_save_cache(pi->u.pi_acphy->papdcali, ctx);
+		}
+#endif /* PHYCAL_CACHING */
 	} else {
 		/* To make phyreg_enter & mac_suspend in sync for PAPD_EN=0 */
 		wlc_phy_susp2tx_cts2self(pi, 0);

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_temp.h 630449 2016-04-09 00:27:18Z vyass $
+ * $Id: phy_temp.h 656120 2016-08-25 08:17:57Z $
  */
 
 #ifndef _phy_temp_h_
@@ -38,10 +38,17 @@ uint16 phy_temp_throttle(phy_temp_info_t *ti);
 #ifdef	WL_DYNAMIC_TEMPSENSE
 int phy_temp_get_cur_temp(phy_temp_info_t *ti);
 int phy_temp_get_temp_thresh(phy_temp_info_t *ti);
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 int phy_temp_get_override(phy_temp_info_t *ti);
-#endif /* BCMDBG || WLTEST */
+#endif 
 #endif /* WL_DYNAMIC_TEMPSENSE */
 void wlc_phy_upd_gain_wrt_temp_phy(phy_info_t *pi, int16 *gain_err_temp_adj);
 void wlc_phy_upd_gain_wrt_gain_cal_temp_phy(phy_info_t *pi, int16 *gain_err_temp_adj);
+int phy_temp_current_temperature_check(phy_temp_info_t *tempi);
+bool phy_temp_get_tempsense_degree(phy_temp_info_t *tempi, int16 *pval);
+
+#ifdef RADIO_HEALTH_CHECK
+int phy_temp_get_cur_temp_radio_health_check(phy_temp_info_t *ti);
+#endif /* RADIO_HEALTH_CHECK */
+
 #endif /* _phy_temp_h_ */

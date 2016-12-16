@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hnddma_priv.h 648804 2016-07-13 19:39:52Z $
+ * $Id: hnddma_priv.h 654730 2016-08-16 09:04:55Z $
  */
 
 #ifndef _HNDDMA_PRIV_H_
@@ -29,15 +29,28 @@
 #include <event_log.h>
 #endif
 
-#ifdef WLCXO_DATA
-/* Redefine PKTDATA as PKTHOSTDATA as we deal with host memory */
-#undef PKTDATA
-#define PKTDATA	PKTHOSTDATA
-#endif /* WLCXO_DATA */
-
 /* debug/trace */
+#ifdef BCMDBG
+#define	DMA_ERROR(args) if (di && (!(*di->msg_level & 1))); else printf args
+#define	DMA_TRACE(args) if (di && (!(*di->msg_level & 2))); else printf args
+#elif defined(BCMDBG_ERR) && defined(ERR_USE_EVENT_LOG)
+
+#if defined(ERR_USE_EVENT_LOG_RA)
+#define	DMA_ERROR(args) if (di && (!(*di->msg_level & 1))); else {  \
+				EVENT_LOG_RA(EVENT_LOG_TAG_DMA_ERROR, args); }
+#else
+#define	DMA_ERROR(args) if (di && (!(*di->msg_level & 1))); else {  \
+				EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_DMA_ERROR, args); }
+#endif /* ERR_USE_EVENT_LOG_RA */
+
+#define	DMA_TRACE(args)
+#elif defined(BCMDBG_ERR)
+#define	DMA_ERROR(args) if (di && (!(*di->msg_level & 1))); else printf args
+#define	DMA_TRACE(args)
+#else
 #define	DMA_ERROR(args)
 #define	DMA_TRACE(args)
+#endif /* BCMDBG */
 
 #define	DMA_NONE(args)
 
@@ -87,7 +100,7 @@
 	#define BCMATTACHFN_DMA_ATTACH(_fn)	(_fn)
 #endif
 
-#define	MAXNAMEL	9		/* 9 char names */
+#define	MAXNAMEL	14		/* 14 char names */
 
 #define	DI_INFO(dmah)	((dma_info_t *)(uintptr)dmah)
 
@@ -118,7 +131,7 @@
 #define dma64_txd64(di, ix) (void *)((uintptr)(&((dma64dd_t *)((di)->txd64))[ix]))
 #endif /* BULK_DESCR_FLUSH */
 
-#define D11RX_WAR_MAX_BUF_SIZE 492 /* Refer JIRA:CRWLDOT11M-1776 */
+#define D11RX_WAR_MAX_BUF_SIZE 492
 #define MAXRXBUFSZ 2048
 
 /* Structure for global DMA states and for storing information needed by all
@@ -134,7 +147,6 @@ struct dma_common {
 	volatile uint32 *indqsel;
 	volatile uint32 *suspreq;
 	volatile uint32 *flushreq;
-	volatile uint32 *chnflushstatus;
 };
 
 /** dma engine software state */
@@ -243,9 +255,7 @@ typedef struct dma_info {
 	 * an aatachfn, because there are cases where this gets called run time for some compiles
 	*/
 	bool		dmapad_required;
-	bool		d11rx_war;	/* JIRA:CRWLDOT11M-1776; Rx DMA buffer cannot exceed
-					 * 492 bytes
-					 */
+	bool		d11rx_war;
 	uint8		rxwaitforcomplt;
 	uint32		d64_rs1_ad_mask; /* rx active descriptor pointer mask */
 #ifdef BCM_SECURE_DMA
@@ -255,6 +265,8 @@ typedef struct dma_info {
 
 	dma_common_t    *dmacommon; /* dma_common_t handle */
 	uint32          trans_coherent; /* coherent per transaction */
+	void		*ctx;		/* context for dma users */
+	setup_context_t	fn;		/* callback function for dma users */
 } dma_info_t;
 
 #ifdef BCM_DMA_INDIRECT
@@ -324,16 +336,10 @@ void dma64_dd_upd_64_from_params(dma_info_t *di, dma64dd_t *ddring, dma64addr_t 
 	uint outidx, uint32 *flags, uint32 bufcount);
 
 uintptr _dma_getvar(dma_info_t *di, const char *name);
-#ifdef WLCXO_DATA
-bool cxo_data_dma_rxfill(dma_info_t *di);
-void *cxo_data_dma_rx(dma_info_t *di);
-void cxo_data_dma_rxreclaim(dma_info_t *di);
-#else /* WLCXO_DATA */
 bool _dma_rxfill(dma_info_t *di);
 void *_dma_rx(dma_info_t *di);
 void _dma_rxreclaim(dma_info_t *di);
 bool dma32_rxenabled(dma_info_t *di);
-#endif /* WLCXO_DATA */
 void *dma32_getnextrxp(dma_info_t *di, bool forceall);
 bool dma32_rxidle(dma_info_t *di);
 void *_dma_getnextrxp(dma_info_t *di, bool forceall);
@@ -341,15 +347,10 @@ void *dma64_getnextrxp(dma_info_t *di, bool forceall);
 bool dma64_rxenabled(dma_info_t *di);
 bool dma64_rxidle(dma_info_t *di);
 
-#ifdef WLCXO_DATA
-int  cxo_data_dma64_txfast(dma_info_t *di, void *p0, bool commit);
-void cxo_data_dma64_txreclaim(dma_info_t *di, txd_range_t range);
-#else /* WLCXO_DATA */
 void *dma32_getnexttxp(dma_info_t *di, txd_range_t range);
 int  dma32_txfast(dma_info_t *di, void *p0, bool commit);
 void dma32_txreclaim(dma_info_t *di, txd_range_t range);
 void dma32_txcommit(dma_info_t *di);
-#endif /* WLCXO_DATA */
 int  dma64_txfast(dma_info_t *di, void *p0, bool commit);
 void dma64_txreclaim(dma_info_t *di, txd_range_t range);
 void *dma64_getnexttxp(dma_info_t *di, txd_range_t range);

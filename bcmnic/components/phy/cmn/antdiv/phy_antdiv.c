@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_antdiv.c 633493 2016-04-22 17:22:36Z kentryu $
+ * $Id: phy_antdiv.c 657347 2016-08-31 22:46:24Z $
  */
 
 #include <phy_cfg.h>
@@ -211,6 +211,46 @@ phy_antdiv_get_sw_control(phy_info_t *pi, int32 *ret_int_ptr, int core)
 	}
 }
 
+int phy_antdiv_set_txswctrlmap(phy_info_t *pi, int32 int_val)
+{
+	phy_type_antdiv_fns_t *fns;
+	int err = BCME_OK;
+
+	ASSERT(pi != NULL);
+
+	fns = pi->antdivi->fns;
+
+	if (fns->set_txswctrlmap != NULL) {
+		err = (fns->set_txswctrlmap)(fns->ctx, int_val);
+	} else {
+		/* Not implemented for this phy. */
+		err = BCME_UNSUPPORTED;
+		PHY_ERROR(("Command not supported for this phy\n"));
+	}
+
+	return err;
+}
+
+int phy_antdiv_get_txswctrlmap(phy_info_t *pi, int32 *ret_int_ptr)
+{
+	phy_type_antdiv_fns_t *fns;
+	int err = BCME_OK;
+
+	ASSERT(pi != NULL);
+
+	fns = pi->antdivi->fns;
+
+	if (fns->get_txswctrlmap != NULL) {
+		err = (fns->get_txswctrlmap)(fns->ctx, ret_int_ptr);
+	} else {
+		/* Not implemented for this phy. */
+		err = BCME_UNSUPPORTED;
+		PHY_ERROR(("Command not supported for this phy\n"));
+	}
+
+	return err;
+}
+
 #ifdef WLC_SW_DIVERSITY
 void
 phy_antdiv_set_swdiv_ant(wlc_phy_t *ppi, uint8 ant)
@@ -267,3 +307,19 @@ BCMATTACHFN(phy_swdiv_read_srom)(phy_info_t *pi, phy_swdiv_t *swdiv)
 	swdiv->swdiv_antmap5g_aux = (uint16)PHY_GETINTVAR(pi, rstr_swdiv_antmap5g_aux);
 }
 #endif /* WLC_SW_DIVERSITY */
+
+int
+phy_antdiv_antsel_type_set(wlc_phy_t *ppi, uint8 antsel_type)
+{
+	phy_info_t *pi = (phy_info_t *)ppi;
+
+	pi->antsel_type = antsel_type;
+
+	/* initialize flag to init HW Rx antsel if the board supports it */
+	if ((pi->antsel_type == ANTSEL_2x3_HWRX) || (pi->antsel_type == ANTSEL_1x2_HWRX))
+		pi->nphy_enable_hw_antsel = TRUE;
+	else
+		pi->nphy_enable_hw_antsel = FALSE;
+
+	return BCME_OK;
+}

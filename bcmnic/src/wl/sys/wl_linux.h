@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_linux.h 657844 2016-09-02 20:52:35Z $
+ * $Id: wl_linux.h 672499 2016-11-28 21:53:34Z $
  */
 
 #ifndef _wl_linux_h_
@@ -26,14 +26,6 @@
 
 #include <wlc_types.h>
 #include <wlc_objregistry.h>
-
-#ifdef WLCXO_CTRL
-#undef WL_ALL_PASSIVE_ON
-#ifndef WL_ALL_PASSIVE_RUNTIME
-#define WL_ALL_PASSIVE_RUNTIME
-#endif
-#define WL_ALL_PASSIVE 1
-#endif /* WLCXO_CTRL */
 
 typedef struct wl_timer {
 	struct timer_list 	timer;
@@ -43,9 +35,9 @@ typedef struct wl_timer {
 	uint 				ms;
 	bool 				periodic;
 	bool 				set;
-	struct wl_timer		*next;
-#if defined(BCM7271)
-	char*				name; /**< Description of the timer */
+	struct wl_timer 	*next;
+#ifdef BCMDBG
+	char* 				name; /**< Description of the timer */
 	uint32				ticks;	/**< how many timer timer fired */
 #endif
 } wl_timer_t;
@@ -114,13 +106,6 @@ struct wl_info {
 	wlc_info_t	*wlc;		/**< pointer to private common os-independent data */
 	osl_t		*osh;		/**< pointer to os handler */
 	wl_cmn_info_t	*cmn;		/* pointer to common part of two wl structure variable */
-#ifdef WLCXO_IPC
-	wlc_ipc_t	*ipc;		/* Handle to ipc layer */
-	wl_task_t	ipc_task;	/* Work queue for ipc indications */
-	struct semaphore ctrl_ret_sem;		/* Use semaphore to allow sleep */
-	struct swq_struct	*cxo_ctrl_wq;	/* CXO host driver workq */
-#endif
-	void		*wl_cxo;	/**< Reference to wl_cxo structure in WLCXO_FULL build */
 #ifdef HNDCTF
 	ctf_t		*cih;		/**< ctf instance handle */
 #endif /* HNDCTF */
@@ -196,7 +181,7 @@ struct wl_info {
 
 	uint processed;		/**< Number of rx frames processed */
 	struct proc_dir_entry *proc_entry;
-#if defined(VASIP_HW_SUPPORT)
+#if defined(WLVASIP)
 	uchar* bar1_addr;
 	uint32 bar1_size;
 	uchar* bar2_addr;
@@ -223,14 +208,13 @@ struct wl_info {
 #ifdef TKO
 	wl_tko_info_t	*tko;	/* pointer to tcp keep-alive info */
 #endif	/* TKO */
+#ifdef ICMP
+	wl_icmp_info_t	*icmp;	/* pointer to icmp info */
+#endif	/* ICMP */
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
-#ifdef BCM7271
-#ifdef PLATFORM_INTEGRATED_WIFI
-	void *plat_info;	/* platform device handler */
-#else /* PLATFORM_INTEGRATED_WIFI */
-	BCM7XXX_Handle  bcm7xxx; /* this is the global handle for BCM7271 WIFI */
-#endif /* PLATFORM_INTEGRATED_WIFI */
-#endif /* BCM7271 */
+#ifdef STB_SOC_WIFI
+	struct wl_platform_info *plat_info;	/* STB SOC device handler */
+#endif /* STB_SOC_WIFI */
 };
 
 #if (defined(NAPI_POLL) && defined(WL_ALL_PASSIVE))
@@ -249,48 +233,21 @@ struct wl_info {
 #endif /* WL_ALL_PASSIVE */
 #endif 
 
-#ifdef WLCXO_IPC
-#define WLCXO_OFLD_DRV_SUSPEND(wl) \
-	do { \
-		if (WLCXO_ENAB(wl->pub)) \
-			wlc_cxo_ctrl_ofld_drv_suspend((wl)->wlc, TRUE); \
-	} while (0)
-#define WLCXO_OFLD_DRV_RESUME(wl) \
-	do { \
-		if (WLCXO_ENAB(wl->pub)) \
-			wlc_cxo_ctrl_ofld_drv_suspend((wl)->wlc, FALSE); \
-	} while (0)
-#else
-#define WLCXO_OFLD_DRV_SUSPEND(wl)
-#define WLCXO_OFLD_DRV_RESUME(wl)
-#endif
-
 /* perimeter lock */
-#define _WL_LOCK(wl) \
+#define WL_LOCK(wl) \
 	do { \
 		if (WL_ALL_PASSIVE_ENAB(wl)) \
 			down(&(wl)->sem); \
 		else \
 			spin_lock_bh(&(wl)->lock); \
 	} while (0)
-#define WL_LOCK(wl) \
-	do { \
-		_WL_LOCK(wl); \
-		WLCXO_OFLD_DRV_SUSPEND(wl); \
-	} while (0)
-#define _WL_UNLOCK(wl) \
+#define WL_UNLOCK(wl) \
 	do { \
 		if (WL_ALL_PASSIVE_ENAB(wl)) \
 			up(&(wl)->sem); \
 		else \
 			spin_unlock_bh(&(wl)->lock); \
 	} while (0)
-#define WL_UNLOCK(wl) \
-	do { \
-		WLCXO_OFLD_DRV_RESUME(wl); \
-		_WL_UNLOCK(wl); \
-	} while (0)
-
 
 /** locking from inside wl_isr */
 #define WL_ISRLOCK(wl, flags) do {spin_lock(&(wl)->isr_lock); (void)(flags);} while (0)
@@ -333,27 +290,24 @@ extern wl_info_t *  wl_wlcreate(osl_t *osh, void *pdev);
 #endif
 
 
-#define TXQ_CNT_THRESH	512	/* txq length threshold */
-
-#ifdef PLATFORM_INTEGRATED_WIFI
-#ifdef BCM7271
-#define	DEVICE_NODE_NAME	"brcm,bcm7271-wlan"
-#endif /* BCM7271 */
-
-static const struct of_device_id plat_devices_of_match[] = {
-	{ .compatible = DEVICE_NODE_NAME, },
-	{ } /* Empty terminated list */
-};
-
 struct wl_platform_info {
-	void __iomem *regs;
+#if defined(PLATFORM_INTEGRATED_WIFI) && defined(CONFIG_OF)
+	struct platform_device *pdev;
+#endif /* PLATFORM_INTEGRATED_WIFI && CONFIG_OF */
+	void __iomem *regs;	/* Base ioremap address for platform device */
 	int irq;
 	uint16 deviceid;
-#ifdef STB_SOC_WIFI
-	uint32 d2hintstatus;
-	uint32 d2hintmask;
-#endif /* STB_SOC_WIFI */
+	void	*plat_priv;
 };
-#endif /* PLATFORM_INTEGRATED_WIFI */
 
+#if defined(STBSOC_CHAR_DRV)
+typedef struct wl_char_drv_dev
+{
+	dev_t	devno;	/* alloted device number */
+	struct class	*dev_class;	/* device model */
+	struct device	*dev_device;	/* /dev */
+	struct cdev	*cdev;	/* char device structure */
+	void	*drvdata;	/* wl handle */
+} wl_char_drv_dev_t;
+#endif /* STBSOC_CHAR_DRV */
 #endif /* _wl_linux_h_ */

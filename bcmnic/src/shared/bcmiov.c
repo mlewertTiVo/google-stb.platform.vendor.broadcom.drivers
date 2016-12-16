@@ -28,7 +28,11 @@
 #define BCM_IOV_SUB_CMDS_OPT_SZ (sizeof(uint32))
 #define BCM_IOV_INVALID_SUBCMD 0x0000
 
+#ifdef BCMDBG
+#define BCM_IOV_DBG(x) printf x
+#else
 #define BCM_IOV_DBG(x)
+#endif
 
 /*
  * Dispatch info. entry
@@ -298,8 +302,11 @@ bcm_iov_dispatch_sub_cmd(bcm_iov_batch_cmd_context_t *ctx, uint16 cmd_id)
 	bcm_iov_parse_context_t *p_ctx = NULL;
 	const bcm_iov_cmd_info_t *cmd = NULL;
 	bcm_iov_cmd_digest_t *dig = ctx->dig;
-	uint8 *res;
+	uint8 *res = NULL;
 	int res_len;
+	uint16 min_len;
+	uint16 max_len;
+
 	p_ctx = ctx->parse_ctx;
 
 	/*
@@ -307,7 +314,7 @@ bcm_iov_dispatch_sub_cmd(bcm_iov_batch_cmd_context_t *ctx, uint16 cmd_id)
 	 */
 	if ((err = bcm_iov_lookup_cmd_handler(p_ctx, p_ctx->disp_cnt,
 		cmd_id, dig, &cmd)) != BCME_OK) {
-		goto done;
+		goto have_result;
 	}
 
 	ASSERT(cmd != NULL);
@@ -321,7 +328,7 @@ bcm_iov_dispatch_sub_cmd(bcm_iov_batch_cmd_context_t *ctx, uint16 cmd_id)
 		OFFSETOF(bcm_iov_buf_t, data));
 	if (ctx->avail < (res - (uint8 *)ctx->result)) {
 		err = BCME_BUFTOOSHORT;
-		goto done;
+		goto done; /* note: no space to return command status */
 	}
 	res_len = ctx->avail - (int)(res - (uint8 *)ctx->result);
 
@@ -329,18 +336,20 @@ bcm_iov_dispatch_sub_cmd(bcm_iov_batch_cmd_context_t *ctx, uint16 cmd_id)
 	 * Validate lengths.
 	 */
 	if (IOV_ISSET(ctx->actionid)) {
-		if ((ctx->cmd_len < dig->cmd_info->min_len_set) ||
-			(ctx->cmd_len > dig->cmd_info->max_len_set)) {
-			err = BCME_BADLEN;
-			goto done;
-		}
+		min_len = dig->cmd_info->min_len_set;
+		max_len = dig->cmd_info->max_len_set;
 	} else {
-		if ((ctx->cmd_len < dig->cmd_info->min_len_get) ||
-			(ctx->cmd_len > dig->cmd_info->max_len_get)) {
-			err = BCME_BADLEN;
-			goto done;
-		}
+		min_len = dig->cmd_info->min_len_get;
+		max_len = dig->cmd_info->max_len_get;
 	}
+
+	if (ctx->cmd_len < min_len) {
+		err = BCME_BADLEN;
+		goto have_result;
+	}
+
+	/* process only supported len and allow future extension */
+	ctx->cmd_len = MIN(ctx->cmd_len, max_len);
 
 	/*
 	 * Validate command
@@ -353,7 +362,6 @@ bcm_iov_dispatch_sub_cmd(bcm_iov_batch_cmd_context_t *ctx, uint16 cmd_id)
 	if (err != BCME_OK) {
 		goto have_result;
 	}
-
 
 	/*
 	 * Dispatch get/set
@@ -376,19 +384,20 @@ bcm_iov_dispatch_sub_cmd(bcm_iov_batch_cmd_context_t *ctx, uint16 cmd_id)
 
 have_result:
 
+	/* upon error, return only status - return values/buffer not deterministic */
 	if (err != BCME_OK) {
 		res_len = 0;
 	}
 
 	/*
-	 * Save the status and len for this response.
+	 * Save the status and len for this response. Data already in place
 	 */
 	if (ctx->is_batch) {
 		bcm_iov_batch_subcmd_t *p_subcmd = (bcm_iov_batch_subcmd_t *)ctx->result;
 		bcm_xtlv_t *ptlv = (bcm_xtlv_t *)ctx->result;
 
 		/*
-		 * Pack the response. Add response status len to lenght of the result
+		 * Pack the response. Add response status len to length of the result
 		 */
 		bcm_xtlv_pack_xtlv(ptlv, cmd_id, res_len + BCM_IOV_STATUS_LEN,
 			NULL, BCM_XTLV_OPTION_ALIGN32);

@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: sbgci.h 617751 2016-02-08 09:04:22Z $
+ * $Id: sbgci.h 657119 2016-08-31 05:21:35Z $
  */
 
 #ifndef _SBGCI_H
@@ -58,7 +58,7 @@ typedef volatile struct {
 	uint32	gci_gpioctl;		/* 0x044 */
 	uint32	gci_gpiostatus;		/* 0x048 */
 	uint32	gci_gpiomask;		/* 0x04c */
-	uint32	eventsummary;		/* 0x050 */
+	uint32	gci_eventsummary;		/* 0x050 */
 	uint32	gci_miscctl;		/* 0x054 */
 	uint32	gci_gpiointmask;	/* 0x058 */
 	uint32	gci_gpiowakemask;	/* 0x05c */

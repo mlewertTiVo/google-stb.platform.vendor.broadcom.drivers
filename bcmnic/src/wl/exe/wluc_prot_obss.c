@@ -38,11 +38,25 @@
 #include "wlu_common.h"
 #include "wlu.h"
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static cmd_func_t wl_ccastats;
+#endif
 static cmd_func_t wl_dyn_bwsw_params;
 
 static cmd_t wl_prot_obss_cmds[] = {
 	{ "obss_prot", wl_bcm_config, WLC_GET_VAR, WLC_SET_VAR,
 	"Get/set OBSS protection (-1=auto, 0=disable, 1=enable)\n" },
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	{ "dump_obss", wl_ccastats, WLC_GET_VAR, -1,
+	"Usage: \n\t wl dump_obss [-d num msecs] to begin measurement\n"
+	"\t wl dump_obss to query for the measurement results" },
+	{ "ccastats", wl_ccastats, WLC_GET_VAR, -1,
+	"Usage: \n\t wl ccastats [-d num msecs] to begin measurement\n"
+	"\t wl ccastats [-o option: 0=default, 1=detail, 2=1+CRS] to query for measurements" },
+	{ "dump_obss_dyn_bwsw", wl_ccastats, WLC_GET_VAR, -1,
+	"Usage: \n\t wl dump_obss_dyn_bwsw [-d num msecs] to begin measurement\n"
+	"\t wl dump_obss_dyn_bwsw to query for the results" },
+#endif
 	{ "dyn_bwsw_params", wl_dyn_bwsw_params, WLC_GET_VAR, WLC_SET_VAR,
 	"Configure the params for dynamic bandswitch\n"
 	"\tUsage (Get): wl dyn_bwsw_params \n"
@@ -67,6 +81,63 @@ wluc_prot_obss_module_init(void)
 	wl_module_cmds_register(wl_prot_obss_cmds);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wl_ccastats(void *wl, cmd_t *cmd, char **argv)
+{
+	cca_stats_n_flags *results;
+	int err = 0;
+	int msr_time;
+	uint8 option = 0;
+	cca_msrmnt_query req;
+	char *ptr;
+
+	/* skip the command name */
+	argv++;
+
+	/* only switch -d for now */
+	if (*argv != NULL && !strcmp(*argv, "-d")) {
+		argv++;
+		if (*argv == NULL || (msr_time = htod32(atoi(*argv))) <= 0) {
+			printf("enter correct duration\n");
+			return 0;
+		}
+		req.msrmnt_query = 0;
+		req.time_req = msr_time;
+
+		if ((err = wlu_iovar_getbuf(wl, cmd->name, &req, sizeof(req),
+		                            buf, WLC_IOCTL_MAXLEN)) < 0) {
+			return err;
+		}
+
+		printf("Measuring %d ms ...\n", msr_time);
+	} else {
+		if (*argv != NULL && !strcmp(*argv, "-o")) {
+			argv++;
+			if (*argv != NULL) {
+				option = (uint8)htod32(atoi(*argv));
+			}
+		}
+
+		req.msrmnt_query = 1;
+		req.time_req = 0;
+		req.report_opt = option;
+
+		// retrieving the results
+		if ((err = wlu_iovar_getbuf(wl, cmd->name, &req, sizeof(req),
+		    buf, WLC_IOCTL_MAXLEN)) < 0) {
+			return err;
+		}
+
+		results = (cca_stats_n_flags *)buf;
+		ptr = results->buf;
+
+		fputs(ptr, stdout);
+	}
+
+	return err;
+}
+#endif 
 
 /* static function for iovar dyn_bwsw_params */
 static INLINE void

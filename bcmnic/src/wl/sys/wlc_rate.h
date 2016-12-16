@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rate.h 629694 2016-04-06 06:57:25Z $
+ * $Id: wlc_rate.h 668765 2016-11-04 21:59:07Z $
  */
 
 
@@ -20,7 +20,7 @@
 #define _WLC_RATE_H_
 
 #include <typedefs.h>
-#include <d11.h>
+#include <hndd11.h>
 #include <wlioctl.h>
 #include <wlc_types.h>
 #include <bcmutils.h>
@@ -110,6 +110,7 @@ extern const mcs_info_t mcs_table[];
 		((PLCP3_ISSGI(plcp)) ? RSPEC_SHORT_GI : 0))
 #define WLC_STD_MAX_VHT_MCS	9	/**< 11ac std VHT MCS 0-9 */
 #define WLC_MAX_VHT_MCS	11	/**< Std VHT MCS 0-9 plus prop VHT MCS 10-11 */
+#define WLC_MAX_HE_MCS	11	/**< Std HE MCS 0-11 */
 
 #define IS_PROPRIETARY_VHT_MCS_10_11(mcs) ((mcs) == 10 || (mcs) == 11)
 
@@ -137,11 +138,6 @@ extern const mcs_info_t mcs_table[];
 #define BW_40MHZ                (RSPEC_BW_40MHZ >> RSPEC_BW_SHIFT)
 #define BW_80MHZ                (RSPEC_BW_80MHZ >> RSPEC_BW_SHIFT)
 #define BW_160MHZ               (RSPEC_BW_160MHZ >> RSPEC_BW_SHIFT)
-#ifdef WL11ULB
-#define BW_10MHZ		(RSPEC_BW_10MHZ >> RSPEC_BW_SHIFT)
-#define BW_5MHZ			(RSPEC_BW_5MHZ >> RSPEC_BW_SHIFT)
-#define BW_2P5MHZ		(RSPEC_BW_2P5MHZ >> RSPEC_BW_SHIFT)
-#endif /* WL11ULB */
 
 #define BW_MAXMHZ	BW_160MHZ
 #define BW_MINMHZ	BW_20MHZ
@@ -205,6 +201,12 @@ RSPEC_ISHT(rspec))
 
 
 #if defined(WLPROPRIETARY_11N_RATES) /* Broadcom proprietary rate support for 11n */
+#ifdef OEM_ANDROID
+#define GET_PROPRIETARY_11N_MCS_NSS(mcs) (1 + ((mcs) - 85) / 8)
+
+#define GET_11N_MCS_NSS(mcs) ((mcs) < 32 ? (1 + ((mcs) / 8)) \
+				: ((mcs) == 32 ? 1 : GET_PROPRIETARY_11N_MCS_NSS(mcs)))
+#endif /* OEM_ANDROID */
 #define IS_SINGLE_STREAM(mcs)	(GET_11N_MCS_NSS(mcs) == 1)
 #else
 #define IS_SINGLE_STREAM(mcs)	(((mcs) <= HIGHEST_SINGLE_STREAM_MCS) || ((mcs) == 32))
@@ -213,6 +215,9 @@ RSPEC_ISHT(rspec))
 /* create ratespecs */
 #define CCK_RSPEC(cck)		LEGACY_RSPEC(cck)
 #define OFDM_RSPEC(ofdm)	LEGACY_RSPEC(ofdm)
+
+#define HT_RSPEC_BW(mcs, bw)	(HT_RSPEC(mcs) | (((bw) << RSPEC_BW_SHIFT) & RSPEC_BW_MASK))
+#define VHT_RSPEC_BW(mcs, nss, bw) (VHT_RSPEC(mcs, nss) | (((bw) << RSPEC_BW_SHIFT)&RSPEC_BW_MASK))
 
 /* Convert encoded rate value in plcp header to numerical rates in 500 KHz increments */
 extern const uint8 *wlc_phy_get_ofdm_rate_lookup(void);
@@ -229,6 +234,7 @@ extern const uint8 *wlc_phy_get_ofdm_rate_lookup(void);
 #define WLC_MCS_ALLOW_VHT			0x2
 #define WLC_MCS_ALLOW_PROP_HT		0x4 /**< Broadcom proprietary 11n rates */
 #define WLC_MCS_ALLOW_1024QAM			0x8 /**< Proprietary VHT rates */
+#define WLC_MCS_ALLOW_HE			0x10
 
 /* per-bw sgi enable */
 #define SGI_BW20		1
@@ -241,6 +247,59 @@ extern const uint8 *wlc_phy_get_ofdm_rate_lookup(void);
 	wlc->bandstate[BAND_2G_INDEX]->mrspec_override || \
 	wlc->bandstate[BAND_5G_INDEX]->rspec_override || \
 	wlc->bandstate[BAND_5G_INDEX]->mrspec_override)
+
+/* ************* HE definitions. ************* */
+
+#define HE_IS_GI_0_8us(gi)	((gi) == RSPEC_HE_GI_0_8us)
+#define HE_IS_GI_1_6us(gi)	((gi) == RSPEC_HE_GI_1_6us)
+#define HE_IS_GI_3_2us(gi)	((gi) == RSPEC_HE_GI_3_2us)
+
+#define HE_PLCP_B0_DL_UL		(0x00)
+#define HE_PLCP_B0_FORMAT_MASK		(0x02)
+#define HE_PLCP_B0_FORMAT_SHIFT		(1)
+#define HE_PLCP_B0_BW_MASK		(0x0C)
+#define HE_PLCP_B0_BW_SHIFT		(2)
+
+#define HE_PLCP_B2_TXBF_MASK		(0x10)
+#define HE_PLCP_B2_TXBF_SHIFT		(4)
+#define HE_PLCP_B2_CODING_MASK		(0x80)
+#define HE_PLCP_B2_CODING_SHIFT		(7)
+
+#define HE_PLCP_B3_STBC_MASK		(0x02)
+#define HE_PLCP_B3_STBC_SHIFT		(1)
+#define HE_PLCP_B3_CPLTF_MASK		(0x0C)
+#define HE_PLCP_B3_CPLTF_SHIFT		(2)
+#define HE_PLCP_B3_MCS_MASK		(0xF0)
+#define HE_PLCP_B3_MCS_SHIFT		(4)
+
+#define HE_PLCP_B4_DCM_MASK		(0x01)
+#define HE_PLCP_B4_DCM_SHIFT		(0)
+#define HE_PLCP_B4_NSTS_MASK		(0x0E)
+#define HE_PLCP_B4_NSTS_SHIFT		(1)
+
+/* HE Rates BITMAP */
+#define HE_CAP_MCS_0_7_MAP		0x00ff
+#define HE_CAP_MCS_0_8_MAP		0x01ff
+#define HE_CAP_MCS_0_9_MAP		0x03ff
+#define HE_CAP_MCS_0_10_MAP		0x07ff
+#define HE_CAP_MCS_0_11_MAP		0x0fff
+#define HE_CAP_MCS_FULL_RATEMAP		HE_CAP_MCS_0_11_MAP
+
+/* Map the mcs bitmap to mcs code */
+#define HE_MCS_MAP_TO_MCS_CODE(mcs_map) \
+	((mcs_map == HE_CAP_MCS_0_7_MAP) ? HE_CAP_MCS_CODE_0_7 : \
+	 (mcs_map == HE_CAP_MCS_0_8_MAP) ? HE_CAP_MCS_CODE_0_8 : \
+	 (mcs_map == HE_CAP_MCS_0_9_MAP) ? HE_CAP_MCS_CODE_0_9 : \
+	 (mcs_map == HE_CAP_MCS_0_10_MAP) ? HE_CAP_MCS_CODE_0_10 : \
+	 (mcs_map == HE_CAP_MCS_0_11_MAP) ? HE_CAP_MCS_CODE_0_11 : HE_CAP_MCS_CODE_NONE)
+
+/* Map the mcs code to mcs bitmap */
+#define HE_MCS_CODE_TO_MCS_MAP(mcs_map) \
+	((mcs_map == HE_CAP_MCS_CODE_0_7) ? HE_CAP_MCS_0_7_MAP : \
+	 (mcs_map == HE_CAP_MCS_CODE_0_8) ? HE_CAP_MCS_0_8_MAP : \
+	 (mcs_map == HE_CAP_MCS_CODE_0_9) ? HE_CAP_MCS_0_9_MAP : \
+	 (mcs_map == HE_CAP_MCS_CODE_0_10) ? HE_CAP_MCS_0_10_MAP : \
+	 (mcs_map == HE_CAP_MCS_CODE_0_11) ? HE_CAP_MCS_0_11_MAP : 0)
 
 /* use the stuct form instead of typedef to fix dependency problems */
 struct wlc_rateset;
@@ -261,6 +320,7 @@ extern uint wlc_ratespec_ntx(ratespec_t rspec);
 /* take a well formed ratespec_t arg and return phy rate in Kbps */
 extern int wlc_rate_rspec2rate(ratespec_t rspec);
 extern uint wlc_rate_mcs2rate(uint mcs, uint nss, uint bw, int sgi);
+extern uint wlc_rate_he_rspec2rate(ratespec_t rspec);
 
 #if defined(WL11N) || defined(WL11AC)
 #define RSPEC_REFERENCE_RATE(rspec) wlc_rate_rspec_reference_rate(rspec)
@@ -285,7 +345,8 @@ extern void wlc_rateset_copy(const struct wlc_rateset *src, struct wlc_rateset *
 uint8 wlc_vht_get_rate_from_plcp(uint8 *plcp);
 extern ratespec_t wlc_vht_get_rspec_from_plcp(uint8 *plcp);
 /* would be nice to have these documented ... */
-extern ratespec_t wlc_recv_compute_rspec(wlc_d11rxhdr_t *wrxh, uint8 *plcp);
+extern ratespec_t wlc_recv_compute_rspec(d11_info_t *d11_info, wlc_d11rxhdr_t *wrxh,
+	uint8 *plcp);
 extern void wlc_rateset_filter(struct wlc_rateset *src, struct wlc_rateset *dst,
 	bool basic_only, uint8 rates, uint xmask, uint8 mcsallow);
 extern void wlc_rateset_ofdm_fixup(struct wlc_rateset *rs);
@@ -328,4 +389,7 @@ extern void wlc_rateset_merge(struct wlc_rateset *rs1, struct wlc_rateset *rs2);
 extern uint wlc_rate_mcs2rate(uint mcs, uint nss, uint bw, int sgi);
 extern uint8 wlc_rate_get_single_stream_mcs(uint mcs);
 extern void wlc_rate_clear_prop_11n_mcses(uint8 mcs_bitmap[]);
+
+extern ratespec_t wlc_he_get_rspec_from_plcp(uint8 *plcp);
+
 #endif	/* _WLC_RATE_H_ */

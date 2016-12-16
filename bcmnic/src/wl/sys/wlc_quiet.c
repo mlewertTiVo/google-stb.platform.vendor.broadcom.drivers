@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_quiet.c 633197 2016-04-21 19:28:19Z $
+ * $Id: wlc_quiet.c 659395 2016-09-14 03:09:14Z $
  */
 
 
@@ -86,7 +86,11 @@ static bool wlc_quiet_read_tsf(wlc_info_t *wlc, wlc_bsscfg_t *cfg, uint32 *tsfl,
 /* cubby */
 static int wlc_quiet_bsscfg_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_quiet_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#ifdef BCMDBG
+static void wlc_quiet_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_quiet_bsscfg_dump NULL
+#endif
 
 /* up/down */
 static void wlc_quiet_bsscfg_up_down(void *ctx, bsscfg_up_down_event_data_t *evt_data);
@@ -368,6 +372,22 @@ wlc_quiet_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	*pquiet = NULL;
 }
 
+#ifdef BCMDBG
+static void
+wlc_quiet_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_quiet_info_t *qm = (wlc_quiet_info_t *)ctx;
+	wlc_quiet_t *quiet = QUIET_BSSCFG_CUBBY(qm, cfg);
+
+	ASSERT(quiet != NULL);
+
+	/* Quiet info */
+	bcm_bprintf(b, "\ttimer: %p\n", OSL_OBFUSCATE_BUF(quiet->timer));
+	bcm_bprintf(b, "\tie: period %d count %d, offset %d duration %d\n",
+	            quiet->period, quiet->count, quiet->offset, quiet->duration);
+	bcm_bprintf(b, "\text_state: 0x%x state: 0x%x\n", quiet->ext_state, quiet->state);
+}
+#endif /* BCMDBG */
 
 /* bsscfg up/down callbacks */
 static void

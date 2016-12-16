@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_stf.h 638403 2016-05-17 19:01:20Z $
+ * $Id: wlc_stf.h 652620 2016-08-02 18:41:13Z $
  */
 
 #ifndef _wlc_stf_h_
@@ -261,6 +261,11 @@ typedef struct stf_scb_info {
 #define STF_CUBBY(wlc, scb) SCB_CUBBY((scb), (wlc)->stf->scb_handle)
 
 #define NAP_RSSI_DELTA          3       /* hysteresis rssi delta */
+#define NAP_DISABLE_RSSI		-80		/* RSSI to disable NAP */
 
-
+#ifdef OCL
+extern void wlc_stf_ocl_rssi_thresh_handling(wlc_bsscfg_t *bsscfg);
+extern void wlc_stf_ocl_update_assoc_pend(wlc_info_t *wlc, bool disable);
+extern int wlc_get_ocl_meas_metrics(wlc_info_t *wlc, uint8 *destptr, int destlen);
+#endif /* OCL */
 #endif /* _wlc_stf_h_ */

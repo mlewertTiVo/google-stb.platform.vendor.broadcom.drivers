@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmnvram.h 657844 2016-09-02 20:52:35Z $
+ * $Id: bcmnvram.h 655606 2016-08-22 17:16:11Z $
  */
 
 #ifndef _bcmnvram_h_
@@ -63,8 +63,6 @@ extern void nvram_restore_var(char *prefix, char *name);
  */
 extern int nvram_init(void *sih);
 extern int nvram_deinit(void *sih);
-
-extern int initvars_file(void *sih, void *osh, char **nvramp, int *nvraml);
 
 
 extern int nvram_file_read(char **nvramp, int *nvraml);

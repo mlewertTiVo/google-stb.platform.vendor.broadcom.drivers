@@ -344,7 +344,7 @@ WLAN_StdIncDirs += components/clm-api/include
 WLAN_SrcIncDirs = src/shared src/wl/sys src/bcmcrypto \
 	src/wl/keymgmt/src src/wl/iocv/src \
 	components/drivers/wl/shim/src src/wl/proxd/src src/wl/mesh/src \
-	src/wl/randmac/src
+	src/wl/randmac/src src/wl/mbo_oce/src
 
 WLAN_StdSrcDirsR	 = $(addprefix $(WLAN_TreeBaseR)/,$(WLAN_StdSrcDirs))
 WLAN_StdIncDirsR	 = $(addprefix $(WLAN_TreeBaseR)/,$(WLAN_StdIncDirs))

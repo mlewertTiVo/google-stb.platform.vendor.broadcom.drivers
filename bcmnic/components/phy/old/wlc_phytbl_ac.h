@@ -17,7 +17,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  * All Rights Reserved.
  *
- * $Id: wlc_phytbl_ac.h 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: wlc_phytbl_ac.h 648596 2016-07-13 01:16:40Z $
  */
 /* FILE-CSTYLED */
 #ifndef _wlc_phytbl_ac_h_
@@ -105,8 +105,8 @@ extern CONST chan_info_radio2069revGE25_t chan_tuning_2069rev_GE_25_40MHz[NUM_RO
 extern CONST BCMATTACHDATA(chan_info_radio2069revGE25_52MHz_t) chan_tuning_2069rev_GE_25_52MHz[NUM_ROWS_CHAN_TUNING];
 
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 extern CONST radio_20xx_dumpregs_t dumpregs_20693_rsdb[];
 extern CONST radio_20xx_dumpregs_t dumpregs_20693_mimo[];
 extern CONST radio_20xx_dumpregs_t dumpregs_20693_80p80[];
@@ -117,7 +117,7 @@ extern CONST radio_20xx_dumpregs_t dumpregs_2069_rev17[];
 extern CONST radio_20xx_dumpregs_t dumpregs_2069_rev25[];
 extern CONST radio_20xx_dumpregs_t dumpregs_2069_rev32[];
 extern CONST radio_20xx_dumpregs_t dumpregs_2069_rev64[];
-#endif /* BCMDBG, BCMDBG_DUMP, BCMINTERNAL, DBG_PHY_IOV, BCMDBG_PHYDUMP */
+#endif 
 extern CONST radio_20xx_prefregs_t prefregs_2069_rev3[];
 extern CONST radio_20xx_prefregs_t prefregs_2069_rev4[];
 extern CONST radio_20xx_prefregs_t prefregs_2069_rev16[];

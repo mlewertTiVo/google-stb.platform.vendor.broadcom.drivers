@@ -37,6 +37,8 @@
 #include <bcmendian.h>
 #include "wlu_common.h"
 #include "wlu.h"
+#include <bcmsrom_fmt.h>
+#include <bcmsrom_tbl.h>
 
 /* For backwards compatibility, the absense of the define 'NO_FILESYSTEM_SUPPORT'
  * implies that a filesystem is supported.
@@ -53,6 +55,7 @@ static cmd_func_t wl_devpath;
 static cmd_func_t wl_diag;
 static cmd_func_t wl_var_setintandprintstr;
 static cmd_func_t wl_otpdump_iter;
+static cmd_func_t wlu_srwrite_data;
 
 static cmd_t wl_bmac_cmds[] = {
 	{ "srcrc", wlu_srwrite, WLC_GET_SROM, -1,
@@ -85,6 +88,9 @@ static cmd_t wl_bmac_cmds[] = {
 	"Dump raw otp"},
 	{ "otpstat", wl_var_setintandprintstr, WLC_GET_VAR, -1,
 	"Dump OTP status"},
+	{ "srwrite_data", wlu_srwrite_data, WLC_GET_SROM, WLC_SET_SROM,
+	"Write caldata to srom: srwrite_data -t type filename\n"
+	"\t Supported types: calblob"},
 	{ NULL, NULL, 0, 0, NULL }
 };
 
@@ -389,6 +395,116 @@ out:
 	return ret;
 #endif /* BWL_FILESYSTEM_SUPPORT */
 }
+
+int wlu_srwrite_data(void *wl, cmd_t *cmd, char **argv)
+{
+	int ret, len, nw;
+	uint16 *words = (uint16 *)&buf[8];
+	uint16 caldata_offset;
+	FILE *fp = NULL;
+	srom_rw_t   *srt =  (srom_rw_t *)buf;
+	char *arg;
+	char *cal_buf;
+	int argc;
+
+	for (argc = 0; argv[argc]; argc++);
+
+	if (argc != 4)
+		return BCME_USAGE_ERROR;
+
+	/* We need at least one arg */
+	if (!*++argv)
+		return BCME_USAGE_ERROR;
+
+	arg = *argv++;
+	if (!strcmp(arg, "-t") && !strcmp(*argv++, "calblob")) {
+		arg = *argv++;
+	/*
+	 * Avoid wl utility to driver compatibility issues by reading a 'safe' amount of words from
+	 * SPROM to determine the SPROM version that the driver supports, once the version is known
+	 * the full SPROM contents can be read. At the moment sromrev12 is the largest.
+	 */
+		nw = MAX(MAX(SROM10_SIGN, SROM11_SIGN), SROM11_SIGN)  + 1;
+		srt->byteoff = htod32(0);
+		srt->nbytes = htod32(2 * nw);
+
+		if (cmd->get < 0)
+			return BCME_ERROR;
+
+		if ((ret = wlu_get(wl, cmd->get, buf, WLC_IOCTL_MAXLEN)) < 0)
+			return ret;
+		caldata_offset = words[SROM15_CAL_OFFSET_LOC] & 0xff;
+		if (words[SROM11_SIGN] == SROM15_SIGNATURE) {
+			nw = SROM15_WORDS;
+		} else if (words[SROM16_SIGN] == SROM16_SIGNATURE) {
+			nw = SROM16_WORDS;
+			caldata_offset = SROM16_CAL_DATA_OFFSET;
+			printf("Srom16, byte offset: %d\n", caldata_offset);
+		} else {
+			printf("Unsupported for SROM revs other than rev15\n");
+			return BCME_ERROR;
+		}
+
+
+		/* Reading caldata from msf file */
+		if (!(fp = fopen(arg, "rb"))) {
+				fprintf(stderr, "%s: No such file or directory\n", arg);
+				return BCME_BADARG;
+		}
+
+		cal_buf = malloc(SROM_MAX);
+		if (cal_buf == NULL) {
+			ret = BCME_NOMEM;
+			goto out;
+		}
+		len = fread(cal_buf, 1, SROM_MAX + 1, fp);
+		len = (len + 1) & ~1;
+		if (len > SROM15_MAX_CAL_SIZE) {
+			ret = BCME_BUFTOOLONG;
+			goto out;
+		}
+
+		if ((ret = ferror(fp))) {
+			printf("\nerror %d reading %s\n", ret, arg);
+			ret = BCME_ERROR;
+			goto out;
+		}
+
+		if (!feof(fp)) {
+			printf("\nFile %s is too large\n", arg);
+			ret = BCME_ERROR;
+			goto out;
+		}
+		if ((len - MAX_IOCTL_TXCHUNK_SIZE) > 0) {
+			memcpy(srt->buf, cal_buf, MAX_IOCTL_TXCHUNK_SIZE);
+			srt->byteoff = htod32(caldata_offset);
+			srt->nbytes = htod32(MAX_IOCTL_TXCHUNK_SIZE);
+			ret = wlu_set(wl, cmd->set, buf, MAX_IOCTL_TXCHUNK_SIZE + 8);
+			memcpy(srt->buf, cal_buf + MAX_IOCTL_TXCHUNK_SIZE,
+				len - MAX_IOCTL_TXCHUNK_SIZE);
+			srt->byteoff = htod32(caldata_offset + MAX_IOCTL_TXCHUNK_SIZE);
+			srt->nbytes = htod32(len - MAX_IOCTL_TXCHUNK_SIZE);
+			ret = wlu_set(wl, cmd->set, buf, len - MAX_IOCTL_TXCHUNK_SIZE + 8);
+		}
+		else {
+			memcpy(srt->buf, cal_buf, len);
+			srt->byteoff = htod32(caldata_offset);
+			srt->nbytes = htod32(len);
+			ret = wlu_set(wl, cmd->set, buf, len + 8);
+		}
+	}
+	else {
+		printf("Invalid arguments for srwrite_data\n");
+		return BCME_BADARG;
+	}
+out:
+	fflush(stdout);
+	if (fp)
+		fclose(fp);
+	free(cal_buf);
+	return ret;
+}
+
 
 
 /*

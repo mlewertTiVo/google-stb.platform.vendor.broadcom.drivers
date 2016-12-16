@@ -35,9 +35,6 @@ enum {
 static const bcm_iovar_t phy_ac_radio_iovars[] = {
 	{"lp_mode", IOV_LP_MODE, (IOVF_SET_UP|IOVF_GET_UP), 0, IOVT_UINT8, 0},
 	{"lp_vco_2g", IOV_LP_VCO_2G, (IOVF_SET_UP|IOVF_GET_UP), 0, IOVT_UINT8, 0},
-#if defined(WLTEST)
-	{"radio_pd", IOV_RADIO_PD, (IOVF_SET_UP|IOVF_GET_UP), 0, IOVT_UINT8, 0},
-#endif /* WLTEST */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -51,6 +48,7 @@ phy_ac_radio_doiovar(void *ctx, uint32 aid,
 	int err = BCME_OK;
 	int int_val = 0;
 	int32 *ret_int_ptr = (int32 *)a;
+	phy_ac_radio_info_t *radioi = pi->u.pi_acphy->radioi;
 
 	if (plen >= (uint)sizeof(int_val))
 		bcopy(p, &int_val, sizeof(int_val));
@@ -62,13 +60,13 @@ phy_ac_radio_doiovar(void *ctx, uint32 aid,
 			PHY_ERROR(("LP MODE %d is not supported \n", (uint16)int_val));
 			err = BCME_RANGE;
 		} else {
-			wlc_phy_lp_mode(pi->u.pi_acphy->radioi, (int8) int_val);
+			wlc_phy_lp_mode(radioi, (int8) int_val);
 		}
 		break;
 	}
 	case IOV_GVAL(IOV_LP_MODE):
 	{
-		*ret_int_ptr = pi->u.pi_acphy->acphy_lp_status;
+		*ret_int_ptr = phy_ac_radio_get_data(radioi)->acphy_lp_status;
 		break;
 	}
 	case IOV_SVAL(IOV_LP_VCO_2G):
@@ -89,38 +87,13 @@ phy_ac_radio_doiovar(void *ctx, uint32 aid,
 	case IOV_GVAL(IOV_LP_VCO_2G):
 	{
 		if (ACMAJORREV_1(pi->pubpi->phy_rev)) {
-			*ret_int_ptr = pi->u.pi_acphy->acphy_force_lpvco_2G;
+			*ret_int_ptr = phy_ac_radio_get_data(radioi)->acphy_force_lpvco_2G;
 		} else {
 			PHY_ERROR(("LP MODE is not supported for this chip \n"));
 			err = BCME_UNSUPPORTED;
 		}
 		break;
 	}
-#if defined(WLTEST)
-	case IOV_SVAL(IOV_RADIO_PD):
-	{
-		if (CHIPID(pi->sh->chip) == BCM4335_CHIP_ID) {
-			if (int_val == 1) {
-				pi->u.pi_acphy->acphy_4335_radio_pd_status = 1;
-				wlc_phy_radio2069_pwrdwn_seq(pi->u.pi_acphy->radioi);
-			} else if (int_val == 0) {
-				wlc_phy_radio2069_pwrup_seq(pi->u.pi_acphy->radioi);
-				pi->u.pi_acphy->acphy_4335_radio_pd_status = 0;
-			} else {
-				PHY_ERROR(("RADIO PD %d is not supported \n", (uint16)int_val));
-			}
-		} else {
-			PHY_ERROR(("RADIO PD is not supported for this chip \n"));
-			err = BCME_UNSUPPORTED;
-		}
-		break;
-	}
-	case IOV_GVAL(IOV_RADIO_PD):
-	{
-		*ret_int_ptr = pi->u.pi_acphy->acphy_4335_radio_pd_status;
-		break;
-	}
-#endif /* WLTEST */
 	default:
 		err = BCME_UNSUPPORTED;
 		break;

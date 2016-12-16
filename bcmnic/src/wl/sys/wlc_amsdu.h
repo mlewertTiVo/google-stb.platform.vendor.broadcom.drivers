@@ -12,29 +12,44 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_amsdu.h 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_amsdu.h 661043 2016-09-23 01:52:16Z $
 */
 
 
 #ifndef _wlc_amsdu_h_
 #define _wlc_amsdu_h_
 /* A-MSDU policy limits */
+typedef union {
+	struct {
+		/* TXQ MUX union elements */
+		bool	m_ackRatioEnabled;	/* Set if skipping of TCP ACKS is specified */
+		uint32	m_aggbytes_hwm_delta;	/* Length delta for highwatermark */
+		uint32 	m_passthrough_flags;	/* A-MSDU passthrough condition flags */
+		uint16	m_packet_headroom;	/* Packet headroom at head of A-MSDU */
+	} mux;
+
+	struct {
+		/* non mux union elemets */
+		uint16	nm_fifo_lowm;		/* low watermark for tx queue precendence */
+		uint16	nm_fifo_hiwm;		/* high watermark for tx queue precendence */
+	} non_mux;
+} amsdu_txpolicy_union_t;
+
 typedef struct amsdu_txpolicy {
-#ifdef TXQ_MUX
-	uint	aggbytes_hwm_delta;	/* Length delta for highwatermark */
-	bool 	ackRatioEnabled;	/* Set if skipping of TCP ACKS is specified */
-	uint32 	passthrough_flags;	/* A-MSDU passthrough condition flags */
-	uint16	packet_headroom;	/* Packet headroom at head of A-MSDU */
-#else
-	uint16	fifo_lowm;		/* low watermark for tx queue precendence */
-	uint16	fifo_hiwm;		/* high watermark for tx queue precendence */
-#endif /* TXQ_MUX */
+	amsdu_txpolicy_union_t u;
 	bool	amsdu_agg_enable;	/* TRUE: agg is allowed, FALSE: agg is disallowed */
 	uint 	amsdu_max_sframes;	/* Maximum allowed subframes per A-MSDU */
 	uint 	amsdu_max_agg_bytes;	/* Maximum allowed payload bytes per A-MSDU */
 } amsdu_txpolicy_t;
 
-#ifdef TXQ_MUX
+#define aggbytes_hwm_delta u.mux.m_aggbytes_hwm_delta
+#define tx_ackRatioEnabled u.mux.m_ackRatioEnabled
+#define tx_passthrough_flags u.mux.m_passthrough_flags
+#define packet_headroom u.mux.m_packet_headroom
+#define fifo_lowm u.non_mux.nm_fifo_lowm
+#define fifo_hiwm u.non_mux.nm_fifo_hiwm
+
+/* TXQ_MUX AMSDU session structures */
 typedef struct amsdu_txsession {
 	void			*amsdu_ctx;		/* TX session context */
 	wlc_bsscfg_t 	*bsscfg;		/* BSSCFG of the A-MSDU-- optimization */
@@ -52,7 +67,6 @@ typedef struct amsdu_txinfo {
 	/* Init by A-MSDU module, exposed to caller for storage allocation purposes */
 	amsdu_txsession_t	txsession;
 } amsdu_txinfo_t;
-#endif /* TXQ_MUX */
 
 extern amsdu_info_t *wlc_amsdu_attach(wlc_info_t *wlc);
 extern void wlc_amsdu_detach(amsdu_info_t *ami);
@@ -104,12 +118,7 @@ extern bool
 wlc_amsdu_is_rxmax_valid(amsdu_info_t *ami);
 extern void wlc_amsdu_update_state(wlc_info_t *wlc);
 
-#ifdef WLCXO_CTRL
-extern void wlc_cxo_tsc_amsdu_init(amsdu_info_t *ami, struct scb *scb, uint8 tid,
-	wlc_cx_scb_amsdu_t *cx_scb_ami);
-extern void wlc_cxo_ctrl_amsdu_add(wlc_info_t *wlc, amsdu_info_t *ami);
-#endif
-#ifdef WL_TXQ_STALL
+#if defined(WL_TXQ_STALL) && !defined(TXQ_MUX)
 int wlc_amsdu_tx_health_check(wlc_info_t * wlc);
 #endif
 int wlc_amsdu_tx_queued_pkts(amsdu_info_t *ami, struct scb * scb, int tid, uint * timestamp);

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_tpc.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_lcn20_tpc.c 659961 2016-09-16 18:46:01Z $
  */
 
 #include <typedefs.h>
@@ -20,7 +20,6 @@
 #include <phy_dbg.h>
 #include <phy_mem.h>
 #include <phy_tpc.h>
-#include "phy_tpc_shared.h"
 #include "phy_type_tpc.h"
 #include <phy_lcn20.h>
 #include <phy_lcn20_tpc.h>
@@ -30,6 +29,7 @@
 #include <phy_utils_var.h>
 #include <phy_rstr.h>
 #include <d11.h>
+#include <phy_stf.h>
 
 #ifndef ALL_NEW_PHY_MOD
 /* < TODO: all these are going away... */
@@ -59,10 +59,8 @@ static bool phy_lcn20_tpc_recalc_sw(phy_type_tpc_ctx_t *ctx);
 static bool phy_lcn20_tpc_hw_ctrl_get(phy_type_tpc_ctx_t *ctx);
 static void phy_lcn20_tpc_set_flags(phy_type_tpc_ctx_t *ctx, phy_tx_power_t *power);
 static void phy_lcn20_tpc_set_max(phy_type_tpc_ctx_t *ctx, phy_tx_power_t *power);
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-static int phy_lcn20_tpc_set_pavars(phy_type_tpc_ctx_t *ctx, void* a, void* p);
-static int phy_lcn20_tpc_get_pavars(phy_type_tpc_ctx_t *ctx, void* a, void* p);
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+static int phy_lcn20_tpc_get_est_pout(phy_type_tpc_ctx_t *ctx,
+	uint8* est_Pout, uint8* est_Pout_adj, uint8* est_Pout_cck);
 
 /* Register/unregister lcn20PHY specific implementation to common layer. */
 phy_lcn20_tpc_info_t *
@@ -96,13 +94,10 @@ BCMATTACHFN(phy_lcn20_tpc_register_impl)(phy_info_t *pi, phy_lcn20_info_t *lcn20
 	fns.get_hwctrl = phy_lcn20_tpc_hw_ctrl_get;
 	fns.setflags = phy_lcn20_tpc_set_flags;
 	fns.setmax = phy_lcn20_tpc_set_max;
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-	fns.set_pavars = phy_lcn20_tpc_set_pavars;
-	fns.get_pavars = phy_lcn20_tpc_get_pavars;
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */
+	fns.get_est_pout = phy_lcn20_tpc_get_est_pout;
 	fns.ctx = info;
 
-	info->ti->data->cfg.cckpwroffset[0] = (int8)PHY_GETINTVAR_DEFAULT(pi,
+	info->ti->data->cfg->cckpwroffset[0] = (int8)PHY_GETINTVAR_DEFAULT(pi,
 		rstr_cckpwroffset0, 0);
 
 	phy_tpc_register_impl(ti, &fns);
@@ -149,6 +144,9 @@ phy_lcn20_tpc_recalc_tgt(phy_type_tpc_ctx_t *ctx)
 	wlc_phy_txpower_recalc_target_lcn20phy(pi);
 }
 
+#define CC_CODE_LEN_BYTES (3)
+#define NUM_LOG_ENTRIES (8)
+
 /* TODO: The code could be optimized by moving the common code to phy/cmn */
 /* [PHY_RE_ARCH] There are two functions: Bigger function wlc_phy_txpower_recalc_target
  * and smaller function phy_tpc_recalc_tgt which in turn call their phy specific functions
@@ -165,6 +163,7 @@ wlc_phy_txpower_recalc_target_lcn20_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_t
 	uint8 mintxpwr = 0;
 	uint8 core;
 	chanspec_t chspec = pi->radio_chanspec;
+	bool min_tx_pwr_check = FALSE;
 	/* Combine user target, regulatory limit, SROM/HW/board limit and power
 	 * percentage to get a tx power target for each rate.
 	 */
@@ -175,7 +174,7 @@ wlc_phy_txpower_recalc_target_lcn20_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_t
 		 */
 		ppr_set_cmn_val(tx_pwr_target, info->ti->data->tx_user_target);
 
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(WL_EXPORT_TXPOWER)
+#if defined(WL_EXPORT_TXPOWER)
 		/* Only allow tx power override for internal or test builds. */
 		if (!info->ti->data->txpwroverride)
 #endif
@@ -237,6 +236,33 @@ wlc_phy_txpower_recalc_target_lcn20_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_t
 		pi->openlp_tx_power_min = tx_pwr_min;
 		info->ti->data->txpwrnegative = 0;
 
+		min_tx_pwr_check = tx_pwr_min < (LCN20PHY_TXPWR_MIN * WLC_TXPWR_DB_FACTOR);
+		if (min_tx_pwr_check) {
+			/* PHY_FATAL_ERROR_MESG((" %s: TxMinPwr less than Supported MinPower\n",
+			 *		__FUNCTION__));
+			 * PHY_FATAL_ERROR(pi, PHY_RC_TXPOWER_LIMITS);
+			 */
+			/* Log the channel & country info when this issue occurs.
+			 * 1st element in the log arrays pi->ccode[] and pi->chanspec_array[]
+			 * correspond to the latest failure case.
+			  */
+			int8 length, i;
+			uint16 *chanspec_array = pi->tpci->data->chanspec_array;
+			char *ccode = pi->tpci->data->ccode;
+			pi->tpci->data->minpwrlimit_fail++;
+			if (pi->tpci->data->ccode_ptr) {
+				length = CC_CODE_LEN_BYTES;
+				for (i = NUM_LOG_ENTRIES-2; i >= 0; i--) {
+					strncpy(ccode + length*(i+1), ccode + length*i,
+							CC_CODE_LEN_BYTES);
+					chanspec_array[i+1] = chanspec_array[i];
+				}
+				strncpy(ccode, pi->tpci->data->ccode_ptr, length);
+			}
+			chanspec_array[0] = pi->radio_chanspec;
+		}
+
+
 		PHY_NONE(("wl%d: %s: min %d max %d\n", pi->sh->unit, __FUNCTION__,
 		    tx_pwr_min, tx_pwr_max));
 
@@ -275,9 +301,6 @@ wlc_phy_txpower_recalc_target_lcn20_big(phy_type_tpc_ctx_t *ctx, ppr_t *tx_pwr_t
 	 * PHY_ERROR(("#####The final power offset limit########\n"));
 	 * ppr_mcs_printf(pi->tx_power_offset);
 	 */
-	ppr_delete(pi->sh->osh, reg_txpwr_limit);
-	ppr_delete(pi->sh->osh, tx_pwr_target);
-	ppr_delete(pi->sh->osh, srom_max_txpwr);
 	/* Common Code End */
 }
 
@@ -345,7 +368,7 @@ wlc_phy_txpower_sromlimit_get_lcn20phy(phy_type_tpc_ctx_t *ctx, chanspec_t chans
 	srom_pwrdet_t *pwrdet  = pi->pwrdet;
 	uint8 band;
 	uint8 channel = CHSPEC_CHANNEL(chanspec);
-	band = wlc_phy_get_band_from_channel(pi, channel);
+	band = phy_tpc_get_band_from_channel(info->ti, channel);
 	wlc_phy_txpwr_apply_sromlcn20(pi, band, max_pwr);
 	ppr_apply_max(max_pwr, pwrdet->max_pwr[core][band]);
 }
@@ -452,7 +475,7 @@ wlc_lcn20phy_perpkt_idle_tssi_est(phy_info_t *pi)
 	wlc_lcn20phy_set_tx_pwr_by_index(pi, SAVE_indx);
 	wlc_lcn20phy_set_tx_pwr_ctrl(pi, SAVE_txpwrctrl);
 	PHY_REG_MOD(pi, LCN20PHY, TxPwrCtrlRangeCmd, cckPwrOffset,
-		pi->tpci->data->cfg.cckpwroffset[0]);
+		pi->tpci->data->cfg->cckpwroffset[0]);
 
 	if (!suspend)
 		wlapi_enable_mac(pi->sh->physhim);
@@ -538,7 +561,7 @@ wlc_lcn20phy_idle_tssi_est(phy_info_t *pi)
 	* 1. cal is not possible
 	* 2. idle TSSI for the current band/subband is valid
 	*/
-	if (0 && wlc_phy_no_cal_possible(pi)) {
+	if (0 && phy_calmgr_no_cal_possible(pi)) {
 		int range = wlc_phy_chanspec_bandrange_get(pi, pi->radio_chanspec);
 
 		if ((range == WL_CHAN_FREQ_RANGE_2G) &&
@@ -551,7 +574,7 @@ wlc_lcn20phy_idle_tssi_est(phy_info_t *pi)
 	wlc_lcn20phy_set_bbmult(pi, 0x0);
 
 	wlc_btcx_override_enable(pi);
-	wlc_phy_do_dummy_tx(pi, TRUE, OFF);
+	phy_tssical_do_dummy_tx(pi, TRUE, OFF);
 	/* Disable WLAN priority */
 	wlc_phy_btcx_override_disable(pi);
 
@@ -565,7 +588,7 @@ wlc_lcn20phy_idle_tssi_est(phy_info_t *pi)
 		PHY_REG_MOD(pi, LCN20PHY, TxPwrCtrlRfCtrlOverride0, tssiRangeOverrideVal, 0);
 
 		wlc_btcx_override_enable(pi);
-		wlc_phy_do_dummy_tx(pi, TRUE, OFF);
+		phy_tssical_do_dummy_tx(pi, TRUE, OFF);
 		/* Disable WLAN priority */
 		wlc_phy_btcx_override_disable(pi);
 
@@ -601,7 +624,7 @@ cleanIdleTSSI:
 	wlc_lcn20phy_set_tx_pwr_by_index(pi, SAVE_indx);
 	wlc_lcn20phy_set_tx_pwr_ctrl(pi, SAVE_txpwrctrl);
 	PHY_REG_MOD(pi, LCN20PHY, TxPwrCtrlRangeCmd, cckPwrOffset,
-		pi->tpci->data->cfg.cckpwroffset[0]);
+		pi->tpci->data->cfg->cckpwroffset[0]);
 
 	if (!suspend)
 		wlapi_enable_mac(pi->sh->physhim);
@@ -644,7 +667,7 @@ WLBANDINITFN(wlc_lcn20phy_txpwrctrl_init)(phy_info_t *pi)
 
 		/* Convert tssi to power LUT */
 #ifdef WLC_TXCAL
-		if (pi->txcali->txcal_pwr_tssi_tbl_in_use == 1) {
+		if (phy_tssical_get_pwr_tssi_tbl_in_use(pi->tssicali) == 1) {
 			/* Use Tx cal based pwr_tssi_tbl */
 			wlc_phy_apply_pwr_tssi_tble_chan_lcn20phy(pi);
 		} else
@@ -689,7 +712,7 @@ WLBANDINITFN(wlc_lcn20phy_txpwrctrl_init)(phy_info_t *pi)
 
 		phy_utils_write_phyreg(pi, LCN20PHY_TxPwrCtrlDeltaPwrLimit, 8);
 		PHY_REG_MOD(pi, LCN20PHY, TxPwrCtrlRangeCmd, cckPwrOffset,
-			pi->tpci->data->cfg.cckpwroffset[0]);
+			pi->tpci->data->cfg->cckpwroffset[0]);
 
 		PHY_REG_MOD(pi, LCN20PHY, TxPwrCtrlCmdCCK, baseIndex_cck_en, 1);
 		PHY_REG_MOD(pi, LCN20PHY, TxPwrCtrlCmdCCK, pwrIndex_init_cck, 180);
@@ -767,7 +790,7 @@ wlc_lcn20phy_set_txpwr_clamp(phy_info_t *pi)
 	} else {
 
 		wlc_lcn20phy_get_tssi_floor(pi, &tssi_floor);
-		wlc_phy_get_paparams_for_band(pi, &a1, &b0, &b1);
+		phy_tpc_get_paparams_for_band(pi, &a1, &b0, &b1);
 
 		perPktIdleTssi = PHY_REG_READ(pi, LCN20PHY, perPktIdleTssiCtrl,
 			perPktIdleTssiUpdate_en);
@@ -789,7 +812,7 @@ wlc_lcn20phy_set_txpwr_clamp(phy_info_t *pi)
 		pwr = wlc_lcn20phy_tssi2dbm(adj_tssi_min, a1, b0, b1);
 		target_pwr_ofdm_max = (pwr - fudge) >> 1;
 		target_pwr_cck_max = (MIN(pwr,
-			(pwr + pi->tpci->data->cfg.cckpwroffset[0])) - fudge) >> 1;
+			(pwr + pi->tpci->data->cfg->cckpwroffset[0])) - fudge) >> 1;
 		PHY_TMP(("idleTssi_OB= %d, idle_tssi_shift= %d, adj_tssi_min= %d, "
 				"pwr = %d, target_pwr_cck_max = %d, target_pwr_ofdm_max = %d\n",
 				idleTssi_OB, idle_tssi_shift, adj_tssi_min, pwr,
@@ -807,7 +830,9 @@ wlc_lcn20phy_set_txpwr_clamp(phy_info_t *pi)
 		max_ovr_pwr = MIN(target_pwr_ofdm_max, target_pwr_cck_max);
 		{
 			uint8 core;
-			FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+			uint8 phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+			BCM_REFERENCE(phyrxchain);
+			FOREACH_ACTV_CORE(pi, phyrxchain, core) {
 				pi->tx_power_min_per_core[core] =
 					MIN(pi->tx_power_min_per_core[core], max_ovr_pwr);
 			}
@@ -847,63 +872,25 @@ wlc_lcn20phy_set_txpwr_clamp(phy_info_t *pi)
 	wlc_lcn20phy_write_table(pi, &tab);
 }
 
-#if (defined(BCMINTERNAL) || defined(WLTEST))
-static int
-phy_lcn20_tpc_set_pavars(phy_type_tpc_ctx_t *ctx, void *a, void *p)
-{
-	phy_lcn20_tpc_info_t *tpci = (phy_lcn20_tpc_info_t *)ctx;
-	phy_info_t *pi = tpci->pi;
-	uint16 inpa[WL_PHY_PAVARS_LEN];
-	uint j = 3; /* PA parameters start from offset 3 */
-	bcopy(p, inpa, sizeof(inpa));
-
-	if (inpa[0] != PHY_TYPE_LCN20) {
-		PHY_ERROR(("Wrong phy type %d\n", inpa[0]));
-		return BCME_BADARG;
-	}
-
-	switch (inpa[1]) {
-	case WL_CHAN_FREQ_RANGE_2G:
-		pi->txpa_2g[2] = inpa[j++]; /* a1 */
-		pi->txpa_2g[0] = inpa[j++]; /* b0 */
-		pi->txpa_2g[1] = inpa[j++]; /* b1 */
-		return BCME_OK;
-	default:
-		PHY_ERROR(("bandrange %d is out of scope\n", inpa[1]));
-		return BCME_OUTOFRANGECHAN;
-	}
-}
 
 static int
-phy_lcn20_tpc_get_pavars(phy_type_tpc_ctx_t *ctx, void *a, void *p)
+phy_lcn20_tpc_get_est_pout(phy_type_tpc_ctx_t *ctx,
+	uint8* est_Pout, uint8* est_Pout_adj, uint8* est_Pout_cck)
 {
-	phy_lcn20_tpc_info_t *tpci = (phy_lcn20_tpc_info_t *)ctx;
-	phy_info_t *pi = tpci->pi;
-	uint16 *outpa = a;
-	uint16 inpa[WL_PHY_PAVARS_LEN];
-	uint j = 3; /* PA parameters start from offset 3 */
+	phy_lcn20_tpc_info_t *tpc_info = (phy_lcn20_tpc_info_t *) ctx;
+	phy_info_t *pi = tpc_info->pi;
 
-	bcopy(p, inpa, sizeof(inpa));
+	*est_Pout_cck = 0;
 
-	outpa[0] = inpa[0]; /* Phy type */
-	outpa[1] = inpa[1]; /* Band range */
-	outpa[2] = inpa[2]; /* Chain */
+	if (pi->hwpwrctrl) {
 
-	if (inpa[0] != PHY_TYPE_LCN20) {
-		PHY_ERROR(("Wrong phy type %d\n", inpa[0]));
-		outpa[0] = PHY_TYPE_NULL;
-		return BCME_BADARG;
+		/* Get power estimates */
+		wlapi_suspend_mac_and_wait(pi->sh->physhim);
+		phy_utils_phyreg_enter(pi);
+		wlc_lcn20phy_get_tssi(pi, (int8*)&est_Pout[0], (int8*)est_Pout_cck);
+		phy_utils_phyreg_exit(pi);
+		wlapi_enable_mac(pi->sh->physhim);
+		est_Pout_adj[0] = est_Pout[0];
 	}
-
-	switch (inpa[1]) {
-	case WL_CHAN_FREQ_RANGE_2G:
-		outpa[j++] = pi->txpa_2g[2];		/* a1 */
-		outpa[j++] = pi->txpa_2g[0];		/* b0 */
-		outpa[j++] = pi->txpa_2g[1];		/* b1 */
-		return BCME_OK;
-	default:
-		PHY_ERROR(("bandrange %d is out of scope\n", inpa[1]));
-		return BCME_OUTOFRANGECHAN;
-	}
+	return BCME_OK;
 }
-#endif /* defined(BCMINTERNAL) || defined(WLTEST) */

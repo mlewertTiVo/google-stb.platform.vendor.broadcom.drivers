@@ -10,7 +10,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scbq.c 642065 2016-06-07 07:39:03Z $
+ * $Id: wlc_scbq.c 665067 2016-10-14 20:09:59Z $
  */
 
 /**
@@ -41,10 +41,14 @@
 #include <wlc_txtime.h>
 #include <wlc_tx.h>
 #include <wlc_ampdu.h>
+#include <wlc_apps.h>
 #include <wlc_scbq.h>
 #include <wlc_txmod.h>
 #include <wlc_perf_utils.h>
 #include <wlc_dump.h>
+#include <wlc_mux_utils.h>
+
+#define SCBQ_DBG(x)
 
 /**
  * @brief Definition of state structure for the SCBQ module created by wlc_scbq_module_attach().
@@ -77,8 +81,11 @@ typedef struct scbq_cubby_info {
 	struct scb          *scb;
 	struct pktq         scb_txq;           /**< @brief multi-prio queue for buffered packets */
 	uint16              fc;                /**< @brief flow control flags */
+	uint16              mux_srcmap;        /**< @brief mux source bitmap */
 	wlc_mux_t           *mux[AC_COUNT];    /**< @brief the MUX we feed */
 	mux_source_handle_t mux_hdl[AC_COUNT]; /**< @brief our MUX source handle */
+	mux_output_fn_t     output_fn;         /**< @brief registered output packet fn */
+	void                *ctx;              /**< @brief context for output_fn */
 	uint8               flags[AC_COUNT];   /**< @brief per-MUX & per-AC flags */
 	scbq_overflow_fn_t  packet_overflow_handler; /**< @brief packet drop handler */
 } scbq_cubby_info_t;
@@ -95,9 +102,9 @@ enum scbq_flags {
 #define SCB_SCBQ_CUBBY_INFO(scbq_info, scb) \
 	(SCB_SCBQ_CUBBY_PTR(scbq_info, scb)->pinfo)
 
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 static int wlc_scbq_module_dump(wlc_scbq_info_t *scbq_info, struct bcmstrbuf *b);
-#endif 
+#endif /* defined(BCMDBG) || defined(WLDUMP) */
 static int wlc_scbq_doiovar(void *hdl, uint32 actionid,
                             void *p, uint plen,
                             void *a, uint alen,
@@ -106,10 +113,12 @@ static int wlc_scbq_doiovar(void *hdl, uint32 actionid,
 static int wlc_scbq_cubby_init(void *context, struct scb *scb);
 static void wlc_scbq_cubby_deinit(void *context, struct scb *scb);
 static void wlc_scbq_scb_tx_flush(wlc_scbq_info_t *scbq_info, struct scb *scb);
+#ifdef BCMDBG
+static void wlc_scbq_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#endif
 
 static void wlc_scbq_enq(void *ctx, struct scb *scb, void *p, uint prec);
 static uint wlc_scbq_txpktcnt(void *hdl);
-static void wlc_scbq_txmod_flush(void *context, struct scb *scb);
 
 static void wlc_scbq_scb_tx_stop(wlc_scbq_info_t *scbq_info, struct scb *scb);
 static void wlc_scbq_scb_tx_start(wlc_scbq_info_t *scbq_info, struct scb *scb);
@@ -124,6 +133,9 @@ enum {
 };
 
 static const bcm_iovar_t scbq_iovars[] = {
+#if defined(BCMDBG)
+	{"scbq_global_fc", IOV_SCBQ_GLOBAL_FC, 0, 0, IOVT_INT32, 0},
+#endif /* BCMDBG */
 	{NULL, 0, 0, 0, 0, 0 }
 };
 
@@ -131,7 +143,7 @@ static const bcm_iovar_t scbq_iovars[] = {
 static txmod_fns_t BCMATTACHDATA(scbq_txmod_fns) = {
 	wlc_scbq_enq,
 	wlc_scbq_txpktcnt,
-	wlc_scbq_txmod_flush,
+	NULL,
 	NULL
 };
 
@@ -177,12 +189,12 @@ BCMATTACHFN(wlc_scbq_module_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 	wlc_dump_register(scbq_info->pub, "scbq", (dump_fn_t)wlc_scbq_module_dump, scbq_info);
 #endif
 
 	/* register an scb cubby dump fn if the build is appropriate */
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 	cubby_dump = wlc_scbq_scb_dump;
 #else
 	cubby_dump = NULL;
@@ -270,6 +282,10 @@ wlc_scbq_set_output_fn(wlc_scbq_info_t *scbq_info, struct scb *scb,
 	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
 	int ac;
 
+	// Save the output fn and context. Remove this when wlc_tx supports output_config
+	scbq_cubby->output_fn = output_fn;
+	scbq_cubby->ctx = ctx;
+
 	/* update the output function for each ac's mux source */
 	for (ac = 0; ac < AC_COUNT; ac++) {
 		wlc_mux_source_set_output_fn(scbq_cubby->mux[ac], scbq_cubby->mux_hdl[ac],
@@ -291,6 +307,62 @@ wlc_scbq_reset_output_fn(wlc_scbq_info_t *scbq_info, struct scb *scb)
 
 	wlc_scbq_set_output_fn(scbq_info, scb, scbq_cubby, wlc_scbq_output);
 }
+
+#if defined(AP)
+void
+wlc_txoutput_config(wlc_scbq_info_t *scbq_info, struct scb *scb, uint8 module_id)
+{
+	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
+	int ac;
+	void *ctx = scb;
+	mux_output_fn_t output_fn = wlc_scbq_ps_output;
+
+	/* update the output function for each ac's mux source */
+	for (ac = 0; ac < AC_COUNT; ac++) {
+		wlc_mux_source_set_output_fn(scbq_cubby->mux[ac], scbq_cubby->mux_hdl[ac],
+		                             ctx, output_fn);
+	}
+}
+
+void
+wlc_txoutput_unconfig(wlc_scbq_info_t *scbq_info, struct scb *scb, uint8 module_id)
+{
+	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
+
+	wlc_scbq_set_output_fn(scbq_info, scb, scbq_cubby->ctx, scbq_cubby->output_fn);
+}
+
+/**
+ * Call the configured output fn for the SCBQ. This is the output fn configured by
+ * the call to wlc_scbq_set_output_fn(), which is "upstream" or "behind" the
+ * output filter function.
+ * Used by the output filter function to request output packets so that it can do the next stage of
+ * tx processing.
+ *
+ * @param scbq_info     A pointer to the state structure for the SCBQ module
+ *                      created by wlc_scbq_module_attach().
+ * @param scb           A pointer to the SCB of interest.
+ * @param ac            Access Category traffic being requested
+ * @param request_time  the total estimated TX time the caller is requesting from the SCB
+ * @param output_q      pointer to a packet queue to use to store the output packets
+ *
+ * @return              The estimated TX time of the packets returned in the output_q. The time
+ *                      returned may be greater than the 'request_time'
+ */
+uint
+wlc_scbq_unfiltered_output(wlc_scbq_info_t *scbq_info, struct scb *scb,
+                           uint ac, uint request_time, struct spktq *output_q)
+{
+	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
+	uint supplied_time;
+
+	/* make a request to the configured output fn */
+	supplied_time = scbq_cubby->output_fn(scbq_cubby->ctx, ac, request_time, output_q);
+
+	return supplied_time;
+}
+
+#endif /* AP */
 
 /**
  * Return the given scb's tx queue
@@ -342,7 +414,7 @@ static void wlc_scbq_drop_packet(wlc_scbq_info_t *scbq_info,
 	return;
 }
 
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 /**
  * Dump current state and statistics of the SCBQ as a whole
  */
@@ -353,7 +425,7 @@ wlc_scbq_module_dump(wlc_scbq_info_t *scbq_info, struct bcmstrbuf *b)
 
 	return BCME_OK;
 }
-#endif 
+#endif /* BCMDBG || WLDUMP */
 
 static int
 wlc_scbq_doiovar(void *hdl, uint32 actionid,
@@ -362,6 +434,10 @@ wlc_scbq_doiovar(void *hdl, uint32 actionid,
                  uint vsize,
                  struct wlc_if *wlcif)
 {
+#if defined(BCMDBG)
+	wlc_scbq_info_t *scbq_info = hdl;
+	int32 *ret_int_ptr = (int32 *)a;
+#endif
 	int32 int_val = 0;
 	bool bool_val;
 	int err = BCME_OK;
@@ -373,6 +449,11 @@ wlc_scbq_doiovar(void *hdl, uint32 actionid,
 	BCM_REFERENCE(bool_val);
 
 	switch (actionid) {
+#if defined(BCMDBG)
+	case IOV_GVAL(IOV_SCBQ_GLOBAL_FC):
+		*ret_int_ptr = scbq_info->global_fc;
+		break;
+#endif /* BCMDBG */
 	default:
 		err = BCME_UNSUPPORTED;
 		break;
@@ -403,7 +484,6 @@ wlc_scbq_cubby_init(void *context, struct scb *scb)
 	wlc_scbq_info_t *scbq_info = (wlc_scbq_info_t *)context;
 	struct scbq_cubby *cubby = SCB_SCBQ_CUBBY_PTR(scbq_info, scb);
 	scbq_cubby_info_t *scbq_cubby;
-	wlc_mux_t *mux;
 	wlc_txq_info_t *qi;
 	int ac;
 	int err;
@@ -443,26 +523,25 @@ wlc_scbq_cubby_init(void *context, struct scb *scb)
 
 	/* create MUX input members for each AC */
 	qi = scb->bsscfg->wlcif->qi;
+
+	/* Save the output fn and context. Remove this when wlc_tx supports output_config */
+	scbq_cubby->output_fn = wlc_scbq_output;
+	scbq_cubby->ctx = scbq_cubby;
+
+	/* create MUX input members for each AC */
+	qi = scb->bsscfg->wlcif->qi;
 	for (ac = 0; ac < AC_COUNT; ac++) {
-		mux = qi->ac_mux[ac];
-		scbq_cubby->mux[ac] = mux;
+		scbq_cubby->mux[ac] = qi->ac_mux[ac];
 		scbq_cubby->flags[ac] = SCBQ_F_STALLED;
-		err = wlc_mux_add_source(mux,
-		                         scbq_cubby,
-		                         wlc_scbq_output,
-		                         &scbq_cubby->mux_hdl[ac]);
+		MUX_GRP_SET(ac, scbq_cubby->mux_srcmap);
+	}
+	err =  wlc_scbq_muxrecreatesrc(scbq_info, scb, qi);
 
-		if (err) {
-			WL_ERROR(("wl%d:%s wlc_mux_add_member() failed err = %d\n",
-			          scbq_info->unit, __FUNCTION__, err));
-		}
-
-		/* If flow control is non-zero (tx is stopped),
-		 * then set the mux sources as stopped
-		 */
-		if (scbq_cubby->fc != 0) {
-			wlc_mux_source_stop(mux, scbq_cubby->mux_hdl[ac]);
-		}
+	if (err) {
+		WL_ERROR(("wl%d:%s wlc_mux_add_member() failed err = %d\n",
+			scbq_info->unit, __FUNCTION__, err));
+		scbq_cubby->mux_srcmap = 0;
+		return (err);
 	}
 
 	/* Set the default packet overflow handler */
@@ -524,6 +603,162 @@ wlc_scbq_scb_tx_flush(wlc_scbq_info_t *scbq_info, struct scb *scb)
 	wlc_txq_pktq_flush(scbq_info->wlc, &scbq_cubby->scb_txq);
 }
 
+/**
+ * Recreate mux sources of a given scb.
+ *
+ * The mux handle associated with the 'new_qi' parameter is saved and
+ * mux sources for the given scb are created for the mux.
+ *
+ * @param scbq_info     A pointer to the state structure for the SCBQ module
+ *                      created by wlc_scbq_module_attach().
+ * @param scb           A pointer to the SCB of interest.
+ * @param new_qi        The TxQ to which the scb will be attached.
+ *
+ * @return  BCME_OK on success or other error code if there is a problem.
+ */
+int
+wlc_scbq_muxrecreatesrc(wlc_scbq_info_t *scbq_info,
+		struct scb *scb, struct wlc_txq_info *new_qi)
+{
+	int err = BCME_OK;
+	int ac;
+	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
+
+	/* Bail if internal, put it here to relieve the burden of detail from the caller */
+	if (SCB_INTERNAL(scb)) {
+		return err;
+	}
+
+	for (ac = 0; ac < AC_COUNT; ac++) {
+		if (MUX_GRP_SELECTED(ac, scbq_cubby->mux_srcmap)) {
+			wlc_mux_t *newmux = new_qi->ac_mux[ac];
+			err = wlc_mux_add_source(newmux, scbq_cubby->ctx,
+					scbq_cubby->output_fn, &scbq_cubby->mux_hdl[ac]);
+
+			if (err) {
+				WL_ERROR(("wl%d:%s wlc_mux_add_member() failed err = %d\n",
+					scbq_info->unit, __FUNCTION__, err));
+				return (err);
+			}
+
+			scbq_cubby->mux[ac] = newmux;
+
+			/* If flow control is non-zero (tx is stopped),
+			 * then set the mux sources as stopped
+			 */
+			if (scbq_cubby->fc != 0) {
+				wlc_mux_source_stop(scbq_cubby->mux[ac], scbq_cubby->mux_hdl[ac]);
+			}
+
+			/* Initial state of mux sources is stalled */
+			scbq_cubby->flags[ac] |= SCBQ_F_STALLED;
+		}
+	}
+	return (err);
+}
+
+/**
+ * Delete mux sources of a given scb
+ *
+ * @param scbq_info     A pointer to the state structure for the SCBQ module
+ *                      created by wlc_scbq_module_attach().
+ * @param scb           A pointer to the SCB of interest.
+ */
+void
+wlc_scbq_muxdelsrc(wlc_scbq_info_t *scbq_info, struct scb *scb)
+{
+	int ac;
+	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
+
+	/* Bail if internal, put it here to relieve the burden of detail from the caller */
+	if (SCB_INTERNAL(scb)) {
+		return;
+	}
+
+	for (ac = 0; ac < AC_COUNT; ac++) {
+		if (MUX_GRP_SELECTED(ac, scbq_cubby->mux_srcmap) && scbq_cubby->mux_hdl[ac]) {
+			wlc_mux_del_source(scbq_cubby->mux[ac], scbq_cubby->mux_hdl[ac]);
+			scbq_cubby->mux_hdl[ac] = NULL;
+		}
+	}
+}
+
+/**
+ * Move mux sources to a new queue
+ *
+ * The mux sources for the given scb are deleted from its current mux,
+ * and created for the mux associated with 'new_qi'.
+ *
+ * @param scbq_info     A pointer to the state structure for the SCBQ module
+ *                      created by wlc_scbq_module_attach().
+ * @param scb           A pointer to the SCB of interest.
+ * @param new_qi        The TxQ to which the scb will be attached.
+ *
+ * @return  BCME_OK on success or other error code if there is a problem.
+ */
+int
+wlc_scbq_mux_move(wlc_scbq_info_t *scbq_info, struct scb *scb, struct wlc_txq_info *new_qi)
+{
+	/* Bail if internal, put it here to relieve the burden of detail from the caller */
+	if (SCB_INTERNAL(scb)) {
+		return BCME_OK;
+	}
+
+	wlc_scbq_muxdelsrc(scbq_info, scb);
+
+	return (wlc_scbq_muxrecreatesrc(scbq_info, scb, new_qi));
+}
+
+#ifdef BCMDBG
+/**
+ * @brief SCBQ's SCB Cubby state dump function
+ *
+ * SCBQ's SCB Cubby state dump function. This funciton is registerd via a call to
+ * wlc_scb_cubby_reserve() by wlc_scbq_module_attach().  This function will dump the
+ * current state and statistics of the SCBQ for an individual SCB. The dump
+ * output appears as part of the SCB dump.
+ */
+static void
+wlc_scbq_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_scbq_info_t *scbq_info = (wlc_scbq_info_t *)ctx;
+	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
+	struct pktq *q;
+	uint prec, ac;
+	int tot_len;
+
+	if (scbq_cubby == NULL) {
+		return;
+	}
+
+	q = &scbq_cubby->scb_txq;
+	tot_len = pktq_n_pkts_tot(q);
+
+	/* print the total pkt count for all precs */
+	bcm_bprintf(b, "     scbq: cubby %p tot qlen %d fc %04x\n",
+	            OSL_OBFUSCATE_BUF(scbq_cubby), tot_len, scbq_cubby->fc);
+
+	for (ac = 0; ac < AC_COUNT; ac++) {
+		bcm_bprintf(b, "           %d: mux_hdl %p flags %x mux %p\n",
+		            ac, OSL_OBFUSCATE_BUF(scbq_cubby->mux_hdl[ac]),
+		            scbq_cubby->flags[ac], OSL_OBFUSCATE_BUF(scbq_cubby->mux[ac]));
+	}
+
+	if (tot_len == 0) {
+		return;
+	}
+
+	/* print the per-prec pkt count for non-zero values */
+	bcm_bprintf(b, "           prec len ");
+	for (prec = 0; prec < q->num_prec; prec++) {
+		uint plen = pktqprec_n_pkts(q, prec);
+		if (plen > 0) {
+			bcm_bprintf(b, "%d:%u ", prec, plen);
+		}
+	}
+	bcm_bprintf(b, "\n");
+}
+#endif /* BCMDBG */
 
 /*
  * SCB TXMOD support
@@ -547,6 +782,9 @@ wlc_scbq_enq(void *ctx, struct scb *scb, void *pkt, uint prec)
 #ifdef PKTQ_LOG
 	pktq_counters_t* prec_cnt = NULL;
 #endif
+
+	ASSERT(WLPKTTAG(pkt) != NULL);
+
 #ifdef PKTQ_LOG
 	/* Update pktq_log stats */
 	if (q->pktqlog) {
@@ -637,22 +875,6 @@ wlc_scbq_txpktcnt(void *ctx)
 	return pktcnt;
 }
 
-/**
- * @brief SCBQ's Tx Module packet flush function
- *
- * SCBQ's Tx Module packet flush function. This funciton is registerd through the
- * @ref scbq_txmod_fns table via a call to wlc_txmod_fn_register() by
- * wlc_scbq_module_attach(). This function is responsible for freeing all tx packets
- * held by the SCBQ's Tx Module for the specified SCB.
- */
-static void
-wlc_scbq_txmod_flush(void *ctx, struct scb *scb)
-{
-	wlc_scbq_info_t *scbq_info = (wlc_scbq_info_t *)ctx;
-
-	wlc_scbq_scb_tx_flush(scbq_info, scb);
-}
-
 /*
  * Tx MUX support
  */
@@ -664,6 +886,7 @@ static const uint16 fifo2prec_map[4] = {
 	0xF000,  /* VO */
 };
 
+#define PREC_MAP_ALL 0xFFFF
 
 /**
  * Set a Stop Flag to prevent tx output from all SCBs
@@ -723,6 +946,9 @@ wlc_scbq_scb_stop_flag_set(wlc_scbq_info_t *scbq_info, struct scb *scb, scbq_sto
 	scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
 	fc = scbq_cubby->fc;
 
+	SCBQ_DBG(("SCBQ: %s "MACF" orig %04X set  %04X\n",
+	          __FUNCTION__, ETHER_TO_MACF(scb->ea), fc, (uint)flag));
+
 	scbq_cubby->fc = fc | (uint16)flag;
 
 	if (fc == 0) {
@@ -742,11 +968,32 @@ wlc_scbq_scb_stop_flag_clear(wlc_scbq_info_t *scbq_info, struct scb *scb, scbq_s
 	scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
 	fc = scbq_cubby->fc;
 
+	SCBQ_DBG(("SCBQ: %s "MACF" orig %04X clear %04X\n",
+	          __FUNCTION__, ETHER_TO_MACF(scb->ea), fc, (uint)flag));
+
 	scbq_cubby->fc = fc & ~((uint16)flag);
 
 	if (fc == (uint16)flag) {
 		wlc_scbq_scb_tx_start(scbq_info, scb);
 	}
+}
+
+/**
+ * Report on the stalled state for the scbq's MUX Source for the specified AC.
+ * When MUX Source is stalled, it will not be polled for output packets.
+ * A stall happens when the SCBQ's MUX Source is polled for output and returns no data.
+ *
+ * @param scbq_info     A pointer to the state structure for the SCBQ module
+ *                      created by wlc_scbq_module_attach().
+ * @param scb           A pointer to the SCB of interest.
+ * @param ac            Access Category to check for stalled state.
+ */
+bool
+wlc_scbq_scb_stalled(wlc_scbq_info_t *scbq_info, struct scb *scb, uint ac)
+{
+	scbq_cubby_info_t *scbq_cubby = SCB_SCBQ_CUBBY_INFO(scbq_info, scb);
+
+	return (scbq_cubby->flags[ac] & SCBQ_F_STALLED) != 0;
 }
 
 /**
@@ -827,6 +1074,8 @@ wlc_scbq_scb_tx_start(wlc_scbq_info_t *scbq_info, struct scb *scb)
 	int ac;
 
 	for (ac = 0; ac < AC_COUNT; ac++) {
+		/* starting a MUX source will also clear the stall condition */
+		scbq_cubby->flags[ac] &= ~SCBQ_F_STALLED;
 		wlc_mux_source_start(scbq_cubby->mux[ac], scbq_cubby->mux_hdl[ac]);
 	}
 }
@@ -864,6 +1113,7 @@ wlc_scbq_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
 	void *pkt[DOT11_MAXNUMFRAGS] = {0};
 	int i, count;
 	uint supplied_time = 0;
+	uint supplied_count = 0;
 	timecalc_t timecalc;
 	uint current_pktlen = 0;
 	uint current_pkttime = 0;
@@ -873,11 +1123,25 @@ wlc_scbq_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
 
 	ASSERT(ac < AC_COUNT);
 
-	/* use a prec_map that matches the AC fifo parameter */
-	prec_map = fifo2prec_map[ac];
+	/* QoS STAs map prios/precs to matching AC fifos
+	 * Non-QoS STAs send all SDUs on the BE fifo
+	 */
+	if (SCB_QOS(scb)) {
+		/* use a prec_map that matches the AC fifo parameter */
+		prec_map = fifo2prec_map[ac];
+	} else {
+		/* early return if asked for output on something other than BE */
+		if (ac != TX_AC_BE_FIFO) {
+			scbq_cubby->flags[ac] |= SCBQ_F_STALLED;
+			return supplied_time;
+		}
+		/* use a prec_map that matches any prio/prec to output on BE fifo */
+		prec_map = PREC_MAP_ALL;
+	}
 
-	WL_TMP(("%s: entry, CUBBY %p req %u ac %u pmap %x qlen %d\n", __FUNCTION__,
-	        OSL_OBFUSCATE_BUF(scbq_cubby), request_time, ac, prec_map, pktq_n_pkts_tot(q)));
+	WL_TMP(("%s: entry, CUBBY %p req %u ac %u pmap 0x%04x mqlen %d\n",
+	        __FUNCTION__, OSL_OBFUSCATE_BUF(scbq_cubby),
+	        request_time, ac, prec_map, pktq_mlen(q, prec_map)));
 
 	/*
 	 * create a pkt time calculation cache to cut down on work for per-pkt time estimate
@@ -885,7 +1149,8 @@ wlc_scbq_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
 	rspec = wlc_tx_current_ucast_rate(wlc, scb, ac);
 	wlc_scbq_init_timecalc(scbq_cubby, rspec, ac, &timecalc);
 
-	while (supplied_time < request_time && (pkt[0] = pktq_mdeq(q, prec_map, &prec))) {
+	while ((supplied_time < request_time || supplied_count == 0) &&
+	       (pkt[0] = pktq_mdeq(q, prec_map, &prec))) {
 		wlc_txh_info_t txh_info;
 		uint pktlen;
 		uint pkttime;
@@ -906,6 +1171,8 @@ wlc_scbq_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
 			uint fifo; /* is this param needed anymore ? */
 			err = wlc_prep_sdu(wlc, scb, pkt, &count, &fifo);
 			if (err == BCME_OK) {
+				ASSERT(fifo == ac);
+
 				if (count == 1) {
 					/* optimization: skip the txtime calculation if the total
 					 * pkt len is the same as the last time through the loop
@@ -963,22 +1230,36 @@ wlc_scbq_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
 
 			uint fifo; /* is this param needed anymore ? */
 
-			/* fetch the rspec saved in tx_prams at the head of the pkt
-			 * before tx_params are removed by wlc_prep_pdu()
-			 */
-			rspec = wlc_pdu_txparams_rspec(osh, pkt[0]);
-
 			count = 1;
-			(void)wlc_prep_pdu(wlc, scb, pkt[0], &fifo);
 
-			wlc_get_txh_info(wlc, pkt[0], &txh_info);
+			if (pkttag->flags & WLF_TXHDR) {
+				(void)wlc_prep_pdu(wlc, scb, pkt[0], &fifo);
+				ASSERT(fifo == ac);
 
-			/* calculate and store the estimated pkt tx time */
-			pkttime = wlc_tx_mpdu_time(wlc, scb, rspec, ac, txh_info.d11FrameSize);
-			WLPKTTIME(pkt[0]) = (uint16)pkttime;
+				/* pkts with TxHdr already have rate and time cacluations */
+				pkttime = WLPKTTIME(pkt[0]);
+
+				ASSERT(pkttime > 0);
+			} else {
+				/* fetch the rspec saved in tx_prams at the head of the pkt
+				 * before tx_params are removed by wlc_prep_pdu()
+				 */
+				rspec = wlc_pdu_txparams_rspec(osh, pkt[0]);
+
+				(void)wlc_prep_pdu(wlc, scb, pkt[0], &fifo);
+				ASSERT(fifo == ac);
+
+				wlc_get_txh_info(wlc, pkt[0], &txh_info);
+
+				/* calculate and store the estimated pkt tx time */
+				pkttime = wlc_tx_mpdu_time(wlc, scb, rspec,
+				                           ac, txh_info.d11FrameSize);
+				WLPKTTIME(pkt[0]) = (uint16)pkttime;
+			}
 		}
 
 		supplied_time += pkttime;
+		supplied_count += count;
 
 		for (i = 0; i < count; i++) {
 #ifdef WLAMPDU_MAC
@@ -1016,8 +1297,8 @@ wlc_scbq_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
 				uint16 frameid;
 				frameid = ltoh16(txh_info.TxFrameID);
 				if (frameid & TXFID_RATE_PROBE_MASK) {
-					wlc_scb_ratesel_probe_ready(wlc->wrsi, scb,
-					frameid, FALSE, 0, ac);
+					wlc_scb_ratesel_probe_ready(wlc->wrsi, scb, frameid,
+					                            FALSE, 0, (uint8)ac);
 				}
 			}
 #endif
@@ -1045,7 +1326,7 @@ wlc_scbq_output(void *ctx, uint ac, uint request_time, struct spktq *output_q)
 	/* Return with output packets on 'output_q', and tx time estimate as return value */
 
 	WL_TMP(("%s: exit supplied %dus, %u pkts\n", __FUNCTION__,
-	        supplied_time, spktq_n_pkts(output_q)));
+	        supplied_time, supplied_count));
 
 	return supplied_time;
 }

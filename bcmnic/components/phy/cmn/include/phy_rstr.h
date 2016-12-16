@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rstr.h 643558 2016-06-15 05:34:16Z changbo $
+ * $Id: phy_rstr.h 666371 2016-10-21 00:02:52Z $
  */
 
 #ifndef _phy_rstr_h_
@@ -27,17 +27,20 @@ extern const char rstr_calmgr[];
 extern const char rstr_interference[];
 extern const char rstr_tssilimucod[];
 extern const char rstr_rssicorrnorm[];
-extern const char rstr_rssicorrnorm5g[];
-extern const char rstr_rssicorratten5g[];
-extern const char rstr_rssicorrperrg2g[];
-extern const char rstr_rssicorrperrg5g[];
 extern const char rstr_5g_cga[];
 extern const char rstr_2g_cga[];
 
 extern const char rstr_tempthresh[];
 extern const char rstr_temps_hysteresis[];
+extern const char rstr_phyrxdesens[];
 extern const char rstr_ldpc[];
 extern const char rstr_core2slicemap[];
+
+#ifdef RADIO_HEALTH_CHECK
+extern const char rstr_rhc_tempthresh[];
+extern const char rstr_rhc_temp_fail_time[];
+#endif /* RADIO_HEALTH_CHECK */
+
 #ifdef WL_PROXDETECT
 extern const char rstr_proxd_basekival[];
 extern const char rstr_proxd_basektval[];
@@ -80,9 +83,14 @@ extern const char BCMATTACHDATA(rstr_clb2gslice0core1)[];
 extern const char BCMATTACHDATA(rstr_clb2gslice1core1)[];
 extern const char BCMATTACHDATA(rstr_clb5gslice0core1)[];
 extern const char BCMATTACHDATA(rstr_clb5gslice1core1)[];
+extern const char BCMATTACHDATA(rstr_btc_prisel_mask)[];
+extern const char BCMATTACHDATA(rstr_btc_prisel_ant_mask)[];
 
 /* Used by et module ac layer */
 extern const char BCMATTACHDATA(rstr_et_mode)[];
+
+/* Radio Band Capability Indicator */
+extern const char BCMATTACHDATA(rstr_bandcap)[];
 
 /* Used in noise module ac specific layer */
 extern const char BCMATTACHDATA(rstr_noiselvl2gaD)[];
@@ -305,6 +313,8 @@ extern const char BCMATTACHDATA(rstr_rud_agc_enable)[];
 extern const char BCMATTACHDATA(rstr_rssi_delta_2gS)[];
 extern const char BCMATTACHDATA(rstr_rssi_delta_5gS)[];
 extern const char BCMATTACHDATA(rstr_rssi_cal_freq_grp_2g)[];
+extern const char BCMATTACHDATA(rstr_num_rssi_cal_gi_2g)[];
+extern const char BCMATTACHDATA(rstr_num_rssi_cal_gi_5g)[];
 
 #ifdef POWPERCHANNL
 extern const char BCMATTACHDATA(rstr_PowOffs2GTNA0)[];
@@ -325,6 +335,8 @@ extern const char BCMATTACHDATA(rstr_phyrxdesens)[];
 
 /* reclaim strings that are only used in attach functions */
 extern const char BCMATTACHDATA(rstr_pagc2g)[];
+extern const char BCMATTACHDATA(rstr_sw_txchain_mask)[];
+extern const char BCMATTACHDATA(rstr_sw_rxchain_mask)[];
 extern const char BCMATTACHDATA(rstr_pagc5g)[];
 extern const char BCMATTACHDATA(rstr_rpcal2g)[];
 extern const char BCMATTACHDATA(rstr_rpcal2gcore3)[];
@@ -371,11 +383,18 @@ extern const char BCMATTACHDATA(rstr_paprrmcsgamma5g80)[];
 extern const char BCMATTACHDATA(rstr_paprrmcsgain5g20)[];
 extern const char BCMATTACHDATA(rstr_paprrmcsgain5g40)[];
 extern const char BCMATTACHDATA(rstr_paprrmcsgain5g80)[];
+extern const char BCMATTACHDATA(rstr_paprrmcsgamma2g_ch13)[];
+extern const char BCMATTACHDATA(rstr_paprrmcsgamma2g_ch1)[];
+extern const char BCMATTACHDATA(rstr_paprrmcsgain2g_ch13)[];
+extern const char BCMATTACHDATA(rstr_paprrmcsgain2g_ch1)[];
 extern const char BCMATTACHDATA(rstr_oob_gaint)[];
 extern const char BCMATTACHDATA(rstr_vcodivmode)[];
 extern const char BCMATTACHDATA(rstr_fdss_interp_en)[];
 extern const char BCMATTACHDATA(rstr_fdss_level_2g)[];
 extern const char BCMATTACHDATA(rstr_fdss_level_5g)[];
+extern const char BCMATTACHDATA(rstr_fdss_bandedge_2g_en)[];
+extern const char BCMATTACHDATA(rstr_fdss_level_2g_ch13)[];
+extern const char BCMATTACHDATA(rstr_fdss_level_2g_ch1)[];
 extern const char BCMATTACHDATA(rstr_ldo3p3_voltage)[];
 extern const char BCMATTACHDATA(rstr_paldo3p3_voltage)[];
 extern const char BCMATTACHDATA(rstr_epacal2g_mask)[];
@@ -388,7 +407,7 @@ extern const char BCMATTACHDATA(rstr_lowpowerrange2g)[];
 extern const char BCMATTACHDATA(rstr_lowpowerrange5g)[];
 extern const char BCMATTACHDATA(rstr_paprdis)[];
 extern const char BCMATTACHDATA(rstr_papdwar)[];
-
+extern const char BCMATTACHDATA(rstr_low_adc_rate_en)[];
 extern const char BCMATTACHDATA(rstr_asymmetricjammermod)[];
 
 extern const char BCMATTACHDATA(rstr_tssisleep_en)[];
@@ -431,7 +450,7 @@ extern const char BCMATTACHDATA(rstr_fccpwrch13)[];
 extern const char BCMATTACHDATA(rstr_fccpwroverride)[];
 #endif /* FCC_PWR_LIMIT_2G */
 
-#if (defined(WLTEST) || defined(BCMINTERNAL) || defined(WLPKTENG))
+#if defined(WLPKTENG)
 extern const char BCMATTACHDATA(rstr_perratedpd2g)[];
 extern const char BCMATTACHDATA(rstr_perratedpd5g)[];
 #endif
@@ -442,17 +461,14 @@ extern const char BCMATTACHDATA(rstr_txfdiqcalenable)[];
 
 extern const char BCMATTACHDATA(rstr_w1clipmod)[];
 
-#if (defined(WLTEST) || defined(BCMINTERNAL))
 extern const char BCMATTACHDATA(rstr_cbuck_out)[];
-#else
-extern const char BCMATTACHDATA(rstr_cbuck_out)[];
-#endif
 extern const char BCMATTACHDATA(rstr_ldo3p3_2g)[];
 extern const char BCMATTACHDATA(rstr_ldo3p3_5g)[];
 extern const char BCMATTACHDATA(rstr_ccktpc_loop_en)[];
 extern const char BCMATTACHDATA(rstr_csml)[];
 extern const char BCMATTACHDATA(rstr_ocl)[];
 extern const char BCMATTACHDATA(rstr_ocl_cm)[];
+extern const char BCMATTACHDATA(rstr_lesi_en)[];
 
 extern const char BCMATTACHDATA(rstr_nap_en)[];
 extern const char BCMATTACHDATA(rstr_swctrlmap4_cfg)[];
@@ -486,5 +502,142 @@ extern const char BCMATTACHDATA(rstr_swdiv_antmap5g_main)[];
 extern const char BCMATTACHDATA(rstr_swdiv_antmap2g_aux)[];
 extern const char BCMATTACHDATA(rstr_swdiv_antmap5g_aux)[];
 #endif /* WLC_SW_DIVERSITY */
+extern const char BCMATTACHDATA(rstr_nonbf_logen_mode_en)[];
+extern const char BCMATTACHDATA(rstr_elna2g)[];
+extern const char BCMATTACHDATA(rstr_elna5g)[];
+extern const char BCMATTACHDATA(rstr_aa2g)[];
+extern const char BCMATTACHDATA(rstr_aa5g)[];
+extern const char BCMATTACHDATA(rstr_tssipos2g)[];
+extern const char BCMATTACHDATA(rstr_pdetrange2g)[];
+extern const char BCMATTACHDATA(rstr_antswctl2g)[];
+extern const char BCMATTACHDATA(rstr_tssipos5g)[];
+extern const char BCMATTACHDATA(rstr_pdetrange5g)[];
+extern const char BCMATTACHDATA(rstr_antswctl5g)[];
+extern const char BCMATTACHDATA(rstr_bw40po)[];
+extern const char BCMATTACHDATA(rstr_cddpo)[];
+extern const char BCMATTACHDATA(rstr_stbcpo)[];
+extern const char BCMATTACHDATA(rstr_bwduppo)[];
+extern const char BCMATTACHDATA(rstr_txpid2ga0)[];
+extern const char BCMATTACHDATA(rstr_txpid2ga1)[];
+extern const char BCMATTACHDATA(rstr_pa2gw0a2)[];
+extern const char BCMATTACHDATA(rstr_pa2gw1a2)[];
+extern const char BCMATTACHDATA(rstr_pa2gw2a2)[];
+extern const char BCMATTACHDATA(rstr_maxp5gla2)[];
+extern const char BCMATTACHDATA(rstr_pa5glw0a2)[];
+extern const char BCMATTACHDATA(rstr_pa5glw1a2)[];
+extern const char BCMATTACHDATA(rstr_pa5glw2a2)[];
+extern const char BCMATTACHDATA(rstr_pa5gw0a2)[];
+extern const char BCMATTACHDATA(rstr_pa5gw1a2)[];
+extern const char BCMATTACHDATA(rstr_pa5gw2a2)[];
+extern const char BCMATTACHDATA(rstr_maxp5gha2)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw0a2)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw1a2)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw2a2)[];
+extern const char BCMATTACHDATA(rstr_pa2gw0a0)[];
+extern const char BCMATTACHDATA(rstr_pa2gw0a1)[];
+extern const char BCMATTACHDATA(rstr_pa2gw1a0)[];
+extern const char BCMATTACHDATA(rstr_pa2gw1a1)[];
+extern const char BCMATTACHDATA(rstr_pa2gw2a0)[];
+extern const char BCMATTACHDATA(rstr_pa2gw2a1)[];
+extern const char BCMATTACHDATA(rstr_itt2ga0)[];
+extern const char BCMATTACHDATA(rstr_itt2ga1)[];
+extern const char BCMATTACHDATA(rstr_cck2gpo)[];
+extern const char BCMATTACHDATA(rstr_ofdm2gpo)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo0)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo1)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo2)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo3)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo4)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo5)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo6)[];
+extern const char BCMATTACHDATA(rstr_mcs2gpo7)[];
+extern const char BCMATTACHDATA(rstr_txpid5gla0)[];
+extern const char BCMATTACHDATA(rstr_txpid5gla1)[];
+extern const char BCMATTACHDATA(rstr_maxp5gla0)[];
+extern const char BCMATTACHDATA(rstr_maxp5gla1)[];
+extern const char BCMATTACHDATA(rstr_pa5glw0a0)[];
+extern const char BCMATTACHDATA(rstr_pa5glw0a1)[];
+extern const char BCMATTACHDATA(rstr_pa5glw1a0)[];
+extern const char BCMATTACHDATA(rstr_pa5glw1a1)[];
+extern const char BCMATTACHDATA(rstr_pa5glw2a0)[];
+extern const char BCMATTACHDATA(rstr_pa5glw2a1)[];
+extern const char BCMATTACHDATA(rstr_ofdm5glpo)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo0)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo1)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo2)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo3)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo4)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo5)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo6)[];
+extern const char BCMATTACHDATA(rstr_mcs5glpo7)[];
+extern const char BCMATTACHDATA(rstr_txpid5ga0)[];
+extern const char BCMATTACHDATA(rstr_txpid5ga1)[];
+extern const char BCMATTACHDATA(rstr_pa5gw0a0)[];
+extern const char BCMATTACHDATA(rstr_pa5gw0a1)[];
+extern const char BCMATTACHDATA(rstr_pa5gw1a0)[];
+extern const char BCMATTACHDATA(rstr_pa5gw1a1)[];
+extern const char BCMATTACHDATA(rstr_pa5gw2a0)[];
+extern const char BCMATTACHDATA(rstr_pa5gw2a1)[];
+extern const char BCMATTACHDATA(rstr_itt5ga0)[];
+extern const char BCMATTACHDATA(rstr_itt5ga1)[];
+extern const char BCMATTACHDATA(rstr_ofdm5gpo)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo0)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo1)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo2)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo3)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo4)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo5)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo6)[];
+extern const char BCMATTACHDATA(rstr_mcs5gpo7)[];
+extern const char BCMATTACHDATA(rstr_txpid5gha0)[];
+extern const char BCMATTACHDATA(rstr_txpid5gha1)[];
+extern const char BCMATTACHDATA(rstr_maxp5gha0)[];
+extern const char BCMATTACHDATA(rstr_maxp5gha1)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw0a0)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw0a1)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw1a0)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw1a1)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw2a0)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw2a1)[];
+extern const char BCMATTACHDATA(rstr_ofdm5ghpo)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo0)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo1)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo2)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo3)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo4)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo5)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo6)[];
+extern const char BCMATTACHDATA(rstr_mcs5ghpo7)[];
+extern const char BCMATTACHDATA(rstr_triso2g)[];
+extern const char BCMATTACHDATA(rstr_triso5g)[];
+extern const char BCMATTACHDATA(rstr_pa2gw0a3)[];
+extern const char BCMATTACHDATA(rstr_pa2gw1a3)[];
+extern const char BCMATTACHDATA(rstr_pa2gw2a3)[];
+extern const char BCMATTACHDATA(rstr_maxp5ga3)[];
+extern const char BCMATTACHDATA(rstr_pa5gw0a3)[];
+extern const char BCMATTACHDATA(rstr_pa5gw1a3)[];
+extern const char BCMATTACHDATA(rstr_pa5gw2a3)[];
+extern const char BCMATTACHDATA(rstr_maxp5gla3)[];
+extern const char BCMATTACHDATA(rstr_pa5glw2a3)[];
+extern const char BCMATTACHDATA(rstr_pa5glw0a3)[];
+extern const char BCMATTACHDATA(rstr_pa5glw1a3)[];
+extern const char BCMATTACHDATA(rstr_maxp5gha3)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw0a3)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw1a3)[];
+extern const char BCMATTACHDATA(rstr_pa5ghw2a3)[];
+
+extern const char BCMATTACHDATA(rstr_legofdmbw202gpo)[];
+extern const char BCMATTACHDATA(rstr_legofdmbw20ul2gpo)[];
+extern const char BCMATTACHDATA(rstr_legofdmbw205glpo)[];
+extern const char BCMATTACHDATA(rstr_legofdmbw20ul5glpo)[];
+extern const char BCMATTACHDATA(rstr_legofdmbw205gmpo)[];
+extern const char BCMATTACHDATA(rstr_legofdmbw20ul5gmpo)[];
+extern const char BCMATTACHDATA(rstr_legofdmbw205ghpo)[];
+extern const char BCMATTACHDATA(rstr_legofdmbw20ul5ghpo)[];
+extern const char BCMATTACHDATA(rstr_mcsbw20ul2gpo)[];
+extern const char BCMATTACHDATA(rstr_mcsbw20ul5glpo)[];
+extern const char BCMATTACHDATA(rstr_mcsbw20ul5gmpo)[];
+extern const char BCMATTACHDATA(rstr_mcsbw20ul5ghpo)[];
+extern const char BCMATTACHDATA(rstr_legofdm40duppo)[];
 
 #endif /* _phy_rstr_h_ */

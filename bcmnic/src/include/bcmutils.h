@@ -18,17 +18,13 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmutils.h 645630 2016-06-24 23:27:55Z $
+ * $Id: bcmutils.h 663946 2016-10-07 13:39:16Z $
  */
 
 #ifndef	_bcmutils_h_
 #define	_bcmutils_h_
 
 #include <bcmtlv.h>
-
-#define CEIL(x, y)		(((x) + ((y) - 1)) / (y))
-#define ROUNDUP(x, y)		((((x) + ((y) - 1)) / (y)) * (y))
-#define ROUNDDN(p, align)	((p) & ~((align) - 1))
 
 #ifdef __cplusplus
 extern "C" {
@@ -143,11 +139,6 @@ extern int ether_isnulladdr(const void *ea);
 
 /* externs */
 /* packet */
-#ifdef WLCXO_DATA
-extern uint cxo_data_pkttotlen(osl_t *osh, void *p);
-extern void *cxo_data_pktlast(osl_t *osh, void *p);
-extern uint cxo_data_pktsegcnt(osl_t *osh, void *p);
-#else /* WLCXO_DATA */
 extern uint pktcopy(osl_t *osh, void *p, uint offset, int len, uchar *buf);
 extern uint pktfrombuf(osl_t *osh, void *p, uint offset, int len, uchar *buf);
 extern uint pkttotlen(osl_t *osh, void *p);
@@ -156,7 +147,6 @@ extern uint pktsegcnt(osl_t *osh, void *p);
 extern uint pktsegcnt_war(osl_t *osh, void *p);
 extern uint8 *pktdataoffset(osl_t *osh, void *p,  uint offset);
 extern void *pktoffset(osl_t *osh, void *p,  uint offset);
-#endif /* WLCXO_DATA */
 
 /* Get priority from a packet and pass it back in scb (or equiv) */
 #define	PKTPRIO_VDSCP	0x100		/* DSCP prio found after VLAN tag */
@@ -200,11 +190,20 @@ extern void bcm_mdelay(uint ms);
 #if defined(BCM_RECLAIM)
 extern bool _nvram_reclaim_enb;
 #define NVRAM_RECLAIM_ENAB() (_nvram_reclaim_enb)
+#ifdef BCMDBG
+#define NVRAM_RECLAIM_CHECK(name)							\
+	if (NVRAM_RECLAIM_ENAB() && (bcm_attach_part_reclaimed == TRUE)) {			\
+		printf("%s: NVRAM already reclaimed, %s\n", __FUNCTION__, (name));	\
+		*(char*) 0 = 0; /* TRAP */						\
+		return NULL;								\
+	}
+#else /* BCMDBG */
 #define NVRAM_RECLAIM_CHECK(name)							\
 	if (NVRAM_RECLAIM_ENAB() && (bcm_attach_part_reclaimed == TRUE)) {			\
 		*(char*) 0 = 0; /* TRAP */						\
 		return NULL;								\
 	}
+#endif /* BCMDBG */
 #else /* BCM_RECLAIM */
 #define NVRAM_RECLAIM_CHECK(name)
 #endif /* BCM_RECLAIM */
@@ -214,6 +213,9 @@ extern int getintvar(char *vars, const char *name);
 extern int getintvararray(char *vars, const char *name, int index);
 extern int getintvararraysize(char *vars, const char *name);
 extern uint getgpiopin(char *vars, char *pin_name, uint def_pin);
+#ifdef BCMDBG
+extern void prpkt(const char *msg, osl_t *osh, void *p0);
+#endif /* BCMDBG */
 #define bcm_perf_enable()
 #define bcmstats(fmt)
 #define	bcmlog(fmt, a1, a2)
@@ -273,15 +275,16 @@ typedef struct wlc_ioctl_cmd {
 	int16 min_len;			/**< IOCTL command minimum argument len (in bytes) */
 } wlc_ioctl_cmd_t;
 
-#if defined(WLTINYDUMP) || defined(WLMSG_INFORM) || defined(WLMSG_ASSOC) || \
-	defined(WLMSG_PRPKT) || defined(WLMSG_WSEC)
+#if defined(WLTINYDUMP) || defined(BCMDBG) || defined(WLMSG_INFORM) || \
+	defined(WLMSG_ASSOC) || defined(WLMSG_PRPKT) || defined(WLMSG_WSEC)
 extern int bcm_format_ssid(char* buf, const uchar ssid[], uint ssid_len);
-#endif 
+#endif /* WLTINYDUMP || BCMDBG || WLMSG_INFORM || WLMSG_ASSOC || WLMSG_PRPKT */
 #endif	/* BCMDRIVER */
 
 /* string */
 extern int bcm_atoi(const char *s);
 extern ulong bcm_strtoul(const char *cp, char **endp, uint base);
+extern uint64 bcm_strtoull(const char *cp, char **endp, uint base);
 extern char *bcmstrstr(const char *haystack, const char *needle);
 extern char *bcmstrnstr(const char *s, uint s_len, const char *substr, uint substr_len);
 extern char *bcmstrcat(char *dest, const char *src);
@@ -330,6 +333,13 @@ int bcmstrnicmp(const char* s1, const char* s2, int cnt);
 #define BCME_STRLEN             64      /* Max string length for BCM errors */
 #define VALID_BCMERROR(e)       valid_bcmerror(e)
 
+
+#ifdef DBG_BUS
+/** tracks non typical execution paths, use gdb with arm sim + firmware dump to read counters */
+#define DBG_BUS_INC(s, cnt) ((s)->dbg_bus->cnt++)
+#else
+#define DBG_BUS_INC(s, cnt)
+#endif /* DBG_BUS */
 
 /*
  * error codes could be added but the defined ones shouldn't be changed/deleted
@@ -381,7 +391,7 @@ int bcmstrnicmp(const char* s1, const char* s2, int cnt);
 #define BCME_RXFAIL			-39	/* RX failure */
 #define BCME_NODEVICE			-40 	/* Device not present */
 #define BCME_NMODE_DISABLED		-41 	/* NMODE disabled */
-#define BCME_NONRESIDENT		-42 /* access to nonresident overlay */
+#define BCME_HOFFLOAD_RESIDENT		-42	/* offload resident */
 #define BCME_SCANREJECT			-43 	/* reject scan request */
 #define BCME_USAGE_ERROR                -44     /* WLCMD usage error */
 #define BCME_IOCTL_ERROR                -45     /* WLCMD ioctl error */
@@ -463,7 +473,7 @@ int bcmstrnicmp(const char* s1, const char* s2, int cnt);
 	"RX Failure",			\
 	"Device Not Present",		\
 	"NMODE Disabled",		\
-	"Nonresident overlay access", \
+	"Host Offload in device",	\
 	"Scan Rejected",		\
 	"WLCMD usage error",		\
 	"WLCMD ioctl error",		\
@@ -517,6 +527,9 @@ int bcmstrnicmp(const char* s1, const char* s2, int cnt);
 
 #define DELTA(curr, prev) ((curr) > (prev) ? ((curr) - (prev)) : \
 	(0xffffffff - (prev) + (curr) + 1))
+#define CEIL(x, y)		(((x) + ((y) - 1)) / (y))
+#define ROUNDUP(x, y)		((((x) + ((y) - 1)) / (y)) * (y))
+#define ROUNDDN(p, align)	((p) & ~((align) - 1))
 #define	ISALIGNED(a, x)		(((uintptr)(a) & ((x) - 1)) == 0)
 #define ALIGN_ADDR(addr, boundary) (void *)(((uintptr)(addr) + (boundary) - 1) \
 	                                         & ~((boundary) - 1))
@@ -543,6 +556,12 @@ int bcmstrnicmp(const char* s1, const char* s2, int cnt);
 #  endif /* GCC 4.8 or newer */
 #endif /* __ARMCC_VERSION */
 #endif /* OFFSETOF */
+
+/* substruct size up to and including a member of the struct */
+#ifndef STRUCT_SIZE_THROUGH
+#define STRUCT_SIZE_THROUGH(sptr, fname) \
+	(((uint8*)&((sptr)->fname) - (uint8*)(sptr)) + sizeof((sptr)->fname))
+#endif
 
 #ifndef ARRAYSIZE
 #define ARRAYSIZE(a)		(sizeof(a) / sizeof(a[0]))
@@ -573,7 +592,21 @@ extern bool isclr(const void *array, uint bit);
 #define	isclr(a, i)	((((const uint8 *)a)[(i) / NBBY] & (1 << ((i) % NBBY))) == 0)
 #endif
 #endif /* setbit */
+
+/* read/write/clear field in a consecutive bits in an octet array.
+ * 'addr' is the octet array's start byte address
+ * 'size' is the octet array's byte size
+ * 'stbit' is the value's start bit offset
+ * 'nbits' is the value's bit size
+ * This set of utilities are for convenience. Don't use them
+ * in time critical/data path as there's a great overhead in them.
+ */
+void setbits(uint8 *addr, uint size, uint stbit, uint nbits, uint32 val);
+uint32 getbits(const uint8 *addr, uint size, uint stbit, uint nbits);
+#define clrbits(addr, size, stbit, nbits) setbits(addr, size, stbit, nbits, 0)
+
 extern void set_bitrange(void *array, uint start, uint end, uint maxbit);
+extern int bcm_find_fsb(uint32 num);
 
 #define	isbitset(a, i)	(((a) & (1 << (i))) != 0)
 
@@ -729,21 +762,28 @@ extern uint16 hndcrc16(uint8 *p, uint nbytes, uint16 crc);
 extern uint32 hndcrc32(uint8 *p, uint nbytes, uint32 crc);
 
 /* format/print */
-#if defined(DHD_DEBUG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || \
-	defined(WLMSG_ASSOC)
+#if defined(BCMDBG) || defined(DHD_DEBUG) || defined(BCMDBG_ERR) || \
+	defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC) || \
+	defined(BCMDBG_DUMP)
 /* print out the value a field has: fields may have 1-32 bits and may hold any value */
 extern int bcm_format_field(const bcm_bit_desc_ex_t *bd, uint32 field, char* buf, int len);
 /* print out which bits in flags are set */
 extern int bcm_format_flags(const bcm_bit_desc_t *bd, uint32 flags, char* buf, int len);
+/* print out whcih bits in octet array 'addr' are set. bcm_bit_desc_t:bit is a bit offset. */
+int bcm_format_octets(const bcm_bit_desc_t *bd, uint bdsz,
+	const uint8 *addr, uint size, char *buf, int len);
 #endif
 
 extern int bcm_format_hex(char *str, const void *bytes, int len);
 
+#ifdef BCMDBG
+extern void deadbeef(void *p, uint len);
+#endif
 extern const char *bcm_crypto_algo_name(uint algo);
 extern char *bcm_chipname(uint chipid, char *buf, uint len);
 extern char *bcm_brev_str(uint32 brev, char *buf);
 extern void printbig(char *buf);
-extern void prhex(const char *msg, volatile uchar *buf, uint len);
+extern void prhex(const char *msg, const uchar *buf, uint len);
 
 /* bcmerror */
 extern const char *bcmerrorstr(int bcmerror);
@@ -1161,6 +1201,9 @@ void * dll_pool_alloc(dll_pool_t * dll_pool_p);
 void dll_pool_free(dll_pool_t * dll_pool_p, void * elem_p);
 void dll_pool_free_tail(dll_pool_t * dll_pool_p, void * elem_p);
 typedef void (* dll_elem_dump)(void * elem_p);
+#ifdef BCMDBG
+void dll_pool_dump(dll_pool_t * dll_pool_p, dll_elem_dump dump);
+#endif
 void dll_pool_detach(void * osh, dll_pool_t * pool, uint16 elems_max, uint16 elem_size);
 
 int valid_bcmerror(int e);
@@ -1220,5 +1263,21 @@ typedef struct trace_buf_info {
 	char buf[TRACE_LOG_BUF_MAX_SIZE];
 } trace_buf_info_t;
 #endif /* SHOW_LOGTRACE */
+
+typedef int32 math_fixed; /* s15.16 fixed-point */
+
+typedef struct _cint32 {
+	math_fixed	q;
+	math_fixed	i;
+} math_cint32;
+
+typedef math_cint32 cint32;
+
+extern void mult_cint32_cfixed(const cint32* in1, const cint32* in2, const uint8 prec,
+	cint32* out, bool conj);
+extern void add_cint32(const cint32* in1, const cint32* in2, cint32* out);
+extern void power_cint32(const cint32* in1, uint32* pwr);
+extern void power_cint32_arr(const cint32* in1, const uint16* idx_arr, uint16 len, uint32* pwr);
+extern uint32 sqrt_int(uint32 value);
 
 #endif	/* _bcmutils_h_ */

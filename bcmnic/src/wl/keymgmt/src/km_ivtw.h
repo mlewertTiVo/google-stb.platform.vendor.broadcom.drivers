@@ -36,6 +36,9 @@ int km_ivtw_reset(km_ivtw_t *ivtw, wlc_key_index_t key_idx);
 void km_ivtw_update(km_ivtw_t *ivtw, wlc_key_info_t *key_info, int ins,
     uint8 *rx_seq, size_t seq_len, bool chained);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void km_ivtw_dump(km_ivtw_t *ivtw, struct bcmstrbuf *b);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 void km_ivtw_clone(km_ivtw_t *from_ivtw, km_ivtw_t *to_ivtw,
 	wlc_key_index_t from_key_idx, wlc_key_index_t to_key_idx);

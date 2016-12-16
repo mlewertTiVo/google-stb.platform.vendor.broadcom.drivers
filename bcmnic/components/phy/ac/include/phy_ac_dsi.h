@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_dsi.h 599661 2015-11-16 10:58:55Z nahegde $
+ * $Id: phy_ac_dsi.h 650019 2016-07-20 07:13:54Z $
  */
 
 #ifndef _phy_ac_dsi_h_
@@ -26,8 +26,8 @@
 typedef struct phy_ac_dsi_info phy_ac_dsi_info_t;
 phy_ac_dsi_info_t *phy_ac_dsi_register_impl(phy_info_t *pi, phy_ac_info_t *aci, phy_dsi_info_t *ri);
 void phy_ac_dsi_unregister_impl(phy_ac_dsi_info_t *info);
+void ds0_radio_seq_update(phy_info_t *pi);
 
-void dsi_update_dyn_seq(phy_info_t *pi);
 
 /* 4339 ProtoWork */
 extern void dsi_save_ACMAJORREV_1(phy_info_t *pi);

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_btcx_api.h 624485 2016-03-11 20:47:51Z vyass $
+ * $Id: phy_btcx_api.h 657044 2016-08-30 21:37:55Z $
  */
 
 #ifndef _phy_btcx_api_h_
@@ -26,5 +26,6 @@ int8 wlc_phy_get_femctrl_bt_wlan_ovrd(wlc_phy_t *pih);
 #if (!defined(WL_SISOCHIP) && defined(SWCTRL_TO_BT_IN_COEX))
 void wlc_phy_femctrl_mask_on_band_change(phy_info_t *pi);
 #endif
+int phy_btcx_set_mode(wlc_phy_t *ppi, int btc_mode);
 
 #endif /* _phy_btcx_api_h_ */

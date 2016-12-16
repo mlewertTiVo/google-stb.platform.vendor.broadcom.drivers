@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_misc.c 624514 2016-03-11 23:15:58Z vyass $
+ * $Id: phy_n_misc.c 658200 2016-09-07 01:03:02Z $
  */
 #include <typedefs.h>
 #include <phy_dbg.h>
@@ -24,6 +24,7 @@
 #include <phy_n_misc.h>
 #include <wlc_phyreg_n.h>
 #include <wlc_phy_int.h>
+#include <wlc_phy_n.h>
 #include <bcmdevs.h>
 #include <phy_utils_reg.h>
 #include <phy_n_info.h>
@@ -35,7 +36,7 @@ struct phy_n_misc_info {
 };
 
 /*  Local Functions */
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static int phy_n_misc_test_freq_accuracy(phy_type_misc_ctx_t *ctx, int channel);
 static void phy_n_misc_test_stop(phy_type_misc_ctx_t *ctx);
 #endif
@@ -48,6 +49,12 @@ static void phy_n_iovar_txlo_tone(phy_type_misc_ctx_t *ctx);
 static int phy_n_iovar_get_rx_iq_est(phy_type_misc_ctx_t *ctx, int32 *ret_int_ptr,
 	int32 int_val, int err);
 static int phy_n_iovar_set_rx_iq_est(phy_type_misc_ctx_t *ctx, int32 int_val, int err);
+
+#ifdef WFD_PHY_LL
+static void phy_n_misc_wfdll_chan_active(phy_type_misc_ctx_t *ctx, bool chan_active);
+#endif
+/* WAR */
+static int phy_n_misc_tkip_rifs_war(phy_type_misc_ctx_t *ctx, uint8 rifs);
 
 /* register phy type specific implementation */
 phy_n_misc_info_t *
@@ -74,7 +81,7 @@ BCMATTACHFN(phy_n_misc_register_impl)(phy_info_t *pi, phy_n_info_t *ni,
 	fns.phy_type_misc_rx_iq_est = phy_n_rx_iq_est;
 	fns.phy_type_misc_set_deaf = phy_n_misc_deaf_mode;
 	fns.phy_type_misc_clear_deaf = phy_n_misc_deaf_mode;
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 	fns.phy_type_misc_test_freq_accuracy = phy_n_misc_test_freq_accuracy;
 	fns.phy_type_misc_test_stop = phy_n_misc_test_stop;
 #endif
@@ -82,6 +89,11 @@ BCMATTACHFN(phy_n_misc_register_impl)(phy_info_t *pi, phy_n_info_t *ni,
 	fns.phy_type_misc_iovar_txlo_tone = phy_n_iovar_txlo_tone;
 	fns.phy_type_misc_iovar_get_rx_iq_est = phy_n_iovar_get_rx_iq_est;
 	fns.phy_type_misc_iovar_set_rx_iq_est = phy_n_iovar_set_rx_iq_est;
+	fns.tkip_rifs_war = phy_n_misc_tkip_rifs_war;
+
+#ifdef WFD_PHY_LL
+	fns.set_wfdll_chan_active = phy_n_misc_wfdll_chan_active;
+#endif
 
 	if (phy_misc_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_misc_register_impl failed\n", __FUNCTION__));
@@ -115,7 +127,7 @@ BCMATTACHFN(phy_n_misc_unregister_impl)(phy_n_misc_info_t *n_info)
 	phy_mfree(pi, n_info, sizeof(phy_n_misc_info_t));
 }
 
-#if defined(BCMDBG) || defined(WLTEST)
+#if defined(BCMDBG)
 static int
 phy_n_misc_test_freq_accuracy(phy_type_misc_ctx_t *ctx, int channel)
 {
@@ -135,7 +147,7 @@ phy_n_misc_test_freq_accuracy(phy_type_misc_ctx_t *ctx, int channel)
 		phy_utils_mod_phyreg(pi, NPHY_BBConfig, NPHY_BBConfig_resample_clk160_MASK, 0);
 		/* use 151 since that should correspond to nominal tx output power */
 		bcmerror = wlc_phy_tx_tone_nphy(pi, 0, 151, 0, 0, TRUE);
-    }
+	}
 
 	return bcmerror;
 }
@@ -152,7 +164,7 @@ phy_n_misc_test_stop(phy_type_misc_ctx_t *ctx)
 		phy_utils_write_phyreg(pi, NPHY_bphytestcontrol, 0x0);
 	}
 }
-#endif /* defined(BCMDBG) || defined(WLTEST) */
+#endif 
 
 /* ********************************************** */
 /* Function table registred function */
@@ -314,7 +326,7 @@ static void phy_n_iovar_tx_tone(phy_type_misc_ctx_t *ctx, int32 int_val)
 		if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3))
 			wlapi_suspend_mac_and_wait(pi->sh->physhim);
 		wlc_phy_stopplayback_nphy(pi);
-		wlc_phy_stay_in_carriersearch_nphy(pi, FALSE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 		if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3))
 			wlapi_enable_mac(pi->sh->physhim);
 	} else {
@@ -325,7 +337,7 @@ static void phy_n_iovar_tx_tone(phy_type_misc_ctx_t *ctx, int32 int_val)
 			wlc_phy_papd_enable_nphy(pi, FALSE);
 		if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3))
 			wlapi_suspend_mac_and_wait(pi->sh->physhim);
-		wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 		wlc_phy_tx_tone_nphy(pi, (uint32)int_val, 151, 0, 0, TRUE); /* play tone */
 		if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3))
 			wlapi_enable_mac(pi->sh->physhim);
@@ -346,7 +358,7 @@ static void phy_n_iovar_txlo_tone(phy_type_misc_ctx_t *ctx)
 		wlc_phy_papd_enable_nphy(pi, FALSE);
 	if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3))
 		wlapi_suspend_mac_and_wait(pi->sh->physhim);
-	wlc_phy_stay_in_carriersearch_nphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 	wlc_phy_tx_tone_nphy(pi, 0, 151, 0, 0, TRUE); /* play tone */
 	if (NREV_GE(pi->pubpi->phy_rev, LCNXN_BASEREV + 3))
 		wlapi_enable_mac(pi->sh->physhim);
@@ -449,4 +461,26 @@ phy_n_misc_deaf_mode(phy_type_misc_ctx_t *ctx, bool user_flag)
 	phy_n_misc_info_t *info = (phy_n_misc_info_t *)ctx;
 	phy_info_t *pi = info->pi;
 	wlc_nphy_deaf_mode(pi, user_flag);
+}
+
+#ifdef WFD_PHY_LL
+static void
+phy_n_misc_wfdll_chan_active(phy_type_misc_ctx_t *ctx, bool chan_active)
+{
+	phy_n_misc_info_t *misc_info = (phy_n_misc_info_t *) ctx;
+	phy_info_t *pi = misc_info->pi;
+
+	pi->wfd_ll_chan_active = chan_active;
+}
+#endif /* WFD_PHY_LL */
+
+/* WAR */
+static int
+phy_n_misc_tkip_rifs_war(phy_type_misc_ctx_t *ctx, uint8 rifs)
+{
+	phy_n_misc_info_t *misc_info = (phy_n_misc_info_t *) ctx;
+	phy_info_t *pi = misc_info->pi;
+
+	wlc_phy_nphy_tkip_rifs_war(pi, rifs);
+	return BCME_OK;
 }

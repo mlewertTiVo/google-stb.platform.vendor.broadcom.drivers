@@ -28,7 +28,6 @@
 #include <phy_utils_reg.h>
 #include <phy_ac_info.h>
 #include <wlc_phy_n.h>
-#include <wlc_phy_lcn.h>
 #include <phy_dbg.h>
 
 /* iovar table */
@@ -52,6 +51,12 @@ static const bcm_iovar_t phy_fcbs_iovars[] = {
 #include <wlc_phy_int.h>
 #endif
 
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
+
 static int
 phy_fcbs_doiovar(void *ctx, uint32 aid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
@@ -61,6 +66,7 @@ phy_fcbs_doiovar(void *ctx, uint32 aid,
 	int int_val = 0;
 #ifdef ENABLE_FCBS
 	phy_info_t *pi = (phy_info_t *)ctx;
+	phy_type_fcbs_fns_t *fns = pi->fcbsi->fns;
 #endif /* ENABLE_FCBS */
 
 	if (plen >= (uint)sizeof(int_val))
@@ -85,29 +91,29 @@ phy_fcbs_doiovar(void *ctx, uint32 aid,
 		}
 		break;
 	case IOV_SVAL(IOV_PHY_FCBS):
-		if (ISACPHY(pi)) {
-			pi->FCBS = (bool)int_val;
+		if (fns->iov_set != NULL) {
+			(fns->iov_set)(fns->ctx, (bool)int_val);
 		} else {
 			err = BCME_UNSUPPORTED;
 		}
 		break;
 	case IOV_GVAL(IOV_PHY_FCBS):
-		if (ISACPHY(pi)) {
-			*ret_int_ptr = pi->FCBS;
+		if (fns->iov_get != NULL) {
+			(fns->iov_get)(fns->ctx, ret_int_ptr);
 		} else {
 			err = BCME_UNSUPPORTED;
 		}
 		break;
 	case IOV_GVAL(IOV_PHY_FCBSARM):
-		if (ISACPHY(pi)) {
-			wlc_phy_fcbs_arm((wlc_phy_t*)pi, 0xFFFF, 0);
+		if (fns->iov_arm_get != NULL) {
+			(fns->iov_arm_get)(fns->ctx, 0xFFFF, 0);
 		} else {
 			err = BCME_UNSUPPORTED;
 		}
 		break;
 	case IOV_GVAL(IOV_PHY_FCBSEXIT):
-		if (ISACPHY(pi)) {
-			 wlc_phy_fcbs_exit((wlc_phy_t*)pi);
+		if (fns->iov_exit != NULL) {
+			(fns->iov_exit)(fns->ctx);
 		} else {
 			err = BCME_UNSUPPORTED;
 		}

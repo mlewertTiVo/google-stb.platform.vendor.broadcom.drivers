@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_txmod.h 550528 2015-04-21 00:12:58Z $
+ * $Id: wlc_txmod.h 664252 2016-10-11 21:27:47Z $
  */
 
 #ifndef _wlc_txmod_h_
@@ -35,11 +35,12 @@ typedef enum txmod_id {
 	TXMOD_TDLS = 2,
 	TXMOD_APPS = 3,
 	TXMOD_TRF_MGMT = 4,
-	TXMOD_NAR = 5,
-	TXMOD_AMSDU = 6,
-	TXMOD_AMPDU = 7,
+	TXMOD_NAR = 5,		// TXQ_MUX: not needed
+	TXMOD_AMSDU = 6,	// TXQ_MUX: not needed
+	TXMOD_AMPDU = 7,	// TXQ_MUX: not needed
 	TXMOD_SCBQ = 8,
 	TXMOD_AIBSS = 9,
+	TXMOD_BCMC = 10,
 /* !!!Add new txmod ID above and update array 'txmod_pos' with the position of the txmod!!! */
 	TXMOD_LAST
 } txmod_id_t;

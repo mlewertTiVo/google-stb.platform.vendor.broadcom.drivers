@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_dsi_data.c 615972 2016-01-29 07:59:51Z nahegde $
+ * $Id: phy_ac_dsi_data.c 650019 2016-07-20 07:13:54Z $
  */
 
 /*
@@ -88,14 +88,13 @@ static d11axiiv_t dyn_ram_maj36_min0_radio_2g_pll_pwrup_bpaccess_seq0[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwrup_radio_reg_seq0[20] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwrup_radio_reg_seq0[19] = {
 	{RF0_20695_PLL_CRISSCROSS_5GAS2G(32), 0x0001, 0x0000, 0xdead},
 	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(32), 0x0001, 0x0000, 0xdead},
 	{RF0_20695_LOGEN5G_REG4(32), 0x8000, 0x0000, 0xdead},
 	{RF0_20695_LO5GTO2G_CFG3(32), 0x0040, 0x0000, 0xdead},
 	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x0000, 0xdead},
 	{RFP0_20695_PLL5G_CFG6(32), 0x0061, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(32), 0x6300, 0x0000, 0xdead},
 	{RFP0_20695_PLL5G_CFG1(32), 0x6300, 0x0000, 0xdead},
 	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0004, 0xdead},
 	{RFP0_20695_PLL_PFDLDO1(32), 0x0044, 0x0004, 0xdead},
@@ -158,7 +157,7 @@ static d11axiiv_t dyn_ram_maj36_min0_radio_2g_pll_pwrup_bpaccess_seq4[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwrup_radio_reg_seq2[15] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwrup_radio_reg_seq2[12] = {
 	{RFP0_20695_PLL_PFDLDO1(32), 0x0044, 0x0040, 0xdead},
 	{RFP0_20695_PLL_RFVCO2(32), 0x8800, 0x0800, 0xdead},
 	{RFP0_20695_PLL_RFVCO2(32), 0x8800, 0x0000, 0xdead},
@@ -168,9 +167,6 @@ static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwrup_radio_reg_se
 	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
 	{RFP0_20695_PLL_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
 	{RFP0_20695_PLL_VCOCAL15(32), 0x07ff, 0x0000, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
 	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
 	{RFP0_20695_PLL_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
 	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead}
@@ -210,13 +206,11 @@ static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_pwrup_bpaccess_seq0[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwrup_radio_reg_seq0[19] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwrup_radio_reg_seq0[17] = {
 	{RF0_20695_PLL_CRISSCROSS_5GAS2G(32), 0x0001, 0x0000, 0xdead},
 	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(32), 0x0001, 0x0000, 0xdead},
 	{RF0_20695_LO5GTO2G_CFG3(32), 0x0040, 0x0000, 0xdead},
 	{RFP0_20695_PLL_RFVCO4(32), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
 	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
 	{RFP0_20695_PLL_PFDLDO1(32), 0x0044, 0x0004, 0xdead},
 	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
@@ -285,7 +279,7 @@ static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_pwrup_bpaccess_seq4[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwrup_radio_reg_seq2[19] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwrup_radio_reg_seq2[17] = {
 	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0040, 0xdead},
 	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x0801, 0xdead},
 	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x0001, 0xdead},
@@ -300,9 +294,7 @@ static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwrup_radio_reg_se
 	{RFP0_20695_PLL5G_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
 	{RFP0_20695_PLL5G_VCOCAL15(32), 0x07ff, 0x0000, 0xdead},
 	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
 	{RFP0_20695_PLL5G_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
 	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
 	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead}
 };
@@ -341,26 +333,19 @@ static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq0[2] =
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq0[19] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq0[12] = {
 	{RF0_20695_PLL_CRISSCROSS_5GAS2G(32), 0x0001, 0x0001, 0xdead},
 	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(32), 0x0001, 0x0001, 0xdead},
 	{RF0_20695_LOGEN5G_REG4(32), 0x8000, 0x0000, 0xdead},
-	{RFP0_20695_PLL_RFVCO4(32), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0e41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(32), 0x0005, 0x0004, 0xdead},
 	{RFP0_20695_PLL_PFDLDO1(32), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0e41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL_OVR1(32), 0x0005, 0x0004, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0x0040, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x8000, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0x00c0, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0044, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x0040, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(32), 0x8800, 0x8800, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x00c0, 0xdead},
 	{RFP0_20695_PLL_PFDLDO1(32), 0x0044, 0x0044, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(32), 0x6300, 0x0100, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0x00c4, 0xdead}
+	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0100, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x00c4, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq0[1] = {
@@ -379,7 +364,71 @@ static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq2[2] =
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq1[18] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq1[12] = {
+	{RFP0_20695_PLL_RFVCO2(32), 0x8800, 0x8800, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x02c4, 0xdead},
+	{RFP0_20695_PLL_CP1(32), 0x4000, 0x4000, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x06c4, 0xdead},
+	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0300, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x06c6, 0xdead},
+	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x06c7, 0xdead},
+	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x2b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x06e7, 0xdead},
+	{RFP0_20695_PLL_RFVCO4(32), 0x0040, 0x0040, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x86e7, 0xdead}
+};
+
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq2[1] = {
+	0x000
+};
+
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq3[2] = {
+	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq3[1] = {
+	0x00a
+};
+
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq4[2] = {
+	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq2[14] = {
+	{RFP0_20695_PLL_PFDLDO1(32), 0x0044, 0x0040, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(32), 0x8800, 0x0800, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(32), 0x8800, 0x0000, 0xdead},
+	{RFP0_20695_PLL_CP1(32), 0x4000, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0e41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(32), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0x0040, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x8000, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0x00c0, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0044, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(32), 0x0044, 0x0040, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(32), 0x6300, 0x0100, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0x00c4, 0xdead}
+};
+
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq4[1] = {
+	0x000
+};
+
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq5[2] = {
+	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq5[1] = {
+	0x00a
+};
+
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq6[2] = {
+	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq3[18] = {
 	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x8800, 0xdead},
 	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0x02c4, 0xdead},
 	{RFP0_20695_PLL5G_CP1(32), 0x6000, 0x4000, 0xdead},
@@ -400,77 +449,84 @@ static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_
 	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0044, 0xdead}
 };
 
-static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq2[1] = {
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq6[1] = {
 	0x000
 };
 
-static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq3[2] = {
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq7[2] = {
 	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq3[1] = {
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq7[1] = {
 	0x00a
 };
 
-static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq4[2] = {
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq8[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq2[26] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq4[31] = {
 	{RFP0_20695_PLL5G_PFDLDO1(32), 0x0044, 0x0040, 0xdead},
 	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x0801, 0xdead},
 	{RFP0_20695_PLL5G_RFVCO2(32), 0x8801, 0x0001, 0xdead},
 	{RFP0_20695_PLL5G_CP1(32), 0x6000, 0x2000, 0xdead},
 	{RF0_20695_LO5GTO2G_CFG3(32), 0x0040, 0x0040, 0xdead},
 	{RF0_20695_LOGEN_OVR1(32), 0x0060, 0x0020, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0100, 0xdead},
-	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x0004, 0xdead},
-	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x0900, 0xdead},
-	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x0005, 0xdead},
+	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x2b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x86e7, 0xdead},
+	{RFP0_20695_PLL_CFG1(32), 0x2b00, 0x2b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x86e7, 0xdead},
 	{RFP0_20695_PLL_RFVCO4(32), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x8005, 0xdead},
+	{RFP0_20695_PLL_OVR1(32), 0x86e7, 0x86e7, 0xdead},
 	{RFP0_20695_PLL5G_CFG6(32), 0x0061, 0x0061, 0xdead},
 	{RFP0_20695_PLL5G_OVR1(32), 0xe7e6, 0xe7e6, 0xdead},
 	{RFP0_20695_PLL5G_RFVCO5(32), 0x0f00, 0x0600, 0xdead},
 	{RFP0_20695_XTAL6(32), 0x03e0, 0x0020, 0xdead},
 	{RFP0_20695_XTAL6(32), 0x03e0, 0x03e0, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead},
-	{RFP0_20695_PLL_VCOCAL_OVR1(32), 0x0005, 0x0001, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL15(32), 0x07ff, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead},
+	{RFP0_20695_XTAL6(32), 0x03e0, 0x03e0, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
 	{RFP0_20695_PLL_VCOCAL15(32), 0x07ff, 0x0000, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead},
 	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0f41, 0xdead},
 	{RFP0_20695_PLL_VCOCAL_OVR1(32), 0x0005, 0x0005, 0xdead},
 	{RFP0_20695_PLL_VCOCAL1(32), 0x0fc1, 0x0fc1, 0xdead}
 };
 
-static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq4[1] = {
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq8[1] = {
 	0x000
 };
 
-static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq5[2] = {
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq9[2] = {
 	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq5[1] = {
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq9[1] = {
 	0x050
 };
 
-static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq6[2] = {
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq10[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq3[2] = {
+static phy_rad_dyn_adp_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq5[4] = {
 	{RFP0_20695_PLL_VCOCAL_OVR1(32), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_XTAL6(32), 0x03e0, 0x03c0, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(32), 0x0005, 0x0004, 0xdead},
 	{RFP0_20695_XTAL6(32), 0x03e0, 0x03c0, 0xdead}
 };
 
-static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq6[1] = {
+static uint16 dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq10[1] = {
 	0x000
 };
 
-static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq7[2] = {
+static d11axiiv_t dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq11[2] = {
 	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
 };
 
@@ -524,7 +580,7 @@ static adp_t rom_maj36_min0_radio_pwrdwn_phy_reg_seq1[4] = {
 };
 
 /* PHY register rom sequence arrays */
-static adp_t rom_maj36_min0_phyreg_init_phy_reg_seq0[132] = {
+static adp_t rom_maj36_min0_phyreg_init_phy_reg_seq0[135] = {
 	{ACPHY_RfctrlIntc0(36), 0x0000},
 	{ACPHY_RfctrlOverrideAfeCfg0(36), 0x0000},
 	{ACPHY_RfctrlOverrideRxPus0(36), 0x0000},
@@ -573,6 +629,8 @@ static adp_t rom_maj36_min0_phyreg_init_phy_reg_seq0[132] = {
 	{ACPHY_DcFiltAddress(36), 0x0615},
 	{ACPHY_bphyTest(36), 0x0000},
 	{ACPHY_bphyFiltBypass(36), 0x0400},
+	{ACPHY_bphyFiltBypass(36), 0x0400},
+	{ACPHY_CCKLMSStepSize(36), 0x0002},
 	{ACPHY_BfeConfigReg1(36), 0x0008},
 	{ACPHY_Core0_TargetVar_log2(36), 0x01c0},
 	{ACPHY_RxSdFeConfig1(36), 0x0001},
@@ -618,12 +676,13 @@ static adp_t rom_maj36_min0_phyreg_init_phy_reg_seq0[132] = {
 	{ACPHY_crshighlowpowThresholdu(36), 0x454b},
 	{ACPHY_Core1TxControl(36), 0x001c},
 	{ACPHY_Core0lpfQ(36), 0x0a7f},
+	{ACPHY_overideDigiGain1(36), 0xff44},
 	{ACPHY_cckshiftbitsRefVar(36), 0x209c},
 	{ACPHY_Core0_BPHY_TargetVar_log2_pt8us(36), 0x01df},
-	{ACPHY_overideDigiGain1(36), 0x7744},
 	{ACPHY_clip1gainSettleLen(36), 0x0028},
 	{ACPHY_dacClkCtrl(36), 0x0800},
 	{ACPHY_RfctrlCmd(36), 0x0002},
+	{ACPHY_Logen_AfeDiv_reset_select(36), 0x311d},
 	{ACPHY_forceFront0(36), 0x6000},
 	{ACPHY_forceFront0(36), 0x6400},
 	{ACPHY_forceFront0(36), 0x6600},
@@ -1326,6 +1385,24 @@ static adp_t rom_maj36_min0_tbl_access_cleanup_phy_reg_seq0[2] = {
 	{ACPHY_FCBSstallCtrl(36), 0x0000}
 };
 
+/* chan tune sequence array */
+static d11axiiv_t ram_maj36_min0_chan_tune_bpaccess_seq0[2] = {
+	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static adp_t ram_20695_maj1_min0_chan_tune_radio_reg_seq0[2] = {
+	{RFP0_20695_PLL_RFVCO4(32), 0xdead},
+	{RF0_20695_LO5GTO2G_CFG3(32), 0xdead}
+};
+
+static uint16 ram_20695_maj36_min0_chan_tune_delay_seq0[1] = {
+	0x000
+};
+
+static d11axiiv_t ram_maj36_min0_chan_tune_bpaccess_seq1[2] = {
+	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
+};
+
 /* PHY reset sequence arrays */
 static d11axiiv_t rom_maj36_min0_phy_rst_bpaccess_seq0[2] = {
 	{0x18101408, 4, 0x34F}, {INITVALS_END_MARKER, 0, 0}
@@ -1488,7 +1565,7 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_minipmu_pwr_up[12] = {
 fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwr_up[20] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_2g_pll_pwrup_bpaccess_seq0},
-	{FCBS_RADIO_REG, 20, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_2g_pll_pwrup_radio_reg_seq0},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_2g_pll_pwrup_delay_seq0},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -1504,7 +1581,7 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_2g_pll_pwrup_delay_seq3},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_2g_pll_pwrup_bpaccess_seq4},
-	{FCBS_RADIO_REG, 15, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 12, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_2g_pll_pwrup_radio_reg_seq2},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_2g_pll_pwrup_delay_seq4},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -1524,7 +1601,7 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_2g_pll_pwr_up[20] = {
 fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwr_up[20] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_5g_pll_pwrup_bpaccess_seq0},
-	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 17, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_5g_pll_pwrup_radio_reg_seq0},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_pwrup_delay_seq0},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -1540,7 +1617,7 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_pwrup_delay_seq3},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_5g_pll_pwrup_bpaccess_seq4},
-	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 17, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_5g_pll_pwrup_radio_reg_seq2},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_pwrup_delay_seq4},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -1557,10 +1634,10 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_pwr_up[20] = {
 };
 
 /* FCBS Radio 5G PLL to 2G Power up and VCO cal sequence for 20695_maj1_min0 */
-fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwr_up[20] = {
+fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwr_up[30] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq0},
-	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 12, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq0},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq0},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -1568,7 +1645,7 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq1},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq2},
-	{FCBS_RADIO_REG, 18, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 12, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq1},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq2},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -1576,7 +1653,7 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq3},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq4},
-	{FCBS_RADIO_REG, 26, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 14, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq2},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq4},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -1584,11 +1661,27 @@ fcbs_input_data_t dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq5},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq6},
-	{FCBS_RADIO_REG, 2, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 18, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq3},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq6},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq7},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq7},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq8},
+	{FCBS_RADIO_REG, 31, FCBS_PHY_RADIO_DYNAMIC,
+	dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq4},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq8},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq9},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq9},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq10},
+	{FCBS_RADIO_REG, 4, FCBS_PHY_RADIO_DYNAMIC,
+	dyn_ram_20695_maj1_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq5},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min0_radio_5g_pll_to_2g_pwrup_delay_seq10},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min0_radio_5g_pll_to_2g_pwrup_bpaccess_seq11},
 	{FCBS_TYPE_MAX, 0, 0, NULL}
 };
 
@@ -1602,7 +1695,7 @@ fcbs_input_data_t rom_20695_maj1_min0_radio_pwr_down[4] = {
 
 /* FCBS PHY register rom sequence array for maj36_min0 */
 fcbs_input_data_t rom_maj36_min0_phy_reg_init[2] = {
-	{FCBS_PHY_REG, 132, 0, rom_maj36_min0_phyreg_init_phy_reg_seq0},
+	{FCBS_PHY_REG, 135, 0, rom_maj36_min0_phyreg_init_phy_reg_seq0},
 	{FCBS_TYPE_MAX, 0, 0, NULL}
 };
 
@@ -1650,6 +1743,15 @@ fcbs_input_data_t rom_maj36_min0_tbl_access_cleanup[2] = {
 	{FCBS_TYPE_MAX, 0, 0, NULL}
 };
 
+/* FCBS chan tune sequence array for maj36_min0 */
+fcbs_input_data_t ram_20695_maj1_min0_chan_tune[5] = {
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS, ram_maj36_min0_chan_tune_bpaccess_seq0},
+	{FCBS_RADIO_REG, 2, 0, ram_20695_maj1_min0_chan_tune_radio_reg_seq0},
+	{FCBS_DELAY, 1, 0, ram_20695_maj36_min0_chan_tune_delay_seq0},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS, ram_maj36_min0_chan_tune_bpaccess_seq1},
+	{FCBS_TYPE_MAX, 0, 0, NULL}
+};
+
 /* FCBS PHY reset sequence for maj36_min0 */
 fcbs_input_data_t rom_maj36_min0_phy_rst[9] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS, rom_maj36_min0_phy_rst_bpaccess_seq0},
@@ -1678,8 +1780,8 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_minipmu_pwrup_bpaccess_seq0[2] = {
 };
 
 static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_minipmu_pwrup_radio_reg_seq0[2] = {
-	{RF0_20695_READOVERRIDES(38), 0x0001, 0x0000, 0xdead},
-	{RFP0_20695_READOVERRIDES(38), 0x0001, 0x0000, 0xdead}
+	{RF0_20695_READOVERRIDES(39), 0x0001, 0x0000, 0xdead},
+	{RFP0_20695_READOVERRIDES(39), 0x0001, 0x0000, 0xdead}
 };
 
 static phy_rad_dyn_adp_t dyn_ram_maj36_min1_radio_minipmu_pwrup_phy_reg_seq0[1] = {
@@ -1687,21 +1789,21 @@ static phy_rad_dyn_adp_t dyn_ram_maj36_min1_radio_minipmu_pwrup_phy_reg_seq0[1] 
 };
 
 static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_minipmu_pwrup_radio_reg_seq1[15] = {
-	{RFP0_20695_BG_REG12(38), 0x0002, 0x0002, 0xdead},
-	{RFP0_20695_LDO1P8_STAT(38), 0x0040, 0x0040, 0xdead},
-	{RFP0_20695_BG_REG2(38), 0x3000, 0x2000, 0xdead},
-	{RFP0_20695_BG_REG2(38), 0x3000, 0x3000, 0xdead},
-	{RF0_20695_PMU_CFG1(38), 0x012a, 0x0000, 0xdead},
-	{RF0_20695_PMU_CFG5(38), 0x0006, 0x0004, 0xdead},
-	{RFP0_20695_BG_REG10(38), 0x006c, 0x002c, 0xdead},
-	{RF0_20695_PMU_CFG5(38), 0x0006, 0x0006, 0xdead},
-	{RF0_20695_PMU_CFG1(38), 0x012a, 0x0020, 0xdead},
-	{RF0_20695_PMU_CFG1(38), 0x012a, 0x0028, 0xdead},
-	{RF0_20695_PMU_CFG1(38), 0x012a, 0x002a, 0xdead},
-	{RF0_20695_RX2G_REG4(38), 0x0002, 0x0002, 0xdead},
-	{RF0_20695_RX5G_REG5(38), 0x0010, 0x0010, 0xdead},
-	{RF0_20695_LDO1P65_STAT(38), 0x0100, 0x0100, 0xdead},
-	{RFP0_20695_BG_REG10(38), 0x006c, 0x006c, 0xdead}
+	{RFP0_20695_BG_REG12(39), 0x0002, 0x0002, 0xdead},
+	{RFP0_20695_LDO1P8_STAT(39), 0x0040, 0x0040, 0xdead},
+	{RFP0_20695_BG_REG2(39), 0x3000, 0x2000, 0xdead},
+	{RFP0_20695_BG_REG2(39), 0x3000, 0x3000, 0xdead},
+	{RF0_20695_PMU_CFG1(39), 0x012a, 0x0000, 0xdead},
+	{RF0_20695_PMU_CFG5(39), 0x0006, 0x0004, 0xdead},
+	{RFP0_20695_BG_REG10(39), 0x006c, 0x002c, 0xdead},
+	{RF0_20695_PMU_CFG5(39), 0x0006, 0x0006, 0xdead},
+	{RF0_20695_PMU_CFG1(39), 0x012a, 0x0020, 0xdead},
+	{RF0_20695_PMU_CFG1(39), 0x012a, 0x0028, 0xdead},
+	{RF0_20695_PMU_CFG1(39), 0x012a, 0x002a, 0xdead},
+	{RF0_20695_RX2G_REG4(39), 0x0002, 0x0002, 0xdead},
+	{RF0_20695_RX5G_REG5(39), 0x0010, 0x0010, 0xdead},
+	{RF0_20695_LDO1P65_STAT(39), 0x0100, 0x0100, 0xdead},
+	{RFP0_20695_BG_REG10(39), 0x006c, 0x006c, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_minipmu_pwrup_delay_seq0[1] = {
@@ -1721,7 +1823,7 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_minipmu_pwrup_bpaccess_seq2[2] = {
 };
 
 static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_minipmu_pwrup_radio_reg_seq2[1] = {
-	{RF0_20695_PMU_CFG1(38), 0x012a, 0x012a, 0xdead}
+	{RF0_20695_PMU_CFG1(39), 0x012a, 0x012a, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_minipmu_pwrup_delay_seq2[1] = {
@@ -1737,27 +1839,26 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_2g_pll_pwrup_bpaccess_seq0[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq0[20] = {
-	{RF0_20695_PLL_CRISSCROSS_5GAS2G(38), 0x0001, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(38), 0x0001, 0x0000, 0xdead},
-	{RF0_20695_LOGEN5G_REG4(38), 0x8000, 0x0000, 0xdead},
-	{RF0_20695_LO5GTO2G_CFG3(38), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0061, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x0000, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0e41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL_OVR1(38), 0x0005, 0x0004, 0xdead},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x0040, 0xdead},
-	{RFP0_20695_PLL_RFVCO2(38), 0x8800, 0x8800, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x00c0, 0xdead},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0044, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0100, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x00c4, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq0[19] = {
+	{RF0_20695_PLL_CRISSCROSS_5GAS2G(39), 0x0001, 0x0000, 0xdead},
+	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(39), 0x0001, 0x0000, 0xdead},
+	{RF0_20695_LOGEN5G_REG4(39), 0x8000, 0x0000, 0xdead},
+	{RF0_20695_LO5GTO2G_CFG3(39), 0x0040, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0061, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x0000, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0e41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x0040, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x8800, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x00c0, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0044, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0100, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x00c4, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_2g_pll_pwrup_delay_seq0[1] = {
@@ -1777,18 +1878,18 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_2g_pll_pwrup_bpaccess_seq2[2] = {
 };
 
 static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq1[12] = {
-	{RFP0_20695_PLL_RFVCO2(38), 0x8800, 0x8800, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x02c4, 0xdead},
-	{RFP0_20695_PLL_CP1(38), 0x4000, 0x4000, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x06c4, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0300, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x06c6, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0b00, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x06c7, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x2b00, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x06e7, 0xdead},
-	{RFP0_20695_PLL_RFVCO4(38), 0x0040, 0x0040, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x86e7, 0xdead}
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x8800, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x02c4, 0xdead},
+	{RFP0_20695_PLL_CP1(39), 0x4000, 0x4000, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06c4, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0300, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06c6, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06c7, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x2b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06e7, 0xdead},
+	{RFP0_20695_PLL_RFVCO4(39), 0x0040, 0x0040, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x86e7, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_2g_pll_pwrup_delay_seq2[1] = {
@@ -1807,22 +1908,19 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_2g_pll_pwrup_bpaccess_seq4[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq2[15] = {
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0040, 0xdead},
-	{RFP0_20695_PLL_RFVCO2(38), 0x8800, 0x0800, 0xdead},
-	{RFP0_20695_PLL_RFVCO2(38), 0x8800, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CP1(38), 0x4000, 0x0000, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x0020, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x03e0, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL_OVR1(38), 0x0005, 0x0005, 0xdead},
-	{RFP0_20695_PLL_VCOCAL15(38), 0x07ff, 0x0000, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL_OVR1(38), 0x0005, 0x0005, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0fc1, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq2[12] = {
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0040, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x0800, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x0000, 0xdead},
+	{RFP0_20695_PLL_CP1(39), 0x4000, 0x0000, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x0020, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03e0, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL_VCOCAL15(39), 0x07ff, 0x0000, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0fc1, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_2g_pll_pwrup_delay_seq4[1] = {
@@ -1842,8 +1940,8 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_2g_pll_pwrup_bpaccess_seq6[2] = {
 };
 
 static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq3[2] = {
-	{RFP0_20695_PLL_VCOCAL_OVR1(38), 0x0005, 0x0004, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x03c0, 0xdead}
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03c0, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_2g_pll_pwrup_delay_seq6[1] = {
@@ -1859,26 +1957,24 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_pwrup_bpaccess_seq0[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq0[19] = {
-	{RF0_20695_PLL_CRISSCROSS_5GAS2G(38), 0x0001, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(38), 0x0001, 0x0000, 0xdead},
-	{RF0_20695_LO5GTO2G_CFG3(38), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL_RFVCO4(38), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0e41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL_OVR1(38), 0x0005, 0x0004, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x0040, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x8000, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x00c0, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0044, 0xdead},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0044, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x0100, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x00c4, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq0[17] = {
+	{RF0_20695_PLL_CRISSCROSS_5GAS2G(39), 0x0001, 0x0000, 0xdead},
+	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(39), 0x0001, 0x0000, 0xdead},
+	{RF0_20695_LO5GTO2G_CFG3(39), 0x0040, 0x0000, 0xdead},
+	{RFP0_20695_PLL_RFVCO4(39), 0x0040, 0x0000, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0000, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0e41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x0040, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x8000, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x00c0, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0044, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0044, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x0100, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x00c4, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_pwrup_delay_seq0[1] = {
@@ -1898,24 +1994,24 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_pwrup_bpaccess_seq2[2] = {
 };
 
 static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq1[18] = {
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x8800, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x02c4, 0xdead},
-	{RFP0_20695_PLL5G_CP1(38), 0x6000, 0x4000, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x06c4, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x0300, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x06c6, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x2300, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x06e6, 0xdead},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0061, 0x0020, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x26e6, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x8801, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x66e6, 0xdead},
-	{RFP0_20695_PLL5G_CP1(38), 0x6000, 0x6000, 0xdead},
-	{RFP0_20695_PLL5G_LF6(38), 0x0001, 0x0001, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x6300, 0xdead},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0061, 0x0060, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x67e6, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0044, 0xdead}
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x8800, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x02c4, 0xdead},
+	{RFP0_20695_PLL5G_CP1(39), 0x6000, 0x4000, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x06c4, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x0300, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x06c6, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x2300, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x06e6, 0xdead},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0061, 0x0020, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x26e6, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x8801, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x66e6, 0xdead},
+	{RFP0_20695_PLL5G_CP1(39), 0x6000, 0x6000, 0xdead},
+	{RFP0_20695_PLL5G_LF6(39), 0x0001, 0x0001, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x6300, 0xdead},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0061, 0x0060, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x67e6, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0044, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_pwrup_delay_seq2[1] = {
@@ -1934,26 +2030,24 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_pwrup_bpaccess_seq4[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq2[19] = {
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0040, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x0801, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x0001, 0xdead},
-	{RFP0_20695_PLL5G_CP1(38), 0x6000, 0x2000, 0xdead},
-	{RF0_20695_LOGEN5G_REG4(38), 0x8000, 0x8000, 0xdead},
-	{RF0_20695_LOGEN_OVR1(38), 0x0060, 0x0060, 0xdead},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0061, 0x0060, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0xe7e6, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x0020, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x03e0, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL_OVR1(38), 0x0005, 0x0005, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL15(38), 0x07ff, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL_OVR1(38), 0x0005, 0x0005, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0fc1, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq2[17] = {
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0040, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x0801, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x0001, 0xdead},
+	{RFP0_20695_PLL5G_CP1(39), 0x6000, 0x2000, 0xdead},
+	{RF0_20695_LOGEN5G_REG4(39), 0x8000, 0x8000, 0xdead},
+	{RF0_20695_LOGEN_OVR1(39), 0x0060, 0x0060, 0xdead},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0061, 0x0060, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0xe7e6, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x0020, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03e0, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL15(39), 0x07ff, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0fc1, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_pwrup_delay_seq4[1] = {
@@ -1973,8 +2067,8 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_pwrup_bpaccess_seq6[2] = {
 };
 
 static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq3[2] = {
-	{RFP0_20695_PLL5G_VCOCAL_OVR1(38), 0x0005, 0x0004, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x03c0, 0xdead}
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03c0, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_pwrup_delay_seq6[1] = {
@@ -1990,26 +2084,19 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq0[2] =
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq0[19] = {
-	{RF0_20695_PLL_CRISSCROSS_5GAS2G(38), 0x0001, 0x0001, 0xdead},
-	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(38), 0x0001, 0x0001, 0xdead},
-	{RF0_20695_LOGEN5G_REG4(38), 0x8000, 0x0000, 0xdead},
-	{RFP0_20695_PLL_RFVCO4(38), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0000, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL1(38), 0x0fc1, 0x0e41, 0xdead},
-	{RFP0_20695_PLL5G_VCOCAL_OVR1(38), 0x0005, 0x0004, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0004, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x0040, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x8000, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x00c0, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0044, 0xdead},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0044, 0x0044, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x0100, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x00c4, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq0[12] = {
+	{RF0_20695_PLL_CRISSCROSS_5GAS2G(39), 0x0001, 0x0001, 0xdead},
+	{RFP0_20695_PLL_CRISSCROSS_5GAS2G(39), 0x0001, 0x0001, 0xdead},
+	{RF0_20695_LOGEN5G_REG4(39), 0x8000, 0x0000, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0e41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x0040, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x8800, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x00c0, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0044, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0100, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x00c4, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq0[1] = {
@@ -2028,25 +2115,19 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq2[2] =
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq1[18] = {
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x8800, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x02c4, 0xdead},
-	{RFP0_20695_PLL5G_CP1(38), 0x6000, 0x4000, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x06c4, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x0300, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x06c6, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x2300, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x06e6, 0xdead},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0061, 0x0020, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x26e6, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x8801, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x66e6, 0xdead},
-	{RFP0_20695_PLL5G_CP1(38), 0x6000, 0x6000, 0xdead},
-	{RFP0_20695_PLL5G_LF6(38), 0x0001, 0x0001, 0xdead},
-	{RFP0_20695_PLL5G_CFG1(38), 0x6300, 0x6300, 0xdead},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0061, 0x0060, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0x67e6, 0xdead},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0044, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq1[12] = {
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x8800, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x02c4, 0xdead},
+	{RFP0_20695_PLL_CP1(39), 0x4000, 0x4000, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06c4, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0300, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06c6, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x0b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06c7, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x2b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x06e7, 0xdead},
+	{RFP0_20695_PLL_RFVCO4(39), 0x0040, 0x0040, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x86e7, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq2[1] = {
@@ -2065,33 +2146,21 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq4[2] =
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq2[26] = {
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0044, 0x0040, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x0801, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x8801, 0x0001, 0xdead},
-	{RFP0_20695_PLL5G_CP1(38), 0x6000, 0x2000, 0xdead},
-	{RF0_20695_LO5GTO2G_CFG3(38), 0x0040, 0x0040, 0xdead},
-	{RF0_20695_LOGEN_OVR1(38), 0x0060, 0x0020, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0100, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x0004, 0xdead},
-	{RFP0_20695_PLL_CFG1(38), 0x2b00, 0x0900, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x0005, 0xdead},
-	{RFP0_20695_PLL_RFVCO4(38), 0x0040, 0x0000, 0xdead},
-	{RFP0_20695_PLL_OVR1(38), 0x86e7, 0x8005, 0xdead},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0061, 0x0061, 0xdead},
-	{RFP0_20695_PLL5G_OVR1(38), 0xe7e6, 0xe7e6, 0xdead},
-	{RFP0_20695_PLL5G_RFVCO5(38), 0x0f00, 0x0600, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x0020, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x03e0, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0fc1, 0xdead},
-	{RFP0_20695_PLL_VCOCAL_OVR1(38), 0x0005, 0x0001, 0xdead},
-	{RFP0_20695_PLL_VCOCAL15(38), 0x07ff, 0x0000, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0fc1, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0fc1, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0fc1, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0f41, 0xdead},
-	{RFP0_20695_PLL_VCOCAL_OVR1(38), 0x0005, 0x0005, 0xdead},
-	{RFP0_20695_PLL_VCOCAL1(38), 0x0fc1, 0x0fc1, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq2[14] = {
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0040, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x0800, 0xdead},
+	{RFP0_20695_PLL_RFVCO2(39), 0x8800, 0x0000, 0xdead},
+	{RFP0_20695_PLL_CP1(39), 0x4000, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0e41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0004, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x0040, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x8000, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x00c0, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0044, 0xdead},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0044, 0x0040, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x0100, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x00c4, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq4[1] = {
@@ -2103,16 +2172,32 @@ static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq5[2] =
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq5[1] = {
-	0x050
+	0x00a
 };
 
 static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq6[2] = {
 	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
 };
 
-static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq3[2] = {
-	{RFP0_20695_PLL_VCOCAL_OVR1(38), 0x0005, 0x0004, 0xdead},
-	{RFP0_20695_XTAL6(38), 0x03e0, 0x03c0, 0xdead}
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq3[18] = {
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x8800, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x02c4, 0xdead},
+	{RFP0_20695_PLL5G_CP1(39), 0x6000, 0x4000, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x06c4, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x0300, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x06c6, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x2300, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x06e6, 0xdead},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0061, 0x0020, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x26e6, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x8801, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x66e6, 0xdead},
+	{RFP0_20695_PLL5G_CP1(39), 0x6000, 0x6000, 0xdead},
+	{RFP0_20695_PLL5G_LF6(39), 0x0001, 0x0001, 0xdead},
+	{RFP0_20695_PLL5G_CFG1(39), 0x6300, 0x6300, 0xdead},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0061, 0x0060, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0x67e6, 0xdead},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0044, 0xdead}
 };
 
 static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq6[1] = {
@@ -2120,6 +2205,79 @@ static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq6[1] = 
 };
 
 static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq7[2] = {
+	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq7[1] = {
+	0x00a
+};
+
+static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq8[2] = {
+	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq4[31] = {
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0044, 0x0040, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x0801, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x8801, 0x0001, 0xdead},
+	{RFP0_20695_PLL5G_CP1(39), 0x6000, 0x2000, 0xdead},
+	{RF0_20695_LO5GTO2G_CFG3(39), 0x0040, 0x0040, 0xdead},
+	{RF0_20695_LOGEN_OVR1(39), 0x0060, 0x0020, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x2b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x86e7, 0xdead},
+	{RFP0_20695_PLL_CFG1(39), 0x2b00, 0x2b00, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x86e7, 0xdead},
+	{RFP0_20695_PLL_RFVCO4(39), 0x0040, 0x0000, 0xdead},
+	{RFP0_20695_PLL_OVR1(39), 0x86e7, 0x86e7, 0xdead},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0061, 0x0061, 0xdead},
+	{RFP0_20695_PLL5G_OVR1(39), 0xe7e6, 0xe7e6, 0xdead},
+	{RFP0_20695_PLL5G_RFVCO5(39), 0x0f00, 0x0600, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x0020, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03e0, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL15(39), 0x07ff, 0x0000, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL1(39), 0x0fc1, 0x0fc1, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03e0, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL_VCOCAL15(39), 0x07ff, 0x0000, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0f41, 0xdead},
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0005, 0xdead},
+	{RFP0_20695_PLL_VCOCAL1(39), 0x0fc1, 0x0fc1, 0xdead}
+};
+
+static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq8[1] = {
+	0x000
+};
+
+static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq9[2] = {
+	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq9[1] = {
+	0x050
+};
+
+static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq10[2] = {
+	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static phy_rad_dyn_adp_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq5[4] = {
+	{RFP0_20695_PLL_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03c0, 0xdead},
+	{RFP0_20695_PLL5G_VCOCAL_OVR1(39), 0x0005, 0x0004, 0xdead},
+	{RFP0_20695_XTAL6(39), 0x03e0, 0x03c0, 0xdead}
+};
+
+static uint16 dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq10[1] = {
+	0x000
+};
+
+static d11axiiv_t dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq11[2] = {
 	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
 };
 
@@ -2135,34 +2293,34 @@ static adp_t rom_maj36_min1_radio_pwrdwn_phy_reg_seq0[7] = {
 };
 
 static adp_t rom_20695_maj2_min0_radio_pwrdwn_radio_reg_seq0[28] = {
-	{RFP0_20695_PLL_RFVCO4(38), 0x4386},
-	{RFP0_20695_PLL_CFG1(38), 0x80a0},
-	{RFP0_20695_PLL_CFG1(38), 0x80a0},
-	{RFP0_20695_PLL_CFG1(38), 0x80a0},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0717},
-	{RFP0_20695_PLL_CFG1(38), 0x80a0},
-	{RFP0_20695_PLL5G_RFVCO2(38), 0x2010},
-	{RFP0_20695_PLL5G_CFG6(38), 0x0006},
-	{RFP0_20695_PLL5G_CFG1(38), 0x00a0},
-	{RFP0_20695_PLL5G_CFG1(38), 0x00a0},
-	{RFP0_20695_PLL5G_PFDLDO1(38), 0x0717},
-	{RFP0_20695_PLL_PFDLDO1(38), 0x0717},
-	{RFP0_20695_PLL5G_CFG1(38), 0x00a0},
-	{RF0_20695_LOGEN5G_REG4(38), 0x0733},
-	{RF0_20695_LO5GTO2G_CFG3(38), 0x0012},
-	{RF0_20695_LDO1P65_STAT(38), 0x0000},
-	{RF0_20695_RX2G_REG4(38), 0x0000},
-	{RF0_20695_RX5G_REG5(38), 0x0002},
-	{RF0_20695_PMU_CFG1(38), 0x0128},
-	{RF0_20695_PMU_CFG1(38), 0x0120},
-	{RF0_20695_PMU_CFG1(38), 0x0100},
-	{RF0_20695_PMU_CFG5(38), 0x0004},
-	{RFP0_20695_BG_REG10(38), 0x004c},
-	{RF0_20695_PMU_CFG5(38), 0x0000},
-	{RF0_20695_PMU_CFG1(38), 0x0000},
-	{RFP0_20695_BG_REG2(38), 0xa8a2},
-	{RFP0_20695_BG_REG2(38), 0x88a2},
-	{RFP0_20695_LDO1P8_STAT(38), 0x0000}
+	{RFP0_20695_PLL_RFVCO4(39), 0x4386},
+	{RFP0_20695_PLL_CFG1(39), 0x80a0},
+	{RFP0_20695_PLL_CFG1(39), 0x80a0},
+	{RFP0_20695_PLL_CFG1(39), 0x80a0},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0717},
+	{RFP0_20695_PLL_CFG1(39), 0x80a0},
+	{RFP0_20695_PLL5G_RFVCO2(39), 0x2010},
+	{RFP0_20695_PLL5G_CFG6(39), 0x0006},
+	{RFP0_20695_PLL5G_CFG1(39), 0x00a0},
+	{RFP0_20695_PLL5G_CFG1(39), 0x00a0},
+	{RFP0_20695_PLL5G_PFDLDO1(39), 0x0717},
+	{RFP0_20695_PLL_PFDLDO1(39), 0x0717},
+	{RFP0_20695_PLL5G_CFG1(39), 0x00a0},
+	{RF0_20695_LOGEN5G_REG4(39), 0x0733},
+	{RF0_20695_LO5GTO2G_CFG3(39), 0x0012},
+	{RF0_20695_LDO1P65_STAT(39), 0x0000},
+	{RF0_20695_RX2G_REG4(39), 0x0000},
+	{RF0_20695_RX5G_REG5(39), 0x0002},
+	{RF0_20695_PMU_CFG1(39), 0x0128},
+	{RF0_20695_PMU_CFG1(39), 0x0120},
+	{RF0_20695_PMU_CFG1(39), 0x0100},
+	{RF0_20695_PMU_CFG5(39), 0x0004},
+	{RFP0_20695_BG_REG10(39), 0x004c},
+	{RF0_20695_PMU_CFG5(39), 0x0000},
+	{RF0_20695_PMU_CFG1(39), 0x0000},
+	{RFP0_20695_BG_REG2(39), 0xa8a2},
+	{RFP0_20695_BG_REG2(39), 0x88a2},
+	{RFP0_20695_LDO1P8_STAT(39), 0x0000}
 };
 
 static adp_t rom_maj36_min1_radio_pwrdwn_phy_reg_seq1[4] = {
@@ -2173,7 +2331,7 @@ static adp_t rom_maj36_min1_radio_pwrdwn_phy_reg_seq1[4] = {
 };
 
 /* PHY register rom sequence arrays */
-static adp_t rom_maj36_min1_phyreg_init_phy_reg_seq0[132] = {
+static adp_t rom_maj36_min1_phyreg_init_phy_reg_seq0[138] = {
 	{ACPHY_RfctrlIntc0(36), 0x0000},
 	{ACPHY_RfctrlOverrideAfeCfg0(36), 0x0000},
 	{ACPHY_RfctrlOverrideRxPus0(36), 0x0000},
@@ -2222,6 +2380,8 @@ static adp_t rom_maj36_min1_phyreg_init_phy_reg_seq0[132] = {
 	{ACPHY_DcFiltAddress(36), 0x0615},
 	{ACPHY_bphyTest(36), 0x0000},
 	{ACPHY_bphyFiltBypass(36), 0x0400},
+	{ACPHY_bphyFiltBypass(36), 0x0400},
+	{ACPHY_CCKLMSStepSize(36), 0x0002},
 	{ACPHY_BfeConfigReg1(36), 0x0008},
 	{ACPHY_Core0_TargetVar_log2(36), 0x01c0},
 	{ACPHY_RxSdFeConfig1(36), 0x0001},
@@ -2267,16 +2427,20 @@ static adp_t rom_maj36_min1_phyreg_init_phy_reg_seq0[132] = {
 	{ACPHY_crshighlowpowThresholdu(36), 0x454b},
 	{ACPHY_Core1TxControl(36), 0x001c},
 	{ACPHY_Core0lpfQ(36), 0x0a7f},
-	{ACPHY_cckshiftbitsRefVar(36), 0x209c},
-	{ACPHY_Core0_BPHY_TargetVar_log2_pt8us(36), 0x01df},
-	{ACPHY_overideDigiGain1(36), 0x7744},
+	{ACPHY_overideDigiGain1(36), 0xff44},
+	{ACPHY_cckshiftbitsRefVar(36), 0x409c},
+	{ACPHY_Core0_BPHY_TargetVar_log2_pt8us(36), 0x01f6},
+	{ACPHY_SyncControl(36), 0x0701},
+	{ACPHY_OptionalModes(36), 0x7c81},
+	{ACPHY_Core0MinMaxGain(36), 0x63f8},
 	{ACPHY_clip1gainSettleLen(36), 0x0028},
 	{ACPHY_SpareRegB0(36), 0x017f},
 	{ACPHY_RfctrlCmd(36), 0x0002},
+	{ACPHY_Logen_AfeDiv_reset_select(36), 0x311d},
 	{ACPHY_forceFront0(36), 0x6000},
 	{ACPHY_SpareRegB0(36), 0x037f},
 	{ACPHY_SpareRegB0(36), 0x0377},
-	{ACPHY_SpareReg(36), 0x40ff},
+	{ACPHY_SpareReg(36), 0x48ff},
 	{ACPHY_forceFront0(36), 0x6400},
 	{ACPHY_forceFront0(36), 0x6600},
 	{ACPHY_TSSIMode(36), 0x000c},
@@ -3011,6 +3175,24 @@ static adp_t rom_maj36_min1_tbl_access_cleanup_phy_reg_seq0[2] = {
 	{ACPHY_FCBSstallCtrl(36), 0x0000}
 };
 
+/* chan tune sequence array */
+static d11axiiv_t ram_maj36_min1_chan_tune_bpaccess_seq0[2] = {
+	{0xe8000492, 2, 0x2}, {INITVALS_END_MARKER, 0, 0}
+};
+
+static adp_t ram_20695_maj2_min0_chan_tune_radio_reg_seq0[2] = {
+	{RFP0_20695_PLL_RFVCO4(39), 0xdead},
+	{RF0_20695_LO5GTO2G_CFG3(39), 0xdead}
+};
+
+static uint16 ram_20695_maj36_min1_chan_tune_delay_seq0[1] = {
+	0x000
+};
+
+static d11axiiv_t ram_maj36_min1_chan_tune_bpaccess_seq1[2] = {
+	{0xe8000492, 2, 0x0}, {INITVALS_END_MARKER, 0, 0}
+};
+
 /* PHY reset sequence arrays */
 static d11axiiv_t rom_maj36_min1_phy_rst_bpaccess_seq0[2] = {
 	{0x18101408, 4, 0x34F}, {INITVALS_END_MARKER, 0, 0}
@@ -3045,7 +3227,7 @@ static uint16 rom_20695_maj36_min1_phy_rst_delay_seq3[1] = {
 };
 
 /* Napping PHY register sequence array */
-static adp_t rom_maj36_min1_napping_phy_reg_seq0[17] = {
+static adp_t rom_maj36_min1_napping_phy_reg_seq0[18] = {
 	{ACPHY_nap_len(36), 0x0040},
 	{ACPHY_NapCtrl(36), 0x0100},
 	{ACPHY_NapCtrl(36), 0x0140},
@@ -3062,7 +3244,8 @@ static adp_t rom_maj36_min1_napping_phy_reg_seq0[17] = {
 	{ACPHY_RxFeCtrl1(36), 0x0a10},
 	{ACPHY_nap2cs_wait_in_reset_len(36), 0x0002},
 	{ACPHY_nap_wait_in_cs_len(36), 0x000a},
-	{ACPHY_SpareRegB0(36), 0x007f}
+	{ACPHY_SpareRegB0(36), 0x007f},
+	{ACPHY_SpareReg(36), 0x08ff}
 };
 
 /* Napping PHY table data arrays */
@@ -3184,7 +3367,7 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_minipmu_pwr_up[12] = {
 fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwr_up[20] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_2g_pll_pwrup_bpaccess_seq0},
-	{FCBS_RADIO_REG, 20, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq0},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_2g_pll_pwrup_delay_seq0},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -3200,7 +3383,7 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_2g_pll_pwrup_delay_seq3},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_2g_pll_pwrup_bpaccess_seq4},
-	{FCBS_RADIO_REG, 15, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 12, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_2g_pll_pwrup_radio_reg_seq2},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_2g_pll_pwrup_delay_seq4},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -3220,7 +3403,7 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_2g_pll_pwr_up[20] = {
 fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwr_up[20] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_5g_pll_pwrup_bpaccess_seq0},
-	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 17, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq0},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_pwrup_delay_seq0},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -3236,7 +3419,7 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_pwrup_delay_seq3},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_5g_pll_pwrup_bpaccess_seq4},
-	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 17, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_5g_pll_pwrup_radio_reg_seq2},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_pwrup_delay_seq4},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -3253,10 +3436,10 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_pwr_up[20] = {
 };
 
 /* FCBS Radio 5G PLL to 2G Power up and VCO cal sequence for 20695_maj2_min0 */
-fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwr_up[20] = {
+fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwr_up[30] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq0},
-	{FCBS_RADIO_REG, 19, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 12, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq0},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq0},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -3264,7 +3447,7 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq1},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq2},
-	{FCBS_RADIO_REG, 18, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 12, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq1},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq2},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -3272,7 +3455,7 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq3},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq4},
-	{FCBS_RADIO_REG, 26, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 14, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq2},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq4},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
@@ -3280,11 +3463,27 @@ fcbs_input_data_t dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwr_up[20] = {
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq5},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq6},
-	{FCBS_RADIO_REG, 2, FCBS_PHY_RADIO_DYNAMIC,
+	{FCBS_RADIO_REG, 18, FCBS_PHY_RADIO_DYNAMIC,
 	dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq3},
 	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq6},
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
 	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq7},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq7},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq8},
+	{FCBS_RADIO_REG, 31, FCBS_PHY_RADIO_DYNAMIC,
+	dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq4},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq8},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq9},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq9},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq10},
+	{FCBS_RADIO_REG, 4, FCBS_PHY_RADIO_DYNAMIC,
+	dyn_ram_20695_maj2_min0_radio_5g_pll_to_2g_pwrup_radio_reg_seq5},
+	{FCBS_DELAY, 1, 0, dyn_ram_20695_maj36_min1_radio_5g_pll_to_2g_pwrup_delay_seq10},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS,
+	dyn_ram_maj36_min1_radio_5g_pll_to_2g_pwrup_bpaccess_seq11},
 	{FCBS_TYPE_MAX, 0, 0, NULL}
 };
 
@@ -3298,7 +3497,7 @@ fcbs_input_data_t rom_20695_maj2_min0_radio_pwr_down[4] = {
 
 /* FCBS PHY register rom sequence array for maj36_min1 */
 fcbs_input_data_t rom_maj36_min1_phy_reg_init[2] = {
-	{FCBS_PHY_REG, 132, 0, rom_maj36_min1_phyreg_init_phy_reg_seq0},
+	{FCBS_PHY_REG, 138, 0, rom_maj36_min1_phyreg_init_phy_reg_seq0},
 	{FCBS_TYPE_MAX, 0, 0, NULL}
 };
 
@@ -3346,6 +3545,15 @@ fcbs_input_data_t rom_maj36_min1_tbl_access_cleanup[2] = {
 	{FCBS_TYPE_MAX, 0, 0, NULL}
 };
 
+/* FCBS chan tune sequence array for maj36_min1 */
+fcbs_input_data_t ram_20695_maj2_min0_chan_tune[5] = {
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS, ram_maj36_min1_chan_tune_bpaccess_seq0},
+	{FCBS_RADIO_REG, 2, 0, ram_20695_maj2_min0_chan_tune_radio_reg_seq0},
+	{FCBS_DELAY, 1, 0, ram_20695_maj36_min1_chan_tune_delay_seq0},
+	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS, ram_maj36_min1_chan_tune_bpaccess_seq1},
+	{FCBS_TYPE_MAX, 0, 0, NULL}
+};
+
 /* FCBS PHY reset sequence for maj36_min1 */
 fcbs_input_data_t rom_maj36_min1_phy_rst[9] = {
 	{FCBS_BP_ACCESS, 2, FCBS_DATA_INITVALS, rom_maj36_min1_phy_rst_bpaccess_seq0},
@@ -3361,7 +3569,7 @@ fcbs_input_data_t rom_maj36_min1_phy_rst[9] = {
 
 /* FCBS Napping sequence array for maj36_min1 */
 fcbs_input_data_t rom_maj36_min1_napping[3] = {
-	{FCBS_PHY_REG, 17, 0, rom_maj36_min1_napping_phy_reg_seq0},
+	{FCBS_PHY_REG, 18, 0, rom_maj36_min1_napping_phy_reg_seq0},
 	{FCBS_PHY_TBL, 16, 0, rom_maj36_min1_napping_phy_tbl_seq0},
 	{FCBS_TYPE_MAX, 0, 0, NULL}
 };

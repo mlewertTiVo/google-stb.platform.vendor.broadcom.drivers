@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lpc.c 618416 2016-02-11 01:05:38Z guangjie $
+ * $Id: phy_lpc.c 618416 2016-02-11 01:05:38Z $
  */
 
 #include <phy_cfg.h>

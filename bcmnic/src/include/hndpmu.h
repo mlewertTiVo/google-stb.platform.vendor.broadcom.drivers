@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hndpmu.h 645916 2016-06-27 22:17:30Z $
+ * $Id: hndpmu.h 665208 2016-10-16 23:44:23Z $
  */
 
 #ifndef _hndpmu_h_
@@ -94,7 +94,6 @@ extern uint32 si_pmu_ilp_clock(si_t *sih, osl_t *osh);  /* returns [Hz] units */
 
 extern void si_pmu_set_ldo_voltage(si_t *sih, osl_t *osh, uint8 ldo, uint8 voltage);
 extern uint16 si_pmu_fast_pwrup_delay(si_t *sih, osl_t *osh);
-extern uint si_pll_minresmask_reset(si_t *sih, osl_t *osh);
 extern void si_pmu_pllupd(si_t *sih);
 extern void si_pmu_spuravoid(si_t *sih, osl_t *osh, uint8 spuravoid);
 extern void si_pmu_spuravoid_isdone(si_t *sih, osl_t *osh, uint32 min_res_mask,
@@ -115,9 +114,7 @@ extern uint32 si_pmu_vreg_control(si_t *sih, uint reg, uint32 mask, uint32 val);
 extern uint32 si_pmu_pllcontrol(si_t *sih, uint reg, uint32 mask, uint32 val);
 extern void si_pmu_pllupd(si_t *sih);
 
-extern void si_pmu_radio_enable(si_t *sih, bool enable);
 extern uint32 si_pmu_waitforclk_on_backplane(si_t *sih, osl_t *osh, uint32 clk, uint32 delay);
-extern void si_pmu_set_4330_plldivs(si_t *sih, uint8 dacrate);
 extern uint32 si_pmu_get_bb_vcofreq(si_t *sih, osl_t *osh, int xtalfreq);
 typedef void (*si_pmu_callback_t)(void* arg);
 
@@ -134,20 +131,22 @@ extern int si_pmu_openloop_cal(si_t *sih, uint16 currtemp);
 extern int si_pmu_min_res_ldo3p3_set(si_t *sih, osl_t *osh, bool on);
 extern int si_pmu_min_res_ldo3p3_get(si_t *sih, osl_t *osh, int *res);
 #endif /* LDO3P3_MIN_RES_MASK */
+
+extern int si_pmu_min_res_otp_pu_set(si_t *sih, osl_t *osh, bool on);
 #endif /* !defined(BCMDONGLEHOST) */
 
-extern uint32 si_pmu_rsrc_macphy_clk_deps(si_t *sih, osl_t *osh);
+extern uint32 si_pmu_rsrc_macphy_clk_deps(si_t *sih, osl_t *osh, int maccore_index);
 extern uint32 si_pmu_rsrc_ht_avail_clk_deps(si_t *sih, osl_t *osh);
 
 extern void si_pmu_otp_power(si_t *sih, osl_t *osh, bool on, uint32* min_res_mask);
 extern void si_sdiod_drive_strength_init(si_t *sih, osl_t *osh, uint32 drivestrength);
 
-extern void si_pmu_minresmask_htavail_set(si_t *sih, osl_t *osh, bool set_clear);
 extern void si_pmu_slow_clk_reinit(si_t *sih, osl_t *osh);
 extern void si_pmu_avbtimer_enable(si_t *sih, osl_t *osh, bool set_flag);
 extern uint32 si_pmu_dump_pmucap_binary(si_t *sih, uchar *p);
 extern uint32 si_pmu_dump_buf_size_pmucap(si_t *sih);
 extern int si_pmu_wait_for_steady_state(si_t *sih, osl_t *osh, pmuregs_t *pmu);
+extern uint32 si_pmu_wake_bit_offset(si_t *sih);
 #if defined(BCMULP)
 int si_pmu_ulp_register(si_t *sih);
 extern void si_pmu_ulp_chipconfig(si_t *sih, osl_t *osh);
@@ -157,4 +156,5 @@ extern void si_pmu_ds1_res_init(si_t *sih, osl_t *osh);
 extern uint32 si_pmu_get_pmutimer(si_t *sih);
 extern void si_switch_pmu_dependency(si_t *sih, uint mode);
 extern void si_pmu_set_min_res_mask(si_t *sih, osl_t *osh, uint min_res_mask);
+extern void si_pmu_set_mac_rsrc_req(si_t *sih, int macunit);
 #endif /* _hndpmu_h_ */

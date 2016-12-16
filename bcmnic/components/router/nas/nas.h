@@ -9,7 +9,7 @@
  * or duplicated in any form, in whole or in part, without the prior
  * written permission of Broadcom.
  *
- * $Id: nas.h 533930 2015-02-12 04:18:41Z $
+ * $Id: nas.h 660153 2016-09-19 07:48:57Z $
  */
 
 #ifndef _nas_h_
@@ -39,8 +39,34 @@
 
 
 /* Debug macros */
+#ifdef BCMDBG
+#define dbg(nas, fmt, args...) (\
+{ \
+	if (nas) { \
+		nas_t *tmp = nas; \
+		if (tmp->debug) { \
+			fprintf(stderr, "%s: %s: " fmt "\n", __FUNCTION__, \
+				tmp->interface , ## args); \
+		} \
+	} \
+	else {\
+		fprintf(stderr, "%s: " fmt "\n", __FUNCTION__ , ## args); \
+	}\
+} \
+)
+#define dump(nas, mem, size)	(\
+{ \
+	if (nas) { \
+		nas_t *tmp = nas; \
+		if (tmp->debug) \
+			prhex("", mem, size); \
+	} \
+} \
+)
+#else
 #define dbg(nas, fmt, args...)
 #define dump(nas, mem, size)
+#endif /* BCMDBG */
 #define err(nas, fmt, args...) (\
 { \
 	if (nas) { \
@@ -124,6 +150,7 @@ typedef enum
 	WPA_PSK = WPA_AUTH_PSK,
 	WPA2 = WPA2_AUTH_UNSPECIFIED,
 	WPA2_PSK = WPA2_AUTH_PSK,
+	WPA2_FT = WPA2_AUTH_FT,
 	RADIUS = 0x20
 } nas_mode_t;
 
@@ -153,6 +180,10 @@ typedef struct nas {
 	uint8 remote[ETHER_ADDR_LEN];
 	/* application data */
 	void *appl;
+#ifdef BCMDBG
+	/* debug flag */
+	bool debug;
+#endif
 
 	/* session timeout - global */
 	uint32 ssn_to;
@@ -166,6 +197,10 @@ typedef struct nas {
 	deauth_params_t  m_deauth_params;
 	subrem_params_t  m_subrem_params;
 	bsstran_params_t m_bsstran_params;
+#ifdef WLHOSTFBT
+	struct l2_packet_data * l2_rrb;
+	uint32 l2_rrb_fd;
+#endif /* WLHOSTFBT */
 
 } nas_t;
 
@@ -252,6 +287,18 @@ extern void hmac_sha1(unsigned char *text, int text_len, unsigned char *key,
                       int key_len, unsigned char *digest);
 extern int nas_send_brcm_event(nas_t *nas, uint8* mac, int reason);
 extern int nas_get_assoc_req_ies(nas_t *nas, char *cap, uint32 size);
+extern int nas_get_ssid(nas_t *nas, uint8 *ssid_ptr, uint32 *ssid_len);
+extern int nas_get_bssid(nas_t *nas, char *buf, int buf_len);
+#ifdef WLHOSTFBT
+extern int nas_get_fbt_mdid(nas_t *nas, uint16 *mdid);
+extern int nas_set_fbt_auth_resp(nas_t *nas, uint8* resp_ies, int resp_ies_len);
+extern int nas_set_fbt_action(nas_t *nas, uint8 *fbt_act_ies, int fbt_act_ies_len);
+extern int nas_set_fbt_ds_add_sta(nas_t *nas, uint8 *fbt_ds_add_sta_ies, int fbt_add_sta_ies_len);
+extern int nas_get_reassoc_timer(nas_t *nas, uint32 *reassoc_deadline);
+extern int nas_get_fbt_overds(nas_t *nas, uint32 *fbt_overds);
+extern int nas_get_fbt_r0kh(nas_t *nas, char *buf, uint32 size);
+extern int nas_get_fbt_r1kh(nas_t *nas, char *buf, uint32 size);
+#endif /* WLHOSTFBT */
 #define MIC_RATE_LIMIT	60		/* seconds */
 
 #define STA_DEAUTH_DELAY_MS 50	/* delay before call wl ioctl deauth */
@@ -260,10 +307,14 @@ extern int nas_get_assoc_req_ies(nas_t *nas, char *cap, uint32 size);
 #define STA_AUTHWHILE_MAX	60	/* max authWhile in second */
 #define STA_QUIETWHILE_MAX	60	/* max quietWhile in second */
 
-#define CHECK_NAS(mode) ((mode) & (WPA | WPA_PSK | WPA2 | WPA2_PSK))
-#define CHECK_PSK(mode) ((mode) & (WPA_PSK | WPA2_PSK))
+#define CHECK_NAS(mode) ((mode) & (WPA | WPA_PSK | WPA2 | WPA2_PSK | WPA2_FT))
+#define CHECK_PSK(mode) ((mode) & (WPA_PSK | WPA2_PSK | WPA2_FT))
 #define CHECK_WPA(mode) ((mode) & (WPA | WPA2))
 #define CHECK_RADIUS(mode) ((mode) & (WPA | RADIUS | WPA2))
-#define CHECK_AUTH(mode) ((mode) & (RADIUS | WPA | WPA_PSK | WPA2 | WPA2_PSK))
-
+#define CHECK_AUTH(mode) ((mode) & (RADIUS | WPA | WPA_PSK | WPA2 | WPA2_PSK | WPA2_FT))
+#ifdef WLHOSTFBT
+#define CHECK_FBT(mode)	((mode) & (WPA2_FT))
+#else
+#define CHECK_FBT(mode) 0
+#endif
 #endif /* _nas_h_ */

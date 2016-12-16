@@ -14,11 +14,13 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_tx.h 643064 2016-06-13 07:04:03Z $
+ * $Id: wlc_tx.h 663980 2016-10-07 19:14:26Z $
  *
  */
 #ifndef _wlc_tx_c
 #define _wlc_tx_c
+
+#include <d11.h>
 
 /* Place holder for tx datapath functions
  * Refer to RB http://wlan-rb.sj.broadcom.com/r/18439/ and
@@ -49,15 +51,16 @@ extern void wlc_set_txmaxpkts(wlc_info_t *wlc, uint16 txmaxpkts);
 extern void wlc_set_default_txmaxpkts(wlc_info_t *wlc);
 
 extern bool wlc_low_txq_empty(txq_t *txq);
-#define WLC_TXQ_OCCUPIED(w) \
-	(!pktq_empty(WLC_GET_TXQ((w)->active_queue)) || \
-	!wlc_low_txq_empty((w)->active_queue->low_txq))
 #ifdef TXQ_MUX
+#define WLC_TXQ_OCCUPIED(w) TRUE
 typedef uint (*txq_supply_fn_t)(void *ctx, uint fifo,
 	int requested_time, struct spktq *output_q);
 extern uint wlc_pull_q(void *ctx, uint fifo, int requested_time,
 	struct spktq *output_q);
 #else
+#define WLC_TXQ_OCCUPIED(w) \
+	(!pktq_empty(WLC_GET_TXQ((w)->active_queue)) || \
+	!wlc_low_txq_empty((w)->active_queue->low_txq))
 typedef uint (*txq_supply_fn_t)(void *ctx, uint ac,
 	int requested_time, struct spktq *output_q, uint *fifo_idx);
 extern uint wlc_pull_q(void *ctx, uint ac_fifo, int requested_time,
@@ -117,15 +120,48 @@ extern void txq_hw_fill(txq_info_t *txqi, txq_t *txq, uint fifo_idx);
 extern wlc_txq_info_t* wlc_txq_alloc(wlc_info_t *wlc, osl_t *osh);
 extern void wlc_txq_free(wlc_info_t *wlc, osl_t *osh, wlc_txq_info_t *qi);
 extern void wlc_send_q(wlc_info_t *wlc, wlc_txq_info_t *qi);
-extern void wlc_send_active_q(wlc_info_t *wlc);
 extern int wlc_prep_pdu(wlc_info_t *wlc, struct scb *scb, void *pdu, uint *fifo);
 extern int wlc_prep_sdu(wlc_info_t *wlc, struct scb *scb, void **sdu, int *nsdu, uint *fifo);
 extern int wlc_prep_sdu_fast(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, struct scb *scb,
-	void *sdu, uint *fifop);
+	void *sdu, uint *fifop, wlc_key_t **key, wlc_key_info_t *key_info);
 extern void* wlc_hdr_proc(wlc_info_t *wlc, void *sdu, struct scb *scb);
+
+/* wlc_d11hdrs() variant - unify with WLC_D11HDRS_FN #define */
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT)
+#define WLC_D11HDRS_DBG
+#endif
+
+uint16 wlc_d11hdrs_pre40(wlc_info_t *wlc, void *pkt, struct scb *scb,
+	uint txparams_flags, uint frag, uint nfrags, uint queue, uint next_frag_len,
+	const wlc_key_info_t *key_info, ratespec_t rspec_override, uint16 *txh_off);
+uint16 wlc_d11hdrs_rev40(wlc_info_t *wlc, void *pkt, struct scb *scb,
+	uint txparams_flags, uint frag, uint nfrags, uint queue, uint next_frag_len,
+	const wlc_key_info_t *key_info, ratespec_t rspec_override, uint16 *txh_off);
+uint16 wlc_d11hdrs_rev80(wlc_info_t *wlc, void *pkt, struct scb *scb,
+	uint txparams_flags, uint frag, uint nfrags, uint queue, uint next_frag_len,
+	const wlc_key_info_t *key_info, ratespec_t rspec_override, uint16 *txh_off);
+
+/* TODO: #include <wlc.h> in order to dereference wlc! */
+#define WLC_D11HDRS_FN(wlc, pkt, scb, \
+		txparams_flags, frag, nfrags, queue, next_frag_len, \
+		key_info, rspec_override, txh_off) \
+	((wlc)->wlc_d11hdrs_fn)(wlc, pkt, scb, \
+		txparams_flags, frag, nfrags, queue, next_frag_len, \
+		key_info, rspec_override, txh_off)
+
+#ifdef WLC_D11HDRS_DBG
 extern uint16 wlc_d11hdrs(wlc_info_t *wlc, void *p, struct scb *scb, uint txparams_flags,
 	uint frag, uint nfrags, uint queue, uint next_frag_len,
 	const wlc_key_info_t *key_info, ratespec_t rspec_override, uint16 *txh_off);
+#else /* !WLC_D11HDRS_DBG */
+#define wlc_d11hdrs(wlc, pkt, scb, \
+		txparams_flags, frag, nfrags, queue, next_frag_len, \
+		key_info, rspec_override, txh_off) \
+	WLC_D11HDRS_FN(wlc, pkt, scb,	\
+		txparams_flags, frag, nfrags, queue, next_frag_len, \
+		key_info, rspec_override, txh_off)
+#endif /* !WLC_D11HDRS_DBG */
+
 extern void wlc_txprep_pkt_get_hdrs(wlc_info_t* wlc, void* p,
 	uint8** ptxd, uint8** ptxh, struct dot11_header** d11_hdr);
 extern bool wlc_txh_get_isSGI(const wlc_txh_info_t* txh_info);
@@ -174,15 +210,14 @@ extern void wlc_active_queue_set(wlc_info_t *wlc, wlc_txq_info_t *new_active_que
 extern void wlc_sync_txfifo(wlc_info_t *wlc, wlc_txq_info_t *qi, uint fifo_bitmap,
 	uint8 flag);
 
+#ifdef WL_MU_TX
+extern int wlc_tx_fifo_hold_set(wlc_info_t *wlc, uint fifo_bitmap);
+extern void wlc_tx_fifo_hold_clr(wlc_info_t *wlc, uint fifo_bitmap);
+#endif /* WL_MU_TX */
+
 #ifdef STA
 extern void *wlc_sdu_to_pdu(wlc_info_t *wlc, void *sdu, struct scb *scb, bool is_8021x);
 #endif /* STA */
-
-extern int32 wlc_dma_tx(wlc_info_t *wlc, uint fifo, void *p, bool commit);
-#ifdef WLCXO_CTRL
-extern struct scb* wlc_cxo_ctrl_recover_pkt_scb(wlc_info_t *wlc, void *pkt);
-extern void wlc_cxo_ctrl_prepare_test_data_frame(wlc_info_t *wlc, struct scb *scb, uint8 prio);
-#endif
 
 void wlc_beacon_phytxctl_txant_upd(wlc_info_t *wlc, ratespec_t bcn_rate);
 void wlc_beacon_phytxctl(wlc_info_t *wlc, ratespec_t bcn_rspec, chanspec_t chanspec);
@@ -265,7 +300,7 @@ typedef enum {
 	WLC_TX_STS_TOSS_NULL_SCB2           = 32,
 	WLC_TX_STS_TOSS_AWDL_NO_ASSOC       = 33,
 	WLC_TX_STS_TOSS_INV_MCAST_FRAME     = 34,
-	WLC_TX_STS_TOSS_INV_CLASS4_BTAMP    = 35,
+	WLC_TX_STS_UNUSED                   = 35, /* Toss reason 35 was unused */
 	WLC_TX_STS_TOSS_HDR_CONV_FAILED     = 36,
 	WLC_TX_STS_TOSS_CRYPTO_ALGO_OFF     = 37,
 	WLC_TX_STS_TOSS_DROP_CAC_PKT        = 38,
@@ -331,7 +366,7 @@ typedef enum {
 	"toss_null_scb2",           /* WLC_TX_STS_TOSS_NULL_SCB2           = 32, */ \
 	"toss_awdl_no_assoc",       /* WLC_TX_STS_TOSS_AWDL_NO_ASSOC       = 33, */ \
 	"toss_inv_mcast",           /* WLC_TX_STS_TOSS_INV_MCAST_FRAME     = 34, */ \
-	"toss_inv_class4_btamp",    /* WLC_TX_STS_TOSS_INV_CLASS4_BTAMP    = 35, */ \
+	"toss_unusd"                /* WLC_TX_STS_UNUSED                   = 35, */ \
 	"toss_hdr_conv_fail",       /* WLC_TX_STS_TOSS_HDR_CONV_FAILED     = 36, */ \
 	"toss_crypto_off",          /* WLC_TX_STS_TOSS_CRYPTO_ALGO_OFF     = 37, */ \
 	"toss_cac_pkt",             /* WLC_TX_STS_TOSS_DROP_CAC_PKT        = 38, */ \
@@ -484,8 +519,9 @@ struct wlc_tx_stall_counters
 
 #ifndef WLC_TX_STALL_EXCLUDE
 #define WLC_TX_STALL_EXCLUDE         ((1 << WLC_TX_STS_TOSS_BSSCFG_DOWN) | \
-					(1 << WLC_TX_STS_SUPR_EXPTIME)     | \
-					(1 << WLC_TX_STS_RETRY_TIMEOUT))
+					(1 << WLC_TX_STS_SUPR_EXPTIME)   | \
+					(1 << WLC_TX_STS_RETRY_TIMEOUT)  | \
+					(1 << WLC_TX_STS_SUPR_FRAG_TBTT))
 #endif
 
 #ifndef WLC_TX_STALL_EXCLUDE1
@@ -515,14 +551,14 @@ struct wlc_tx_stall_info {
 	int cfg_handle;
 
 	/* TX counters given validation period  */
-	wlc_tx_stall_counters_t counters;
+	wlc_tx_stall_counters_t *counters;
 
 	/* TX DROP/FAILURE reasons to be excluded */
 	uint32 exclude_bitmap;
 	uint32 exclude_bitmap1;
 
 	/* History of N periods   */
-	wlc_tx_stall_counters_t * history;
+	wlc_tx_stall_counters_t *history;
 	uint32 history_idx;
 
 	/* timeout value. 0 - Disable validation */
@@ -541,7 +577,7 @@ struct wlc_tx_stall_info {
 	bool assert_on_error;
 
 	/* Stall info */
-	wlc_tx_stall_error_info_t error;
+	wlc_tx_stall_error_info_t *error;
 };
 
 #endif /* WL_TX_STALL */
@@ -553,6 +589,18 @@ int wlc_hc_tx_get(wlc_info_t *wlc, wlc_if_t *wlcif,
 #endif /* HC_TX_HANDLER */
 
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void wlc_txq_dump_ampdu_txq(wlc_info_t *wlc,
+	wlc_bsscfg_t * cfg, struct scb *scb, struct bcmstrbuf *b);
+void wlc_txq_dump_ampdu_rxq(wlc_info_t *wlc,
+	wlc_bsscfg_t * cfg, struct scb *scb, struct bcmstrbuf *b);
+void wlc_txq_dump_amsdu_txq(wlc_info_t *wlc,
+	wlc_bsscfg_t * cfg, struct scb *scb, struct bcmstrbuf *b);
+void wlc_txq_dump_ap_psq(wlc_info_t *wlc,
+	wlc_bsscfg_t * cfg, struct scb *scb, struct bcmstrbuf *b);
+void wlc_txq_dump_supr_txq(wlc_info_t *wlc,
+	wlc_bsscfg_t * cfg, struct scb *scb, struct bcmstrbuf *b);
+#endif
 
 #ifdef WL_TXQ_STALL
 int wlc_txq_health_check(wlc_info_t *wlc);
@@ -569,9 +617,9 @@ extern ratespec_t wlc_ravg_get_scb_cur_rspec(wlc_info_t *wlc, struct scb *scb);
 extern uint32 wlc_scb_dot11hdrsize(struct scb *scb);
 #endif /* WLATF_DONGLE */
 
-typedef struct wlc_d11axtxh_rate wlc_d11axtxh_rate_t;
-struct wlc_d11axtxh_rate {
-	d11axtxh_rate_fixed_t *txh_rate_fixed;	/* per rate info - fixed portion */
+typedef struct wlc_d11txh_rev80_rate wlc_d11txh_rev80_rate_t;
+struct wlc_d11txh_rev80_rate {
+	d11txh_rev80_rate_fixed_t *txh_rate_fixed;	/* per rate info - fixed portion */
 	uint16	*FbwInfo;	/* Considering that FBwInfo is of variable length */
 	uint8	*Bfm0;		/* Each power offset is 1 byte long */
 
@@ -585,34 +633,79 @@ extern uint16 wlc_compute_RateInfoElem_size(uint8 n_users, uint8 n_rus,
 /**
 * Size of entire variable length RateInfo block
 */
-#define D11AX_TXH_RATE_BLKSIZE(nu, nru, pwr_offs)	((D11AC_TXH_NUM_RATES) * \
-						(wlc_compute_RateInfoElem_size(nu, nru, pwr_offs)))
+#define D11_REV80_TXH_RATE_BLKSIZE(nu, nru, pwr_offs)	\
+	((D11AC_TXH_NUM_RATES) * \
+	 (wlc_compute_RateInfoElem_size(nu, nru, pwr_offs)))
 
 /*
 * Size of the TXH is variable. Size shall vary depending upon
 * no. of phytxctrl words to be used and filled in each RateInfo block.
 */
-#define D11AX_TXH_LEN(nu, nru, pwr_offs)	((D11AX_TXH_FIXED_LEN) + \
-						(D11AX_TXH_RATE_BLKSIZE(nu, nru, pwr_offs)))
+#define D11_REV80_TXH_LEN(nu, nru, pwr_offs)	((D11_REV80_TXH_FIXED_LEN) + \
+						 (D11_REV80_TXH_RATE_BLKSIZE(nu, nru, pwr_offs)))
 
-/** Abstraction for 11ax and 11ac per cache info pointers */
+/* Calculate Length for long format rev80 TXD */
+#define D11_REV80_TXH_LEN_EX(wlc, pofs)		((D11REV_GE((wlc)->pub->corerev, 80)) ? \
+						(D11_REV80_TXH_LEN(0, 0, pofs)) : \
+						(D11_PRE80_TXH_LEN_EX(wlc)))
+
+/* Calculate Length for long format pre80 TXD */
+#define D11_PRE80_TXH_LEN_EX(wlc)	(D11REV_GE((wlc)->pub->corerev, 40) ? D11AC_TXH_LEN : \
+					(D11_TXH_LEN + D11_PHY_HDR_LEN))
+
+/**
+ * Calculate Length for long format pre and post80 TXD
+ *
+ * Todo : for rev80 cases calculate power offset from wlc (for now use static value of 2 for 4369)
+ */
+#ifdef WL11AX
+#define D11_TXH_LEN_EX(wlc)		(D11REV_GE((wlc)->pub->corerev, 80) ? \
+					(D11_REV80_TXH_LEN_EX(wlc, 2)) : \
+					(D11_PRE80_TXH_LEN_EX(wlc)))
+
+#define D11_TXH_SHORT_LEN(wlc)		(D11REV_GE((wlc)->pub->corerev, 80) ? \
+					(D11_REV80_TXH_SHORT_LEN) : \
+					(D11REV_GE((wlc)->pub->corerev, 40) ? \
+					(D11AC_TXH_SHORT_LEN) : \
+					(D11_TXH_LEN + D11_PHY_HDR_LEN)))
+
+#define D11_TXH_LEN_SFD(wlc)		(D11REV_GE((wlc)->pub->corerev, 80) ? \
+					(D11_REV80_TXH_SHORT_LEN) : \
+					(D11REV_GE((wlc)->pub->corerev, 40) ? \
+					(D11AC_TXH_SFD_LEN) : \
+					(D11_TXH_LEN + D11_PHY_HDR_LEN)))
+#else /* !WL11AX */
+#define D11_TXH_LEN_EX(wlc)		(D11_PRE80_TXH_LEN_EX(wlc))
+
+#define D11_TXH_SHORT_LEN(wlc)		(D11REV_GE((wlc)->pub->corerev, 40) ? \
+					(D11AC_TXH_SHORT_LEN) : \
+					(D11_TXH_LEN + D11_PHY_HDR_LEN))
+
+#define D11_TXH_LEN_SFD(wlc)		(D11REV_GE((wlc)->pub->corerev, 40) ? \
+					(D11AC_TXH_SFD_LEN) : \
+	                                (D11_TXH_LEN + D11_PHY_HDR_LEN))
+#endif /* WL11AX */
+
+/** Abstraction for rev80 and rev40 per cache info pointers */
 typedef union wlc_d11txh_cache_info wlc_d11txh_cache_info_u;
 union wlc_d11txh_cache_info {
-	d11actxh_cache_t *d11actxh_CacheInfo;	/* 11ac txh per cache info pointer */
-	d11axtxh_cache_t *d11axtxh_CacheInfo;	/* 11ax txh per cache info pointer */
+	d11actxh_cache_t *d11actxh_CacheInfo;	/* rev40 txh per cache info pointer */
+	d11txh_rev80_cache_t *rev80_CacheInfo;	/* rev80 txh per cache info pointer */
 };
 
-/** Abstraction for 11ax and 11ac txds */
+/** Abstraction for rev80 and rev40 txds */
 typedef union wlc_d11txh_info wlc_d11txh_u;
 union wlc_d11txh_info {
-	d11actxh_t *d11actxh;	/* 11ac txh per cache info pointer */
-	d11axtxh_t *d11axtxh;	/* 11ax txh per cache info pointer */
+	d11actxh_t *d11actxh;		/* rev40 txh per cache info pointer */
+	d11txh_rev80_t *d11txh_rev80;	/* rev80 txh per cache info pointer */
 };
 
 /* pointers to TXD per packet info fields */
 typedef struct wlc_d11pktinfo wlc_d11pktinfo_t;
 struct wlc_d11pktinfo {
 	d11pktinfo_common_t *PktInfo;	/* 0 - 20 */
-	d11pktinfo_ax_t *PktInfoExt;	/* 21-23 */
+	d11pktinfo_rev80_t *PktInfoExt;	/* 21-23 */
 };
+
+extern void wlc_txq_enq_spq(wlc_info_t *wlc, struct scb *scb, struct spktq *spq, uint prec);
 #endif /* _wlc_tx_c */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_noise.h 650807 2016-07-22 15:01:33Z mvermeid $
+ * $Id: phy_ac_noise.h 673547 2016-12-02 10:42:12Z $
  */
 
 #ifndef _phy_ac_noise_h_
@@ -21,6 +21,7 @@
 #include <phy_api.h>
 #include <phy_ac.h>
 #include <phy_noise.h>
+#include <d11.h>
 
 #include <phy_ac_rxspur.h>
 
@@ -31,7 +32,6 @@ typedef struct phy_ac_noise_info phy_ac_noise_info_t;
 phy_ac_noise_info_t *phy_ac_noise_register_impl(phy_info_t *pi,
 	phy_ac_info_t *aci, phy_noise_info_t *cmn_info);
 void phy_ac_noise_unregister_impl(phy_ac_noise_info_t *ac_info);
-
 
 /* ************************************************************************* */
 /* ************************************************************************* */
@@ -105,12 +105,14 @@ void phy_ac_noise_unregister_impl(phy_ac_noise_info_t *ac_info);
 #ifndef WLC_DISABLE_ACI
 #define ACPHY_ENABLE_FCBS_HWACI(pi) \
 	(ACMAJORREV_3((pi)->pubpi->phy_rev) || ACMAJORREV_4((pi)->pubpi->phy_rev) || \
-	ACMAJORREV_36(pi->pubpi->phy_rev))
+	ACMAJORREV_36(pi->pubpi->phy_rev) || ACMAJORREV_40(pi->pubpi->phy_rev))
 #define ACPHY_HWACI_WITH_DESENSE_ENG(pi) (ACMAJORREV_4((pi)->pubpi->phy_rev) || \
-	ACMAJORREV_36(pi->pubpi->phy_rev))
+	ACMAJORREV_36(pi->pubpi->phy_rev) || ACMAJORREV_40(pi->pubpi->phy_rev))
+#define ACPHY_HWACI_HWTBL_MITIGATION(pi) (ACMAJORREV_33((pi)->pubpi->phy_rev))
 #else
 #define ACPHY_ENABLE_FCBS_HWACI(pi) 0
 #define ACPHY_HWACI_WITH_DESENSE_ENG(pi) (0)
+#define ACPHY_HWACI_HWTBL_MITIGATION(pi) (0)
 #endif
 
 #ifndef WLC_DISABLE_ACI
@@ -129,6 +131,11 @@ void phy_ac_noise_unregister_impl(phy_ac_noise_info_t *ac_info);
 #define AC4354REV(pi) 0
 
 #endif
+
+/* Debug crash support functions */
+#define PHY_AC_OFFSET_WEAKEST_RSSI		15
+#define PHY_AC_DESENSE_WEAKEST_RSSI_OFDM	96
+#define PHY_AC_DESENSE_WEAKEST_RSSI_BPHY	100
 
 typedef struct acphy_desense_values
 {
@@ -193,11 +200,45 @@ typedef struct _acphy_router_4349_nvshptbl {
 	uint8 spur_mode;
 } acphy_router_4349_nvshptbl_t;
 
+typedef struct _aci_reg_list_entry {
+	uint16 regaddraci;
+	uint16 regaddr;
+} aci_reg_list_entry;
+
+typedef struct _aci_tbl_list_entry {
+	uint16 tblidaci;
+	uint16 tblid;
+	uint16 start_offset;
+	uint16 tbl_len;
+	uint16 tbl_width;
+} aci_tbl_list_entry;
+
+typedef struct phy_ac_noise_data {
+	aci_reg_list_entry *hwaci_phyreg_list;
+	aci_tbl_list_entry *hwaci_phytbl_list;
+	/* this data is shared between noise and rxgcrs */
+	int8	phy_noise_all_core[PHY_CORE_MAX]; /* noise power in dB for all cores */
+	uint16	gain_idx_forced;
+	/* this data is shared between noise and btcx */
+	uint16	pktabortctl;
+	bool	current_preemption_status;
+	/* this data is shared between noise, rxgcrs and btcx */
+	bool	hw_aci_status;
+	/* this data is shared between noise and rxgcrs */
+	bool	trigger_crsmin_cal;
+} phy_ac_noise_data_t;
+
 #ifndef WLC_DISABLE_ACI
 /* ACI, BT Desense (start) */
 extern void wlc_phy_hwaci_init_acphy(phy_ac_noise_info_t *pi);
 extern void wlc_phy_save_def_gain_settings_acphy(phy_info_t *pi);
 #endif /* !WLC_DISABLE_ACI */
+
+/* inter-module data API */
+phy_ac_noise_data_t *phy_ac_noise_get_data(phy_ac_noise_info_t *noisei);
+/* this is used by rxgcrs */
+void phy_ac_noise_set_gainidx(phy_ac_noise_info_t *noisei, uint16 gainidx);
+void phy_ac_noise_set_trigger_crsmin_cal(phy_ac_noise_info_t *noisei, bool trigger_crsmin_cal);
 
 void chanspec_noise(phy_info_t *pi);
 void wlc_phy_aci_w2nb_setup_acphy(phy_info_t *pi, bool on);
@@ -205,6 +246,7 @@ extern void wlc_phy_hwaci_setup_acphy(phy_info_t *pi, bool on, bool init);
 extern uint8 wlc_phy_disable_hwaci_fcbs_trig(phy_info_t *pi);
 extern void wlc_phy_restore_hwaci_fcbs_trig(phy_info_t *pi, uint8 trig_disable);
 extern void wlc_phy_hwaci_mitigation_enable_acphy(phy_info_t *pi, uint8 hwaci_mode, bool init);
+extern void wlc_phy_enable_hwaci_rev40(phy_info_t *pi);
 extern void wlc_phy_desense_aci_engine_acphy(phy_info_t *pi);
 extern void wlc_phy_reset_noise_var_shaping_acphy(phy_info_t *pi);
 extern void wlc_phy_hwaci_override_acphy(phy_info_t *pi, int state);
@@ -212,7 +254,9 @@ extern void wlc_phy_hwaci_engine_acphy(phy_info_t *pi);
 extern void wlc_phy_hwaci_mitigate_acphy(phy_info_t *pi, bool aci_status);
 acphy_desense_values_t* phy_ac_noise_get_desense(phy_ac_noise_info_t *noisei);
 uint8 phy_ac_noise_get_desense_state(phy_ac_noise_info_t *noisei);
-void phy_ac_noise_hwaci_mitigation_tiny(phy_ac_noise_info_t *ni);
+int8 phy_ac_noise_get_weakest_rssi(phy_ac_noise_info_t *noisei);
+void phy_ac_noise_hwaci_mitigation(phy_ac_noise_info_t *ni, int8 desense_state);
+extern void phy_ac_noise_hwaci_switching_regs_tbls_list_init(phy_info_t *pi);
 extern void wlc_phy_desense_aci_reset_params_acphy(phy_info_t *pi,
 	bool call_gainctrl, bool all2g, bool all5g);
 void wlc_phy_aci_updsts_acphy(phy_info_t *pi);
@@ -221,4 +265,9 @@ extern void wlc_phy_reset_noise_var_shaping_acphy(phy_info_t *pi);
 extern void wlc_phy_noise_var_shaping_acphy(phy_info_t *pi, uint8 core_nv, uint8 core_sp,
 	int8 *tone_id, uint8 noise_var[][ACPHY_SPURWAR_NV_NTONES], uint8 reset);
 extern void wlc_phy_switch_preemption_settings(phy_info_t *pi, uint8 state);
+void phy_ac_noise_preempt(phy_ac_noise_info_t *ni, bool enable_preempt,
+	bool EnablePostRxFilter_Proc);
+#ifdef RADIO_HEALTH_CHECK
+int phy_ac_noise_force_fail_desense(phy_ac_noise_info_t *noisei);
+#endif /* RADIO_HEALTH_CHECK */
 #endif /* _phy_ac_noise_h_ */

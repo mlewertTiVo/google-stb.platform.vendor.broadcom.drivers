@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rsdb.h 635019 2016-05-02 09:13:36Z $
+ * $Id: wlc_rsdb.h 664685 2016-10-13 11:34:52Z $
  */
 
 
@@ -42,20 +42,6 @@ typedef enum {
 	WLC_MODESW_LIST_END
 } wlc_modesw_cb_type;
 
-#ifdef WL_NAN
-enum wlc_nan_coex_modes {
-	WLC_NAN_COEX_CONTINUE,
-	WLC_NAN_COEX_DN_MODESW,
-	WLC_NAN_COEX_MOVE,
-	WLC_NAN_COEX_INVALID
-};
-
-enum wlc_nan_pending_states {
-	WLC_NAN_NONE_PENDING = 0,
-	WLC_NAN_MODESW_PENDING,
-	WLC_NAN_MOVE_PENDING
-};
-#endif /* WL_NAN */
 
 #define CFG_CLONE_START		0x01
 #define CFG_CLONE_END		0x02
@@ -81,6 +67,10 @@ extern void wlc_rsdb_suppress_pending_tx_pkts(wlc_bsscfg_t *from_cfg, wlc_bsscfg
 #define WL_RSDB_ZERO_DELAY 0
 #define WL_RSDB_UPGRADE_TIMER_DELAY 2
 
+/* Flags to restrict wlc selection */
+#define WL_RSDB_CORE_MATCH_BAND		0x1
+#define WL_RSDB_CORE_MATCH_BW		0x2
+#define WL_RSDB_CORE_MATCH_CHAINS	0x4
 
 /* RSDB Auto mode override flags */
 #define WLC_RSDB_AUTO_OVERRIDE_RATE			0x01
@@ -134,18 +124,20 @@ extern bool wlc_rsdb_upgrade_allowed(wlc_info_t *wlc);
 extern int wlc_rsdb_check_upgrade(wlc_info_t *wlc);
 extern int wlc_rsdb_dyn_switch(wlc_info_t *wlc, bool mode);
 #endif
-
+extern int wlc_rsdb_handle_sta_csa(wlc_rsdb_info_t* rsdbinfo, wlc_bsscfg_t *bsscfg,
+	chanspec_t chanspec);
 bool wlc_rsdb_get_mimo_cap(wlc_bss_info_t *bi);
-extern uint8 wlc_rsdb_ap_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg);
-#ifdef WL_NAN
-extern int wlc_rsdb_nan_bringup(wlc_info_t* wlc, chanspec_t chanspec, wlc_bsscfg_t** cfg);
-extern uint8 wlc_rsdb_get_nan_coex(wlc_info_t *wlc, chanspec_t chanspec);
-#endif
+extern int wlc_rsdb_ap_bringup(wlc_rsdb_info_t* rsdbinfo, wlc_bsscfg_t** cfg);
+extern int wlc_rsdb_ibss_bringup(wlc_info_t* wlc, wlc_bsscfg_t** cfg);
 int wlc_rsdb_get_wlcs(wlc_info_t *wlc, wlc_info_t **wlc_2g, wlc_info_t **wlc_5g);
 wlc_info_t * wlc_rsdb_get_other_wlc(wlc_info_t *wlc);
 int wlc_rsdb_any_wlc_associated(wlc_info_t *wlc);
-wlc_info_t* wlc_rsdb_find_wlc_for_chanspec(wlc_info_t *wlc, chanspec_t chanspec);
-wlc_bsscfg_t* wlc_rsdb_cfg_for_chanspec(wlc_info_t *wlc, wlc_bsscfg_t *cfg, chanspec_t chanspec);
+wlc_info_t* wlc_rsdb_find_wlc_for_chanspec(wlc_info_t *wlc, wlc_bss_info_t *bi,
+	chanspec_t chanspec, wlc_info_t *skip_wlc, uint32 match_mask);
+wlc_info_t* wlc_rsdb_find_wlc_for_band(wlc_rsdb_info_t *rsdbinfo, uint bandunit,
+	wlc_info_t *skip_wlc);
+uint8 wlc_rsdb_num_wlc_for_band(wlc_rsdb_info_t *rsdbinfo, uint bandunit);
+wlc_bsscfg_t* wlc_rsdb_cfg_for_chanspec(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bss_info_t *bi);
 int wlc_rsdb_auto_get_wlcs(wlc_info_t *wlc, wlc_info_t **wlc_2g, wlc_info_t **wlc_5g);
 void wlc_rsdb_update_wlcif(wlc_info_t *wlc, wlc_bsscfg_t *from, wlc_bsscfg_t *to);
 int wlc_rsdb_join_prep_wlc(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, uint8 *SSID, int len,
@@ -160,14 +152,27 @@ extern uint16 wlc_rsdb_mode(void *hdl);
 bool wlc_rsdb_chkiovar(wlc_info_t *wlc, const bcm_iovar_t  *vi_ptr, uint32 actid, int32 wlc_indx);
 bool wlc_rsdb_is_other_chain_idle(void *hdl);
 void wlc_rsdb_force_rsdb_mode(wlc_info_t *wlc);
-
 bool wlc_rsdb_reinit(wlc_info_t *wlc);
 void wlc_rsdb_chan_switch_dump(wlc_info_t *wlc, chanspec_t chanspec, uint32 dwell_time);
+#if defined(WL_NAN)
+int wlc_rsdb_bsscfg_create(wlc_rsdb_info_t *rsdbinfo, uint32 flags,
+	wlc_bsscfg_type_t *type, struct ether_addr *mac_addr,
+	wlc_bsscfg_t **cfg_arr, int *if_idx);
+wlc_bsscfg_t *wlc_rsdb_bsscfg_get_linked_cfg(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *cfg);
+int wlc_rsdb_bsscfg_delete(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg);
+int wlc_rsdb_bsscfg_init(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg);
+int wlc_rsdb_bsscfg_deinit(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg);
+int wlc_rsdb_bsscfg_enable(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg);
+int wlc_rsdb_bsscfg_disable(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *bsscfg);
+#endif 
 #else /* WLRSDB */
-#define wlc_rsdb_mode(hdl) (PHYMODE_MIMO)
+#define wlc_rsdb_mode(hdl)			(PHYMODE_MIMO)
+#define wlc_rsdb_any_wlc_associated(wlc)	((wlc)->pub->associated)
+#define WLC_RSDB_GET_PRIMARY_WLC(wlc) (wlc)
 #endif /* WLRSDB */
 
 #define WLC_DUALMAC_RSDB(cmn)	(cmn->dualmac_rsdb)
+#define WLC_DUALMAC_RSDB_WRAP(dm_rsdb) (dm_rsdb)
 
 #if defined(WLRSDB) && !defined(WL_DUALNIC_RSDB)&& !defined(WL_DUALMAC_RSDB)
 void wlc_rsdb_bmc_smac_template(void *wlc, int tplbuf, uint32 bufsize);
@@ -176,6 +181,7 @@ extern void wlc_rsdb_set_phymode(void *hdl, uint32 phymode);
 #define wlc_rsdb_bmc_smac_template(hdl, tplbuf, bufsize)  do {} while (0)
 #define wlc_rsdb_set_phymode(a, b) do {} while (0)
 #endif /* defined(WLRSDB) && !defined(WL_DUALNIC_RSDB) */
+
 extern bool wlc_rsdb_up_allowed(wlc_info_t *wlc);
 extern void wlc_rsdb_init_max_rateset(wlc_info_t *wlc, wlc_bss_info_t *bi);
 extern int wlc_rsdb_wlc_cmn_attach(wlc_info_t *wlc);
@@ -183,5 +189,14 @@ extern void wlc_rsdb_cmn_detach(wlc_info_t *wlc);
 extern void wlc_rsdb_config_auto_mode_switch(wlc_info_t *wlc, uint32 reason, uint32 override);
 extern int wlc_rsdb_move_connection(wlc_bsscfg_t *bscfg, int8 chain, bool dynswitch);
 extern void wlc_rsdb_pm_move_override(wlc_info_t *wlc, bool ovr);
+extern void wlc_rsdb_suppress_pending_tx_pkts(wlc_bsscfg_t *from_cfg, wlc_bsscfg_t *to_cfg);
 extern wlc_bsscfg_t * wlc_rsdb_get_infra_cfg(wlc_info_t *wlc);
+extern bool wlc_rsdb_change_band_allowed(wlc_info_t *wlc, int bandunit);
+extern uint8 wlc_rsdb_get_cmn_bwcap(wlc_info_t *wlc, int bandtype);
+extern int wlc_rsdb_scb_clone(wlc_bsscfg_t * from_cfg, wlc_bsscfg_t * to_cfg);
+extern uint8 wlc_rsdb_any_aps_active(wlc_info_t* wlc);
+extern uint8 wlc_rsdb_any_go_active(wlc_info_t* wlc);
+int wlc_rsdb_move_scb(wlc_bsscfg_t * from_cfg, wlc_bsscfg_t * to_cfg,
+		struct scb *scb, bool suppress);
+int wlc_rsdb_switch_if_to_linked_cfg(wlc_rsdb_info_t *rsdbinfo, wlc_bsscfg_t *to_cfg);
 #endif /* _wlc_rsdb_h_ */

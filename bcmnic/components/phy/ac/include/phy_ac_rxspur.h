@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_rxspur.h 644994 2016-06-22 06:23:44Z vyass $
+ * $Id: phy_ac_rxspur.h 657044 2016-08-30 21:37:55Z $
  */
 
 #ifndef _phy_ac_rxspur_h_
@@ -47,8 +47,6 @@ phy_ac_spurwar(phy_ac_rxspur_info_t *rxspuri, uint8 noise_var[][ACPHY_SPURWAR_NV
 extern void phy_ac_dssf(phy_ac_rxspur_info_t *rxspuri, bool on);
 extern void phy_ac_dssfB(phy_ac_rxspur_info_t *rxspuri, bool on);
 extern void phy_ac_spurcan(phy_ac_rxspur_info_t *rxspuri, bool enable);
-extern void phy_ac_set_spurmode(phy_ac_rxspur_info_t *rxspuri, uint16 freq);
-extern void phy_ac_get_spurmode(phy_ac_rxspur_info_t *rxspuri, uint16 freq);
 void chanspec_bbpll_parr(phy_ac_rxspur_info_t *rxspuri, uint32 *bbpll_parr_in, bool state);
 
 #endif /* _phy_ac_rxspur_h_ */

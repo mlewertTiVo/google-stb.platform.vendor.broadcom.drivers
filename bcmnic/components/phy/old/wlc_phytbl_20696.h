@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phytbl_20694.h 618585 2016-02-11 18:13:22Z snag $
+ * $Id: wlc_phytbl_20694.h 618585 2016-02-11 18:13:22Z $
  */
 
 #ifndef _WLC_PHYTBL_20696_H_
@@ -89,10 +89,10 @@ extern const chan_info_radio20696_rffe_t
 extern const uint16 chan_tune_20696_rev0_length;
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 extern radio_20xx_dumpregs_t dumpregs_20696_rev0[];
 
-#endif	/* BCMINTERNAL */
+#endif	
 #endif	/* BCMDBG || BCMDBG_DUMP */
 
 /* Radio referred values tables */

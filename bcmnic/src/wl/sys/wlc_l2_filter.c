@@ -102,7 +102,11 @@ struct l2_filter_info {
 /* cubby */
 static int wlc_l2_filter_bsscfg_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_l2_filter_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#ifdef BCMDBG
+static void wlc_l2_filter_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_l2_filter_bsscfg_dump NULL
+#endif
 
 typedef struct {
 	bool grat_arp_enable;
@@ -178,6 +182,30 @@ wlc_l2_filter_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 {
 }
 
+#ifdef BCMDBG
+static void
+wlc_l2_filter_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	l2_filter_info_t *l2_filter = (l2_filter_info_t *)ctx;
+	wlc_l2_filter_bsscfg_cubby_t *cubby_l2_filter = WLC_L2_FILTER_BSSCFG_CUBBY(l2_filter, cfg);
+	ASSERT(cubby_l2_filter != NULL);
+
+	bcm_bprintf(b, "grat_arp: %s\n",
+		cubby_l2_filter->grat_arp_enable ? "enabled" : "disabled");
+	bcm_bprintf(b, "block_ping: %s\n",
+		cubby_l2_filter->block_ping ? "enabled" : "disabled");
+	bcm_bprintf(b, "block_tdls: %s\n",
+		cubby_l2_filter->block_tdls ? "enabled" : "disabled");
+	bcm_bprintf(b, "block_sta: %s\n",
+		cubby_l2_filter->block_sta ? "enabled" : "disabled");
+	bcm_bprintf(b, "block_multicast: %s\n",
+		cubby_l2_filter->block_multicast ? "enabled" : "disabled");
+	bcm_bprintf(b, "dhcp_unicast: %s\n",
+		cubby_l2_filter->dhcp_unicast ? "enabled" : "disabled");
+	bcm_bprintf(b, "gtk_per_sta: %s\n",
+		cubby_l2_filter->gtk_per_sta ? "enabled" : "disabled");
+}
+#endif /* BCMDBG */
 
 /*
  * initialize l2_filter private context.

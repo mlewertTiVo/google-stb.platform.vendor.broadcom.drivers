@@ -29,7 +29,11 @@
 #include <bcmdevs.h>
 #include <stbutils.h>
 
+#ifdef BCMDBG_ERR
+#define STBUTIL_MSG(x) printf x
+#else
 #define STBUTIL_MSG(x)
+#endif	/* BCMDBG_ERR */
 
 #define NUM_PSIZES 16
 typedef struct _params {
@@ -54,7 +58,11 @@ static char *param_get_internal(const char *name);
 static int params_getall_internal(char *buf, int count);
 
 static void
+#if defined(BCMDBG_DUMP)
+sortparams(osl_t *osh, params_t *new)
+#else
 	BCMATTACHFN(sortparams)(osl_t *osh, params_t *new)
+#endif
 {
 	char *s = new->params;
 	int i;
@@ -277,7 +285,11 @@ BCMATTACHFN(stbpriv_exit)(osl_t *osh)
 }
 
 static char *
+#if defined(BCMDBG_DUMP)
+findparam(char *vars_arg, char *lim, const char *name)
+#else
 BCMATTACHFN(findparam)(char *vars_arg, char *lim, const char *name)
+#endif 
 {
 	char *s;
 	int len;
@@ -297,7 +309,11 @@ BCMATTACHFN(findparam)(char *vars_arg, char *lim, const char *name)
 }
 
 static char *
+#if defined(BCMDBG_DUMP)
+param_get_internal(const char * name)
+#else
 BCMATTACHFN(param_get_internal)(const char *name)
+#endif 
 {
 	params_t *cur;
 	char *v = NULL;
@@ -329,7 +345,11 @@ stbparam_get(const char *name)
 }
 
 static int
+#if defined(BCMDBG_DUMP)
+params_getall_internal(char *buf, int count)
+#else
 BCMATTACHFN(params_getall_internal)(char *buf, int count)
+#endif 
 {
 	int len, resid = count;
 	params_t *this;

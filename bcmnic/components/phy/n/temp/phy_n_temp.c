@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_temp.c 601801 2015-11-24 06:58:29Z chihap $
+ * $Id: phy_n_temp.c 659187 2016-09-13 04:45:39Z $
  */
 
 #include <typedefs.h>
@@ -40,6 +40,7 @@ struct phy_n_temp_info {
 
 /* local functions */
 static uint16 phy_n_temp_throttle(phy_type_temp_ctx_t *ctx);
+static int16 phy_n_temp_do_tempsense(phy_type_temp_ctx_t *ctx);
 
 /* Register/unregister NPHY specific implementation to common layer */
 phy_n_temp_info_t *
@@ -47,6 +48,7 @@ BCMATTACHFN(phy_n_temp_register_impl)(phy_info_t *pi, phy_n_info_t *ni, phy_temp
 {
 	phy_n_temp_info_t *info;
 	phy_type_temp_fns_t fns;
+	phy_txcore_temp_t *temp = NULL;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
@@ -63,7 +65,15 @@ BCMATTACHFN(phy_n_temp_register_impl)(phy_info_t *pi, phy_n_info_t *ni, phy_temp
 	/* Register PHY type specific implementation */
 	bzero(&fns, sizeof(fns));
 	fns.throt = phy_n_temp_throttle;
+	fns.do_tempsense = phy_n_temp_do_tempsense;
 	fns.ctx = info;
+
+	/* Initialize any common layer variable */
+	temp = phy_temp_get_st(ti);
+	ASSERT(temp);
+	if ((temp->disable_temp == 0) || (temp->disable_temp == 0xff)) {
+		temp->disable_temp = PHY_CHAIN_TX_DISABLE_TEMP;
+	}
 
 	phy_temp_register_impl(ti, &fns);
 
@@ -184,4 +194,12 @@ phy_n_temp_throttle(phy_type_temp_ctx_t *ctx)
 	}
 
 	return temp->bitmap;
+}
+
+static int16
+phy_n_temp_do_tempsense(phy_type_temp_ctx_t *ctx)
+{
+	phy_n_temp_info_t *info = (phy_n_temp_info_t *)ctx;
+	phy_info_t *pi = info->pi;
+	return wlc_phy_tempsense_nphy(pi);
 }

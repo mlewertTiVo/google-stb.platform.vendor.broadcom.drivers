@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_assoc.h 643777 2016-06-16 00:50:00Z $
+ * $Id: wlc_assoc.h 657946 2016-09-03 09:10:54Z $
  */
 
 #ifndef __wlc_assoc_h__
@@ -42,7 +42,7 @@ extern void wlc_set_ssid_complete(wlc_bsscfg_t *cfg, uint status, struct ether_a
 extern void wlc_roam_complete(wlc_bsscfg_t *cfg, uint status,
                               struct ether_addr *addr, uint bss_type);
 extern int wlc_roam_scan(wlc_bsscfg_t *cfg, uint reason, chanspec_t *list, uint32 channum);
-extern void wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason);
+extern int wlc_roamscan_start(wlc_bsscfg_t *cfg, uint roam_reason);
 extern void wlc_assoc_roam(wlc_bsscfg_t *cfg);
 extern void wlc_txrate_roam(wlc_info_t *wlc, struct scb *scb, tx_status_t *txs, bool pkt_sent,
 	bool pkt_max_retries, uint8 ac);
@@ -191,6 +191,9 @@ void wlc_assoc_next_join_target(wlc_info_t *wlc);
 void wlc_assoc_set_as_cfg(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
 /* get the next join requestor */
 wlc_bsscfg_t *wlc_assoc_get_as_cfg(wlc_info_t *wlc);
+/* unregister packet call back for timed out pkt */
+extern void wlc_assoc_unregister_pcb_on_timeout(wlc_info_t *wlc,
+	wlc_bsscfg_t *cfg);
 
 #ifdef STA
 extern void wlc_join_attempt(wlc_bsscfg_t *cfg);
@@ -257,6 +260,21 @@ struct wlc_assoc {
 #define ROAM_CACHELIST_SIZE		4
 #define MAX_ROAM_CHANNEL		20
 #define WLC_SRS_DEF_ROAM_CHAN_LIMIT	6	/* No. of cached channels for Split Roam Scan */
+
+/* Features that use downgraded RSDB scan */
+typedef enum {
+	SCAN_DOWNGRADED_AP_SCAN = 0x01,		/* Downgraded scan feature for AP active */
+	SCAN_DOWNGRADED_P2P_DISC_SCAN = 0x02,	/* Downgraded scan feature for P2P Discovery */
+	SCAN_DOWNGRADED_CH_PRUNE_ROAM = 0x10,	/* Enable channel pruning for ROAM SCAN */
+	SCAN_DOWNGRADED_CH_PRUNE_ALL  = 0x20,	/* Enable channel pruning for any SCAN */
+} downgraded_scan_features_t;
+
+/* assoc scan state changes for pruning AP band channels */
+typedef enum roam_prune_type {
+	ROAM_PRUNE_NONE,
+	ROAM_PRUNE_APBAND_CHANNELS, /* Do not scan any channel in AP band other than AP's channel */
+	ROAM_PRUNE_NON_APBAND_CHANNELS /* reverse of ROAM_PRUNE_APBAND_CHANNELS */
+} roam_prune_type_t;
 
 struct wlc_roam {
 	uint	bcn_timeout;		/**< seconds w/o bcns until loss of connection */
@@ -340,18 +358,27 @@ struct wlc_roam {
 	int16	roam_prof_idx;		/**< current roaming profile (based upon band/RSSI) */
 
 
+#ifdef BCMDBG
+	uint8	tbtt_since_bcn;		/**< tbtt count since our last beacon from AP */
+#endif
 	uint16  prev_scan_home_time;
 	uint32  link_monitor_last_update;	/**< last time roam scan counters decreased */
 
 	uint	bcn_thresh;		/**< bcn intervals w/o bcn --> bcn lost event */
 	uint	bcn_interval_cnt;	/**< count of bcn intervals since last bcn */
 	bool    roam_bcnloss_off;      /* disable roaming for beacon loss */
+	uint8	prune_type;	/* Pruning in the scan module for channels in our SoftAPs band. */
 };
+
+extern void wlc_assoc_homech_req_update(wlc_bsscfg_t *bsscfg);
 
 /* attach/detach interface */
 wlc_assoc_info_t *wlc_assoc_attach(wlc_info_t *wlc);
 void wlc_assoc_detach(wlc_assoc_info_t *asi);
+extern int _wlc_join_start_ibss(wlc_info_t *wlc, wlc_bsscfg_t *cfg, int bss_type);
 
+extern uint8 wlc_assoc_get_prune_type(wlc_info_t *wlc);
+extern wlc_bss_info_t * wlc_assoc_get_next_join_bi(wlc_info_t *wlc);
 /* ******** WORK-IN-PROGRESS ******** */
 
 #endif /* __wlc_assoc_h__ */

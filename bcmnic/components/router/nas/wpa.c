@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2002, 2003 Broadcom Corporation
  *
- * $Id: wpa.c 610075 2016-01-06 06:04:39Z $
+ * $Id: wpa.c 667706 2016-10-28 07:40:48Z $
  */
 
 #include <typedefs.h>
@@ -33,15 +33,17 @@
 #include <nas.h>
 #include <wpa.h>
 
+#ifdef WLHOSTFBT
+#include <common.h>
+#include <wpa_common.h>
+#include <wpa_auth_ft.h>
+#endif /* WLHOSTFBT */
+
 #define CHECK_WPA2(mode) ((mode) & (WPA2 | WPA2_PSK))
 
 #define MAX_ARRAY 1
 #define MIN_ARRAY 0
 
-/* mapping from WEP key length to CRYPTO_ALGO_WEPXXX */
-#define WEP_KEY2ALGO(len)	((len) == WEP1_KEY_SIZE ? CRYPTO_ALGO_WEP1 : \
-				(len) == WEP128_KEY_SIZE ? CRYPTO_ALGO_WEP128 : \
-				CRYPTO_ALGO_OFF)
 /* mapping from WPA_CIPHER_XXXX to CRYPTO_ALGO_XXXX */
 #define WPA_CIPHER2ALGO(cipher)	((cipher) == WPA_CIPHER_WEP_40 ? CRYPTO_ALGO_WEP1 : \
 				(cipher) == WPA_CIPHER_WEP_104 ? CRYPTO_ALGO_WEP128 : \
@@ -72,8 +74,6 @@
 #endif /* WPA_AES_CMAC_CALC */
 
 static void wpa_calc_ptk(wpa_t *wpa, nas_sta_t *sta);
-static void wpa_gen_gtk(wpa_t *wpa, nas_sta_t *sta);
-static void wpa_plumb_gtk(wpa_t *wpa, int primary);
 static bool wpa_encr_gtk(wpa_t *wpa, nas_sta_t *ssta, uint8 *encrypted, uint16 *encrypted_len);
 #ifdef BCMSUPPL
 static bool wpa_decr_gtk(wpa_t *wpa, nas_sta_t *sta, eapol_wpa_key_header_t *body);
@@ -88,7 +88,6 @@ static bool wpa_decr_key_data(wpa_t *wpa, nas_sta_t *sta, eapol_wpa_key_header_t
 static itimer_status_t wpa_set_timeout(bcm_timer_id td, int secs, int msecs);
 static bool wpa_check_mic(nas_sta_t *sta, eapol_header_t *eapol);
 static bool wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta);
-static void wpa_incr_gkc(wpa_t *wpa);
 static int wpa_verifystart(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol);
 static int wpa_ptkstart(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol);
 static int wpa_ptkinitnegotiating(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol);
@@ -99,6 +98,15 @@ static void wpa_setkeysdone(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol);
 static void wpa_retransmission(bcm_timer_id td, nas_sta_t *sta);
 static void wpa_new_gtk_callback(bcm_timer_id td, wpa_t *wpa);
 extern int nas_get_stainfo(nas_t *nas, char *macaddr, int len, char *ret_buf, int ret_buf_len);
+
+#ifdef WLHOSTFBT
+static bool wpa_insert_pmk_r1name(wpa_t *wpa, nas_sta_t *sta,
+		eapol_header_t *eapol, uint16 *data_len);
+static bool wpa_insert_mdie(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol, uint16 *data_len);
+static bool wpa_insert_ftie(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol, uint16 *data_len,
+		const unsigned char *anonce, const unsigned char *snonce,
+		const unsigned char *subelem, size_t subelem_len);
+#endif /* WLHOSTFBT */
 
 #ifdef MFP
 #define MFP2 1
@@ -118,10 +126,6 @@ static int wpa_find_mckey_algo(wpa_t *wpa, uint8 *ie, int ie_len);
 static int wpa_new_ptk_callback(bcm_timer_id td, wpa_t *wpa);
 
 static int wpa_get_rsn_cap(nas_t *nas, uint8 *cap);
-/* Toggle GTK index.  Indices 1 - 3 are usable; spec recommends 1 and 2. */
-#define GTK_NEXT_INDEX(wpa)	((wpa)->gtk_index == GTK_INDEX_1 ? GTK_INDEX_2 : GTK_INDEX_1)
-/* Toggle IGTK index.  Indices 4 - 5 are usable per spec */
-#define IGTK_NEXT_INDEX(wpa)	((wpa)->igtk.id == IGTK_INDEX_1 ? IGTK_INDEX_2 : IGTK_INDEX_1)
 
 /* Set an iterval timer. */
 itimer_status_t
@@ -182,6 +186,9 @@ wpa_retransmission(bcm_timer_id td, nas_sta_t *sta)
 	nas_t *nas;
 	wpa_suppl_state_t save_state;
 	int reason;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	int retry_timer;
 
 	if (sta) {
@@ -348,6 +355,13 @@ wpa_calc_ptk(wpa_t *wpa, nas_sta_t *sta)
 
 	dbg(wpa->nas, "STA : SUPPL PMK \n");
 	dump(wpa->nas, sta->suppl.pmk, sta->suppl.pmk_len);
+#ifdef WLHOSTFBT
+	if (CHECK_FBT(sta->mode)) {
+		wpa_auth_derive_ptk_ft(wpa, sta, (const char *)sta->suppl.pmk,
+				prf_buff, sta->suppl.ptk_len);
+	}
+	else
+#endif
 #if defined(MFP) || defined(HSPOT_OSEN)
 	if (sta->key_auth_type == KEYAUTH_SHA256) {
 	  KDF(sta->suppl.pmk, sta->suppl.pmk_len, prefix, strlen((char *)prefix),
@@ -366,7 +380,7 @@ wpa_calc_ptk(wpa_t *wpa, nas_sta_t *sta)
 	dbg(wpa->nas, "done");
 }
 
-static void
+void
 wpa_gen_gtk(wpa_t *wpa, nas_sta_t *sta)
 {
 	unsigned char data[256], prf_buff[PRF_RESULT_LEN];
@@ -411,7 +425,7 @@ wpa_gen_gtk(wpa_t *wpa, nas_sta_t *sta)
 	dbg(wpa->nas, "done");
 }
 
-static void
+void
 wpa_plumb_gtk(wpa_t *wpa, int primary)
 {
 	uint16 lo;
@@ -512,6 +526,11 @@ wpa_new_gtk_callback(bcm_timer_id td, wpa_t *wpa)
 #ifdef WLWNM
 		/* don't update key if sta is sleeping */
 		if (sta->sleeping) {
+#ifdef BCMDBG
+			char eabuf[ETHER_ADDR_STR_LEN];
+			dbg(nas, "skip update key in sta %s due to its on sleeping",
+			    ether_etoa((uchar *)&sta->ea, eabuf));
+#endif
 			/* mark sta gtk expired */
 			sta->gtk_expire = TRUE;
 
@@ -1051,6 +1070,10 @@ static void wpa_send_mic_failure(wpa_t *wpa, nas_sta_t *sta)
 	eapol_wpa_key_header_t *wpa_key = (eapol_wpa_key_header_t *)eapol->body;
 	nas_t *nas = wpa->nas;
 	ushort ki;
+#ifdef BCMDBG
+	char sta_eabuf[ETHER_ADDR_STR_LEN]; /* peer */
+	char nas_eabuf[ETHER_ADDR_STR_LEN]; /* local */
+#endif
 
 	assert(nas->flags & NAS_FLAG_SUPPLICANT);
 	dbg(nas, "sending mic failure report to %s from %s",
@@ -1091,6 +1114,9 @@ wpa_mic_error(wpa_t *wpa, nas_sta_t *msta, bool from_driver)
 	time_t now, since;
 	nas_t *nas = wpa->nas;
 	itimer_status_t ts;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	now = time(NULL);
 
@@ -1129,7 +1155,8 @@ wpa_mic_error(wpa_t *wpa, nas_sta_t *msta, bool from_driver)
 	}
 
 	/* If within the time limit we have to toss all the STAs. */
-	if ((nas->MIC_failures != 0) && (since < WPA_TKIP_CM_DETECT)) {
+	if ((nas->MIC_failures != 0) && (nas->MIC_countermeasures == 0) &&
+		(since < WPA_TKIP_CM_DETECT)) {
 		nas_sta_t *sta;
 
 		dbg(nas, "Second MIC failure in %d seconds, taking countermeasures",
@@ -1190,7 +1217,7 @@ done:
 	return ret;
 }
 
-static uint8
+uint8
 wpa_auth2akm(wpa_t *wpa, uint32 auth)
 {
 	switch (auth) {
@@ -1202,6 +1229,8 @@ wpa_auth2akm(wpa_t *wpa, uint32 auth)
 		return RSN_AKM_PSK;
 	case WPA2_AUTH_UNSPECIFIED:
 		return RSN_AKM_UNSPECIFIED;
+	case WPA2_AUTH_FT:
+		return RSN_AKM_FBT_PSK;
 	case WPA_AUTH_DISABLED:
 	default:
 		return RSN_AKM_NONE;
@@ -1231,7 +1260,7 @@ wpa_build_ie(wpa_t *wpa, uint32 wsec, uint32 algo, uint32 sta_mode,
 		uint8 *ptr = buf;
 		uint16 bytes;
 
-		if (sta_mode & (WPA2 | WPA2_PSK | WPA | WPA_PSK)) {
+		if (sta_mode & (WPA2 | WPA2_PSK | WPA | WPA_PSK | WPA2_FT)) {
 			/* get wpa ie */
 			bytes = nas_get_wpa_ie(wpa->nas, (char*)ptr, buf_len, sta_mode);
 
@@ -1247,7 +1276,7 @@ wpa_build_ie(wpa_t *wpa, uint32 wsec, uint32 algo, uint32 sta_mode,
 		return 0;
 	}
 
-	if ((mode & (WPA2 | WPA2_PSK)) && (sta_mode & (WPA2 | WPA2_PSK))) {
+	if ((mode & (WPA2 | WPA2_PSK | WPA2_FT)) && (sta_mode & (WPA2 | WPA2_PSK | WPA2_FT))) {
 		wpa_rsn_ie_fixed_t *wpaie = (wpa_rsn_ie_fixed_t *)buf;
 
 		/* fixed portion */
@@ -1343,6 +1372,16 @@ uni2_done:
 				return -1;
 			bcopy(WPA2_OUI, auth->list[count].oui, WPA_OUI_LEN);
 			auth->list[count].type = wpa_auth2akm(wpa, wpa_mode2auth(WPA2_PSK));
+			tag_len += WPA_SUITE_LEN;
+			count ++;
+			if (sup || wds)
+				goto akm2_done;
+		}
+		if (mode & WPA2_FT) {
+			if (tag_len + WPA_SUITE_LEN > buf_len)
+				return -1;
+			bcopy(WPA2_OUI, auth->list[count].oui, WPA_OUI_LEN);
+			auth->list[count].type = wpa_auth2akm(wpa, wpa_mode2auth(WPA2_FT));
 			tag_len += WPA_SUITE_LEN;
 			count ++;
 			if (sup || wds)
@@ -1561,7 +1600,12 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 	int key_index, mic_length = 0;
 	nas_t *nas = wpa->nas;
 	uint16 data_len = 0;
-
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
+#ifdef WLHOSTFBT
+	uint32 reassoc_deadline;
+#endif
 	dbg(nas, "message for %s", ether_etoa((uchar *)&sta->ea, eabuf));
 
 	bzero(buffer, 1024);
@@ -1577,7 +1621,7 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 	frags.iov_len = EAPOL_HEADER_LEN + EAPOL_WPA_KEY_LEN;
 
 	/* Set the key type to WPA */
-	if ((sta->mode & (WPA2_PSK | WPA2)))
+	if ((sta->mode & (WPA2_PSK | WPA2 | WPA2_FT)))
 		body->type = EAPOL_WPA2_KEY;
 	else
 		body->type = EAPOL_WPA_KEY;
@@ -1596,7 +1640,7 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 		bcopy(sta->suppl.anonce, body->nonce, NONCE_LEN);
 
 		/* No PMKID for OSEN-AUTH */
-		if ((sta->mode & (WPA2_PSK | WPA2)) &&
+		if ((sta->mode & (WPA2_PSK | WPA2 | WPA2_FT)) &&
 #ifdef HSPOT_OSEN
 		    !(sta->flags & STA_FLAG_OSEN_AUTH) &&
 #endif
@@ -1618,7 +1662,7 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 		/* Set the Key info flags */
 		body->key_info = htons(sta->suppl.desc | WPA_KEY_INDEX_0 | WPA_KEY_ACK |
 		                       WPA_KEY_PAIRWISE | WPA_KEY_INSTALL | WPA_KEY_MIC);
-		if ((sta->mode & (WPA2 | WPA2_PSK)))
+		if ((sta->mode & (WPA2 | WPA2_PSK | WPA2_FT)))
 			body->key_info |= htons(WPA_KEY_SECURE | WPA_KEY_ENCRYPTED_DATA);
 		if (nas->flags & NAS_FLAG_WDS)
 			body->key_info |= htons(WPA_KEY_SECURE);
@@ -1637,8 +1681,20 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 			dbg(nas, "failed to build WPA IE");
 			return FALSE;
 		}
+#ifdef WLHOSTFBT
+		if (sta->mode & WPA2_FT) {
+			if (!wpa_insert_pmk_r1name(wpa, sta, eapol, &data_len)) {
+				err(nas, "insertion of pmk-r1name failed");
+				nas_handle_error(nas, 1);
+			}
+			if (!wpa_insert_mdie(wpa, sta, eapol, &data_len)) {
+				err(nas, "insertion of mdie failed");
+				nas_handle_error(nas, 1);
+			}
+		}
+#endif /* WLHOSTFBT */
 
-		if ((sta->mode & (WPA2 | WPA2_PSK))) {
+		if ((sta->mode & (WPA2 | WPA2_PSK | WPA2_FT))) {
 			if (!wpa_insert_gtk(wpa, sta, eapol, &data_len)) {
 				err(nas, "insertion of gtk failed");
 				nas_handle_error(nas, 1);
@@ -1649,6 +1705,34 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 				/* wpa_key->data_len = hton16(data_len); */
 			}
 #endif
+#ifdef WLHOSTFBT
+		tie_t *tie_info;
+		if (sta->mode & WPA2_FT) {
+			if (!wpa_insert_ftie(wpa, sta, eapol, &data_len, NULL, NULL, NULL, 0)) {
+				err(nas, "insertion of ftie failed");
+				nas_handle_error(nas, 1);
+			}
+
+			nas_get_reassoc_timer(nas, &reassoc_deadline);
+			wpa->fbt_info.reassociation_deadline = reassoc_deadline;
+			/* TIE[ReassociationDeadline] (TU) */
+			tie_info = (tie_t *) (body->data + data_len);
+			tie_info->id = DOT11_MNG_FT_TI_ID;
+			tie_info->len = REASSOC_DEADLINE_LEN;
+			tie_info->type = WLAN_TIMEOUT_REASSOC_DEADLINE;
+			WPA_PUT_LE32(tie_info->data, wpa->fbt_info.reassociation_deadline);
+			data_len += TLV_HDR_LEN + REASSOC_DEADLINE_LEN;
+
+			wpa->fbt_info.r0_key_lifetime = KEY_LIFETIME;
+			/* TIE[KeyLifetime] (Sec) */
+			tie_info = (tie_t *) (body->data + data_len);
+			tie_info->id = DOT11_MNG_FT_TI_ID;
+			tie_info->len = KEY_LIFETIME_LEN;
+			tie_info->type = WLAN_TIMEOUT_KEY_LIFETIME;
+			WPA_PUT_LE32(tie_info->data, wpa->fbt_info.r0_key_lifetime);
+			data_len += TLV_HDR_LEN + KEY_LIFETIME_LEN;
+		}
+#endif /* WLHOSTFBT */
 			/* copy in the iv and encrypt the key data field */
 			bcopy(&wpa->global_key_counter[KEY_COUNTER_LEN-16], body->iv, 16);
 			if (!wpa_encr_key_data(wpa, sta, body->data, &data_len)) {
@@ -1656,6 +1740,7 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 				nas_handle_error(nas, 1);
 			}
 		}
+
 		body->data_len = htons(data_len);
 		/* add the data field length (WPA IE) */
 		frags.iov_len += data_len;
@@ -1672,7 +1757,7 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 		body->key_info = htons(sta->suppl.desc | WPA_KEY_SECURE |
 		                       WPA_KEY_ACK | WPA_KEY_MIC);
 
-	  if ((sta->mode & (WPA2 | WPA2_PSK))) {
+	  if ((sta->mode & (WPA2 | WPA2_PSK | WPA2_FT))) {
 		if (!wpa_insert_gtk(wpa, sta, eapol, &data_len)) {
 			err(nas, "insertion of gtk failed");
 			nas_handle_error(nas, 1);
@@ -1780,7 +1865,7 @@ wpa_send_eapol(wpa_t *wpa, nas_sta_t *sta)
 				/* send message #4 and we are done with pairwise */
 				if (nas->flags & NAS_FLAG_WDS)
 					body->key_info |= htons(WPA_KEY_SECURE);
-				if ((sta->mode & (WPA2 | WPA2_PSK)))
+				if ((sta->mode & (WPA2 | WPA2_PSK | WPA2_FT)))
 					body->key_info |= htons(WPA_KEY_SECURE);
 				sta->suppl.pk_state = EAPOL_SUP_PK_DONE;
 				break;
@@ -1861,6 +1946,8 @@ wpa_mode2auth(int mode)
 		return WPA2_AUTH_PSK;
 	case WPA2:
 		return WPA2_AUTH_UNSPECIFIED;
+	case WPA2_FT:
+		return WPA2_AUTH_FT;
 	case RADIUS:
 	default:
 		return WPA_AUTH_DISABLED;
@@ -1880,6 +1967,8 @@ wpa_auth2mode(int auth)
 		return WPA2_PSK;
 	case WPA2_AUTH_UNSPECIFIED:
 		return WPA2;
+	case WPA2_AUTH_FT:
+		return WPA2_FT;
 	case WPA_AUTH_DISABLED:
 	default:
 		return RADIUS;
@@ -1904,15 +1993,20 @@ static uint32
 wpa2_akm2auth(uint32 akm)
 {
 #ifdef MFP
+#ifdef WLHOSTFBT
+	if (akm != RSN_AKM_FBT_PSK)
+#endif
 	/* for PMF : clear the bit which is not relevant here  */
 	akm &= ~0x4;
-#endif
+#endif /* MFP */
 
 	switch (akm) {
 	case RSN_AKM_PSK:
 		return WPA2_AUTH_PSK;
 	case RSN_AKM_UNSPECIFIED:
 		return WPA2_AUTH_UNSPECIFIED;
+	case RSN_AKM_FBT_PSK:
+		return WPA2_AUTH_FT;
 	case RSN_AKM_NONE:
 	default:
 		return WPA_AUTH_NONE;
@@ -1999,6 +2093,7 @@ wpa_parse_ie(wpa_t *wpa, uint8 *ie, int ie_len, uint32 *wsec, uint32 *mode,
 		}
 		break;
 	}
+
 	default:
 		dbg(wpa->nas, "unsupported IE type");
 		return -1;
@@ -2386,12 +2481,15 @@ wpa_driver_assoc_msg(wpa_t *wpa, bcm_event_t *dpkt, nas_sta_t *sta)
 	uint16 len = ntoh32(event->datalen);
 	uint32 mode, wsec;
 	itimer_status_t ts;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	uint32 algo, pmkc;
 	wpa_ie_fixed_t *wpaie;
 	uint8 *parse = data;
 	int parse_len = len;
 	int wpaie_len = 0;
-	sta_info_t   *sta_info;
+	sta_info_v5_t   *sta_info;
 	char sta_info_buf[300] __attribute__ ((aligned(4)));
 
 	if (!sta) {
@@ -2487,7 +2585,7 @@ wpa_driver_assoc_msg(wpa_t *wpa, bcm_event_t *dpkt, nas_sta_t *sta)
 		bzero(sta_info_buf, 300);
 		nas_get_stainfo(nas, (char *)&sta->ea, sizeof(struct ether_addr), sta_info_buf,
 		                300);
-		sta_info = (sta_info_t *)sta_info_buf;
+		sta_info = (sta_info_v5_t *)sta_info_buf;
 		dbg(nas, "sta_info ver: %d listen_interval_ms: %dms",
 			sta_info->ver, sta_info->listen_interval_inms);
 		sta->wpa_msg_timeout_s = WPA2_DEFAULT_RETRY_SECS;
@@ -2646,6 +2744,9 @@ int wpa_driver_disassoc_msg(wpa_t *wpa,  bcm_event_t *dpkt, nas_sta_t *sta)
 
 	nas_t *nas = wpa->nas;
 	uint16 reason;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	/* non-WDS processing */
 	if (!(nas->flags & NAS_FLAG_WDS)) {
@@ -2793,7 +2894,12 @@ wpa_ptkinitnegotiating(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol)
 	ushort key_info, wpaie_len;
 	unsigned int required_flags, prohibited_flags;
 	itimer_status_t ts;
-
+#ifdef WLHOSTFBT
+	struct wpa_ft_ies parse;
+	struct rsn_mdie *mdie;
+	char buf[WLC_IOCTL_SMLEN];
+	uint32 fbt_overds;
+#endif /* WLHOSTFBT */
 	/* Check that the packet looks like the correct response */
 	required_flags = WPA_KEY_PAIRWISE | WPA_KEY_MIC;
 	prohibited_flags = WPA_KEY_ACK | WPA_KEY_INDEX_MASK;
@@ -2816,16 +2922,58 @@ wpa_ptkinitnegotiating(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol)
 	/* kill timeouts from previous state */
 	wpa_stop_retx(sta);
 
-	/* Check the WPA IE */
-	wpaie_len = ntohs(body->data_len);
-	if (!wpaie_len || wpaie_len != sta->suppl.assoc_wpaie_len ||
-	    bcmp(body->data, sta->suppl.assoc_wpaie, wpaie_len) != 0) {
-		dbg(wpa->nas, "WPA IE mismatch");
-		dbg(wpa->nas, "WPA IE in 4-way handshake message #2");
-		dump(wpa->nas, body->data, wpaie_len);
-		dbg(wpa->nas, "WPA IE in driver assoc indication");
-		dump(wpa->nas, sta->suppl.assoc_wpaie, wpaie_len);
-		return 1;
+#ifdef WLHOSTFBT
+	if (CHECK_FBT(sta->mode)) {
+		if (wpa_ft_validate_ies(wpa, body->data, body->data_len, &parse) < 0) {
+			dbg(wpa->nas, "FT: Validation of FT IEs failed");
+			return 0;
+		}
+
+		mdie = (struct rsn_mdie *) parse.mdie;
+		wpaie_len = parse.rsn_len;
+
+		/* MDIE info */
+		memcpy(wpa->fbt_info.mobility_domain, mdie->mobility_domain,
+				MOBILITY_DOMAIN_ID_LEN);
+		nas_get_fbt_overds(wpa->nas, &fbt_overds);
+		wpa->fbt_info.ft_over_ds = fbt_overds;
+
+		/* R0KH-ID */
+		memset(buf, 0, sizeof(buf));
+		nas_get_fbt_r0kh(wpa->nas, buf, sizeof(buf));
+		memcpy(wpa->fbt_info.r0_key_holder, buf, parse.r0kh_id_len);
+		wpa->fbt_info.r0_key_holder_len = strlen(buf);
+
+		/* R1KH-ID */
+		memset(buf, 0, sizeof(buf));
+		nas_get_fbt_r1kh(wpa->nas, buf, sizeof(buf));
+		memcpy(wpa->fbt_info.r1_key_holder, buf, FT_R1KH_ID_LEN);
+
+		dbg(wpa->nas, "FT: Mobility domain");
+		dump(wpa->nas, wpa->fbt_info.mobility_domain, MOBILITY_DOMAIN_ID_LEN);
+		dbg(wpa->nas, "FT: R1KH");
+		dump(wpa->nas, wpa->fbt_info.r1_key_holder, FT_R1KH_ID_LEN);
+		dbg(wpa->nas, "FT: R0KH");
+		dump(wpa->nas, wpa->fbt_info.r0_key_holder, wpa->fbt_info.r0_key_holder_len);
+	}
+	else
+#endif /* WLHOSTFBT */
+		wpaie_len = ntohs(body->data_len);
+
+	/* In case of FBT, EAPOL key 2 msg will have PMKID, MDIE, FTIE too, apart from RSNIE.
+	 * So, We can not compare key 2 RSN IE with assoc request RSN IE
+	 */
+	if (!CHECK_FBT(sta->mode)) {
+		/* Check the WPA IE */
+		if (!wpaie_len || wpaie_len != sta->suppl.assoc_wpaie_len ||
+			bcmp(body->data, sta->suppl.assoc_wpaie, wpaie_len) != 0) {
+			dbg(wpa->nas, "WPA IE mismatch");
+			dbg(wpa->nas, "WPA IE in 4-way handshake message #2");
+			dump(wpa->nas, body->data, wpaie_len);
+			dbg(wpa->nas, "WPA IE in driver assoc indication");
+			dump(wpa->nas, sta->suppl.assoc_wpaie, wpaie_len);
+			return 1;
+		}
 	}
 
 	/* Get the snonce */
@@ -2883,6 +3031,7 @@ wpa_ptkinitdone(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol)
 	nas_t *nas = wpa->nas;
 	ushort key_info;
 	unsigned int required_flags, prohibited_flags;
+	unsigned short data_len;
 
 	/* Check that the packet looks like the correct response */
 	required_flags = WPA_KEY_PAIRWISE | WPA_KEY_MIC;
@@ -2897,6 +3046,15 @@ wpa_ptkinitdone(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol)
 	    ((key_info & prohibited_flags) != 0)) {
 		dbg(nas, "Ignoring key response with incorrect key_info 0x%04x",
 		    key_info);
+		return 0;
+	}
+
+	/* Vulnerability: message confusion fix, the data must be empty. */
+	data_len = ntohs(body->data_len);
+	if (data_len != 0) {
+		dbg(wpa->nas, "Key data is not vaild");
+		dbg(wpa->nas, "Key data in 4-way handshake message #4");
+		dump(wpa->nas, body->data, data_len);
 		return 0;
 	}
 
@@ -2924,6 +3082,9 @@ wpa_ptkinitdone2(wpa_t *wpa, nas_sta_t *sta)
 {
 	nas_t *nas = wpa->nas;
 	itimer_status_t ts;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	/* kill timeouts from previous state */
 	wpa_stop_retx(sta);
@@ -2998,6 +3159,9 @@ wpa_rekeyneg(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol)
 	eapol_wpa_key_header_t *body = (eapol_wpa_key_header_t *)eapol->body;
 	ushort key_info;
 	unsigned int required_flags, prohibited_flags;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	/* Check that the packet looks like the correct response.
 	 * WPA_KEY_ERROR is not really "prohibited".  It's set as
@@ -3108,6 +3272,46 @@ wpa_setkeysdone(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol)
 	return;
 }
 
+#ifdef BCMDBG
+static char *sta_state[] = {
+	/* authenticator states */
+	/* 4 way pkt exchange state machine */
+	"WPA_DISCONNECT",
+	"WPA_DISCONNECTED",
+	"WPA_INITIALIZE",
+	"WPA_AUTHENTICATION2",
+	"WPA_INITPMK",
+	"WPA_INITPSK",
+	"WPA_PTKSTART",
+	"WPA_PTKINITNEGOTIATING",
+	"WPA_PTKINITDONE",
+	"WPA_UPDATEKEYS",
+	"WPA_INTEGRITYFAILURE",
+	"WPA_KEYUPDATE",
+	/* group key state machine */
+	"WPA_REKEYNEGOTIATING",
+	"WPA_KEYERRROR",
+	"WPA_REKEYESTABLISHED",
+	/* Authenticator, group key */
+	"WPA_SETKEYS",
+	"WPA_SETKEYSDONE",
+#ifdef BCMSUPPL
+	/* supplicant states */
+	"WPA_SUP_DISCONNECTED",
+	"WPA_SUP_INITIALIZE",
+	"WPA_SUP_AUTHENTICATION",
+	"WPA_SUP_STAKEYSTARTP",
+	"WPA_SUP_STAKEYSTARTG",
+	"WPA_SUP_KEYUPDATE"
+#endif /* BCMSUPPL */
+};
+static char*
+sta_state_name(int state)
+{
+	return state < sizeof(sta_state)/sizeof(sta_state[0]) ?
+		sta_state[state] : "unknown";
+}
+#endif /* BCMDBG */
 
 #ifdef BCMSUPPL
 /*
@@ -3262,6 +3466,9 @@ eapol_sup_process_key(wpa_t *wpa, eapol_header_t *eapol, nas_sta_t *sta)
 		wpa_plumb_gtk(wpa, key_info & WPA_KEY_INSTALL);
 	}
 	if ((state == EAPOL_SUP_PK_MICOK) && (key_info & WPA_KEY_SECURE)) {
+#ifdef BCMDBG
+		char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 		/* Authorize authenticator */
 		dbg(wpa->nas, "authorize %s (WPA)", ether_etoa((uchar *)&sta->ea, eabuf));
@@ -3281,6 +3488,12 @@ eapol_sup_process_key(wpa_t *wpa, eapol_header_t *eapol, nas_sta_t *sta)
 int
 process_sup_wpa(wpa_t *wpa, eapol_header_t *eapol, nas_sta_t *sta)
 {
+#ifdef BCMDBG
+	nas_t *nas = wpa->nas;
+	char eabuf[ETHER_ADDR_STR_LEN];
+	eapol_wpa_key_header_t *wpa_key = (eapol_wpa_key_header_t *)eapol->body;
+	uint16 key_info = ntohs(wpa_key->key_info);
+#endif
 
 	dbg(nas, "start for %s", ether_etoa((uchar *)&sta->ea, eabuf));
 	dbg(nas, "state %s key info %04x", sta_state_name(sta->suppl.state), key_info);
@@ -3355,6 +3568,9 @@ process_wpa(wpa_t *wpa, eapol_header_t *eapol, nas_sta_t *sta)
 {
 	int ret = 0;
 	nas_t *nas = wpa->nas;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 	eapol_wpa_key_header_t *wpa_key = (eapol_wpa_key_header_t *)eapol->body;
 	uint16 key_info = ntohs(wpa_key->key_info);
 
@@ -3509,7 +3725,7 @@ wpa_gen_igtk(wpa_t *wpa)
 }
 #endif /* MFP */
 
-static void
+void
 wpa_incr_gkc(wpa_t *wpa)
 {
 	wpa_incr_array(wpa->global_key_counter, KEY_COUNTER_LEN);
@@ -3765,3 +3981,115 @@ static int wpa_get_rsn_cap(nas_t *nas, uint8 *cap)
 	}
 	return -1;
 }
+
+#ifdef WLHOSTFBT
+/* Insert PMKR1Name in EAPOL message */
+static bool
+wpa_insert_pmk_r1name(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol, uint16 *data_len)
+{
+	int len = *data_len;
+	eapol_wpa_key_header_t *body = (eapol_wpa_key_header_t *)eapol->body;
+	uint8 *pmk_r1name;
+
+	dbg(wpa->nas, "data len before pmkid %d", len);
+
+	/* insert PMKID into eapol message */
+	pmk_r1name = (uint8 *) (body->data + len);
+	bcopy(wpa->fbt_info.pmk_r1name, pmk_r1name, WPA_PMK_NAME_LEN);
+	len += WPA_PMK_NAME_LEN;
+	dbg(wpa->nas, "data len including pmkid %d", len);
+
+	/* return the adjusted data len */
+	*data_len = len;
+
+	return (TRUE);
+}
+
+/* Insert MDIE in EAPOL message */
+static bool
+wpa_insert_mdie(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol, uint16 *data_len)
+{
+	int len = *data_len;
+	eapol_wpa_key_header_t *body = (eapol_wpa_key_header_t *)eapol->body;
+	bcm_tlv_t *mdie;
+	unsigned char capab;
+
+	dbg(wpa->nas, "data len before mdie %d", len);
+
+	/* insert MDIE into eapol message */
+	mdie = (bcm_tlv_t *) (body->data + len);
+	mdie->id = DOT11_MNG_MDIE_ID;
+	mdie->len = MOBILITY_DOMAIN_ID_LEN + 1;
+	bcopy(wpa->fbt_info.mobility_domain, mdie->data, MOBILITY_DOMAIN_ID_LEN);
+	len += TLV_HDR_LEN + MOBILITY_DOMAIN_ID_LEN;
+
+	capab = 0;
+	if (wpa->fbt_info.ft_over_ds)
+		capab |= RSN_FT_CAPAB_FT_OVER_DS;
+	*(body->data + len) = capab;
+	len++;
+
+	dbg(wpa->nas, "data len including mdie %d", len);
+
+	/* return the adjusted data len */
+	*data_len = len;
+
+	return (TRUE);
+}
+
+/* Insert FTIE in EAPOL message */
+static bool
+wpa_insert_ftie(wpa_t *wpa, nas_sta_t *sta, eapol_header_t *eapol, uint16 *data_len,
+		const unsigned char *anonce, const unsigned char *snonce,
+		const unsigned char *subelem, size_t subelem_len)
+{
+	eapol_wpa_key_header_t *body = (eapol_wpa_key_header_t *)eapol->body;
+	struct rsn_ftie *ftie;
+	unsigned char *pos, *ielen, *buf;
+	int len = *data_len;
+
+	dbg(wpa->nas, "data len before ftie %d", len);
+
+	pos = (unsigned char *) (body->data + len);
+	buf = pos;
+
+	*pos++ = DOT11_MNG_FTIE_ID;
+	ielen = pos++;
+
+	ftie = (struct rsn_ftie *) pos;
+	memset(ftie, 0, sizeof(*ftie));
+	pos += sizeof(*ftie);
+	WPA_PUT_LE16(ftie->mic_control, 0);
+	if (anonce)
+		memcpy(ftie->anonce, anonce, NONCE_LEN);
+	if (snonce)
+		memcpy(ftie->snonce, snonce, NONCE_LEN);
+
+	/* Optional Parameters */
+	*pos++ = FTIE_SUBELEM_R1KH_ID;
+	*pos++ = FT_R1KH_ID_LEN;
+	memcpy(pos, wpa->fbt_info.r1_key_holder, FT_R1KH_ID_LEN);
+	pos += FT_R1KH_ID_LEN;
+
+	if (wpa->fbt_info.r0_key_holder) {
+		*pos++ = FTIE_SUBELEM_R0KH_ID;
+		*pos++ = wpa->fbt_info.r0_key_holder_len;
+		memcpy(pos, wpa->fbt_info.r0_key_holder, wpa->fbt_info.r0_key_holder_len);
+		pos += wpa->fbt_info.r0_key_holder_len;
+	}
+
+	if (subelem) {
+		memcpy(pos, subelem, subelem_len);
+		pos += subelem_len;
+	}
+
+	*ielen = pos - buf - 2;
+	len += pos - buf;
+
+	dbg(wpa->nas, "data len including ftie %d", len);
+
+	*data_len = len;
+	return (TRUE);
+}
+
+#endif /* WLHOSTFBT */

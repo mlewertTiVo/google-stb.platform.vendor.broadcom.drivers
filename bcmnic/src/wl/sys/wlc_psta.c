@@ -200,6 +200,9 @@ static void wlc_psta_disassoc_notif(void *ctx, bss_disassoc_notif_data_t *notif)
 static void wlc_psta_disable(wlc_psta_info_t *psta, wlc_bsscfg_t *cfg);
 static void wlc_psta_disable_all(wlc_psta_info_t *psta);
 
+#ifdef BCMDBG
+static int wlc_psta_dump(wlc_psta_info_t *psta, struct bcmstrbuf *b);
+#endif /* BCMDBG */
 
 /** Return the number of PSTA bsscfgs */
 static int
@@ -288,6 +291,9 @@ BCMATTACHFN(wlc_psta_attach)(wlc_info_t *wlc)
 	/* Register module */
 	wlc_module_register(wlc->pub, psta_iovars, "psta", psta, wlc_psta_doiovar,
 	                    wlc_psta_watchdog, wlc_psta_wlc_up, wlc_psta_wlc_down);
+#ifdef BCMDBG
+	wlc_dump_register(wlc->pub, "psta", (dump_fn_t)wlc_psta_dump, (void *)psta);
+#endif
 
 	/* Reserve cubby in the bsscfg container for per-bsscfg private data */
 	if ((psta->cfgh = wlc_bsscfg_cubby_reserve(wlc, sizeof(psta_bsscfg_cubby_t),
@@ -495,6 +501,9 @@ wlc_psta_deauth_client(wlc_psta_info_t *psta, const struct ether_addr *addr)
 	wlc_bsscfg_t *cfg;
 	struct scb *scb;
 	struct ether_addr psta_ha;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
 	WL_PSTA(("wl%d: Rcvd deauth from client %s\n",
 	         psta->pub->unit, bcm_ether_ntoa(addr, eabuf)));
@@ -794,6 +803,9 @@ wlc_psta_doiovar(void *hdl, uint32 actionid,
 	wlc_bsscfg_t *cfg;
 	bool bool_val;
 	psta_bsscfg_cubby_t *psta_cfg;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	wlc = psta->wlc;
 
@@ -905,6 +917,9 @@ static void
 wlc_psta_disable(wlc_psta_info_t *psta, wlc_bsscfg_t *cfg)
 {
 	psta_bsscfg_cubby_t *psta_cfg;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	/* Nothing to do if the bss is not sta */
 	if (!BSSCFG_STA(cfg))
@@ -964,6 +979,9 @@ wlc_psta_create(wlc_psta_info_t *psta, wlc_info_t *wlc, struct ether_addr *ea,
 	struct ether_addr ds_ea;
 	chanspec_t chanspec;
 	psta_bsscfg_cubby_t *psta_cfg;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	/* Do the bss lookup using the psta's mac address */
 	cfg = wlc_bsscfg_find_by_hwaddr(wlc, ea);
@@ -1306,6 +1324,9 @@ wlc_psta_alias_create(wlc_psta_info_t *psta, wlc_bsscfg_t *pcfg, struct ether_ad
 {
 	uint32 m, b;
 	uint8 oui[3];
+#ifdef BCMDBG
+	char alias_ea[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	ASSERT(pcfg != NULL);
 
@@ -1384,6 +1405,9 @@ wlc_psta_proto_proc(wlc_psta_info_t *psta, wlc_bsscfg_t *pcfg, void **p, uint8 *
 	int32 ea_off = -1;
 	bool bcmc, fr_is_1x;
 	psta_bsscfg_cubby_t *psta_cfg = NULL;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 	bool skip_proto_proc = FALSE;
 
 	/* Ignore unknown frames */
@@ -1469,6 +1493,16 @@ wlc_psta_proto_proc(wlc_psta_info_t *psta, wlc_bsscfg_t *pcfg, void **p, uint8 *
 		/* Restore proxy client address in the ether header */
 		if (!bcmc) {
 			ASSERT(*cfg != NULL);
+#ifdef BCMDBG
+			/* If local admin bit is not set then ignore the frame,
+			 * do not proxy such address.
+			 */
+			if (!PSTA_IS_ALIAS(psta, *cfg, eh)) {
+				WL_INFORM(("wl%d: Not proxying frame\n",
+				           psta->pub->unit));
+				return BCME_NOTASSOCIATED;
+			}
+#endif /* BCMDBG */
 			psta_cfg = PSTA_BSSCFG_CUBBY(psta, *cfg);
 			PSTA_CLR_ALIAS(psta, psta_cfg->psa, *cfg, eh + ETHER_DEST_OFFSET);
 			ea = &psta_cfg->psa->ds_ea;
@@ -1686,6 +1720,9 @@ wlc_psta_send_proc(wlc_psta_info_t *psta, void **p, wlc_bsscfg_t **cfg)
 	wlc_bsscfg_t *pcfg = *cfg;
 	psta_bsscfg_cubby_t *psta_cfg;
 	uint16 ether_type;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	ASSERT(pcfg != NULL);
 
@@ -1807,6 +1844,10 @@ wlc_psta_recv_proc(wlc_psta_info_t *psta, void *p, struct ether_header *eh,
 {
 	psta_bsscfg_cubby_t *psta_cfg;
 	wlc_bsscfg_t *cfg = *bsscfg;
+#ifdef BCMDBG
+	char s_eabuf[ETHER_ADDR_STR_LEN];
+	char d_eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	ASSERT(ETHER_ISMULTI(eh->ether_dhost) || BSSCFG_PSTA(cfg));
 
@@ -1872,6 +1913,9 @@ wlc_psta_disassoc_all(wlc_psta_info_t *psta)
 {
 	int32 idx;
 	wlc_bsscfg_t *cfg;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	/* Cleanup all active proxy stas */
 	FOREACH_PSTA(psta->wlc, idx, cfg) {
@@ -1924,6 +1968,9 @@ cleanup:
 static void
 wlc_psta_reassoc_all(wlc_psta_info_t *psta, wlc_bsscfg_t *pcfg)
 {
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 	saved_psta_t *spsta;
 
 	/*
@@ -1950,6 +1997,61 @@ wlc_psta_reassoc_all(wlc_psta_info_t *psta, wlc_bsscfg_t *pcfg)
 	}
 }
 
+#ifdef BCMDBG
+static int
+wlc_psta_dump(wlc_psta_info_t *psta, struct bcmstrbuf *b)
+{
+	int32 idx;
+	wlc_bsscfg_t *cfg;
+	psta_bsscfg_cubby_t *psta_cfg;
+	wlc_psa_t *psa;
+	char eabuf[ETHER_ADDR_STR_LEN], ds_eabuf[ETHER_ADDR_STR_LEN];
+
+	bcm_bprintf(b, "PSTA BSS %s is %sconnected, primary is %sassociated, "
+		"datapath is %savailable\n",
+		bcm_ether_ntoa(&psta->wlc->cfg->cur_etheraddr, eabuf),
+		wlc_bss_connected(psta->wlc->cfg) ? "":"NOT ",
+		wlc_psta_prim_associated(psta) ? "":"NOT ",
+		wlc_psta_is_datapath_available(psta) ? "":"NOT ");
+
+	bcm_bprintf(b, "psta mode: %s\n", PSTA_IS_PROXY(psta->wlc) ? "proxy" :
+	            PSTA_IS_REPEATER(psta->wlc) ? "repeater" : "disabled");
+
+	/* Dump the global counters */
+	bcm_bprintf(b, "pstatxucast %d pstatxnoassoc %d pstatxbcmc %d\n",
+	            WLCNTVAL(psta->pub->_cnt->pstatxucast),
+	            WLCNTVAL(psta->pub->_cnt->pstatxnoassoc),
+	            WLCNTVAL(psta->pub->_cnt->pstatxbcmc));
+	bcm_bprintf(b, "pstarxucast %d pstarxbcmc %d\n",
+	            WLCNTVAL(psta->pub->_cnt->pstarxucast),
+	            WLCNTVAL(psta->pub->_cnt->pstarxbcmc));
+	bcm_bprintf(b, "pstatxdhcpc %d pstarxdhcpc %d pstatxdhcps %d pstarxdhcps %d\n",
+	            WLCNTVAL(psta->pstatxdhcpc), WLCNTVAL(psta->pstarxdhcpc),
+	            WLCNTVAL(psta->pstatxdhcps), WLCNTVAL(psta->pstarxdhcps));
+	bcm_bprintf(b, "pstatxdhcpc6 %d pstarxdhcpc6 %d pstatxdhcps6 %d pstarxdhcps6 %d\n",
+	            WLCNTVAL(psta->pstatxdhcpc6), WLCNTVAL(psta->pstarxdhcpc6),
+	            WLCNTVAL(psta->pstatxdhcps6), WLCNTVAL(psta->pstarxdhcps6));
+	bcm_bprintf(b, "pstadupdetect %d\n", WLCNTVAL(psta->pstadupdetect));
+
+	bcm_bprintf(b, "  MAC\t\t\tAlias\t\t\tRCMTA\tAS\tTxBCMC\t\tTxUcast\t\t"
+	            "RxUcast\t\tTxNoAssoc\n");
+
+	/* Dump the proxy links */
+	FOREACH_PSTA(psta->wlc, idx, cfg) {
+		psta_cfg = PSTA_BSSCFG_CUBBY(psta, cfg);
+		psa = psta_cfg->psa;
+		bcm_bprintf(b, "%c %s\t%s\t%d\t%d\t%d\t\t%d\t\t%d\t\t%d\n",
+		            cfg->up ? cfg->associated ? '*' : '+' : '-',
+		            bcm_ether_ntoa(&psa->ds_ea, ds_eabuf),
+		            bcm_ether_ntoa(&cfg->cur_etheraddr, eabuf),
+		            psa->rcmta_idx, cfg->assoc->state,
+		            WLCNTVAL(psa->txbcmc), WLCNTVAL(psa->txucast),
+		            WLCNTVAL(psa->rxucast), WLCNTVAL(psa->txnoassoc));
+	}
+
+	return 0;
+}
+#endif	/* BCMDBG */
 
 /* enable during assocation state complete via scb state notif */
 static void

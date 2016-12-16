@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_chanmgr_notif.h 583048 2015-08-31 16:43:34Z jqliu $
+ * $Id: phy_chanmgr_notif.h 656063 2016-08-25 03:56:25Z $
  */
 
 #ifndef _phy_chanmgr_notif_h_
@@ -68,9 +68,11 @@ typedef enum phy_chanmgr_notif_order {
 	/* add new client here */
 } phy_chanmgr_notif_order_t;
 
+#ifdef PHYCAL_CACHING
 /* 'events' is a mask of the supported events */
 int phy_chanmgr_notif_add_interest(phy_chanmgr_notif_info_t *cni,
 	phy_chanmgr_notif_fn_t fn, phy_chanmgr_notif_ctx_t *ctx,
 	phy_chanmgr_notif_order_t order, uint16 events);
+#endif /* PHYCAL_CACHING */
 
 #endif /* _phy_chanmgr_notif_h_ */

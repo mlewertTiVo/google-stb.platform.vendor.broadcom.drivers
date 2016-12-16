@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: siutils.h 655650 2016-08-22 23:54:53Z $
+ * $Id: siutils.h 665717 2016-10-18 23:29:25Z $
  */
 
 #ifndef	_siutils_h_
@@ -74,6 +74,7 @@ struct si_pub {
 	uint	boardvendor;		/**< board vendor */
 	uint	boardflags;		/**< board flags */
 	uint	boardflags2;		/**< board flags2 */
+	uint	boardflags4;		/**< board flags4 */
 	uint	chip;			/**< chip number */
 	uint	chiprev;		/**< chip revision */
 	uint	chippkg;		/**< chip package option */
@@ -83,6 +84,7 @@ struct si_pub {
 	bool	pci_pr32414;
 	int	gcirev;			/**< gci core rev */
 	int	lpflags;		/**< low power flags */
+	uint32	enum_base;	/**< backplane address where the chipcommon core resides */
 
 #ifdef BCM_BACKPLANE_TIMEOUT
 	si_axi_error_info_t * err_info;
@@ -209,6 +211,13 @@ typedef void (*gci_gpio_handler_t)(uint32 stat, void *arg);
 #define	SI_BPIND_1BYTE		0x1
 #define	SI_BPIND_2BYTE		0x3
 #define	SI_BPIND_4BYTE		0xF
+
+#define GET_GCI_OFFSET(sih, gci_reg)	\
+	(AOB_ENAB(sih)? OFFSETOF(gciregs_t, gci_reg) : OFFSETOF(chipcregs_t, gci_reg))
+
+#define GET_GCI_CORE(sih)	\
+	(AOB_ENAB(sih)? si_findcoreidx(sih, GCI_CORE_ID, 0) : SI_CC_IDX)
+
 #include <osl_decl.h>
 /* === exported functions === */
 extern si_t *si_attach(uint pcidev, osl_t *osh, volatile void *regs, uint bustype,
@@ -319,6 +328,9 @@ extern void si_gci_time_sync_gpio_enable(si_t *sih, uint8 gpio, bool state);
 /* GCI interrupt handlers */
 extern void si_gci_handler_process(si_t *sih);
 
+extern void si_enable_gpio_wake(si_t *sih, uint8 *wake_mask, uint8 *cur_status, uint8 gci_gpio,
+	uint32 pmu_cc2_mask, uint32 pmu_cc2_value);
+
 /* GCI GPIO event handlers */
 extern void *si_gci_gpioint_handler_register(si_t *sih, uint8 gpio, uint8 sts,
 	gci_gpio_handler_t cb, void *arg);
@@ -328,6 +340,12 @@ extern uint8 si_gci_gpio_status(si_t *sih, uint8 gci_gpio, uint8 mask, uint8 val
 extern void si_gci_config_wake_pin(si_t *sih, uint8 gpio_n, uint8 wake_events,
 	bool gci_gpio);
 extern void si_gci_free_wake_pin(si_t *sih, uint8 gpio_n);
+#if !defined(BCMDONGLEHOST)
+#if !defined(_CFEZ_) || defined(CFG_WL)
+extern uint8 si_gci_gpio_wakemask(si_t *sih, uint8 gpio, uint8 mask, uint8 value);
+extern uint8 si_gci_gpio_intmask(si_t *sih, uint8 gpio, uint8 mask, uint8 value);
+#endif 
+#endif /* !defined(BCMDONGLEHOST) */
 
 /* Wake-on-wireless-LAN (WOWL) */
 extern bool si_pci_pmecap(si_t *sih);
@@ -380,7 +398,6 @@ extern int si_cis_source(si_t *sih);
 #define	TSMC_FAB12	0x2	/**< TSMC Fab12/Fab14 chip */
 #define	SMIC_FAB4	0x3	/**< SMIC Fab4 chip */
 
-extern int BCMINITFN(si_otp_fabid)(si_t *sih, uint16 *fabid, bool rw);
 extern uint16 BCMATTACHFN(si_fabid)(si_t *sih);
 extern uint16 BCMINITFN(si_chipid)(si_t *sih);
 
@@ -425,30 +442,27 @@ extern void si_chipcontrl_epa4331(si_t *sih, bool on);
 extern void si_chipcontrl_epa4331_wowl(si_t *sih, bool enter_wowl);
 extern void si_chipcontrl_srom4360(si_t *sih, bool on);
 extern void si_srom_clk_set(si_t *sih); /**< for chips with fast BP clock */
-/* Enable BT-COEX & Ex-PA for 4313 */
-extern void si_epa_4313war(si_t *sih);
 extern void si_btc_enable_chipcontrol(si_t *sih);
-/* BT/WL selection for 4313 bt combo >= P250 boards */
-extern void si_btcombo_p250_4313_war(si_t *sih);
 extern void si_btcombo_43228_war(si_t *sih);
-extern void si_clk_pmu_htavail_set(si_t *sih, bool set_clear);
 extern void si_pmu_avb_clk_set(si_t *sih, osl_t *osh, bool set_flag);
-extern void si_pmu_synth_pwrsw_4313_war(si_t *sih);
-extern uint si_pll_reset(si_t *sih);
 /* === debug routines === */
 
 extern bool si_taclear(si_t *sih, bool details);
 
-#if defined(BCMDBG_PHYDUMP)
+#ifdef BCMDBG
+extern void si_view(si_t *sih, bool verbose);
+extern void si_viewall(si_t *sih, bool verbose);
+#endif /* BCMDBG */
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
 struct bcmstrbuf;
 extern int si_dump_pcieinfo(si_t *sih, struct bcmstrbuf *b);
 extern void si_dump_pmuregs(si_t *sih, struct bcmstrbuf *b);
 extern int si_dump_pcieregs(si_t *sih, struct bcmstrbuf *b);
 #endif 
 
-#if defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
 extern void si_dumpregs(si_t *sih, struct bcmstrbuf *b);
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || BCMDBG_PHYDUMP */
 
 extern uint32 si_ccreg(si_t *sih, uint32 offset, uint32 mask, uint32 val);
 extern uint32 si_pciereg(si_t *sih, uint32 offset, uint32 mask, uint32 val, uint type);
@@ -490,6 +504,8 @@ extern uint32 si_clear_backplane_to_per_core(si_t *sih, uint coreid, uint coreun
 extern const si_axi_error_info_t * si_get_axi_errlog_info(si_t *sih);
 extern void si_reset_axi_errlog_info(si_t * sih);
 #endif /* BCM_BACKPLANE_TIMEOUT */
+
+extern void si_update_backplane_timeouts(si_t *sih, bool enable, uint32 timeout, uint32 cid);
 
 #if defined(BCMDONGLEHOST)
 extern uint32 si_tcm_size(si_t *sih);
@@ -657,10 +673,19 @@ extern void set_secondary_d11_core(si_t *sih, void **secmap, void **secwrap);
 #define GCI_SECIIN_GCIGPIO_OFFSET		4
 #define GCI_SECIIN_RXID2IP_OFFSET		8
 
+#define GCI_SECIIN_MODE_MASK                    0x7
+#define GCI_SECIIN_GCIGPIO_MASK                 0xF
+
 #define GCI_SECIOUT_MODE_OFFSET			0
 #define GCI_SECIOUT_GCIGPIO_OFFSET		4
 #define	GCI_SECIOUT_LOOPBACK_OFFSET		8
 #define GCI_SECIOUT_SECIINRELATED_OFFSET	16
+
+#define GCI_SECIOUT_MODE_MASK                   0x7
+#define GCI_SECIOUT_GCIGPIO_MASK                0xF
+#define GCI_SECIOUT_SECIINRELATED_MASK          0x1
+
+#define GCI_SECIOUT_SECIINRELATED               0x1
 
 #define GCI_SECIAUX_RXENABLE_OFFSET		0
 #define GCI_SECIFIFO_RXENABLE_OFFSET		16
@@ -791,5 +816,7 @@ extern uint32 si_srpwr_domain(si_t *sih);
 	#define SRPWR_ENAB()            (0)
 #endif /* BCMSRPWR */
 
+
+uint32 si_enum_base(uint devid);
 
 #endif	/* _siutils_h_ */

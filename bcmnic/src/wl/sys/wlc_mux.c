@@ -163,12 +163,12 @@ static void mux_dlist_delete(mux_source_t **list_head, mux_source_t *m);
 /*
  * Dump support
  */
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 static int wlc_mux_module_dump(wlc_mux_info_t *muxi, struct bcmstrbuf *b);
 static void mux_dump(wlc_mux_t *mux, struct bcmstrbuf *b);
 static void mux_loop_dump(mux_source_t *head, int count, struct bcmstrbuf *b);
 static void mux_source_dump(mux_source_t *m, struct bcmstrbuf *b);
-#endif 
+#endif /* defined(BCMDBG) || defined(WLDUMP) */
 
 static const bcm_iovar_t mux_iovars[] = {
 	{NULL, 0, 0, 0, 0, 0 }
@@ -219,7 +219,7 @@ BCMATTACHFN(wlc_mux_module_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 	wlc_dump_register(muxi->pub, "mux", (dump_fn_t)wlc_mux_module_dump, muxi);
 #endif
 
@@ -260,7 +260,7 @@ BCMATTACHFN(wlc_mux_module_detach)(wlc_mux_info_t *muxi)
 	MFREE(muxi->osh, muxi, sizeof(wlc_mux_info_t));
 }
 
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 /**
  * Dump a text detail of the MUX infrastructure and all MUX layer state into a text buffer.
  *
@@ -282,7 +282,7 @@ wlc_mux_module_dump(wlc_mux_info_t *muxi, struct bcmstrbuf *b)
 
 	return 0;
 }
-#endif 
+#endif /* BCMDBG || WLDUMP */
 
 /**
  * IOVar handler for the MUX infrastructure module
@@ -981,7 +981,7 @@ wlc_mux_source_set_output_fn(wlc_mux_t *mux, mux_source_handle_t hdl,
 	m->ctx = ctx;
 }
 
-#if defined(WLDUMP)
+#if defined(BCMDBG) || defined(WLDUMP)
 /**
  * Dump a text detail of state in a single MUX created by wlc_mux_alloc() into a text buffer.
  *
@@ -1080,7 +1080,7 @@ mux_source_dump(mux_source_t *m, struct bcmstrbuf *b)
 	bcm_bprintf(b, "next -> 0x%p:\n", OSL_OBFUSCATE_BUF(m->next));
 	bcm_bprintf(b, "prev -> 0x%p:\n", OSL_OBFUSCATE_BUF(m->prev));
 }
-#endif 
+#endif /* BCMDBG || WLDUMP */
 
 
 #ifdef UNIT_TEST

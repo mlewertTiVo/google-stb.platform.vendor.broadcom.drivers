@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_event_utils.c 637654 2016-05-13 13:23:42Z $
+ * $Id: wlc_event_utils.c 663980 2016-10-07 19:14:26Z $
  */
 
 #include <wlc_cfg.h>
@@ -24,7 +24,7 @@
 #include <bcmutils.h>
 #include <bcmendian.h>
 #include <wlioctl.h>
-#include <d11.h>
+#include <hndd11.h>
 #include <wlc_rate.h>
 #include <wlc_pub.h>
 #include <wlc_bsscfg.h>
@@ -61,11 +61,9 @@ wlc_if_event(wlc_info_t *wlc, uint8 what, struct wlc_if *wlcif)
 		return;
 	}
 
-	if ((cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif)) == NULL) {
-		WL_ERROR(("wl%d: %s: wlc_bsscfg_find_by_wlcif failed\n",
-			WLCWLUNIT(wlc), __FUNCTION__));
-		return;
-	}
+	cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+	ASSERT(cfg != NULL);
+
 
 	/* Don't do anything if the eventing system has been shutdown */
 	if (wlc->eventq == NULL) {
@@ -122,7 +120,9 @@ wlc_if_event(wlc_info_t *wlc, uint8 what, struct wlc_if *wlcif)
 				r = WLC_E_IF_ROLE_NAN;
 			else
 #endif /* WL_NAN */
-
+			if (BSSCFG_IBSS(cfg))
+				r = WLC_E_IF_ROLE_IBSS;
+			else
 				r = WLC_E_IF_ROLE_STA;
 		}
 	} else {
@@ -338,8 +338,7 @@ wlc_bss_mac_rxframe_event(wlc_info_t* wlc, wlc_bsscfg_t *bsscfg, uint msg,
 		}
 		if (e->data == NULL) {
 			wlc_event_free(wlc->eventq, e);
-			WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc),
-				(bsscfg ? WLC_BSSCFG_IDX(bsscfg) : -1),
+			WL_ERROR((WLC_BSS_MALLOC_ERR, WLCWLUNIT(wlc), WLC_BSSCFG_IDX(bsscfg),
 				__FUNCTION__, (int)e->event.datalen,
 				MALLOCED(wlc->osh)));
 			return BCME_NOMEM;
@@ -439,6 +438,9 @@ void
 wlc_eapol_event_indicate(wlc_info_t *wlc, void *p, struct scb *scb, wlc_bsscfg_t *bsscfg,
 	struct ether_header *eh)
 {
+#if defined(BCMDBG)
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* defined(BCMDBG) */
 
 	ASSERT(WLEIND_ENAB(wlc->pub));
 

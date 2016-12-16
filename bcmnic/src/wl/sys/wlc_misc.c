@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_misc.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_misc.c 659962 2016-09-16 18:46:17Z $
  */
 
 #include <wlc_cfg.h>

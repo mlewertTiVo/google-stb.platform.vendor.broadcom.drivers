@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_rxgcrs.c 644994 2016-06-22 06:23:44Z vyass $
+ * $Id: phy_n_rxgcrs.c 659967 2016-09-16 19:35:14Z $
  */
 
 #include <phy_cfg.h>
@@ -25,8 +25,15 @@
 #include <phy_n.h>
 #include <phy_n_info.h>
 #include <phy_n_rxgcrs.h>
+#include <phy_calmgr.h>
 #include <wlc_phyreg_n.h>
 #include <phy_type_rxgcrs.h>
+
+#ifndef ALL_NEW_PHY_MOD
+/* < TODO: all these are going away... */
+#include <wlc_phy_int.h>
+/* TODO: all these are going away... > */
+#endif
 
 /* ************************ */
 /* Modules used by this module */
@@ -39,18 +46,25 @@ struct phy_n_rxgcrs_info {
 	phy_rxgcrs_info_t *cmn_info;
 };
 
-static void wlc_phy_adjust_ed_thres_nphy(phy_type_rxgcrs_ctx_t * ctx, int32 *assert_threshold,
+static void phy_n_rxgcrs_adjust_ed_thres(phy_type_rxgcrs_ctx_t * ctx, int32 *assert_threshold,
 	bool set_threshold);
 #if defined(RXDESENS_EN)
-static int wlc_nphy_get_rxdesens(phy_type_rxgcrs_ctx_t *ctx, int32 *ret_int_ptr);
+static int phy_n_rxgcrs_get_rxdesens(phy_type_rxgcrs_ctx_t *ctx, int32 *ret_int_ptr);
 static int phy_n_rxgcrs_set_rxdesens(phy_type_rxgcrs_ctx_t *ctx, int32 int_val);
 #endif /* defined(RXDESENS_EN) */
-#ifndef ATE_BUILD
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 static int phy_n_rxgcrs_forcecal_noise(phy_type_rxgcrs_ctx_t *ctx, void *a, bool set);
-#endif /* BCMINTERNAL || WLTEST || ATE_BUILD */
-#endif /* !ATE_BUILD */
+#endif 
+static void
+phy_n_rxgcrs_stay_in_carriersearch(phy_type_rxgcrs_ctx_t *ctx, bool enable);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+phy_n_rxgcrs_phydump_chanest(phy_type_rxgcrs_ctx_t *ctx, struct bcmstrbuf *b);
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
+#if defined(DBG_BCN_LOSS)
+static int
+phy_n_rxgcrs_dump_phycal_rx_min(phy_type_rxgcrs_ctx_t *ctx, struct bcmstrbuf *b);
+#endif /* DBG_BCN_LOSS */
 
 /* register phy type specific implementation */
 phy_n_rxgcrs_info_t *
@@ -75,17 +89,21 @@ BCMATTACHFN(phy_n_rxgcrs_register_impl)(phy_info_t *pi, phy_n_info_t *ni,
 	/* register PHY type specific implementation */
 	bzero(&fns, sizeof(fns));
 	fns.ctx = n_info;
-	fns.adjust_ed_thres = wlc_phy_adjust_ed_thres_nphy;
+	fns.adjust_ed_thres = phy_n_rxgcrs_adjust_ed_thres;
 #if defined(RXDESENS_EN)
-	fns.adjust_get_rxdesens = wlc_nphy_get_rxdesens;
+	fns.adjust_get_rxdesens = phy_n_rxgcrs_get_rxdesens;
 	fns.adjust_set_rxdesens = phy_n_rxgcrs_set_rxdesens;
 #endif /* defined(RXDESENS_EN) */
-#ifndef ATE_BUILD
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 	fns.forcecal_noise = phy_n_rxgcrs_forcecal_noise;
-#endif /* BCMINTERNAL || WLTEST || ATE_BUILD */
-#endif /* !ATE_BUILD */
+#endif 
+	fns.stay_in_carriersearch = phy_n_rxgcrs_stay_in_carriersearch;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	fns.phydump_chanest = phy_n_rxgcrs_phydump_chanest;
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
+#if defined(DBG_BCN_LOSS)
+	fns.phydump_phycal_rxmin = phy_n_rxgcrs_dump_phycal_rx_min;
+#endif /* DBG_BCN_LOSS */
 
 	if (phy_rxgcrs_register_impl(cmn_info, &fns) != BCME_OK) {
 		PHY_ERROR(("%s: phy_rxgcrs_register_impl failed\n", __FUNCTION__));
@@ -115,7 +133,7 @@ BCMATTACHFN(phy_n_rxgcrs_unregister_impl)(phy_n_rxgcrs_info_t *n_info)
 	phy_mfree(pi, n_info, sizeof(phy_n_rxgcrs_info_t));
 }
 
-static void wlc_phy_adjust_ed_thres_nphy(phy_type_rxgcrs_ctx_t * ctx, int32 *assert_thresh_dbm,
+static void phy_n_rxgcrs_adjust_ed_thres(phy_type_rxgcrs_ctx_t * ctx, int32 *assert_thresh_dbm,
 	bool set_threshold)
 {
 	phy_info_t *pi = (phy_info_t *)ctx;
@@ -151,7 +169,7 @@ static void wlc_phy_adjust_ed_thres_nphy(phy_type_rxgcrs_ctx_t * ctx, int32 *ass
 
 #if defined(RXDESENS_EN)
 static int
-wlc_nphy_get_rxdesens(phy_type_rxgcrs_ctx_t *ctx, int32 *ret_int_ptr)
+phy_n_rxgcrs_get_rxdesens(phy_type_rxgcrs_ctx_t *ctx, int32 *ret_int_ptr)
 {
 	phy_n_rxgcrs_info_t *info = (phy_n_rxgcrs_info_t *)ctx;
 	phy_info_t *pi = info->pi;
@@ -190,12 +208,7 @@ phy_n_rxgcrs_set_rxdesens(phy_type_rxgcrs_ctx_t *ctx, int32 int_val)
 }
 #endif /* defined(RXDESENS_EN) */
 
-#ifndef ATE_BUILD
-#if defined(BCMINTERNAL) || defined(WLTEST) || defined(DBG_PHY_IOV) || \
-	defined(WFD_PHY_LL_DEBUG)
-/* JIRA: SWWLAN-32606, RB: 12975: function to do only Noise cal & read crsmin power of
- * core 0 & core 1
-*/
+#if defined(DBG_PHY_IOV) || defined(WFD_PHY_LL_DEBUG)
 static int
 phy_n_rxgcrs_forcecal_noise(phy_type_rxgcrs_ctx_t *ctx, void *a, bool set)
 {
@@ -214,7 +227,7 @@ phy_n_rxgcrs_forcecal_noise(phy_type_rxgcrs_ctx_t *ctx, void *a, bool set)
 		bcopy(crsmin, a, sizeof(uint16)*4);
 	}
 	else {
-		wlc_phy_cal_perical_mphase_reset(pi);
+		phy_calmgr_mphase_reset(pi->calmgri);
 
 		pi->cal_info->cal_phase_id = MPHASE_CAL_STATE_NOISECAL;
 		pi->trigger_noisecal = TRUE;
@@ -239,5 +252,153 @@ phy_n_rxgcrs_forcecal_noise(phy_type_rxgcrs_ctx_t *ctx, void *a, bool set)
 	}
 	return err;
 }
-#endif /* BCMINTERNAL || WLTEST || ATE_BUILD */
-#endif /* !ATE_BUILD */
+#endif 
+
+static void
+phy_n_rxgcrs_stay_in_carriersearch(phy_type_rxgcrs_ctx_t *ctx, bool enable)
+{
+	phy_n_rxgcrs_info_t *rxgcrs_info = (phy_n_rxgcrs_info_t *)ctx;
+	phy_info_t *pi = rxgcrs_info->pi;
+	uint16 clip_off[] = {0xffff, 0xffff};
+	phy_info_nphy_t *pi_nphy = pi->u.pi_nphy;
+
+	PHY_TRACE(("wl%d: %s\n", pi->sh->unit, __FUNCTION__));
+
+	/* MAC should be suspended before calling this function */
+	ASSERT(!(R_REG(pi->sh->osh, &pi->regs->maccontrol) & MCTL_EN_MAC));
+
+	if (enable) {
+		if (pi_nphy->nphy_deaf_count == 0) {
+			pi->phy_classifier_state = wlc_phy_classifier_nphy(pi, 0, 0);
+			wlc_phy_classifier_nphy(pi, NPHY_ClassifierCtrl_classifierSel_MASK, 4);
+			wlc_phy_clip_det_nphy(pi, 0, pi->phy_clip_state);
+			wlc_phy_clip_det_nphy(pi, 1, clip_off);
+		}
+
+		pi_nphy->nphy_deaf_count++;
+
+		wlc_phy_resetcca_nphy(pi);
+
+	} else {
+		ASSERT(pi_nphy->nphy_deaf_count > 0);
+
+		pi_nphy->nphy_deaf_count--;
+
+		if (pi_nphy->nphy_deaf_count == 0) {
+			wlc_phy_classifier_nphy(pi, NPHY_ClassifierCtrl_classifierSel_MASK,
+			pi->phy_classifier_state);
+			wlc_phy_clip_det_nphy(pi, 1, pi->phy_clip_state);
+		}
+	}
+}
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+phy_n_rxgcrs_phydump_chanest(phy_type_rxgcrs_ctx_t *ctx, struct bcmstrbuf *b)
+{
+	phy_n_rxgcrs_info_t *rxgcrs_info = (phy_n_rxgcrs_info_t *)ctx;
+	phy_info_t *pi = rxgcrs_info->pi;
+	uint16 num_rx, num_sts, num_tones, start_tone;
+	uint16 k, r, t, fftk;
+	uint32 ch;
+	uint16 ch_re_ma, ch_im_ma;
+	uint8  ch_re_si, ch_im_si;
+	int16  ch_re, ch_im;
+	int8   ch_exp;
+	uint8  dump_tones;
+
+	num_rx = (uint8)PHYCORENUM(pi->pubpi->phy_corenum);
+	num_sts = 4;
+
+	if (CHSPEC_IS40(pi->radio_chanspec)) {
+		num_tones = 128;
+#ifdef CHSPEC_IS80
+	} else if (CHSPEC_IS80(pi->radio_chanspec)) {
+		num_tones = 256;
+#endif /* CHSPEC_IS80 */
+	} else {
+		num_tones = 64;
+	}
+
+	bcm_bprintf(b, "num_tones=%d\n", num_tones);
+
+	/* Dump only 16 sub-carriers at a time */
+	dump_tones = 16;
+	/* Reset the dump counter */
+	if (pi->phy_chanest_dump_ctr > (num_tones/dump_tones - 1))
+		pi->phy_chanest_dump_ctr = 0;
+
+	start_tone = pi->phy_chanest_dump_ctr * dump_tones;
+	pi->phy_chanest_dump_ctr++;
+
+	for (r = 0; r < num_rx; r++) {
+		bcm_bprintf(b, "rx=%d\n", r);
+		for (t = 0; t < num_sts; t++) {
+			bcm_bprintf(b, "sts=%d\n", t);
+			for (k = start_tone; k < (start_tone + dump_tones); k++) {
+				wlc_phy_table_read_nphy(pi, NPHY_TBL_ID_CHANEST, 1,
+							 t*128 + k, 32, &ch);
+
+				/* Q11 FLP (12,12,6) */
+				ch_re_ma  = ((ch >> 18) & 0x7ff);
+				ch_re_si  = ((ch >> 29) & 0x001);
+				ch_im_ma  = ((ch >>  6) & 0x7ff);
+				ch_im_si  = ((ch >> 17) & 0x001);
+				ch_exp	  = ((int8)((ch << 2) & 0xfc)) >> 2;
+				ch_re = (ch_re_si > 0) ? -ch_re_ma : ch_re_ma;
+				ch_im = (ch_im_si > 0) ? -ch_im_ma : ch_im_ma;
+				fftk = ((k < num_tones/2) ? (k + num_tones/2) : (k - num_tones/2));
+
+				bcm_bprintf(b, "chan(%d,%d,%d)=(%d+i*%d)*2^%d;\n",
+					    r+1, t+1, fftk+1, ch_re, ch_im, ch_exp);
+			}
+		}
+	}
+}
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
+
+#if defined(DBG_BCN_LOSS)
+static int
+phy_n_rxgcrs_dump_phycal_rx_min(phy_type_rxgcrs_ctx_t *ctx, struct bcmstrbuf *b)
+{
+	phy_n_rxgcrs_info_t *rxgcrs_info = (phy_n_rxgcrs_info_t *)ctx;
+	phy_info_t *pi = rxgcrs_info->pi;
+	nphy_iq_comp_t rxcal_coeffs;
+	int time_elapsed;
+	phy_info_nphy_t *pi_nphy = pi->u.pi_nphy;
+
+	if (!pi_nphy) {
+		PHY_ERROR(("wl%d: %s: NPhy null, cannot dump \n",
+			pi->sh->unit, __FUNCTION__));
+		return BCME_UNSUPPORTED;
+	}
+
+	time_elapsed = pi->sh->now - pi->cal_info->last_cal_time;
+	if (time_elapsed < 0)
+		time_elapsed = 0;
+
+	wlapi_suspend_mac_and_wait(pi->sh->physhim);
+	phy_utils_phyreg_enter(pi);
+
+	if (pi_nphy->phyhang_avoid)
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
+
+	/* Read Rx calibration co-efficients */
+	wlc_phy_rx_iq_coeffs_nphy(pi, 0, &rxcal_coeffs);
+
+	if (pi_nphy->phyhang_avoid)
+		phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
+
+	/* reg access is done, enable the mac */
+	phy_utils_phyreg_exit(pi);
+	wlapi_enable_mac(pi->sh->physhim);
+
+	bcm_bprintf(b, "time since last cal: %d (sec), mphase_cal_id: %d\n\n",
+		time_elapsed, pi->cal_info->cal_phase_id);
+
+	bcm_bprintf(b, "rx cal  a0=%d, b0=%d, a1=%d, b1=%d\n\n",
+		rxcal_coeffs.a0, rxcal_coeffs.b0, rxcal_coeffs.a1, rxcal_coeffs.b1);
+
+	return BCME_OK;
+}
+#endif /* DBG_BCN_LOSS */

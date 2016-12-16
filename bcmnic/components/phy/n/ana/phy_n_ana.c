@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_n_ana.c 601801 2015-11-24 06:58:29Z chihap $
+ * $Id: phy_n_ana.c 601801 2015-11-24 06:58:29Z $
  */
 
 #include <typedefs.h>

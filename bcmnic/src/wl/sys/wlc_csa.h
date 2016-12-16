@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_csa.h 633968 2016-04-26 09:01:47Z $
+ * $Id: wlc_csa.h 662085 2016-09-28 07:48:19Z $
 */
 
 /**
@@ -26,6 +26,19 @@
 
 /* APIs */
 #ifdef WLCSA
+typedef struct wlc_csa_notif_cb_data {
+	wlc_bsscfg_t *cfg;
+	int status;
+	int signal;
+	chanspec_t chanspec;
+} wlc_csa_notif_cb_data_t;
+
+enum CSA_NOTIF_SIGNALS {
+	CSA_CHANNEL_CHANGE_START = 1,
+	CSA_CHANNEL_CHANGE_END = 2
+};
+
+typedef void (*wlc_csa_notif_cb_fn_t)(void *ctx, wlc_csa_notif_cb_data_t *notif_data);
 
 /* module */
 extern wlc_csa_info_t *wlc_csa_attach(wlc_info_t *wlc);
@@ -64,6 +77,10 @@ extern bool wlc_csa_quiet_mode(wlc_csa_info_t *csam, uint8 *tag, uint tag_len);
 
 /* accessors */
 extern uint8 wlc_csa_get_csa_count(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg);
+extern int wlc_csa_obss_dynbw_notif_cb_register(wlc_csa_info_t *csam,
+	wlc_csa_notif_cb_fn_t cb, void *arg);
+extern int wlc_csa_obss_dynbw_notif_cb_unregister(wlc_csa_info_t *csam,
+	wlc_csa_notif_cb_fn_t cb, void *arg);
 
 #else /* !WLCSA */
 
@@ -86,6 +103,9 @@ extern uint8 wlc_csa_get_csa_count(wlc_csa_info_t *csam, wlc_bsscfg_t *cfg);
 #define wlc_csa_quiet_mode(csam, tag, tag_len) FALSE
 
 #define wlc_csa_get_csa_count(csam, cfg) 0
+
+#define wlc_csa_obss_dynbw_notif_cb_register(csam, cb, arg)  0
+#define wlc_csa_obss_dynbw_notif_cb_unregister(csam, cb, arg)  0
 
 #endif /* !WLCSA */
 

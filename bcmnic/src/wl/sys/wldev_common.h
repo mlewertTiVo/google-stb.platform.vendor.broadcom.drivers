@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wldev_common.h 655259 2016-08-18 15:48:30Z $
+ * $Id: wldev_common.h 668765 2016-11-04 21:59:07Z $
  */
 #ifndef __WLDEV_COMMON_H__
 #define __WLDEV_COMMON_H__
@@ -94,7 +94,7 @@ extern bool dhd_force_country_change(struct net_device *dev);
 extern void dhd_bus_band_set(struct net_device *dev, uint band);
 extern int wldev_set_country(struct net_device *dev, char *country_code, bool notify,
 	bool user_enforced, int revinfo);
-#if defined(BCMDONGLEHOST)
+#ifdef BCMDONGLEHOST
 extern int net_os_wake_lock(struct net_device *dev);
 extern int net_os_wake_unlock(struct net_device *dev);
 extern int net_os_wake_lock_timeout(struct net_device *dev);

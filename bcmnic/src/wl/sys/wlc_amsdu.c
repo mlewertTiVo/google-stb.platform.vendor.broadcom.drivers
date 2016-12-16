@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_amsdu.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_amsdu.c 663577 2016-10-06 01:25:43Z $
  */
 
 
@@ -59,7 +59,6 @@
 #include <wlc_rate_sel.h>
 #include <wlc_amsdu.h>
 #ifdef PROP_TXSTATUS
-#include <wlfc_proto.h>
 #include <wlc_wlfc.h>
 #endif
 #if defined(WLAMPDU) && defined(WLOVERTHRUSTER)
@@ -70,7 +69,7 @@
 #include <proto/bcmtcp.h>
 #endif /* WLAMPDU && WLOVERTHRUSTER */
 #ifdef WL_DATAPATH_LOG_DUMP
-#include <proto/event_log_payload.h>
+#include <event_log.h>
 #endif
 #ifdef PSTA
 #include <wlc_psta.h>
@@ -87,10 +86,6 @@
 #include <wlc_dump.h>
 #include <wlc_hw.h>
 #include <wlc_rsdb.h>
-#ifdef WLCXO_CTRL
-#include <wlc_cxo_amsdu.h>
-#include <wlc_cxo_amsdu_priv.h>
-#endif
 
 #ifdef BCMSPLITRX
 #include <wlc_pktfetch.h>
@@ -189,7 +184,7 @@ typedef struct wlc_amsdu_cnt {
 	uint32 agg_stop_sf;           /**< num of MSDU aggs stopped for sub-frame count limit */
 	uint32 agg_stop_len;          /**< num of MSDU aggs stopped for byte length limit */
 	uint32 agg_stop_passthrough;  /**< num of MSDU aggs stopped for un-aggregated frame */
-#ifdef TXQ_MUX
+	/* TXQ _MUX */
 	/* Aggregation stop reasons */
 	uint32 agg_stop_qempty;       /**< Stop as input queue has run out of pkts */
 	uint32 agg_stop_flags;        /**< Stop agg due to overide bits being set */
@@ -214,9 +209,10 @@ typedef struct wlc_amsdu_cnt {
 	uint32 tx_singleton;         /**< No agg because of a single packet only */
 	uint32 tx_pkt_putback;       /**< Incremented on requeue to the inbound queue */
 	uint32 rlimit_max_bytes;     /**< max_bytes is reduced due to specified rate */
-#else
+
+	/* NEW_TXQ */
 	uint32	agg_stop_lowwm;      /**< num of MSDU aggs stopped for tx low water mark */
-#endif /* TXQ_MUX */
+
 	/* Receive Deaggregation counters */
 	uint32 deagg_msdu;           /**< MSDU of deagged A-MSDU(in ucode) */
 	uint32 deagg_amsdu;          /**< valid A-MSDU deagged(exclude bad A-MSDU) */
@@ -281,12 +277,12 @@ static const bcm_iovar_t amsdu_iovars[] = {
 	{"amsdu_noack", IOV_AMSDUNOACK, (IOVF_RSDB_SET), 0, IOVT_BOOL, 0},
 	{"amsdu_aggsf", IOV_AMSDU_AGGSF, (IOVF_RSDB_SET), 0, IOVT_UINT16, 0},
 	{"amsdu_aggbytes", IOV_AMSDU_AGGBYTES, (0), 0, IOVT_UINT32, 0},
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	{"amsdu_aggblock", IOV_AMSDU_BLOCK, (0), 0, IOVT_BOOL, 0},
 #ifdef WLCNT
 	{"amsdu_counters", IOV_AMSDU_COUNTERS, (0), 0, IOVT_BUFFER, sizeof(wlc_amsdu_cnt_t)},
 #endif /* WLCNT */
-#endif 
+#endif /* BCMDBG */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -299,15 +295,7 @@ typedef struct amsdu_deagg {
 
 /** default/global settings for A-MSDU module */
 typedef struct amsdu_ami_policy {
-#ifdef TXQ_MUX
-	uint aggbytes_hwm_delta;           /**< Length delta for highwatermark */
-	bool ackRatioEnabled;              /**< Skip TCP ACKS if set */
-	uint32 passthrough_flags;          /**< A-MSDU passthrough condition flags */
-	uint16 packet_headroom;            /**< Packet headroom at head of A-MSDU */
-#else
-	uint16 fifo_lowm;                  /**< low watermark for tx queue */
-	uint16 fifo_hiwm;                  /**< high watermark for tx queue */
-#endif /* TXQ_MUX */
+	amsdu_txpolicy_union_t u;
 	uint amsdu_max_sframes;            /**< Maximum allowed subframes per A-MSDU */
 	bool amsdu_agg_enable[NUMPRIO];    /**< TRUE:agg allowed, FALSE:agg disallowed */
 	uint amsdu_max_agg_bytes[NUMPRIO]; /**< Maximum allowed payload bytes per A-MSDU */
@@ -334,7 +322,7 @@ struct amsdu_info {
 #ifdef WLCNT
 	wlc_amsdu_cnt_t *cnt;        /**< counters/stats */
 #endif /* WLCNT */
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)
 	amsdu_dbg_t *amdbg;
 #endif
 };
@@ -384,7 +372,7 @@ typedef struct {
 #else
 typedef struct {
 	uint amsdu_agg_bytes;      /**< A-MSDU byte count */
-	uint amsdu_agg_sframes;    /**< A-MSDU subframe count */
+	uint amsdu_agg_sframes;    /**< A-MSDU max allowed subframe count */
 	void *amsdu_agg_p;         /**< A-MSDU pkt pointer to first MSDU */
 	void *amsdu_agg_ptail;     /**< A-MSDU pkt pointer to last MSDU */
 	uint amsdu_agg_padlast;    /**< pad bytes in the agg tail buffer */
@@ -397,14 +385,13 @@ typedef struct {
 
 /** per scb cubby info */
 typedef struct scb_amsduinfo {
-#ifdef TXQ_MUX
 	/* Initialized when A-MSDU module for the SCB is plumbed */
 	amsdu_info_t *ami;         /* A-MSDU module handle */
 	struct scb *scb;           /* SCB of the A-MSDU-- optimization */
-#else
+
 	/* NEW_TXQ buffers the frames in A-MSDU aggregate, this is the state metadata */
 	amsdu_txaggstate_t aggstate[NUMPRIO];
-#endif /* TXQ_MUX */
+
 	/*
 	 * Default policy items in TXQ_MUX, STATE + POLICY items in NEW_TXQ
 	 * This contains the default attach time values as well as any
@@ -426,9 +413,10 @@ static int wlc_amsdu_up(void *hdl);
 #ifdef WLAMSDU_TX
 
 #ifndef WLAMSDU_TX_DISABLED
+static int wlc_amsdu_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg);
 static int wlc_amsdu_scb_init(void *cubby, struct scb *scb);
 static void wlc_amsdu_scb_deinit(void *cubby, struct scb *scb);
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)
 static void wlc_amsdu_dump_scb(void *ctx, struct scb *scb, struct bcmstrbuf *b);
 #else
 #define wlc_amsdu_dump_scb NULL
@@ -470,7 +458,7 @@ static txmod_fns_t BCMATTACHDATA(amsdu_txmod_fns) = {
 #endif /* !TXQ_MUX */
 #endif /* WLAMSDU_TX */
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)
 static int wlc_amsdu_dump(void *ctx, struct bcmstrbuf *b);
 #endif
 
@@ -481,9 +469,10 @@ static bool wlc_amsdu_deagg_verify(amsdu_info_t *ami, uint16 fc, void *h);
 static void wlc_amsdu_deagg_flush(amsdu_info_t *ami, int fifo);
 static int wlc_amsdu_tx_attach(amsdu_info_t *ami, wlc_info_t *wlc);
 
-#if defined(BCMDBG_AMSDU) && defined(WLCNT)
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)) && \
+	defined(WLCNT)
 void wlc_amsdu_dump_cnt(amsdu_info_t *ami, struct bcmstrbuf *b);
-#endif	
+#endif	/* defined(BCMDBG) && defined(WLCNT) */
 
 #ifdef WLAMSDU_TX
 
@@ -496,8 +485,8 @@ wlc_amsdu_set_scb_default_txpolicy(amsdu_info_t *ami, scb_amsdu_t *scb_ami)
 		amsdu_txpolicy_t *scb_txpolicy = &scb_ami->scb_txpolicy[i].pub;
 #ifdef TXQ_MUX
 		scb_txpolicy->aggbytes_hwm_delta = ami->txpolicy.aggbytes_hwm_delta;
-		scb_txpolicy->ackRatioEnabled = ami->txpolicy.ackRatioEnabled;
-		scb_txpolicy->passthrough_flags = ami->txpolicy.passthrough_flags;
+		scb_txpolicy->tx_ackRatioEnabled = ami->txpolicy.tx_ackRatioEnabled;
+		scb_txpolicy->tx_passthrough_flags = ami->txpolicy.tx_passthrough_flags;
 		scb_txpolicy->packet_headroom = ami->txpolicy.packet_headroom;
 #else
 		scb_txpolicy->fifo_lowm = ami->txpolicy.fifo_lowm;
@@ -573,7 +562,7 @@ wlc_amsdu_pkt_freed(wlc_info_t *wlc, void *pkt, uint txs)
 #endif /* !TXQ_MUX */
 #endif /* WLAMSDU_TX */
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)
 #ifdef WLCNT
 static int
 wlc_amsdu_dump_clr(void *ctx)
@@ -588,7 +577,7 @@ wlc_amsdu_dump_clr(void *ctx)
 #else
 #define wlc_amsdu_dump_clr NULL
 #endif
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || BCMDBG_AMSDU */
 
 /*
  * This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
@@ -632,7 +621,7 @@ BCMATTACHFN(wlc_amsdu_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)
 	if (!(ami->amdbg = (amsdu_dbg_t *)MALLOCZ(wlc->osh, sizeof(amsdu_dbg_t)))) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
 			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
@@ -644,7 +633,7 @@ BCMATTACHFN(wlc_amsdu_attach)(wlc_info_t *wlc)
 
 #ifdef TXQ_MUX
 	ami->txpolicy.packet_headroom = (uint16)WLC_AMSDU_PKT_HEADROOM;
-	ami->txpolicy.passthrough_flags = WLC_AMSDU_PASSTHROUGH_FLAGS;
+	ami->txpolicy.tx_passthrough_flags = WLC_AMSDU_PASSTHROUGH_FLAGS;
 	ami->txpolicy.aggbytes_hwm_delta = WLC_AMSDU_AGGDELTA_HIGHWATER;
 #else
 	ami->txpolicy.fifo_lowm = (uint16)WLC_AMSDU_LOW_WATERMARK;
@@ -680,10 +669,8 @@ BCMATTACHFN(wlc_amsdu_tx_attach)(amsdu_info_t *ami, wlc_info_t *wlc)
 #ifndef WLAMSDU_TX_DISABLED
 	uint i;
 	uint max_agg;
-#ifndef TXQ_MUX
-#if defined(WL_DATAPATH_LOG_DUMP)
 	scb_cubby_params_t cubby_params;
-#endif
+#ifndef TXQ_MUX
 	int err;
 #endif /* !TXQ_MUX */
 
@@ -712,6 +699,7 @@ BCMATTACHFN(wlc_amsdu_tx_attach)(amsdu_info_t *ami, wlc_info_t *wlc)
 		          wlc->pub->unit, __FUNCTION__));
 		return -10;
 	}
+#endif /* WL_DATAPATH_LOG_DUMP && !TXQ_MUX */
 
 	/* reserve cubby in the scb container for per-scb private data */
 	bzero(&cubby_params, sizeof(cubby_params));
@@ -719,21 +707,15 @@ BCMATTACHFN(wlc_amsdu_tx_attach)(amsdu_info_t *ami, wlc_info_t *wlc)
 	cubby_params.context = ami;
 	cubby_params.fn_init = wlc_amsdu_scb_init;
 	cubby_params.fn_deinit = wlc_amsdu_scb_deinit;
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)
 	cubby_params.fn_dump = wlc_amsdu_dump_scb;
 #endif
+#if defined(WL_DATAPATH_LOG_DUMP) && !defined(TXQ_MUX)
 	cubby_params.fn_data_log_dump = wlc_amsdu_datapath_summary;
+#endif
+	cubby_params.fn_update = wlc_amsdu_scb_update;
 
 	ami->scb_handle = wlc_scb_cubby_reserve_ext(wlc, sizeof(scb_amsdu_t), &cubby_params);
-
-#else /* WL_DATAPATH_LOG_DUMP && !TXQ_MUX */
-
-	/* reserve cubby in the scb container for per-scb private data */
-	ami->scb_handle = wlc_scb_cubby_reserve(wlc, sizeof(scb_amsdu_t),
-		wlc_amsdu_scb_init, wlc_amsdu_scb_deinit,
-		wlc_amsdu_dump_scb,
-		ami);
-#endif /* WL_DATAPATH_LOG_DUMP && !TXQ_MUX */
 
 	if (ami->scb_handle < 0) {
 		WL_ERROR(("wl%d: %s: wlc_scb_cubby_reserve failed\n",
@@ -803,6 +785,12 @@ BCMATTACHFN(wlc_amsdu_detach)(amsdu_info_t *ami)
 
 	wlc_module_unregister(ami->pub, "amsdu", ami);
 
+#ifdef BCMDBG
+	if (ami->amdbg) {
+		MFREE(ami->pub->osh, ami->amdbg, sizeof(amsdu_dbg_t));
+		ami->amdbg = NULL;
+	}
+#endif
 
 #ifdef WLCNT
 	if (ami->cnt)
@@ -933,6 +921,18 @@ wlc_amsdu_set(amsdu_info_t *ami, bool on)
 } /* wlc_amsdu_set */
 
 #ifndef WLAMSDU_TX_DISABLED
+static int
+wlc_amsdu_scb_update(void *context, struct scb *scb, wlc_bsscfg_t* new_cfg)
+{
+#ifdef TXQ_MUX
+	amsdu_info_t *ami = (amsdu_info_t *)context;
+	wlc_info_t *new_wlc = new_cfg->wlc;
+	scb_amsdu_t *scb_ami = SCB_AMSDU_CUBBY(ami, scb);
+
+	scb_ami->ami = new_wlc->ami;
+#endif
+	return BCME_OK;
+}
 
 /** WLAMSDU_TX specific function, initializes each priority for a remote party (scb) */
 static int
@@ -1004,44 +1004,6 @@ wlc_amsdu_scb_deinit(void *context, struct scb *scb)
 #endif /* !WLAMSDU_TX_DISABLED */
 #endif /* WLAMSDU_TX */
 
-
-#ifdef WLCXO_CTRL
-/*
- * Initialize and add amsdu info in offload driver.
- */
-void
-wlc_cxo_ctrl_amsdu_add(wlc_info_t *wlc, amsdu_info_t *ami)
-{
-	wlc_cx_amsdu_info_t cx_ami;
-	int32 i;
-
-	/* Init amsdu info for offload driver */
-	cx_ami.wlc = WLC_INFO_C2D(wlc);
-	for (i = 0; i < NUMPRIO; i++) {
-		cx_ami.amsdu_agg_sframes_limit[i] = ami->txpolicy.amsdu_max_sframes;
-	}
-
-	/* Call IPC to add amsdu object */
-	__wlc_cxo_c2d_amsdu_add(wlc->ipc, wlc, &cx_ami);
-}
-
-void
-wlc_cxo_tsc_amsdu_init(amsdu_info_t *ami, struct scb *scb, uint8 tid,
-                       wlc_cx_scb_amsdu_t *cx_scb_ami)
-{
-	scb_amsdu_t *scb_ami;
-
-	ASSERT(scb != NULL);
-	ASSERT(cx_scb_ami != NULL);
-
-	scb_ami = SCB_AMSDU_CUBBY(ami, scb);
-	ASSERT(scb_ami != NULL);
-
-	cx_scb_ami->prio[tid].amsdu_vht_agg_bytes_max =
-		scb_ami->scb_txpolicy[tid].amsdu_vht_agg_bytes_max;
-}
-#endif /* WLCXO_CTRL */
-
 /** handle AMSDU related items when going down */
 static int
 wlc_amsdu_down(void *hdl)
@@ -1112,7 +1074,6 @@ wlc_amsdu_doiovar(void *hdl, uint32 actionid,
 
 #ifdef WLAMSDU_TX
 	case IOV_SVAL(IOV_AMSDU):
-		WL_ERROR(("%s:AMSDU_TX_SUPPORT=%d\n", __FUNCTION__, AMSDU_TX_SUPPORT(wlc->pub)));
 		if (AMSDU_TX_SUPPORT(wlc->pub))
 			err = wlc_amsdu_set(ami, bool_val);
 		else
@@ -1128,7 +1089,7 @@ wlc_amsdu_doiovar(void *hdl, uint32 actionid,
 		wlc->_amsdu_noack = bool_val;
 		break;
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	case IOV_GVAL(IOV_AMSDU_BLOCK):
 		*pval = (int32)ami->amsdu_agg_block;
 		break;
@@ -1142,7 +1103,7 @@ wlc_amsdu_doiovar(void *hdl, uint32 actionid,
 		bcopy(&ami->cnt, a, sizeof(ami->cnt));
 		break;
 #endif /* WLCNT */
-#endif 
+#endif /* BCMDBG */
 
 #ifdef WLAMSDU_TX
 	case IOV_GVAL(IOV_AMSDU_AGGBYTES):
@@ -1241,8 +1202,6 @@ wlc_amsdu_doiovar(void *hdl, uint32 actionid,
 	case IOV_SVAL(IOV_RX_AMSDU_IN_AMPDU):
 		if (bool_val && D11REV_LT(wlc->pub->corerev, 40)) {
 			WL_AMSDU(("wl%d: Not supported < corerev (40)\n", wlc->pub->unit));
-			err = BCME_UNSUPPORTED;
-		} else if (bool_val && WLCXO_ENAB(wlc->pub)) {
 			err = BCME_UNSUPPORTED;
 		} else {
 			wlc->_rx_amsdu_in_ampdu = bool_val;
@@ -1344,6 +1303,12 @@ wlc_amsdu_agglimit_frag_upd(amsdu_info_t *ami)
 				/* Nothing else to be done. */
 				continue;
 			}
+#ifdef BCMDBG
+			if (wlc->fragthresh[WME_PRIO2AC(i)] > MIN(max_agg, fifo_size)) {
+				WL_AMSDU(("wl%d:%s: MIN(max_agg=%d, fifo_sz=%d)=>amsdu_max_agg\n",
+					ami->wlc->pub->unit, __FUNCTION__, max_agg, fifo_size));
+			}
+#endif /* BCMDBG */
 			ami->txpolicy.amsdu_max_agg_bytes[i] = MIN(fifo_size, max_agg);
 			/* if frag not disabled, then take into account the fragthresh */
 			if (!frag_disabled) {
@@ -1396,9 +1361,17 @@ wlc_amsdu_scb_vht_agglimit_upd(amsdu_info_t *ami, struct scb *scb)
 	uint i;
 	scb_amsdu_t *scb_ami;
 	uint16 vht_pref = 0;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	scb_ami = SCB_AMSDU_CUBBY(ami, scb);
 	vht_pref = wlc_vht_get_scb_amsdu_mtu_pref(ami->wlc->vhti, scb);
+#ifdef BCMDBG
+	WL_AMSDU(("wl%d: %s: scb=%s scb->vht_mtu_pref %d\n",
+		ami->wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(&(scb->ea), eabuf),
+		vht_pref));
+#endif
 
 	for (i = 0; i < NUMPRIO; i++) {
 		WL_AMSDU(("old: scb_txpolicy[%d].vhtaggbytesmax = %d", i,
@@ -1420,6 +1393,13 @@ wlc_amsdu_scb_ht_agglimit_upd(amsdu_info_t *ami, struct scb *scb)
 	scb_amsdu_t *scb_ami;
 	uint16 ht_pref = wlc_ht_get_scb_amsdu_mtu_pref(ami->wlc->hti, scb);
 
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+
+	WL_AMSDU(("wl%d: %s: scb=%s scb->amsdu_ht_mtu_pref %d\n",
+		ami->wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(&(scb->ea), eabuf),
+		ht_pref));
+#endif
 
 	scb_ami = SCB_AMSDU_CUBBY(ami, scb);
 	for (i = 0; i < NUMPRIO; i++) {
@@ -1557,6 +1537,12 @@ wlc_amsdu_pktc_agg(amsdu_info_t *ami, struct scb *scb, void *p, void *n,
 	void *p1 = NULL;
 	bool pad_at_head = FALSE;
 
+#ifdef BCMDBG
+	if (ami->amsdu_agg_block) {
+		WLCNTINCR(ami->cnt->agg_passthrough);
+		return (n);
+	}
+#endif /* BCMDBG */
 
 	pad = 0;
 	i = 1;
@@ -1695,13 +1681,13 @@ wlc_amsdu_pktc_agg(amsdu_info_t *ami, struct scb *scb, void *p, void *n,
 		pad_at_head = FALSE;
 	}
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	/* update statistics histograms */
 	ami->amdbg->tx_msdu_histogram[MIN(i-1,
 		MAX_TX_SUBFRAMES_LIMIT-1)]++;
 	ami->amdbg->tx_length_histogram[MIN(totlen / AMSDU_LENGTH_BIN_BYTES,
 		AMSDU_LENGTH_BINS-1)]++;
-#endif 
+#endif /* BCMDBG */
 
 	if (i > 1)
 		eh->ether_type = HTON16(totlen - ETHER_HDR_LEN);
@@ -1780,7 +1766,7 @@ wlc_amsdu_can_agg(amsdu_txaggstate_t *amsdustate, void *p)
 	}
 
 	/* A-MSDUs carry only frames with the same TID */
-	if (amsdustate->amsdu_tid != PKTPRIO(p)) {
+	if (amsdustate->amsdu_tid != (uint)PKTPRIO(p)) {
 		WL_AMSDU(("%s:TID Passthrough\n", __FUNCTION__));
 		WLCNTINCR(cnt->agg_stop_tid);
 		return FALSE;
@@ -1905,8 +1891,8 @@ wlc_amsdu_agg_open(amsdu_txinfo_t *txinfo, scb_amsdu_t *scb_ami,
 	amsdustate->lastpkt_len = pkt_totlen;
 	amsdustate->hdr_headroom = txpolicy->packet_headroom;
 	amsdustate->callbackidx = pkttag->callbackidx;
-	amsdustate->ackRatioEnabled = txpolicy->ackRatioEnabled;
-	amsdustate->passthrough_flags = txpolicy->passthrough_flags;
+	amsdustate->ackRatioEnabled = txpolicy->tx_ackRatioEnabled;
+	amsdustate->passthrough_flags = txpolicy->tx_passthrough_flags;
 	amsdustate->amsdu_agg_sframes = 1;
 	amsdustate->aggbytes_hwm = txinfo->txsession.aggbytes_hwm;
 	amsdustate->amsdu_max_bytes = txpolicy->amsdu_max_agg_bytes;
@@ -2300,13 +2286,13 @@ amsdu_close_agg:
 	WLCNTADD(amsdustate.cnt->tx_padding_in_head, tx_padding_in_head);
 	WLCNTADD(amsdustate.cnt->tx_padding_in_tail, tx_padding_in_tail);
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	/* update statistics histograms */
 	amsdustate.ami->amdbg->tx_msdu_histogram[
 		MIN(amsdustate.amsdu_agg_sframes-1, MAX_TX_SUBFRAMES_LIMIT-1)]++;
 	amsdustate.ami->amdbg->tx_length_histogram[
 		MIN(amsdustate.amsdu_agg_bytes / AMSDU_LENGTH_BIN_BYTES, AMSDU_LENGTH_BINS-1)]++;
-#endif 
+#endif /* BCMDBG */
 
 	WL_AMSDU(("%s: valid AMSDU, add to txq %d bytes, scb %p\n",
 		__FUNCTION__, amsdustate.amsdu_agg_bytes, scb_ami->scb));
@@ -2574,13 +2560,13 @@ wlc_amsdu_agg_close(amsdu_info_t *ami, struct scb *scb, uint tid)
 	WLCNTINCR(ami->cnt->agg_amsdu);
 	WLCNTADD(ami->cnt->agg_msdu, aggstate->amsdu_agg_sframes);
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	/* update statistics histograms */
 	ami->amdbg->tx_msdu_histogram[MIN(aggstate->amsdu_agg_sframes-1,
 	                                  MAX_TX_SUBFRAMES_LIMIT-1)]++;
 	ami->amdbg->tx_length_histogram[MIN(amsdu_body_len / AMSDU_LENGTH_BIN_BYTES,
 	                                    AMSDU_LENGTH_BINS-1)]++;
-#endif 
+#endif /* BCMDBG */
 
 	aggstate->amsdu_agg_txpending++;
 
@@ -3094,6 +3080,9 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 
 	uint32 pktlen_w_plcp;           /* packet length starting at PLCP */
 	struct dot11_header *h;
+#ifdef BCMDBG
+	int msdu_cnt = -1;              /* just used for debug */
+#endif
 
 #if !defined(PKTC) && !defined(PKTC_DONGLE)
 	BCM_REFERENCE(chained_sendup);
@@ -3104,14 +3093,21 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 	ASSERT(padp != NULL);
 
 	if (RXS_SHORT_ENAB(ami->pub->corerev) &&
-	    (wrxh->rxhdr.lt80.dma_flags & RXS_SHORT_MASK)) {
+		((D11RXHDR_ACCESS_VAL(&wrxh->rxhdr, ami->pub->corerev, dma_flags)) &
+		RXS_SHORT_MASK)) {
 		mrxs = wlc_get_mrxs(wlc, &wrxh->rxhdr);
 		aggtype = (*mrxs & RXSS_AGGTYPE_MASK) >>
 			RXSS_AGGTYPE_SHIFT;
 		pad_present = ((*mrxs & RXSS_PBPRES) != 0);
+#ifdef BCMDBG
+		msdu_cnt = (*mrxs & RXSS_MSDU_CNT_MASK) >>
+			RXSS_MSDU_CNT_SHIFT;
+#endif  /* BCMDBG */
 	} else {
-		aggtype = (wrxh->rxhdr.lt80.RxStatus2 & RXS_AGGTYPE_MASK) >> RXS_AGGTYPE_SHIFT;
-		pad_present = ((wrxh->rxhdr.lt80.RxStatus1 & RXS_PBPRES) != 0);
+		aggtype = (((D11RXHDR_ACCESS_VAL(&wrxh->rxhdr, ami->pub->corerev,
+			RxStatus2)) & RXS_AGGTYPE_MASK) >> RXS_AGGTYPE_SHIFT);
+		pad_present = (((D11RXHDR_ACCESS_VAL(&wrxh->rxhdr, ami->pub->corerev,
+			RxStatus1)) & RXS_PBPRES) != 0);
 	}
 	if (pad_present) {
 		pad = 2;
@@ -3123,7 +3119,7 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 	/* Packet length w/o PLCP */
 	pktlen = pktlen_w_plcp - D11_PHY_HDR_LEN;
 
-	fifo = wrxh->rxhdr.lt80.fifo;
+	fifo = (D11RXHDR_ACCESS_VAL(&wrxh->rxhdr, ami->pub->corerev, fifo));
 	ASSERT((fifo < RX_FIFO_NUMBER));
 	deagg = &ami->amsdu_deagg[fifo];
 
@@ -3160,7 +3156,7 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 	case RXS_AMSDU_INTERMEDIATE:
 		/* PKTDATA starts with subframe header */
 		if (deagg->amsdu_deagg_state != WLC_AMSDU_DEAGG_FIRST) {
-			WL_ERROR(("%s: wrong A-MSDU deagg sequence, cur_state=%d\n",
+			WL_AMSDU_ERROR(("%s: wrong A-MSDU deagg sequence, cur_state=%d\n",
 				__FUNCTION__, deagg->amsdu_deagg_state));
 			WLCNTINCR(ami->cnt->deagg_wrongseq);
 			goto abort;
@@ -3177,7 +3173,7 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 #endif /* ASSERT */
 
 		if ((pktlen) <= ETHER_HDR_LEN) {
-			WL_ERROR(("%s: rxrunt\n", __FUNCTION__));
+			WL_AMSDU_ERROR(("%s: rxrunt\n", __FUNCTION__));
 			WLCNTINCR(ami->pub->_cnt->rxrunt);
 			goto abort;
 		}
@@ -3190,7 +3186,7 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 	case RXS_AMSDU_LAST:
 		/* PKTDATA starts with last subframe header */
 		if (deagg->amsdu_deagg_state != WLC_AMSDU_DEAGG_FIRST) {
-			WL_ERROR(("%s: wrong A-MSDU deagg sequence, cur_state=%d\n",
+			WL_AMSDU_ERROR(("%s: wrong A-MSDU deagg sequence, cur_state=%d\n",
 				__FUNCTION__, deagg->amsdu_deagg_state));
 			WLCNTINCR(ami->cnt->deagg_wrongseq);
 			goto abort;
@@ -3209,7 +3205,7 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 #endif /* ASSERT */
 
 		if ((pktlen) < (ETHER_HDR_LEN + DOT11_FCS_LEN)) {
-			WL_ERROR(("%s: rxrunt\n", __FUNCTION__));
+			WL_AMSDU_ERROR(("%s: rxrunt\n", __FUNCTION__));
 			WLCNTINCR(ami->pub->_cnt->rxrunt);
 			goto abort;
 		}
@@ -3284,13 +3280,15 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 			rxh = &frag_wrxh->rxhdr;
 
 			/* Check for short or long format */
-			if (rxh->lt80.dma_flags & RXS_SHORT_MASK) {
+			if ((D11RXHDR_ACCESS_VAL(rxh, ami->pub->corerev,
+				dma_flags)) & RXS_SHORT_MASK) {
 				/* short rx status received */
 				mrxs = wlc_get_mrxs(wlc, rxh);
 				pad_cnt = (*mrxs & RXSS_PBPRES) ? 2 : 0;
 			} else {
 				/* long rx status received */
-				pad_cnt = ((rxh->lt80.RxStatus1 & RXS_PBPRES) ? 2 : 0);
+				pad_cnt = (((D11RXHDR_ACCESS_VAL(rxh, ami->pub->corerev,
+					RxStatus1)) & RXS_PBPRES) ? 2 : 0);
 			}
 
 			plcp = (uchar *)(PKTDATA(ami->wlc->osh, pp) + ami->wlc->hwrxoff + pad_cnt);
@@ -3327,13 +3325,15 @@ wlc_recvamsdu(amsdu_info_t *ami, wlc_d11rxhdr_t *wrxh, void *p, uint16 *padp, bo
 				rxh = &frag_wrxh->rxhdr;
 
 				if (RXS_SHORT_ENAB(ami->pub->corerev) &&
-				    (rxh->lt80.dma_flags & RXS_SHORT_MASK)) {
+					((D11RXHDR_ACCESS_VAL(rxh,
+					ami->pub->corerev, dma_flags)) & RXS_SHORT_MASK)) {
 					/* short rx status received */
 					mrxs = wlc_get_mrxs(wlc, rxh);
 					pad_cnt = (*mrxs & RXSS_PBPRES) ? 2 : 0;
 				} else {
 					/* long rx status received */
-					pad_cnt = ((rxh->lt80.RxStatus1 & RXS_PBPRES) ? 2 : 0);
+					pad_cnt = (((D11RXHDR_ACCESS_VAL(rxh,
+					ami->pub->corerev, RxStatus1)) & RXS_PBPRES) ? 2 : 0);
 				}
 				PKTPULL(osh, np, ami->wlc->hwrxoff + pad_cnt);
 				np = PKTNEXT(osh, np);
@@ -3375,7 +3375,7 @@ wlc_amsdu_deagg_verify(amsdu_info_t *ami, uint16 fc, void *h)
 	if (qoscontrol & QOS_AMSDU_MASK)
 		return TRUE;
 
-	WL_ERROR(("%s fail: qos field 0x%x\n", __FUNCTION__, *pqos));
+	WL_AMSDU_ERROR(("%s fail: qos field 0x%x\n", __FUNCTION__, *pqos));
 	return FALSE;
 }
 
@@ -3568,17 +3568,17 @@ wlc_amsdu_deagg_hw(amsdu_info_t *ami, struct scb *scb, struct wlc_frminfo *f)
 
 	resid = f->totlen;
 	newpkt = f->p;
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	WLCNTINCR(ami->amdbg->rx_length_histogram[
 		MIN(PKTLEN(osh, f->p)/AMSDU_LENGTH_BIN_BYTES,
 		AMSDU_LENGTH_BINS-1)]);
-#endif 
+#endif /* BCMDBG */
 
 	/* break chained AMSDU into N independent MSDU */
 	while (newpkt != NULL) {
 		/* there must be a limit to stop in order to prevent memory/stack overflow */
 		if (num_sf >= MAX_RX_SUBFRAMES) {
-			WL_ERROR(("%s: more than %d MSDUs !\n", __FUNCTION__, num_sf));
+			WL_AMSDU_ERROR(("%s: more than %d MSDUs !\n", __FUNCTION__, num_sf));
 			break;
 		}
 
@@ -3597,7 +3597,7 @@ wlc_amsdu_deagg_hw(amsdu_info_t *ami, struct scb *scb, struct wlc_frminfo *f)
 		sflen = ntoh16(eh->ether_type) + ETHER_HDR_LEN;
 
 		if ((((uintptr)eh + (uint)ETHER_HDR_LEN) % 4)  != 0) {
-			WL_ERROR(("%s: sf body is not 4 bytes aligned!\n", __FUNCTION__));
+			WL_AMSDU_ERROR(("%s: sf body is not 4 bytes aligned!\n", __FUNCTION__));
 			WLCNTINCR(ami->cnt->deagg_badsfalign);
 			toss_reason = WLC_RX_STS_TOSS_DEAGG_UNALIGNED;
 			goto toss;
@@ -3605,7 +3605,7 @@ wlc_amsdu_deagg_hw(amsdu_info_t *ami, struct scb *scb, struct wlc_frminfo *f)
 
 		/* last MSDU: has FCS, but no pad, other MSDU: has pad, but no FCS */
 		if (len != (PKTNEXT(osh, newpkt) ? ROUNDUP(sflen, 4) : sflen)) {
-			WL_ERROR(("%s: len mismatch buflen %d sflen %d, sf %d\n",
+			WL_AMSDU_ERROR(("%s: len mismatch buflen %d sflen %d, sf %d\n",
 				__FUNCTION__, len, sflen, num_sf));
 			WLCNTINCR(ami->cnt->deagg_badsflen);
 			toss_reason = WLC_RX_STS_TOSS_BAD_DEAGG_SF_LEN;
@@ -3663,7 +3663,7 @@ skip_conv:
 
 	/* toss the remaining MSDU, which we couldn't handle */
 	if (newpkt != NULL) {
-		WL_ERROR(("%s: toss MSDUs > %d !\n", __FUNCTION__, num_sf));
+		WL_AMSDU_ERROR(("%s: toss MSDUs > %d !\n", __FUNCTION__, num_sf));
 		PKTFREE(osh, newpkt, FALSE);
 	}
 
@@ -3702,9 +3702,9 @@ skip_conv:
 	}
 
 	WL_AMSDU(("wlc_amsdu_deagg_hw: this A-MSDU has %d MSDU, done\n", num_sf));
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	WLCNTINCR(ami->amdbg->rx_msdu_histogram[MIN(num_sf, AMSDU_RX_SUBFRAMES_BINS-1)]);
-#endif 
+#endif /* BCMDBG */
 
 	return;
 
@@ -3721,9 +3721,9 @@ toss:
 	for (i = 0; i < num_sf; i++)
 		sf[i] = NULL;
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	WLCNTINCR(ami->amdbg->rx_msdu_histogram[0]);
-#endif 
+#endif /* BCMDBG */
 	WL_AMSDU(("%s: tossing amsdu in deagg -- error seen\n", __FUNCTION__));
 	PKTFREE(osh, f->p, FALSE);
 } /* wlc_amsdu_deagg_hw */
@@ -3768,7 +3768,7 @@ wlc_amsdu_pktc_deagg_hw(amsdu_info_t *ami, void **pp, wlc_rfc_t *rfc, uint16 *in
 	}
 
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	len = MIN(PKTLEN(osh, head)/AMSDU_LENGTH_BIN_BYTES, AMSDU_LENGTH_BINS-1);
 	WLCNTINCR(ami->amdbg->rx_length_histogram[len]);
 #endif
@@ -3781,7 +3781,7 @@ wlc_amsdu_pktc_deagg_hw(amsdu_info_t *ami, void **pp, wlc_rfc_t *rfc, uint16 *in
 
 		/* there must be a limit to stop in order to prevent memory/stack overflow */
 		if (num_sf >= MAX_RX_SUBFRAMES) {
-			WL_ERROR(("%s: more than %d MSDUs !\n", __FUNCTION__, num_sf));
+			WL_AMSDU_ERROR(("%s: more than %d MSDUs !\n", __FUNCTION__, num_sf));
 			break;
 		}
 
@@ -3794,12 +3794,15 @@ wlc_amsdu_pktc_deagg_hw(amsdu_info_t *ami, void **pp, wlc_rfc_t *rfc, uint16 *in
 			/* determine whether packet has 2-byte pad */
 			wrxh = (wlc_d11rxhdr_t*) PKTDATA(osh, newpkt);
 			if (RXS_SHORT_ENAB(wlc->pub->corerev) &&
-			    (wrxh->rxhdr.lt80.dma_flags & RXS_SHORT_MASK)) {
+				((D11RXHDR_ACCESS_VAL(&wrxh->rxhdr,
+				ami->pub->corerev, dma_flags)) & RXS_SHORT_MASK)) {
 				uint16 *mrxs;
 				mrxs = wlc_get_mrxs(wlc, &wrxh->rxhdr);
 				pad = ((*mrxs & RXSS_PBPRES) != 0) ? 2 : 0;
 			} else {
-				pad = ((wrxh->rxhdr.lt80.RxStatus1 & RXS_PBPRES) != 0) ? 2 : 0;
+				pad = (((D11RXHDR_ACCESS_VAL(&wrxh->rxhdr,
+					ami->pub->corerev, RxStatus1)) &
+					RXS_PBPRES) != 0) ? 2 : 0;
 			}
 			PKTPULL(wlc->osh, newpkt, wlc->hwrxoff + pad);
 			resid -= (wlc->hwrxoff + pad);
@@ -3819,14 +3822,14 @@ wlc_amsdu_pktc_deagg_hw(amsdu_info_t *ami, void **pp, wlc_rfc_t *rfc, uint16 *in
 		sflen = NTOH16(eh->ether_type) + ETHER_HDR_LEN;
 
 		if ((((uintptr)eh + (uint)ETHER_HDR_LEN) % 4) != 0) {
-			WL_ERROR(("%s: sf body is not 4b aligned!\n", __FUNCTION__));
+			WL_AMSDU_ERROR(("%s: sf body is not 4b aligned!\n", __FUNCTION__));
 			WLCNTINCR(ami->cnt->deagg_badsfalign);
 			goto toss;
 		}
 
 		/* last MSDU: has FCS, but no pad, other MSDU: has pad, but no FCS */
 		if (len != (PKTNEXT(osh, newpkt) ? ROUNDUP(sflen, 4) : sflen)) {
-			WL_ERROR(("%s: len mismatch buflen %d sflen %d, sf %d\n",
+			WL_AMSDU_ERROR(("%s: len mismatch buflen %d sflen %d, sf %d\n",
 				__FUNCTION__, len, sflen, num_sf));
 			WLCNTINCR(ami->cnt->deagg_badsflen);
 			goto toss;
@@ -3921,12 +3924,12 @@ skip_conv:
 
 	/* toss the remaining MSDU, which we couldn't handle */
 	if (newpkt != NULL) {
-		WL_ERROR(("%s: toss MSDUs > %d !\n", __FUNCTION__, num_sf));
+		WL_AMSDU_ERROR(("%s: toss MSDUs > %d !\n", __FUNCTION__, num_sf));
 		PKTFREE(osh, newpkt, FALSE);
 	}
 
 	WL_AMSDU(("%s: this A-MSDU has %d MSDUs, done\n", __FUNCTION__, num_sf));
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	WLCNTINCR(ami->amdbg->rx_msdu_histogram[MIN(num_sf, AMSDU_RX_SUBFRAMES_BINS-1)]);
 #endif
 
@@ -3959,7 +3962,7 @@ toss:
 		}
 	}
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_AMSDU)
 	WLCNTINCR(ami->amdbg->rx_msdu_histogram[0]);
 #endif
 	WL_AMSDU(("%s: tossing amsdu in deagg -- error seen\n", __FUNCTION__));
@@ -4037,7 +4040,7 @@ wlc_amsdu_deagg_sw(amsdu_info_t *ami, struct scb *scb, struct wlc_frminfo *f)
 		 *  up to 8K. HW deagg is the preferred way to handle large A-MSDU.
 		 */
 		if (sflen > ETHER_MAX_DATA + DOT11_LLC_SNAP_HDR_LEN + ETHER_HDR_LEN) {
-			WL_ERROR(("%s: unexpected long pkt, toss!", __FUNCTION__));
+			WL_AMSDU_ERROR(("%s: unexpected long pkt, toss!", __FUNCTION__));
 			WLCNTINCR(ami->cnt->deagg_swdeagglong);
 			goto done;
 		}
@@ -4096,7 +4099,7 @@ wlc_amsdu_deagg_sw(amsdu_info_t *ami, struct scb *scb, struct wlc_frminfo *f)
 
 		/* last MSDU doesn't have pad, may overcount */
 		if (resid < -4) {
-			WL_ERROR(("wl: %s: error: resid %d\n", __FUNCTION__, resid));
+			WL_AMSDU_ERROR(("wl: %s: error: resid %d\n", __FUNCTION__, resid));
 			break;
 		}
 	}
@@ -4108,7 +4111,7 @@ done:
 #endif /* WLAMSDU_SWDEAGG */
 
 
-#if defined(BCMDBG_AMSDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMSDU)
 static int
 wlc_amsdu_dump(void *ctx, struct bcmstrbuf *b)
 {
@@ -4308,7 +4311,7 @@ wlc_amsdu_dump_scb(void *ctx, struct scb *scb, struct bcmstrbuf *b)
 	}
 }
 #endif /* WLAMSDU_TX && !WLAMSDU_TX_DISABLED */
-#endif	
+#endif	/* BCMDBG || BCMDBG_DUMP || BCMDBG_AMSDU */
 
 #if defined(WL_DATAPATH_LOG_DUMP) && !defined(TXQ_MUX) && defined(WLAMSDU_TX) && \
 	!defined(WLAMSDU_TX_DISABLED)
@@ -4426,7 +4429,10 @@ wlc_amsdu_update_state(wlc_info_t *wlc)
 	}
 }
 
-#ifdef WL_TXQ_STALL
+/* Note: TXQ_MUX does not queue pkts for AMSDU, so there is only a tx healthcheck
+ * on AMSDU when !TXQ_MUX.
+ */
+#if defined(WL_TXQ_STALL) && !defined(TXQ_MUX)
 int
 wlc_amsdu_tx_health_check(wlc_info_t * wlc)
 {
@@ -4470,26 +4476,26 @@ wlc_amsdu_tx_health_check(wlc_info_t * wlc)
 			/* Fitst packet was queued before timeout seconds */
 			if ((wlc->pub->now - aggstate->timestamp) >=
 				tx_stall->timeout) {
-				snprintf(tx_stall->error.reason,
-					sizeof(tx_stall->error.reason) - 1,
+				snprintf(tx_stall->error->reason,
+					sizeof(tx_stall->error->reason) - 1,
 					"txq:amsdu,cfg:%s,scb:%s,prio:%d,qts:%d,now:%d",
 					(SCB_BSSCFG(scb) && SCB_BSSCFG(scb)->wlcif) ?
 						wl_ifname(wlc->wl,
 						SCB_BSSCFG(scb)->wlcif->wlif) : "",
 					bcm_ether_ntoa(&scb->ea, eabuf), prio,
 					aggstate->timestamp, wlc->pub->now);
-				tx_stall->error.reason[sizeof(tx_stall->error.reason) - 1] = '\0';
+				tx_stall->error->reason[sizeof(tx_stall->error->reason) - 1] = '\0';
 				WL_ERROR(("AMSDU_TXQ stall: %s\n",
-					tx_stall->error.reason));
+					tx_stall->error->reason));
 				if (tx_stall->assert_on_error) {
-					tx_stall->error.stall_reason =
+					tx_stall->error->stall_reason =
 						WLC_TX_STALL_REASON_TXQ_NO_PROGRESS;
 
 					wlc_bmac_report_fatal_errors(wlc->hw, WL_REINIT_TX_STALL);
 				} else {
 					WL_ERROR(("Possible AMSDU TXQ stall: %s\n",
-						tx_stall->error.reason));
-					wl_log_system_state(wlc->wl, tx_stall->error.reason, TRUE);
+						tx_stall->error->reason));
+					wl_log_system_state(wlc->wl, tx_stall->error->reason, TRUE);
 				}
 				return BCME_ERROR;
 			}

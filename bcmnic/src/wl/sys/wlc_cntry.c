@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_cntry.c 622828 2016-03-03 21:58:35Z $
+ * $Id: wlc_cntry.c 652038 2016-07-29 09:06:15Z $
  */
 
 
@@ -47,6 +47,7 @@
 #include <wlc_ie_reg.h>
 #include <wlc_dbg.h>
 #include <wlc_dump.h>
+#include <wlc_iocv.h>
 
 /* IOVar table */
 /* No ordering is imposed */
@@ -62,6 +63,9 @@ enum {
 static const bcm_iovar_t wlc_cntry_iovars[] = {
 	{"country", IOV_COUNTRY, (0), 0, IOVT_BUFFER, WLC_CNTRY_BUF_SZ},
 	{"country_abbrev_override", IOV_COUNTRY_ABBREV_OVERRIDE, (0), 0, IOVT_BUFFER, 0},
+#ifdef BCMDBG
+	{"country_ie_override", IOV_COUNTRY_IE_OVERRIDE, (0), 0, IOVT_BUFFER, 5},
+#endif /* BCMDBG */
 	{"country_rev", IOV_COUNTRY_REV, (0), 0, IOVT_BUFFER, (sizeof(uint32)*(WL_NUMCHANSPECS+1))},
 	{"ccode_info", IOV_CCODE_INFO, (0), 0, IOVT_BUFFER, WL_CCODE_INFO_FIXED_LEN},
 	{NULL, 0, 0, 0, 0, 0}
@@ -79,6 +83,9 @@ struct wlc_cntry_info {
 						 * when country ie has been created previously and
 						 * is still valid
 						 */
+#ifdef BCMDBG
+	bcm_tlv_t *country_ie_override;		/* debug override of announced Country IE */
+#endif
 };
 
 /* local functions */
@@ -88,6 +95,9 @@ int wlc_cntry_external_to_internal(char *buf, int buflen);
 #endif /* OPENSRC_IOV_IOCTL */
 static int wlc_cntry_doiovar(void *ctx, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
+#ifdef BCMDBG
+static int wlc_cntry_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* IE mgmt */
 #ifdef AP
@@ -153,6 +163,13 @@ BCMATTACHFN(wlc_cntry_attach)(wlc_info_t *wlc)
 	}
 #endif /* WLTDLS */
 
+#ifdef BCMDBG
+	if (wlc_dump_register(wlc->pub, "cntry", wlc_cntry_dump, cm) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif
 
 	/* keep the module registration the last other add module unregistratin
 	 * in the error handling code below...
@@ -180,6 +197,13 @@ BCMATTACHFN(wlc_cntry_detach)(wlc_cntry_info_t *cm)
 
 	wlc_module_unregister(wlc->pub, "cntry", cm);
 
+#ifdef BCMDBG
+	if (cm->country_ie_override != NULL) {
+		MFREE(wlc->osh, cm->country_ie_override,
+		      cm->country_ie_override->len + TLV_HDR_LEN);
+		cm->country_ie_override = NULL;
+	}
+#endif	/* BCMDBG */
 
 	MFREE(wlc->osh, cm, sizeof(wlc_cntry_info_t));
 }
@@ -203,10 +227,12 @@ wlc_cntry_external_to_internal(char *buf, int buflen)
 	} else if (!strncmp(buf, "RDR", sizeof("RDR") - 1)) {
 		strncpy(buf, "#r", buflen);
 	}
+#if !defined(BCMDBG)
 	/* Don't allow ALL or RDR in production. */
 	if ((!strncmp(buf, "#a", sizeof("#a") - 1)) || (!strncmp(buf, "#r", sizeof("#r") - 1))) {
 		err = BCME_BADARG;
 	}
+#endif 
 	return err;
 }
 #endif /* OPENSRC_IOV_IOCTL */
@@ -270,6 +296,7 @@ wlc_cntry_doiovar(void *ctx, uint32 actionid,
 		char country_abbrev_host[WLC_CNTRY_BUF_SZ];
 		char ccode[WLC_CNTRY_BUF_SZ];
 		int32 rev = -1;
+		chanspec_t chanspec = wlc->chanspec;
 		int idx;
 		wlc_bsscfg_t *cfg;
 
@@ -295,8 +322,9 @@ wlc_cntry_doiovar(void *ctx, uint32 actionid,
 							break;
 						}
 					}
-					if (!wlc_11d_compatible_country(wlc->m11d,
-						country_abbrev)) {
+					if (!wlc_valid_chanspec_cntry
+					(wlc->cmi, country_abbrev, wlc->home_chanspec) ||
+					!wlc_11d_compatible_country(wlc->m11d, country_abbrev)) {
 						if (WLC_LOCALE_PRIORITIZATION_2G_ENABLED(wlc) &&
 							WLC_AUTOCOUNTRY_ENAB(wlc)) {
 							strncpy(country_abbrev,
@@ -314,7 +342,15 @@ wlc_cntry_doiovar(void *ctx, uint32 actionid,
 				/* save default country for exiting 11d regulatory mode */
 				strncpy(cm->country_default,
 					country_abbrev_host, WLC_CNTRY_BUF_SZ - 1);
-				break;
+
+				if (WLC_LOCALE_PRIORITIZATION_2G_ENABLED(wlc) &&
+					WLC_AUTOCOUNTRY_ENAB(wlc)) {
+					break;
+				} else {
+					memcpy(country_abbrev,
+					wlc_11d_get_autocountry_default(wlc->m11d),
+					sizeof(country_abbrev));
+				}
 			}
 		}
 
@@ -340,6 +376,19 @@ wlc_cntry_doiovar(void *ctx, uint32 actionid,
 			err = wlc_set_countrycode_rev(wlc->cmi, ccode, rev);
 		if (err)
 			break;
+
+		/* When set country code, check the current chanspec.
+		 * If the current chanspec is invalid,
+		 * find the first valid chanspec and set it.
+		 */
+		if (!wlc_valid_chanspec_db(wlc->cmi, chanspec)) {
+			chanspec = wlc_next_chanspec(wlc->cmi, chanspec, CHAN_TYPE_ANY, TRUE);
+			if (chanspec != INVCHANSPEC) {
+				int chspec = chanspec;
+				err = wlc_iovar_op(wlc, "chanspec",
+					NULL, 0, &chspec, sizeof(int), IOV_SET, wlcif);
+			}
+		}
 
 		/* the country setting may have changed our radio state */
 		wlc_radio_upd(wlc);
@@ -392,6 +441,51 @@ wlc_cntry_doiovar(void *ctx, uint32 actionid,
 	}
 #endif /* OPENSRC_IOV_IOCTL */
 
+#ifdef BCMDBG
+	case IOV_GVAL(IOV_COUNTRY_IE_OVERRIDE): {
+		bcm_tlv_t *ie = (bcm_tlv_t*)arg;
+
+		if (cm->country_ie_override == NULL) {
+			ie->id = DOT11_MNG_COUNTRY_ID;
+			ie->len = 0;
+			break;
+		} else if ((int)len < (cm->country_ie_override->len + TLV_HDR_LEN)) {
+			err = BCME_BUFTOOSHORT;
+			break;
+		}
+
+		bcm_copy_tlv(cm->country_ie_override, (uint8 *)ie);
+		break;
+	}
+
+	case IOV_SVAL(IOV_COUNTRY_IE_OVERRIDE): {
+		bcm_tlv_t *ie = (bcm_tlv_t*)arg;
+
+		if (ie->id != DOT11_MNG_COUNTRY_ID || (int)len < (ie->len + TLV_HDR_LEN)) {
+			err = BCME_BADARG;
+			break;
+		}
+
+		/* free any existing override */
+		if (cm->country_ie_override != NULL) {
+			MFREE(wlc->osh, cm->country_ie_override,
+			      cm->country_ie_override->len + TLV_HDR_LEN);
+			cm->country_ie_override = NULL;
+		}
+
+		/* save a copy of the Country IE override */
+		cm->country_ie_override = MALLOC(wlc->osh, ie->len + TLV_HDR_LEN);
+		if (cm->country_ie_override == NULL) {
+			err = BCME_NORESOURCE;
+			break;
+		}
+
+		bcm_copy_tlv(ie, (uint8*)cm->country_ie_override);
+		wlc_update_beacon(wlc);
+		wlc_update_probe_resp(wlc, TRUE);
+		break;
+	}
+#endif /* BCMDBG */
 	case IOV_GVAL(IOV_CCODE_INFO): {
 		err = wlc_populate_ccode_info(wlc, arg, len);
 		break;
@@ -450,10 +544,16 @@ wlc_populate_ccode_info(wlc_info_t *wlc, void *arg, uint len)
 	for (band = 0, ce = &ci->ccodelist[0], count = 0; band < MAXBANDS; band ++) {
 		ce->band = band;
 		ce->role = WLC_CCODE_ROLE_ACTIVE;
-		if (band == BAND_2G_INDEX &&
+		if ((band == BAND_2G_INDEX &&
 			WLC_LOCALE_PRIORITIZATION_2G_ENABLED(wlc) &&
 			!WLC_CNTRY_DEFAULT_ENAB(wlc) &&
-			WLC_AUTOCOUNTRY_ENAB(wlc)) {
+			WLC_AUTOCOUNTRY_ENAB(wlc)) ||
+			/* If we are in an invalid channel of the host defined country,
+			 * accode should also be the default country.
+			 */
+			(WLC_CNTRY_DEFAULT_ENAB(wlc) &&
+			 !wlc_valid_chanspec_db(wlc->cmi, wlc->chanspec) &&
+			 CHSPEC_WLCBANDUNIT(wlc->chanspec) == band)) {
 			strncpy(ce->ccode,
 				wlc_11d_get_autocountry_default(wlc->m11d), sizeof(ccode_t));
 		} else {
@@ -484,7 +584,7 @@ wlc_populate_ccode_info(wlc_info_t *wlc, void *arg, uint len)
 			ce->role = WLC_CCODE_ROLE_80211D_SCAN;
 			ce ++; count ++;
 		}
-		if (WLC_AUTOCOUNTRY_ENAB(wlc)) {
+		if (WLC_AUTOCOUNTRY_ENAB(wlc) || WLC_CNTRY_DEFAULT_ENAB(wlc)) {
 			strncpy(ce->ccode,
 				wlc_11d_get_autocountry_default(wlc->m11d), sizeof(ccode_t));
 			ce->band = band;
@@ -495,6 +595,22 @@ wlc_populate_ccode_info(wlc_info_t *wlc, void *arg, uint len)
 	ci->count = count;
 	return BCME_OK;
 }
+#ifdef BCMDBG
+static int
+wlc_cntry_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_cntry_info_t *cm = (wlc_cntry_info_t *)ctx;
+
+	bcm_bprintf(b, "country_default:%s\n", cm->country_default);
+
+	if (cm->country_ie_override != NULL) {
+		wlc_print_ies(cm->wlc, (uint8 *)cm->country_ie_override,
+		              cm->country_ie_override->len + TLV_HDR_LEN);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG */
 
 #if defined(AP) || defined(WLTDLS)
 static uint8 *
@@ -618,6 +734,12 @@ wlc_cntry_write_country_ie(wlc_bsscfg_t *cfg, wlc_cntry_info_t *cm, uint8 *cp, i
 
 	if (!WLC_AUTOCOUNTRY_ENAB(wlc) ||
 	    wlc_11d_autocountry_adopted(wlc->m11d)) {
+#ifdef BCMDBG
+		/* Override country IE if is configured */
+		if (cm->country_ie_override != NULL)
+			cp = bcm_copy_tlv_safe(cm->country_ie_override, cp, buflen);
+		else
+#endif
 			cp = wlc_write_country_ie(wlc, cfg, cm, cp, buflen);
 	}
 

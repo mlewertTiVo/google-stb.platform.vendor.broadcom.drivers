@@ -9,10 +9,12 @@
 # or duplicated in any form, in whole or in part, without the prior
 # written permission of Broadcom.
 #
-# $Id: Makefile 512605 2014-11-04 06:19:03Z $
+# $Id: Makefile 660153 2016-09-19 07:48:57Z $
 #
 
-CFLAGS	+= -I.. -I$(SRCBASE)/include ${WLAN_StdIncPathA} -I$(SRCBASE)/../components/shared -I$(SRCBASE)/common/include -I$(SRCBASE_ROUTER)/shared -Wall -Werror
+include $(SRCBASE_ROUTER)/.config
+
+CFLAGS	+= -I.. -I$(SRCBASE_SYS)/include ${WLAN_StdIncPathA} -I$(SRCBASE_SYS)/../components/shared -I$(SRCBASE_SYS)/common/include -I$(SRCBASE_ROUTER)/shared -Wall -Werror
 CFLAGS	+= $(WLAN_ComponentIncPath)
 
 #CFLAGS	+= -g -DDEBUG
@@ -29,16 +31,22 @@ CFLAGS	+= -DBCMSUPPL
 # EAPD include path
 CFLAGS	+= -I$(SRCBASE_ROUTER)/eapd
 
+# NAS FBT include path
+CFLAGS	+= -I$(SRCBASE_ROUTER)/nas/nas_fbt
+
 LDFLAGS += -L$(TOP)/nvram -L$(INSTALLDIR)/nvram/usr/lib -lnvram
 LDFLAGS += -L$(TOP)/shared -L$(INSTALLDIR)/shared/usr/lib -lshared
 LDFLAGS += -L$(TOP)/libbcmcrypto -L$(INSTALLDIR)/libbcmcrypto/usr/lib -lbcmcrypto
 LDFLAGS += $(EXTRA_LDFLAGS)
 
-vpath %.c $(SRCBASE_ROUTER)/nas $(SRCBASE)/shared $(SRCBASE_ROUTER)/shared
+vpath %.c $(SRCBASE_ROUTER)/nas $(SRCBASE_ROUTER)/nas/nas_fbt $(SRCBASE_SYS)/shared $(SRCBASE_ROUTER)/shared
 
 # build target
 NASOBJS = mppe.o wpa.o nas.o nas_linux.o nas_wl.o nas_wksp.o
 NASOBJS += nas_radius.o nas_wksp_radius.o
+ifeq ($(CONFIG_FBT),y)
+NASOBJS += wpa_common.o wpa_auth_ft.o eloop.o l2_packet.o
+endif
 UTLOBJS = bcmwpa.o bcmutils.o
 
 all: nas

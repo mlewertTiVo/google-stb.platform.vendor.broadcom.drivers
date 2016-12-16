@@ -12,7 +12,7 @@
  *
  *   <<Broadcom-WL-IPTag/Proprietary:>>
  *
- *   $Id: wlc_pm.h 625868 2016-03-18 01:10:34Z $
+ *   $Id: wlc_pm.h 668637 2016-11-04 08:47:37Z $
  */
 
 /** Twiki: [WlDriverPowerSave] */
@@ -192,6 +192,13 @@ struct wlc_pm_st {
 						 * DFRTS pkts/bytes threshold for using
 						 * the high FRTS timeout.
 						 */
+	uint32	tim_bits_in_last_bcn;	/* total number of TIM bit set in last received beacon */
+	uint8 PM_oldvalue;	/* Save the old PM mode value, and re-assign this value to
+				 * PM mode if STA moved from Radar to non-Radar channel
+				 */
+	uint8 PMmodeChangeDisabled;	/* Flag to handle allowing pm mode value change by user in
+					 * DFS/non-DFS channels
+					 */
 };
 
 /* attach/detach interface */

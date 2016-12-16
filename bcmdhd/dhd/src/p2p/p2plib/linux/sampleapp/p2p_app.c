@@ -3081,6 +3081,10 @@ static BCMP2P_STATUS p2papp_update_conn_complete(BCMP2P_NOTIFICATION_CODE notifi
 			case BCMP2P_NOTIF_GROUP_OWNER_NEGOTIATION_INFO_UNAVAIL:
 				status = BCMP2P_GON_FAILED_INFO_UNAVAIL;
 				break;
+			case BCMP2P_NOTIF_P2P_INVITE_RSP:
+				p2papp_enable_persistent = FALSE;
+				status = BCMP2P_SUCCESS;
+				break;
 			default:
 				status = BCMP2P_ERROR;
 				break;

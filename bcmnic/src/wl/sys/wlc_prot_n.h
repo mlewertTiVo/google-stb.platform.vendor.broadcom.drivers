@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_prot_n.h 545867 2015-04-01 22:45:19Z $
+ * $Id: wlc_prot_n.h 665208 2016-10-16 23:44:23Z $
  */
 
 
@@ -123,12 +123,6 @@ wlc_prot_n_preamble(wlc_info_t *wlc, struct scb *scb)
 		if (preamble_type == WLC_GF_PREAMBLE) {
 			if (!(scb->flags & SCB_BRCM))
 				preamble_type = WLC_MM_PREAMBLE;
-		}
-	}
-
-	if (CHIPID(chip) == BCM4313_CHIP_ID) {
-		if (preamble_type == WLC_GF_PREAMBLE) {
-			preamble_type = WLC_MM_PREAMBLE;
 		}
 	}
 

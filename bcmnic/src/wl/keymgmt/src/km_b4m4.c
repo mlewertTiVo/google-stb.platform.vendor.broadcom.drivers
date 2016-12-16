@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_b4m4.c 619609 2016-02-17 13:46:00Z $
+ * $Id: km_b4m4.c 654771 2016-08-16 13:04:43Z $
  */
 
 #include "km_pvt.h"
@@ -211,7 +211,7 @@ km_b4m4_notify(keymgmt_t *km, wlc_keymgmt_notif_t notif,
 	case WLC_KEYMGMT_NOTIF_M4_TX:
 		err = wlc_pcb_fn_register(KM_PCB(km), km_b4m4_m4cb, bsscfg, pkt);
 		if (err != BCME_OK) {
-			KM_ERR(("wl%d: %s: error %d registering packet callback\n",
+			KM_REGST_ERR(("wl%d: %s: error %d registering packet callback\n",
 				KM_UNIT(km), __FUNCTION__, err));
 			km_b4m4_m4cb(km->wlc, TX_STATUS_ACK_RCV, bsscfg);
 		}

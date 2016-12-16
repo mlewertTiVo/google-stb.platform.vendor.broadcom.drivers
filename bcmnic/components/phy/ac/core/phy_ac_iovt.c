@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_iovt.c 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_ac_iovt.c 647115 2016-07-04 01:33:05Z $
  */
 
 #include <typedefs.h>
@@ -23,6 +23,7 @@
 #include <phy_ac_misc_iov.h>
 #include <phy_ac_radio_iov.h>
 #include <phy_ac_rssi_iov.h>
+#include <phy_ac_rxgcrs_iov.h>
 #include <phy_ac_tbl_iov.h>
 #include <phy_ac_tpc_iov.h>
 #include "phy_type_ac.h"
@@ -57,6 +58,12 @@ BCMATTACHFN(phy_ac_register_iovt)(phy_info_t *pi, phy_type_info_t *ti, wlc_iocv_
 	/* Register RSSICompute module ACPHY iovar table/handlers */
 	if ((err = phy_ac_rssi_register_iovt(pi, ii)) != BCME_OK) {
 		PHY_ERROR(("%s: phy_ac_rssi_register_iovt failed\n", __FUNCTION__));
+		goto fail;
+	}
+
+	/* Register Rx Gain Control and Carrier Sense module ACPHY iovar table/handlers */
+	if ((err = phy_ac_rxgcrs_register_iovt(pi, ii)) != BCME_OK) {
+		PHY_ERROR(("%s: phy_ac_rxgcrs_register_iovt failed\n", __FUNCTION__));
 		goto fail;
 	}
 

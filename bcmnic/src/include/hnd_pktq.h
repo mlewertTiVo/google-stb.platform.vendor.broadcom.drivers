@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hnd_pktq.h 643007 2016-06-11 06:06:24Z $
+ * $Id: hnd_pktq.h 654730 2016-08-16 09:04:55Z $
  */
 
 #ifndef _hnd_pktq_h_
@@ -212,10 +212,6 @@ extern bool pktqprec_full(struct pktq *pq, int prec);
 #define pktqprec_full(pq, prec)	((pq)->q[prec].n_pkts >= (pq)->q[prec].max_pkts)
 #endif	/* HND_PKTQ_THREAD_SAFE */
 
-#ifdef WLCXO_DATA
-extern void *cxo_data_spktq_enq(struct spktq *spq, void *p);
-extern void *cxo_data_spktq_deq(struct spktq *spq);
-#else /* WLCXO_DATA */
 extern void  pktq_append(struct pktq *pq, int prec, struct spktq *list);
 extern void  spktq_append(struct spktq *spq, struct spktq *list);
 extern void  pktq_prepend(struct pktq *pq, int prec, struct spktq *list);
@@ -234,7 +230,6 @@ extern void *spktq_enq(struct spktq *spq, void *p);
 extern void *spktq_enq_head(struct spktq *spq, void *p);
 extern void *spktq_deq(struct spktq *spq);
 extern void *spktq_deq_tail(struct spktq *spq);
-#endif /* WLCXO_DATA */
 
 /* operations on a set of precedences in packet queue */
 
@@ -265,10 +260,6 @@ extern bool spktq_full(struct spktq *spq);
 #endif	/* HND_PKTQ_THREAD_SAFE */
 
 /* operations for single precedence queues */
-#ifdef WLCXO_DATA
-#define spktenq(pq, p)		cxo_data_spktq_enq((pq), (p))
-#define spktdeq(pq)		cxo_data_spktq_deq((pq))
-#else /* WLCXO_DATA */
 #define pktenq(pq, p)		pktq_penq((pq), 0, (p))
 #define pktenq_head(pq, p)	pktq_penq_head((pq), 0, (p))
 #define pktdeq(pq)		pktq_pdeq((pq), 0)
@@ -293,7 +284,6 @@ extern bool spktq_full(struct spktq *spq);
 #define spktqfull(spq)			spktq_full((spq))
 #define spktqfilter(spq, fltr, fltr_ctx, defer, defer_ctx, flush, flush_ctx) \
 	spktq_filter((spq), (fltr), (fltr_ctx), (defer), (defer_ctx), (flush), (flush_ctx))
-#endif /* WLCXO_DATA */
 
 extern bool pktq_init(struct pktq *pq, int num_prec, int max_pkts);
 extern bool pktq_deinit(struct pktq *pq);

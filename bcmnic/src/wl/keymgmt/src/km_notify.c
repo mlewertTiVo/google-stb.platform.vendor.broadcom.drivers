@@ -10,7 +10,7 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_notify.c 616104 2016-01-29 18:26:03Z $
+ * $Id: km_notify.c 662881 2016-10-01 01:27:36Z $
  */
 
 #include "km_pvt.h"
@@ -244,8 +244,10 @@ km_handle_key_update(keymgmt_t *km, wlc_key_t *key, wlc_key_info_t *key_info)
 		bsscfg->wsec_portopen = TRUE;
 		if ((key_info->algo & SEC_ALGO_KEY_EXCH) && (km->wlc->cfg == bsscfg)) {
 #ifdef WL_PWRSTATS
-			if (bsscfg->assoc->state == AS_IDLE)
-				wlc_connect_time_upd(km->wlc);
+			if (PWRSTATS_ENAB(km->wlc->pub)) {
+				if (bsscfg->assoc->state == AS_IDLE)
+					wlc_connect_time_upd(km->wlc);
+			}
 #endif /* WL_PWRSTATS */
 #ifdef WLWNM
 			/* Check DMS req for primary infra STA */
@@ -594,7 +596,7 @@ km_notify(keymgmt_t *km, wlc_keymgmt_notif_t notif,
 	}
 
 	KM_LOG(("wl%d.%d: %s: notification %d - %s for key idx 0x%04x addr %s\n",
-		KM_UNIT(km), ((bsscfg != NULL) ? WLC_BSSCFG_IDX(bsscfg) : 0),
+		KM_UNIT(km), WLC_BSSCFG_IDX(bsscfg),
 		__FUNCTION__, notif, wlc_keymgmt_notif_name(notif), key_info.key_idx,
 		bcm_ether_ntoa(&key_info.addr, eabuf)));
 }
@@ -617,7 +619,7 @@ wlc_keymgmt_notify(keymgmt_t *km, wlc_keymgmt_notif_t notif,
 
 	if (KM_NOTIIF_IS_INTERNAL(notif)) {
 		KM_LOG(("wl%d.%d: %s: external notification %d - %s not allowed.\n",
-			KM_UNIT(km), ((bsscfg != NULL) ? WLC_BSSCFG_IDX(bsscfg) : 0),
+			KM_UNIT(km), WLC_BSSCFG_IDX(bsscfg),
 			__FUNCTION__, notif, wlc_keymgmt_notif_name(notif)));
 	} else {
 		km_notify(km, notif, bsscfg, scb, key, pkt);

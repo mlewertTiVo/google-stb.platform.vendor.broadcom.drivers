@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ap.h 636823 2016-05-10 21:38:16Z $
+ * $Id: wlc_ap.h 663543 2016-10-05 21:41:16Z $
  */
 #ifndef _WLC_AP_H_
 #define _WLC_AP_H_
@@ -128,21 +128,12 @@ extern bool wlc_radio_pwrsave_bcm_cancelled(const wlc_ap_info_t *ap);
 extern void wlc_bss_up(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg);
 
 extern uint8 wlc_ap_count(wlc_ap_info_t *ap, bool include_p2p);
+extern bool wlc_ap_on_chan(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg);
+
 
 extern int wlc_ap_sendauth(wlc_ap_info_t *ap, wlc_bsscfg_t *bsscfg,
 	struct scb *scb, int auth_alg, int auth_seq, int status,
 	uint8 *challenge_text, bool short_preamble, bool send_auth);
-
-#if defined(TXQ_MUX)
-extern bool wlc_bcmc_enqueue(wlc_info_t *wlc, wlc_bsscfg_t *cfg, void *pkt, uint prec);
-extern void wlc_bcmc_global_start_mux_sources(wlc_info_t *wlc);
-extern void wlc_bcmc_global_stop_mux_sources(wlc_info_t *wlc);
-extern void wlc_bcmc_set_powersave(wlc_bsscfg_t *cfg, bool ps_enable);
-
-#define WLC_BCMC_PSON(cfg) wlc_bcmc_set_powersave((cfg), TRUE)
-#define WLC_BCMC_PSOFF(cfg) wlc_bcmc_set_powersave((cfg), FALSE)
-#define WLC_BSS_DATA_FC_ON(cfg) ((cfg)->wlc->block_datafifo != 0)
-#endif /* TXQ_MUX */
 
 struct scb *wlc_ap_get_psta_prim(wlc_ap_info_t *ap, struct scb *scb);
 extern void wlc_ap_channel_switch(wlc_ap_info_t *ap, wlc_bsscfg_t *cfg);
@@ -173,6 +164,7 @@ bool wlc_apup_allowed(wlc_info_t *wlc);
 #define wlc_ap_get_psta_prim(a, b) NULL
 #define wlc_ap_channel_switch(a, b) do {} while (0)
 #define wlc_ap_count(a, b)	FALSE
+#define wlc_ap_on_chan(a, b)	FALSE
 #endif /* AP */
 
 #if defined(AP) && defined(STA)

@@ -10,11 +10,14 @@
  *
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
- * $Id: km_key.c 645630 2016-06-24 23:27:55Z $
+ * $Id: km_key.c 663980 2016-10-07 19:14:26Z $
  */
 
 #include "km_key_pvt.h"
 #include <wlc_txc.h>
+#ifdef BCM_SFD
+#include <wlc_sfd.h>
+#endif
 
 /* internal interface */
 
@@ -63,6 +66,21 @@ key_find_algo_entry(key_algo_t algo)
 	return NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+km_key_info_dump(wlc_key_t *key, key_info_t *key_info, struct bcmstrbuf *b)
+{
+	char eabuf[ETHER_ADDR_STR_LEN];
+	bcm_bprintf(b, "\tidx: %03d id: %01d hw idx %02d\n", key_info->key_idx,
+		key_info->key_id, key->hw_idx);
+	bcm_bprintf(b, "\talgo: %d (%s) hw algo: %d\n", key_info->algo,
+		wlc_keymgmt_get_algo_name(KEY_KM(key), key_info->algo), key_info->hw_algo);
+	bcm_bprintf(b, "\taddr: %s\n", bcm_ether_ntoa(&key_info->addr, eabuf));
+	bcm_bprintf(b, "\tflags: 0x%08x\n", key_info->flags);
+	bcm_bprintf(b, "\tlen: key %d, iv %d icv %d\n", key_info->key_len,
+		key_info->iv_len, key_info->icv_len);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 enum km_key_pkt_type {
 	KM_KEY_PKT_DOT11 = 0,
@@ -83,10 +101,29 @@ km_key_update_txd(wlc_key_t *key, void *pkt,
 
 	KM_DBG_ASSERT(txd != NULL);
 	if (KEY_USE_AC_TXD(key)) {
-		d11actxh_t *ac_txh = (d11actxh_t *)&txd->txd;
-		d11actxh_cache_t	*cache_info;
+		d11txh_cache_common_t *cache_info;
 
-		cache_info = WLC_TXD_CACHE_INFO_GET(ac_txh, KEY_PUB(key)->corerev);
+#ifdef WL11AX
+		if (D11REV_GE(KEY_PUB(key)->corerev, 80)) {
+			d11txh_rev80_t *rev80_txh = &txd->rev80_txd;
+			cache_info = &rev80_txh->CacheInfo.common;
+		} else
+#endif
+		{
+			d11actxh_t *ac_txh = (d11actxh_t *)&txd->txd;
+			d11actxh_cache_t *d11ac_cache_info;
+#ifdef BCM_SFD
+			if (SFD_ENAB(key->wlc->pub) && PKTISSFDFRAME(key->wlc->osh, pkt)) {
+				d11ac_cache_info = wlc_sfd_get_cache_info(key->wlc->sfd, ac_txh);
+			} else
+#endif
+			{
+				d11ac_cache_info =
+				        WLC_TXD_CACHE_INFO_GET(ac_txh, KEY_PUB(key)->corerev);
+			}
+			cache_info = &d11ac_cache_info->common;
+		}
+
 		cache_info->BssIdEncAlg |= key->info.hw_algo << D11AC_ENCRYPT_ALG_SHIFT;
 		cache_info->KeyIdx = (uint8)KM_KEY_HW_IDX_TO_SLOT(key, key->hw_idx);
 	} else {
@@ -129,8 +166,10 @@ km_key_create(keymgmt_t *km, const key_info_t *key_info, wlc_key_t **out_key)
 	key->info = *key_info;
 
 	key->info.flags |= WLC_KEY_FLAG_VALID;
-	if (KEY_COREREV_GE40(key))
+	if (KEY_COREREV_GE40(key) && KEY_COREREV_LT80(key))
 		key->info.flags |= WLC_KEY_FLAG_USE_AC_TXD;
+	else if (KEY_COREREV_GE80(key))
+		key->info.flags |= WLC_KEY_FLAG_USE_REV80_TXD;
 
 	key->hw_idx = WLC_KEY_INDEX_INVALID;
 
@@ -183,6 +222,25 @@ km_key_destroy(wlc_key_t **in_key)
 	return BCME_OK;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void
+km_key_dump(wlc_key_t *key, struct bcmstrbuf *b)
+{
+	int err;
+	KM_DBG_ASSERT(KEY_VALID(key));
+
+	bcm_bprintf(b, "begin key@%p dump:\n", key);
+	bcm_bprintf(b, "\twlc: %p\n", KEY_WLC(key));
+	km_key_info_dump(key, &key->info, b);
+	bcm_bprintf(b, "\texp: %d\n", key->exp);
+	KEY_ALGO_CB(err, key->algo_impl.cb->dump, (key, b));
+	if (err != BCME_OK && err != BCME_UNSUPPORTED) {
+		KEY_LOG(("wl%d: %s: error %d dumping key@%p algo impl\n",
+			KEY_WLUNIT(key), __FUNCTION__, err, key));
+	}
+	bcm_bprintf(b, "end key@%p dump:\n", key);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 void
 wlc_key_get_info(const wlc_key_t *key, key_info_t *key_info)
@@ -202,7 +260,7 @@ wlc_key_get_info(const wlc_key_t *key, key_info_t *key_info)
 /* get pkt info and ptr to body */
 static uint8*
 km_key_dot11_pkt_get_body(struct dot11_header *hdr, int pkt_len,
-	const d11rxhdr_t *rxh, key_pkt_info_t *pkt_info)
+	const d11rxhdr_t *rxh, key_pkt_info_t *pkt_info,  d11_info_t *d11_info)
 {
 	int body_off;
 	uint16 fc;
@@ -217,7 +275,7 @@ km_key_dot11_pkt_get_body(struct dot11_header *hdr, int pkt_len,
 		body_off += DOT11_QOS_LEN;
 	}
 
-	if (KM_KEY_PKT_DOT11_HTC_PRESENT(rxh, fc)) {
+	if (KM_KEY_PKT_DOT11_HTC_PRESENT(d11_info->revid, rxh, fc)) {
 		body_off += DOT11_HTC_LEN;
 		pkt_info->flags |= KEY_PKT_HTC_PRESENT;
 	}
@@ -250,6 +308,20 @@ int wlc_key_prep_tx_mpdu(wlc_key_t *key, void *pkt, wlc_txd_t *txd)
 		err = (key->info.algo == CRYPTO_ALGO_OFF) ? BCME_OK : BCME_NOTENABLED;
 		goto done;
 	}
+#if defined(BCMDBG)
+	else if (key->info.flags & (WLC_KEY_FLAG_GROUP | WLC_KEY_FLAG_MGMT_GROUP)) {
+		scb_t *scb = WLPKTTAGSCBGET(pkt);
+		KM_DBG_ASSERT(scb != NULL);
+		if (scb != NULL) {
+			wlc_bsscfg_t *bsscfg = SCB_BSSCFG(scb);
+			BCM_REFERENCE(bsscfg);
+			KM_DBG_ASSERT(bsscfg != NULL);
+			KM_DBG_ASSERT(BSSCFG_AP(bsscfg) || KM_BSSCFG_IS_IBSS(bsscfg) ||
+				(key->info.algo == CRYPTO_ALGO_WEP1) ||
+				(key->info.algo == CRYPTO_ALGO_WEP128));
+		}
+	}
+#endif /* BCMDBG */
 
 	/* Map remaining unmapped pkt contents to cover the cases where
 	 * we receive hw decrypted frame and have to send it using sw encr
@@ -261,8 +333,8 @@ int wlc_key_prep_tx_mpdu(wlc_key_t *key, void *pkt, wlc_txd_t *txd)
 	/* debug: dump pkt */
 	KEY_LOG_DUMP_PKT(__FUNCTION__, key, pkt);
 
-	body = km_key_dot11_pkt_get_body(hdr, KEY_PKT_LEN(key, pkt),
-		NULL /* no rxh */, &pkt_info);
+	body = km_key_dot11_pkt_get_body(hdr, KEY_PKT_LEN(key, pkt), NULL /* no rxh */,
+		&pkt_info, key->wlc->d11_info);
 	body_len = pkt_info.body_len;
 
 	fc  = pkt_info.fc;
@@ -298,6 +370,15 @@ int wlc_key_prep_tx_mpdu(wlc_key_t *key, void *pkt, wlc_txd_t *txd)
 	if (err != BCME_OK)
 		goto done;
 
+#if defined(BCMDBG)
+	/* ICV error generation support */
+	if (key->info.flags & WLC_KEY_FLAG_GEN_ICV_ERR) {
+		if (FC_TYPE(fc) != FC_TYPE_MNG || !ETHER_ISMULTI(&hdr->a1)) {
+			key->info.flags &= ~WLC_KEY_FLAG_GEN_ICV_ERR;
+			body[body_len] = ~body[body_len];
+		}
+	}
+#endif /* BCMDBG */
 
 	/* update pkt len except for mc mgmt frames unless linux crypto or hw enc
 	 * if hw enc, update txd(txh) - hw/algo, key idx.
@@ -373,20 +454,24 @@ wlc_key_rx_mpdu(wlc_key_t *key, void *pkt, d11rxhdr_t *rxh)
 	bool hwdec = TRUE;
 	int err = BCME_OK;
 	key_pkt_info_t pkt_info;
+	uint16 *RxStatus1;
 
 
 	KM_DBG_ASSERT(KEY_VALID(key) && rxh != NULL);
 
+	RxStatus1 = D11RXHDR_ACCESS_REF(rxh, KEY_PUB(key)->corerev, RxStatus1);
+
 	KEY_LOG(("wl%d: %s: enter pkt@%p rxs %04x DECATMPT %d DECERR %d\n",
-		KEY_WLUNIT(key), __FUNCTION__, pkt, rxh->lt80.RxStatus1,
-		((rxh->lt80.RxStatus1 & RXS_DECATMPT) ? 1 : 0),
-		((rxh->lt80.RxStatus1 & RXS_DECERR) ? 1 : 0)));
+		KEY_WLUNIT(key), __FUNCTION__, pkt,
+		*RxStatus1, ((*RxStatus1 & RXS_DECATMPT) ? 1 : 0),
+		((*RxStatus1 & RXS_DECERR) ? 1 : 0)));
 
 	hdr = KEY_MPDU_HDR(key, pkt);
 
 	KEY_LOG_DUMP_PKT(__FUNCTION__, key, pkt);
 
-	body = km_key_dot11_pkt_get_body(hdr,  KEY_PKT_LEN(key, pkt), rxh, &pkt_info);
+	body = km_key_dot11_pkt_get_body(hdr, KEY_PKT_LEN(key, pkt), rxh, &pkt_info,
+		key->wlc->d11_info);
 	body_len = pkt_info.body_len;
 
 	fc  = pkt_info.fc;
@@ -415,14 +500,19 @@ wlc_key_rx_mpdu(wlc_key_t *key, void *pkt, d11rxhdr_t *rxh)
 
 	/* handle h/w decrypted */
 
+#ifdef BCMDBG
+	/* mfp currently done in s/w */
+	if (WLPKTFLAG_PMF(WLPKTTAG(pkt)))
+		KM_DBG_ASSERT(!(*RxStatus1 & RXS_DECATMPT));
+#endif /* BCMDBG */
 
-	if ((FC_TYPE(fc) == FC_TYPE_MNG) && (rxh->lt80.RxStatus1 & RXS_DECATMPT) &&
+	if ((FC_TYPE(fc) == FC_TYPE_MNG) && (*RxStatus1 & RXS_DECATMPT) &&
 		((fc & FC_KIND_MASK) == FC_AUTH) &&
 		KM_WEP_ALGO(key->info.algo) && !WLC_KEY_IS_DEFAULT_BSS(&key->info)) {
 		err = km_key_wep_rx_defkey_fixup(key, body, body_len);
 		if (err != BCME_OK)
 			goto done;
-		rxh->lt80.RxStatus1 &= ~(RXS_DECATMPT | RXS_DECERR);
+		*RxStatus1 &= ~(RXS_DECATMPT | RXS_DECERR);
 	}
 
 	/* algorithm specific processing */
@@ -434,8 +524,7 @@ wlc_key_rx_mpdu(wlc_key_t *key, void *pkt, d11rxhdr_t *rxh)
 				key->info.key_idx, WLPKTTAG(pkt)->flags));
 			err = BCME_UNSUPPORTED;
 		}
-
-	} else if (rxh->lt80.RxStatus1 & RXS_DECERR) {
+	} else if (*RxStatus1 &	RXS_DECERR) {
 		err = BCME_DECERR;
 	}
 
@@ -468,11 +557,11 @@ wlc_key_rx_mpdu(wlc_key_t *key, void *pkt, d11rxhdr_t *rxh)
 		if (ETHER_ISMULTI(&hdr->a1))
 			WLCNTINCR(KEY_CNT(key)->wepundec_mcst);
 	} else {
-		rxh->lt80.RxStatus1 |= RXS_DECATMPT; /* attempted h/w or s/w */
+		*RxStatus1 |= RXS_DECATMPT; /* attempted h/w or s/w */
 		if (!hwdec)
 			KEY_WLCNINC(key, swdecrypt);
 		if (err == BCME_DECERR || err == BCME_MICERR)
-			rxh->lt80.RxStatus1 |= RXS_DECERR;
+			*RxStatus1 |= RXS_DECERR;
 	}
 
 	/* strip off icv */
@@ -546,9 +635,9 @@ done:
 	}
 
 	KEY_LOG(("wl%d: %s: exit status %d rxs %04x DECATMPT %d DECERR %d wep %d\n",
-		KEY_WLUNIT(key), __FUNCTION__, err, rxh->lt80.RxStatus1,
-		((rxh->lt80.RxStatus1 & RXS_DECATMPT) ? 1 : 0),
-		((rxh->lt80.RxStatus1 & RXS_DECERR) ? 1 : 0),
+		KEY_WLUNIT(key), __FUNCTION__, err, *RxStatus1,
+		((*RxStatus1 & RXS_DECATMPT) ? 1 : 0),
+		((*RxStatus1 & RXS_DECERR) ? 1 : 0),
 		((fc & FC_WEP) ? 1 : 0)));
 	return err;
 }
@@ -562,11 +651,16 @@ wlc_key_rx_msdu(wlc_key_t *key, void *pkt, d11rxhdr_t *rxh)
 	int body_len = 0;
 	key_pkt_info_t pkt_info;
 	bool hwdec;
+	uint16 RxStatus2;
 
 	KM_ASSERT(KEY_VALID(key));
 
+	RxStatus2 = D11RXHDR_ACCESS_VAL(rxh, KEY_PUB(key)->corerev, RxStatus2);
+
 	KEY_LOG(("wl%d: %s: enter pkt@%p rxs status1 0x%04x  status2 0x%04x\n",
-		KEY_WLUNIT(key), __FUNCTION__, pkt, rxh->lt80.RxStatus1, rxh->lt80.RxStatus2));
+		KEY_WLUNIT(key), __FUNCTION__, pkt,
+		D11RXHDR_ACCESS_VAL(rxh, KEY_PUB(key)->corerev, RxStatus1),
+		RxStatus2));
 
 	/* check if the key is valid for rx */
 	if (!KEY_RX_ENABLED(key)) {
@@ -583,8 +677,8 @@ wlc_key_rx_msdu(wlc_key_t *key, void *pkt, d11rxhdr_t *rxh)
 
 	/* algorithm specific processing */
 	hwdec = WLC_KEY_MIC_IN_HW(&key->info) && key->info.algo == CRYPTO_ALGO_TKIP &&
-		(rxh->lt80.RxStatus2 & RXS_TKMICATMPT);
-	if (hwdec && (rxh->lt80.RxStatus2 & RXS_TKMICERR))
+		(RxStatus2 & RXS_TKMICATMPT);
+	if (hwdec && (RxStatus2 & RXS_TKMICERR))
 		pkt_info.status = BCME_MICERR;
 	else
 		pkt_info.status = BCME_OK;
@@ -597,6 +691,11 @@ wlc_key_rx_msdu(wlc_key_t *key, void *pkt, d11rxhdr_t *rxh)
 			WLCNTINCR(KEY_CNT(key)->decsuccess_mcst);
 	}
 
+#if defined(BCMDBG)
+	if (err != BCME_UNSUPPORTED) {
+		KEY_LOG_DUMP_PKT(__FUNCTION__, key, pkt);
+	}
+#endif
 
 done:
 	/* check error and notify keymgmt */
@@ -873,7 +972,7 @@ wlc_key_pn_to_seq(uint8 *seq, size_t seq_size, uint16 lo, uint32 hi)
 	return seq_len;
 }
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLMSG_WSEC)
 const char*
 wlc_key_get_data_type_name(wlc_key_data_type_t data_type)
 {
@@ -892,7 +991,7 @@ wlc_key_get_data_type_name(wlc_key_data_type_t data_type)
 	}
 	return name;
 }
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || WLMSG_WSEC */
 
 
 bool

@@ -66,6 +66,7 @@ LOCAL_SRC_FILES := \
    ./src/wl/exe/wluc_msch.c \
    ./src/wl/exe/wluc_he.c \
    ./src/wl/exe/wlu_avail_utils.c \
+   ./src/wl/exe/wlu_subcounters.c \
    ./src/shared/bcmutils.c \
    ./src/shared/bcmwifi/src/bcmwifi_channels.c \
    ./src/shared/miniopt.c \

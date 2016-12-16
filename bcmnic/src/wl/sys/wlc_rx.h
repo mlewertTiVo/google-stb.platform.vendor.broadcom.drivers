@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rx.h 643373 2016-06-14 12:34:01Z $
+ * $Id: wlc_rx.h 649859 2016-07-19 19:42:43Z $
  *
  */
 #ifndef _wlc_rx_c
@@ -103,6 +103,20 @@ typedef enum wlc_rx_ststus
 
 #ifdef WL_RX_STALL
 
+typedef enum {
+	RX_HC_NOSCB =	0,
+	RX_HC_ICVERR =	1,
+	RX_HC_REPLAY =	2,
+	RX_HC_AMPDU_DUP = 3,
+	RX_HC_DROPPED_LAST
+} wlc_rx_hc_drop_reason;
+
+#define RX_HC_REASON_STRINGS \
+	"No SCB",		/* RX_HC_NOSCB	*/ \
+	"ICV error",		/* RX_HC_ICVERR	*/ \
+	"Replay detected",	/* RX_HC_REPLAY */ \
+	"AMPDU dup"		/* RX_HC_AMPDU_DUP */
+
 #ifndef RX_HC_FRAMECNT
 #define RX_HC_FRAMECNT 100
 #endif
@@ -143,8 +157,13 @@ struct wlc_rx_hc {
 	int scb_handle;
 	int cfg_handle;
 	wlc_rx_hc_counters_t counters;
+	uint32  rx_hc_pkts;
+	uint32  rx_hc_dropped_all;
+	uint32  rx_hc_dropped[RX_HC_DROPPED_LAST];
+	uint32  rx_hc_ts;
 	uint32  rx_hc_alert_th;
 	uint32  rx_hc_cnt;
+	uint32	rx_hc_stall_cnt;
 #if RX_HC_TIMES_HISTORY > 0
 	struct	{
 		uint32  sum;
@@ -159,8 +178,8 @@ struct wlc_rx_hc {
 #endif
 	wlc_rx_hc_err_info_t error;
 };
-#endif /* WL_RX_STALL */
 
+#endif /* WL_RX_STALL */
 
 extern uint16* wlc_get_mrxs(wlc_info_t *wlc, d11rxhdr_t *rxh);
 
@@ -212,6 +231,9 @@ extern int wlc_process_eapol_frame(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg,
 		struct scb *scb, struct wlc_frminfo *f, void *pkt);
 
 #ifdef WL_RX_STALL
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+int wlc_rx_activity_dump(wlc_info_t *wlc, struct bcmstrbuf *b);
+#endif
 wlc_rx_hc_t *wlc_rx_hc_attach(wlc_info_t * wlc);
 void wlc_rx_hc_detach(wlc_rx_hc_t * rx_hc);
 int wlc_rx_healthcheck_update_counters(wlc_info_t * wlc, int ac, scb_t * scb,
@@ -220,7 +242,7 @@ int wlc_rx_healthcheck_verify(wlc_info_t *wlc,
 	wlc_rx_hc_counters_t *counters, int ac, const char * prefix);
 void wlc_rx_healthcheck_report(wlc_info_t *wlc);
 int wlc_rx_healthcheck(uint8* buffer_ptr, uint16 remaining_len,
-	void* context, uint16* bytes_written);
+	void* context, int16* bytes_written);
 const char *wlc_rx_dropped_get_name(int reason);
 void wlc_rx_healthcheck_force_fail(wlc_info_t *wlc);
 #endif /* WL_RX_STALL */

@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_airtime.h 632307 2016-04-18 22:25:14Z $
+ * $Id: wlc_airtime.h 659395 2016-09-14 03:09:14Z $
  *
  */
 
@@ -38,7 +38,10 @@
 #define WLC_AIRTIME_BA(f)		((f) & WLC_AIRTIME_AMPDU)
 
 /* ATF Pig mode. If enabled ATF will release up to airtime limit */
+#define WLC_AIRTIME_DISABLED	0
+#define WLC_AIRTINE_ENABLED		1
 #define WLC_AIRTIME_PMODE		2
+#define WLC_AIRTIME_DONGLE		3
 
 /**
  * Packet overhead not including PLCP header of payload

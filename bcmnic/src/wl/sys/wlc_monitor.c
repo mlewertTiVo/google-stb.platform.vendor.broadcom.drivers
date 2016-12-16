@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_monitor.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_monitor.c 659939 2016-09-16 16:49:34Z $
  */
 
 
@@ -35,6 +35,8 @@
 #include <wlc_vht.h>
 #include <wlc_ht.h>
 #include <wlc_rspec.h>
+#include <phy_chanmgr_api.h>
+#include <phy_calmgr_api.h>
 
 
 #if defined(PHYCAL_CACHING)
@@ -51,12 +53,15 @@
 #define WLCOSH(x) ((x)->wlc->osh)
 #define WLC(x) ((x)->wlc)
 
+#define RX_AMSDU_IN_AMPDU	0x1
+
 struct wlc_monitor_info {
 	wlc_info_t *wlc;
 	uint32 promisc_bits; /* monitor promiscuity bitmap */
 	chanspec_t chanspec;
 	bool timer_active;
 	struct wl_timer * mon_cal_timer;
+	uint32 monitor_flags;
 };
 
 /* IOVar table */
@@ -216,7 +221,7 @@ wlc_monitor_phy_cal(wlc_monitor_info_t *ctxt, bool enable)
 		}
 	}
 
-	wlc_phy_destroy_chanctx(wlc->pi, ctxt->chanspec);
+	phy_chanmgr_destroy_ctx((phy_info_t *) wlc->pi, ctxt->chanspec);
 
 skip_del_ctx:
 
@@ -236,7 +241,7 @@ skip_del_ctx:
 		ctxt->chanspec = wlc->chanspec;
 
 #if defined(PHYCAL_CACHING)
-		wlc_phy_create_chanctx(wlc->pi, ctxt->chanspec);
+		phy_chanmgr_create_ctx((phy_info_t *) wlc->pi, ctxt->chanspec);
 #endif /* PHYCAL_CACHING */
 
 		wlc_phy_cal_perical(wlc->pi, PHY_PERICAL_JOIN_BSS);
@@ -252,10 +257,20 @@ wlc_monitor_promisc_enable(wlc_monitor_info_t *ctxt, bool enab)
 		return;
 
 	/* Add/remove corresponding promisc bits if monitor is enabled/disabled. */
-	if (enab)
+	if (enab) {
 		ctxt->promisc_bits |= WL_MONITOR_PROMISC_BITS_DEF;
-	else
+		if (WLC(ctxt)->_rx_amsdu_in_ampdu) {
+			WLC(ctxt)->_rx_amsdu_in_ampdu = FALSE;
+			WLC(ctxt)->mon_info->monitor_flags |= RX_AMSDU_IN_AMPDU;
+		}
+	}
+	else {
 		ctxt->promisc_bits &= ~WL_MONITOR_PROMISC_BITS_DEF;
+		if (WLC(ctxt)->mon_info->monitor_flags & RX_AMSDU_IN_AMPDU) {
+			WLC(ctxt)->mon_info->monitor_flags &= ~RX_AMSDU_IN_AMPDU;
+			WLC(ctxt)->_rx_amsdu_in_ampdu = TRUE;
+		}
+	}
 
 	wlc_monitor_phy_cal(ctxt, enab);
 

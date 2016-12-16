@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_tbl.h 644198 2016-06-17 10:39:14Z hreddy $
+ * $Id: phy_ac_tbl.h 655464 2016-08-19 23:20:17Z $
  */
 
 #ifndef _phy_ac_tbl_h_
@@ -26,14 +26,24 @@
 typedef struct phy_ac_tbl_info phy_ac_tbl_info_t;
 typedef struct phytbl_info acphytbl_info_t;
 
+typedef struct phy_ac_tbl_data {
+	/* this data is shared between tbl and radio */
+	void	*chan_tuning;
+	uint32	chan_tuning_tbl_len;
+	/* this data is shared between tbl and tpc */
+	bool	is_p25TxGainTbl;
+} phy_ac_tbl_data_t;
+
 /* register/unregister ACPHY specific implementations to/from common */
 phy_ac_tbl_info_t *phy_ac_tbl_register_impl(phy_info_t *pi,
 	phy_ac_info_t *aci, phy_tbl_info_t *ti);
 void phy_ac_tbl_unregister_impl(phy_ac_tbl_info_t *info);
+
+/* inter-module data API */
+phy_ac_tbl_data_t *phy_ac_tbl_get_data(phy_ac_tbl_info_t *tbli);
+
 uint8 wlc_phy_get_tbl_id_gainctrlbbmultluts(phy_info_t *pi, uint8 core);
 uint8 wlc_phy_get_tbl_id_estpwrshftluts(phy_info_t *pi, uint8 core);
-extern void wlc_phy_rfldo_trim_value(phy_info_t *pi);
-extern void wlc_phy_init_acphy(phy_info_t *pi);
 extern uint32 wlc_phy_ac_caps(phy_info_t *pi);
 extern uint32 wlc_phy_ac_caps1(phy_info_t *pi);
 extern uint8 wlc_phy_ac_phycap_maxbw(phy_info_t *pi);
@@ -52,6 +62,8 @@ extern void wlc_phy_table_write_tiny_chnsmth(phy_info_t *pi, uint32 id, uint32 l
 extern void wlc_phy_force_mac_clk(phy_info_t *pi, uint16 *orig_phy_ctl);
 extern void wlc_phy_clear_static_table_acphy(phy_info_t *pi, const phytbl_info_t *ptbl_info,
 	const uint32 tbl_info_cnt);
-void wlc_phy_set_txgain_tbls(phy_ac_info_t *aci);
-
+const uint16 *wlc_phy_get_txgain_tbl_20695(phy_info_t *pi);
+void wlc_phy_ac_gains_load(phy_ac_tbl_info_t *tbli);
+void wlc_phy_tx_gain_table_write_acphy(phy_ac_tbl_info_t *tbli, uint32 l,
+	uint32 o, uint32 w, const void *d);
 #endif /* _phy_ac_tbl_h_ */

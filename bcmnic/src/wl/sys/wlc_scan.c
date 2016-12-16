@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_scan.c 655259 2016-08-18 15:48:30Z $
+ * $Id: wlc_scan.c 668637 2016-11-04 08:47:37Z $
  */
 
 
@@ -87,7 +87,6 @@
 #include <wlc_mesh.h>
 #include <wlc_mesh_peer.h>
 #endif
-#include <wlc_ulb.h>
 #include <wlc_utils.h>
 #include <wlc_msch.h>
 #include <wlc_event_utils.h>
@@ -95,18 +94,24 @@
 #include <wlc_scan_utils.h>
 #include <wlc_dump.h>
 #include <wlc_iocv.h>
+#include <wlc_chanctxt.h>
+#include <wlc_pm.h>
+#include <wlc_dfs.h>
+#ifdef WL_OCE
+#include <wlc_oce.h>
+#endif
 
-#if defined(WLMSG_INFORM)
-#define	WL_INFORM_SCAN(args)									\
-	do {										\
-		if ((wl_msg_level & WL_INFORM_VAL) || (wl_msg_level2 & WL_SCAN_VAL))	\
-		    WL_PRINT(args);					\
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
+#define	WL_INFORM_SCAN(args)                                                                    \
+	do {                                                                            \
+		if ((wl_msg_level & WL_INFORM_VAL) || (wl_msg_level2 & WL_SCAN_VAL))    \
+		WL_PRINT(args);                                     \
 	} while (0)
 #undef WL_INFORM_ON
-#define WL_INFORM_ON()	((wl_msg_level & WL_INFORM_VAL) || (wl_msg_level2 & WL_SCAN_VAL))
+#define WL_INFORM_ON() ((wl_msg_level & WL_INFORM_VAL) || (wl_msg_level2 & WL_SCAN_VAL))
 #else
-#define	WL_INFORM_SCAN(args)
-#endif 
+#define        WL_INFORM_SCAN(args)
+#endif /* BCMDBG */
 
 
 #ifdef WLMCNX
@@ -174,6 +179,7 @@ int _wlc_scan(
 
 #ifdef WLRSDB
 static void wlc_parallel_scan_cb(void *arg, int status, wlc_bsscfg_t *cfg);
+static void wlc_scan_free_chanspec_list(scan_info_t *scan_info);
 static int wlc_scan_split_channels_per_band(scan_info_t *scan_info,
 	const chanspec_t* chanspec_list, int chan_num, chanspec_t** chanspec_set0,
 	chanspec_t** chanspec_set1, int *channel_set0_num, int *channel_set1_num, int active_time,
@@ -208,8 +214,11 @@ static int _wlc_scan_schd_channels_complete(wlc_scan_info_t *wlc_scan_info,
 static uint32 wlc_scan_get_current_home_time(scan_info_t *scan_info);
 #endif
 
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 static void wlc_scan_print_ssids(wlc_ssid_t *ssid, int nssid);
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_scan_dump(scan_info_t *si, struct bcmstrbuf *b);
 #endif
 
 #ifdef WL11N
@@ -333,13 +342,13 @@ static const bcm_iovar_t wlc_scan_iovars[] = {
 	},
 #ifdef WLSCANCACHE
 	{"scancache", IOV_SCANCACHE,
-	(IOVF_OPEN_ALLOW|IOVF_RSDB_SET), 0, IOVT_BOOL, 0
+	(IOVF_OPEN_ALLOW), 0, IOVT_BOOL, 0
 	},
 	{"scancache_timeout", IOV_SCANCACHE_TIMEOUT,
-	(IOVF_OPEN_ALLOW|IOVF_RSDB_SET), 0, IOVT_INT32, 0
+	(IOVF_OPEN_ALLOW), 0, IOVT_INT32, 0
 	},
 	{"scancache_clear", IOV_SCANCACHE_CLEAR,
-	(IOVF_OPEN_ALLOW|IOVF_RSDB_SET), 0, IOVT_VOID, 0
+	(IOVF_OPEN_ALLOW), 0, IOVT_VOID, 0
 	},
 #endif /* WLSCANCACHE */
 #endif /* STA */
@@ -358,6 +367,10 @@ static const bcm_iovar_t wlc_scan_iovars[] = {
 	{"scan_home_time_default", IOV_SCAN_HOME_TIME_DEFAULT,
 	(IOVF_WHL|IOVF_OPEN_ALLOW), 0, IOVT_UINT16, 0
 	},
+#ifdef BCMDBG
+	{"scan_dbg", IOV_SCAN_DBG, 0, 0, IOVT_UINT8, 0},
+	{"scan_test", IOV_SCAN_TEST, 0, 0, IOVT_UINT8, 0},
+#endif
 #ifdef STA
 	{"scan_home_away_time", IOV_SCAN_HOME_AWAY_TIME, (IOVF_WHL), 0, IOVT_UINT16, 0},
 #endif /* STA */
@@ -365,6 +378,12 @@ static const bcm_iovar_t wlc_scan_iovars[] = {
 	{"scan_parallel", IOV_SCAN_RSDB_PARALLEL_SCAN, 0, 0, IOVT_BOOL, 0},
 #endif
 #ifdef WLSCAN_PS
+#if defined(BCMDBG)
+	/* debug iovar to enable power optimization in rx */
+	{"scan_rx_ps", IOV_SCAN_RX_PWRSAVE, (IOVF_WHL), 0, IOVT_UINT8, 0},
+	/* debug iovar to enable power optimization in tx */
+	{"scan_tx_ps", IOV_SCAN_TX_PWRSAVE, (IOVF_WHL), 0, IOVT_UINT8, 0},
+#endif 
 	/* single core scanning to reduce power consumption */
 	{"scan_ps", IOV_SCAN_PWRSAVE, (IOVF_WHL), 0, IOVT_UINT8, 0},
 #endif /* WLSCAN_PS */
@@ -409,8 +428,25 @@ wlc_scan_del_timer_dbg(scan_info_t *scan, const char *fname, int line)
 
 #define WLC_SCAN_LENGTH_ERR	"%s: Length verification failed len: %d sm->len: %d\n"
 
+#ifdef BCMDBG
+#define SCAN_DBG_ENT	0x1
+#define WL_SCAN_ENT(scan, x)	do {					\
+		if (WL_SCAN_ON() && ((scan)->debug & SCAN_DBG_ENT))	\
+			printf x;					\
+	} while (0)
+#else /* !BCMDBG */
 #define WL_SCAN_ENT(scan, x)
+#endif /* !BCMDBG */
 
+#ifdef BCMDBG
+/* some test cases */
+#define SCAN_TEST_NONE	0
+#define SCAN_TEST_ABORT_PSPEND	1	/* abort after sending PM1 indication */
+#define SCAN_TEST_ABORT_PSPEND_AND_SCAN	2	/* abort after sending PM1 indication and scan */
+#define SCAN_TEST_ABORT_WSUSPEND	3	/* abort after tx suspend */
+#define SCAN_TEST_ABORT_WSUSPEND_AND_SCAN	4	/* abort after suspend and scan */
+#define SCAN_TEST_ABORT_ENTRY	5	/* abort right away after the scan request */
+#endif
 
 /* guard time */
 #define WLC_SCAN_PSPEND_GUARD_TIME	15
@@ -476,18 +512,36 @@ BCMATTACHFN(wlc_scan_attach)(wlc_info_t *wlc, void *wl, osl_t *osh, uint unit)
 
 	if (scan_info->scan_pub->wlc_scan_cmn == NULL) {
 		if ((scan_info->scan_pub->wlc_scan_cmn =  (struct wlc_scan_cmn_info*)
-			MALLOC(osh, sizeof(struct wlc_scan_cmn_info))) == NULL) {
+			MALLOCZ(osh, sizeof(struct wlc_scan_cmn_info))) == NULL) {
 			WL_ERROR(("wl%d: %s: wlc_scan_cmn_info alloc falied\n",
 				unit, __FUNCTION__));
 			goto error;
 		}
-		bzero((char*)scan_info->scan_pub->wlc_scan_cmn,
-			sizeof(struct wlc_scan_cmn_info));
 		/* OBJECT REGISTRY: We are the first instance, store value for key */
 		obj_registry_set(wlc->objr, OBJR_SCANPUBLIC_CMN,
 		scan_info->scan_pub->wlc_scan_cmn);
 	}
 	BCM_REFERENCE(obj_registry_ref(wlc->objr, OBJR_SCANPUBLIC_CMN));
+
+#if defined(WLSCANCACHE) && !defined(WLSCANCACHE_DISABLED)
+	scan_info->sdb = (wlc_scandb_t*)
+		obj_registry_get(wlc->objr, OBJR_SCANDB_CMN);
+
+	if (scan_info->sdb == NULL) {
+		scan_info->sdb = wlc_scandb_create(osh, unit,
+			wlc->pub->tunables->max_scancache_results);
+		if (scan_info->sdb == NULL) {
+			WL_ERROR(("wl%d: %s: wlc_create_scandb failed\n",
+				unit, __FUNCTION__));
+			goto error;
+		}
+	}
+	/* OBJECT REGISTRY: We are the first instance, store value for key */
+	obj_registry_set(wlc->objr, OBJR_SCANDB_CMN, scan_info->sdb);
+
+	wlc->pub->cmn->_scancache_support = TRUE;
+	scan_info->scan_pub->wlc_scan_cmn->_scancache = FALSE; /* disabled by default */
+#endif /* WLSCANCACHE && !WLSCANCACHE_DISABLED */
 
 	scan_info->scan_cmn->memsize = scan_info_size;
 	scan_info->wlc = wlc;
@@ -511,15 +565,6 @@ BCMATTACHFN(wlc_scan_attach)(wlc_info_t *wlc, void *wl, osl_t *osh, uint unit)
 		goto error;
 	}
 
-#if defined(WLSCANCACHE) && !defined(WLSCANCACHE_DISABLED)
-	scan_info->sdb = wlc_scandb_create(osh, unit);
-	if (scan_info->sdb == NULL) {
-		WL_ERROR(("wl%d: %s: wlc_create_scandb failed\n", unit, __FUNCTION__));
-		goto error;
-	}
-	wlc->pub->_scancache_support = TRUE;
-	scan_info->scan_pub->_scancache = FALSE;	/* disabled by default */
-#endif /* WLSCANCACHE || WLSCANCACHE_DISABLED */
 	SCAN_SET_WATCHDOG_FN(wlc_scan_watchdog);
 
 #ifdef WLC_SCAN_IOVARS
@@ -567,7 +612,17 @@ BCMATTACHFN(wlc_scan_attach)(wlc_info_t *wlc, void *wl, osl_t *osh, uint unit)
 		goto error;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "scan", (dump_fn_t)wlc_scan_dump, (void *)scan_info);
+#ifdef WLSCANCACHE
+	if (SCANCACHE_SUPPORT(scan_info->wlc))
+		wlc_dump_register(wlc->pub, "scancache", wlc_scandb_dump, scan_info->sdb);
+#endif /* WLSCANCACHE */
+#endif /* BCMDBG || BCMDBG_DUMP */
 
+#ifdef BCMDBG
+	/* scan_info->debug = SCAN_DBG_ENT; */
+#endif
 	scan_info->pspend_guard_time = WLC_SCAN_PSPEND_GUARD_TIME;
 	scan_info->wsuspend_guard_time = WLC_SCAN_WSUSPEND_GUARD_TIME;
 
@@ -575,8 +630,12 @@ BCMATTACHFN(wlc_scan_attach)(wlc_info_t *wlc, void *wl, osl_t *osh, uint unit)
 	scan_info->scan_ps_txchain = 0;
 	scan_info->scan_ps_rxchain = 0;
 	/* disable scan power optimization by default */
-	scan_info->scan_pwrsave_enable = FALSE;
-	scan_info->scan_mimo_override = FALSE;
+#if defined(BCMDBG)
+	scan_info->scan_rx_pwrsave = FALSE;
+	scan_info->scan_tx_pwrsave = FALSE;
+#endif 
+	scan_info->scan_cmn->scan_pwrsave_enable = FALSE;
+	scan_info->scan_cmn->scan_mimo_override = FALSE;
 #endif /* WLSCAN_PS */
 
 #if defined(WLSCAN_PS) && defined(WL_STF_ARBITRATOR)
@@ -592,7 +651,7 @@ BCMATTACHFN(wlc_scan_attach)(wlc_info_t *wlc, void *wl, osl_t *osh, uint unit)
 #endif /* WLSCAN_PS && WL_STF_ARBITRATOR */
 
 #if defined(WLRSDB) && !defined(RSDB_PARALLEL_SCAN_DISABLED)
-	if (RSDB_ENAB(wlc->pub) && !WLC_DUALMAC_RSDB(wlc->cmn)) {
+	if (RSDB_ENAB(wlc->pub)) {
 		scan_info->scan_cmn->rsdb_parallel_scan = TRUE;
 	}
 #endif /* WLRSDB && !RSDB_PARALLEL_SCAN_DISABLED */
@@ -625,8 +684,10 @@ error:
 	if (scan_info) {
 		if (scan_info->timer != NULL)
 			WLC_SCAN_FREE_TIMER(scan_info);
-		if (scan_info->sdb)
+		if (scan_info->sdb) {
 			wlc_scandb_free(scan_info->sdb);
+			scan_info->sdb = NULL;
+		}
 #ifdef WLSCAN_SUMEVT
 		if (SCAN_SUMEVT_ENAB(wlc->pub)) {
 			if (scan_info->scan_sum_chan_info != NULL)
@@ -712,10 +773,6 @@ BCMATTACHFN(wlc_scan_detach)(wlc_scan_info_t *wlc_scan_info)
 			WLC_SCAN_FREE_TIMER(scan_info);
 			scan_info->timer = NULL;
 		}
-#ifdef WLSCANCACHE
-		if (SCANCACHE_SUPPORT(scan_info->wlc->pub))
-			wlc_scandb_free(scan_info->sdb);
-#endif /* WLSCANCACHE */
 #ifdef WLSCAN_SUMEVT
 		if (SCAN_SUMEVT_ENAB(wlc->pub)) {
 			MFREE(scan_info->osh, scan_info->scan_sum_chan_info,
@@ -727,7 +784,6 @@ BCMATTACHFN(wlc_scan_detach)(wlc_scan_info_t *wlc_scan_info)
 			}
 		}
 #endif
-
 
 		wlc_module_unregister(scan_info->wlc->pub, "scan", scan_info);
 
@@ -742,6 +798,13 @@ BCMATTACHFN(wlc_scan_detach)(wlc_scan_info_t *wlc_scan_info)
 			obj_registry_set(wlc->objr, OBJR_SCANPRIV_CMN, NULL);
 			MFREE(wlc->osh, scan_info->scan_cmn, sizeof(scan_cmn_info_t));
 		}
+#ifdef WLSCANCACHE
+		if (SCANCACHE_SUPPORT(scan_info->wlc) &&
+			(obj_registry_unref(wlc->objr, OBJR_SCANDB_CMN) == 0)) {
+			obj_registry_set(wlc->objr, OBJR_SCANDB_CMN, NULL);
+			wlc_scandb_free(scan_info->sdb);
+		}
+#endif /* WLSCANCACHE */
 		if (obj_registry_unref(wlc->objr, OBJR_SCANPUBLIC_CMN) == 0) {
 			obj_registry_set(wlc->objr, OBJR_SCANPUBLIC_CMN, NULL);
 			MFREE(wlc->osh, wlc_scan_info->wlc_scan_cmn, sizeof(wlc_scan_cmn_t));
@@ -762,7 +825,7 @@ BCMATTACHFN(wlc_scan_detach)(wlc_scan_info_t *wlc_scan_info)
 	}
 }
 
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 static void
 wlc_scan_print_ssids(wlc_ssid_t *ssid, int nssid)
 {
@@ -783,7 +846,7 @@ wlc_scan_print_ssids(wlc_ssid_t *ssid, int nssid)
 	}
 	printf("\n");
 }
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 bool
 wlc_scan_in_scan_chanspec_list(wlc_scan_info_t *wlc_scan_info, chanspec_t chanspec)
@@ -897,10 +960,40 @@ wlc_scan_handle_req_end_for_pscan(wlc_info_t *wlc)
 		oth_wlc_scan_info->flag &= ~SCAN_FLAG_PASSIVE_PSCAN_REQ_ENDED;
 		scan_info->channel_idx++;
 		oth_scan_info->channel_idx++;
-		scan_info->state = WLC_SCAN_STATE_PARTIAL;
-		oth_scan_info->state = WLC_SCAN_STATE_PARTIAL;
+
+		/*
+		* compare channel_idx with channel_num as we may have
+		* completed scanning all channels and decide next state
+		*/
+
+		if (scan_info->channel_idx < scan_info->channel_num) {
+			scan_info->state = WLC_SCAN_STATE_PARTIAL;
+		} else {
+			/* all channels for this wlc scanned */
+			scan_info->state = WLC_SCAN_STATE_COMPLETE;
+		}
+
+		if (oth_scan_info->channel_idx < oth_scan_info->channel_num) {
+			oth_scan_info->state = WLC_SCAN_STATE_PARTIAL;
+		} else {
+			/* all channels for this wlc scanned */
+			oth_scan_info->state = WLC_SCAN_STATE_COMPLETE;
+		}
+		/* run scantimer to conclude next action */
 		WLC_SCAN_ADD_TIMER(scan_info, 0, 0);
 		WLC_SCAN_ADD_TIMER(oth_scan_info, 0, 0);
+
+		/*
+		* if any one of the wlcs has finished scanning passive
+		* channels OR Any one wlc has finished scanning all
+		* channels, passive parallel scan cannot happen anymore.
+		* clear passive p-scan flag.
+		*/
+		if (!(SCAN_PASSIVE_5G_CHANSPEC(scan_info)) ||
+			!(SCAN_PASSIVE_5G_CHANSPEC(oth_scan_info))) {
+			scan_info->scan_cmn->flag &=
+				~(SCAN_CMN_FLAG_5G_5G_PASSIVE);
+		}
 	}
 }
 
@@ -1097,6 +1190,7 @@ wlc_scan_split_channels_per_band(scan_info_t *scan_info, const chanspec_t* chans
 		}
 	}
 
+	ASSERT(scan_cmn->chanspeclist == NULL);
 	/* Allocate new chanspec list for both 2G and 5G channels. */
 	scan_cmn->chanspeclist = MALLOCZ(wlc->osh, scan_cmn->chanspec_list_size);
 
@@ -1329,6 +1423,17 @@ wlc_scan_split_channels_per_band(scan_info_t *scan_info, const chanspec_t* chans
 }
 
 static
+void wlc_scan_free_chanspec_list(scan_info_t *scan_info)
+{
+	if (scan_info->scan_cmn->chanspeclist) {
+		MFREE(SCAN_WLC(scan_info)->osh, scan_info->scan_cmn->chanspeclist,
+		scan_info->scan_cmn->chanspec_list_size);
+		scan_info->scan_cmn->chanspeclist = NULL;
+		scan_info->scan_cmn->chanspec_list_size = 0;
+	}
+}
+
+static
 void wlc_parallel_scan_cb(void *arg, int status, wlc_bsscfg_t *cfg)
 {
 	wlc_info_t *scanned_wlc = (wlc_info_t*) arg;
@@ -1336,6 +1441,7 @@ void wlc_parallel_scan_cb(void *arg, int status, wlc_bsscfg_t *cfg)
 	scan_info_t *scan_info = (scan_info_t *)scanned_wlc->scan->scan_priv;
 	int status2 = scan_info->scan_cmn->first_scanresult_status;
 	int final_status = WLC_E_STATUS_INVALID;
+	UNUSED_PARAMETER(scan_request_wlc);
 
 	WL_SCAN(("wl%d.%d %s Scanned in wlc:%d, requested wlc:%d # of CBs %d\n",
 		scanned_wlc->pub->unit, cfg->_idx, __FUNCTION__, scanned_wlc->pub->unit,
@@ -1355,12 +1461,7 @@ void wlc_parallel_scan_cb(void *arg, int status, wlc_bsscfg_t *cfg)
 			wlc_scan_abort(otherwlc->scan, status);
 			return;
 		} else {
-			 if (scan_info->scan_cmn->chanspeclist) {
-				 MFREE(scan_request_wlc->osh, scan_info->scan_cmn->chanspeclist,
-				 scan_info->scan_cmn->chanspec_list_size);
-				 scan_info->scan_cmn->chanspeclist = NULL;
-				 scan_info->scan_cmn->chanspec_list_size = 0;
-			 }
+			wlc_scan_free_chanspec_list(scan_info);
 			 (*scan_info->scan_cmn->cb)(scan_info->scan_cmn->cb_arg, status, cfg);
 			return;
 		}
@@ -1424,7 +1525,7 @@ void wlc_parallel_scan_cb(void *arg, int status, wlc_bsscfg_t *cfg)
 				 */
 				/* Use the last status */
 				final_status = status;
-				WL_ERROR(("Err. Parallel scan"
+				WL_SCAN_ERROR(("Err. Parallel scan"
 				" status's are not matching\n"));
 				ASSERT(0);
 		}
@@ -1432,15 +1533,9 @@ void wlc_parallel_scan_cb(void *arg, int status, wlc_bsscfg_t *cfg)
 
 	scan_info->scan_cmn->flag &= ~(SCAN_CMN_FLAG_5G_5G_PASSIVE);
 
+	wlc_scan_free_chanspec_list(scan_info);
 	(*scan_info->scan_cmn->cb)(scan_info->scan_cmn->cb_arg,
 		final_status, cfg);
-
-	if (scan_info->scan_cmn->chanspeclist) {
-		MFREE(scan_request_wlc->osh, scan_info->scan_cmn->chanspeclist,
-			scan_info->scan_cmn->chanspec_list_size);
-		scan_info->scan_cmn->chanspeclist = NULL;
-		scan_info->scan_cmn->chanspec_list_size = 0;
-	}
 }
 #endif /* WLRSDB */
 
@@ -1481,9 +1576,9 @@ wlc_scan(
 	wlc_info_t *wlc_2g, *wlc_5g;
 	uint ret_val0 = BCME_OK, ret_val1 = BCME_OK;
 	int parallel_scan_disabled = FALSE;
-#if defined(WLMSG_SCAN)
+#if defined(BCMDBG) || defined(WLMSG_SCAN)
 	char chanbuf[CHANSPEC_STR_LEN];
-#endif 
+#endif /* defined(BCMDBG) || defined(WLMSG_SCAN) */
 #endif /* WLRSDB */
 
 	wlc_scan_info->wlc_scan_cmn->usage = (uint8)usage;
@@ -1496,18 +1591,25 @@ wlc_scan(
 
 	/* channel list validation */
 	if (channel_num > MAXCHANNEL) {
-		WL_ERROR(("wl%d: %s: wlc_scan bad param channel_num %d greater"
+		WL_SCAN_ERROR(("wl%d: %s: wlc_scan bad param channel_num %d greater"
 		" than max %d\n", scan_info->unit, __FUNCTION__,
 		channel_num, MAXCHANNEL));
 		channel_num = 0;
 	}
 
 	if (channel_num > 0 && chanspec_list == NULL) {
-		WL_ERROR(("wl%d: %s: wlc_scan bad param channel_list was NULL"
+		WL_SCAN_ERROR(("wl%d: %s: wlc_scan bad param channel_list was NULL"
 			" with channel_num = %d\n",
 			scan_info->unit, __FUNCTION__, channel_num));
 		channel_num = 0;
 	}
+#ifdef STA
+		if (!IS_EXTSTA_ENAB(scan_info) && !IS_AS_IN_PROGRESS(scan_info) &&
+			ANY_SCAN_IN_PROGRESS(wlc_scan_info)) {
+			/* Abort the if any non-assoc scan is already in progress. */
+			wlc_scan_abort(wlc_scan_info, WLC_E_STATUS_ABORT);
+		}
+#endif /* STA */
 
 #ifdef WLRSDB
 
@@ -1528,6 +1630,10 @@ wlc_scan(
 	if (RSDB_PARALLEL_SCAN_ON(scan_info) && !parallel_scan_disabled) {
 		chanspec_t *chanspec_list5g = NULL;
 		chanspec_t *chanspec_list2g = NULL;
+		scan_info_t *scan_info_2g = NULL;
+		scan_info_t *scan_info_5g = NULL;
+		bool both_wlc_scan = FALSE;
+
 		chanspec_t chanspec_start_2g = 0, chanspec_start_5g = 0;
 		int channel_num2g = 0, channel_num5g = 0;
 		int err;
@@ -1560,12 +1666,18 @@ wlc_scan(
 			passive_time, scan_type);
 
 		if (err != BCME_OK) {
+			wlc_scan_free_chanspec_list(scan_info);
 			return err;
 		}
 
 		/* Return if no chanset enumeration. */
-		if (!(channel_num2g || channel_num5g))
+		if (!(channel_num2g || channel_num5g)) {
+			wlc_scan_free_chanspec_list(scan_info);
 			return BCME_EPERM;
+		}
+		else if (channel_num2g && channel_num5g) {
+			both_wlc_scan = TRUE;
+		}
 
 		chanspec_start_2g = chanspec_list2g[0];
 		chanspec_start_5g = chanspec_list5g[0];
@@ -1584,6 +1696,16 @@ wlc_scan(
 		* so update the wlc_2g and wlc_5g based on the current chanspec (wlc->chanspec)
 		*/
 		wlc_rsdb_get_wlcs(cfg->wlc, &wlc_2g, &wlc_5g);
+
+		if (both_wlc_scan) {
+			/* need to wake up both wlcs together before scheduling first request */
+			scan_info_2g = (scan_info_t *)wlc_2g->scan->scan_priv;
+			scan_info_5g = (scan_info_t *)wlc_5g->scan->scan_priv;
+			wlc_2g->mpc_scan = TRUE;
+			wlc_scan_radio_mpc_upd(scan_info_2g);
+			wlc_5g->mpc_scan = TRUE;
+			wlc_scan_radio_mpc_upd(scan_info_5g);
+		}
 
 		/* 2G band scan */
 		if (channel_num2g) {
@@ -1610,6 +1732,15 @@ wlc_scan(
 
 			if (ret_val0 == BCME_OK) {
 				scan_info->scan_cmn->num_of_cbs++;
+			} else {
+				if (both_wlc_scan) {
+					/* mpc update for 5G wlc also as 2g wlc scan failed */
+					wlc_5g->mpc_scan = FALSE;
+					wlc_scan_radio_mpc_upd(scan_info_5g);
+					wlc_scan_radio_upd(scan_info_5g);
+				}
+				wlc_scan_free_chanspec_list(scan_info);
+				return ret_val0;
 			}
 		}
 
@@ -1638,13 +1769,20 @@ wlc_scan(
 			if (ret_val1 == BCME_OK) {
 				scan_info->scan_cmn->num_of_cbs++;
 			}
+			else {
+				/*
+				* if 5G WLC scan failed it's mpc update will happen in _wlc_scan()
+				* no need to explicitly do anything here
+				*/
+			}
 		}
-
 
 		if (scan_info->scan_cmn->num_of_cbs)
 			ret_val = BCME_OK;
-		else
+		else {
+			wlc_scan_free_chanspec_list(scan_info);
 			return BCME_EPERM;
+		}
 	} else
 #endif /* WLRSDB */
 	{
@@ -1703,7 +1841,7 @@ int _wlc_scan(
 	int i, num;
 	wlc_info_t *wlc = scan_info->wlc;
 
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char *ssidbuf;
 	char eabuf[ETHER_ADDR_STR_LEN];
 	char chanbuf[CHANSPEC_STR_LEN];
@@ -1725,7 +1863,7 @@ int _wlc_scan(
 
 	WL_SCAN(("wl%d: %s: scan request at %u\n", scan_info->unit, __FUNCTION__,
 		wl_scan_hnd_time()));
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	ssidbuf = (char *) MALLOCZ(scan_info->osh, SSID_FMT_BUF_LEN);
 	if (ssidbuf == NULL) {
 		WL_ERROR((WLC_MALLOC_ERR, scan_info->unit, __FUNCTION__, (int)SSID_FMT_BUF_LEN,
@@ -1745,13 +1883,13 @@ int _wlc_scan(
 	WL_INFORM_SCAN(("wl%d: %s: scanning for BSSID \"%s\"\n", scan_info->unit, __FUNCTION__,
 	           (bcm_ether_ntoa(bssid, eabuf), eabuf)));
 	MFREE(scan_info->osh, (void *)ssidbuf, SSID_FMT_BUF_LEN);
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 	/* enforce valid argument */
 	scan_info->ssid_wildcard_enabled = 0;
 	for (i = 0; i < nssid; i++) {
 		if (ssid[i].SSID_len > DOT11_MAX_SSID_LEN) {
-			WL_ERROR(("wl%d: %s: invalid SSID len %d, capping\n",
+			WL_SCAN(("wl%d: %s: invalid SSID len %d, capping\n",
 			          scan_info->unit, __FUNCTION__, ssid[i].SSID_len));
 			ssid[i].SSID_len = DOT11_MAX_SSID_LEN;
 		}
@@ -1806,7 +1944,6 @@ int _wlc_scan(
 	} else {
 		wlc_scan_info->wlc_scan_cmn->is_hotspot_scan = FALSE;
 	}
-
 #ifdef STA
 #ifdef WL11D
 	/* If we're doing autocountry, clear country info accumulation */
@@ -1868,7 +2005,7 @@ int _wlc_scan(
 	/* allocate memory for ssid list, using prealloc if sufficient */
 	ASSERT(scan_info->ssid_list == scan_info->ssid_prealloc);
 	if (scan_info->ssid_list != scan_info->ssid_prealloc) {
-		WL_ERROR(("wl%d: %s: ssid_list not set to prealloc\n",
+		WL_SCAN(("wl%d: %s: ssid_list not set to prealloc\n",
 		          scan_info->unit, __FUNCTION__));
 	}
 	if (nssid > scan_info->nssid_prealloc) {
@@ -1917,12 +2054,12 @@ int _wlc_scan(
 
 	/* channel list validation */
 	if (channel_num > MAXCHANNEL) {
-		WL_ERROR(("wl%d: %s: wlc_scan bad param channel_num %d greater than max %d\n",
+		WL_SCAN(("wl%d: %s: wlc_scan bad param channel_num %d greater than max %d\n",
 			scan_info->unit, __FUNCTION__, channel_num, MAXCHANNEL));
 		channel_num = 0;
 	}
 	if (channel_num > 0 && chanspec_list == NULL) {
-		WL_ERROR(("wl%d: %s: wlc_scan bad param channel_list was NULL with channel_num ="
+		WL_SCAN(("wl%d: %s: wlc_scan bad param channel_list was NULL with channel_num ="
 			" %d\n",
 			scan_info->unit, __FUNCTION__, channel_num));
 		channel_num = 0;
@@ -1950,6 +2087,25 @@ int _wlc_scan(
 	WL_ROAM(("SCAN for '%s' %d SSID(s) %d channels\n", SSIDbuf, nssid, channel_num));
 #endif /* WLMSG_ROAM */
 
+#ifdef BCMDBG
+	if (WL_INFORM_ON()) {
+		char chan_list_buf[128];
+		struct bcmstrbuf b;
+
+		bcm_binit(&b, chan_list_buf, sizeof(chan_list_buf));
+
+		for (i = 0; i < scan_info->channel_num; i++) {
+			bcm_bprintf(&b, " %s",
+				wf_chspec_ntoa_ex(scan_info->chanspec_list[i], chanbuf));
+
+			if ((i % 8) == 7 || (i + 1) == scan_info->channel_num) {
+				WL_INFORM_SCAN(("wl%d: wlc_scan: scan channels %s\n",
+					scan_info->unit, chan_list_buf));
+				bcm_binit(&b, chan_list_buf, sizeof(chan_list_buf));
+			}
+		}
+	}
+#endif /* BCMDBG */
 
 	if ((wlc_scan_info->state & SCAN_STATE_SUPPRESS) || (!scan_info->channel_num)) {
 		int status;
@@ -1977,13 +2133,6 @@ int _wlc_scan(
 		goto end;
 	}
 
-#ifdef STA
-	if (!IS_EXTSTA_ENAB(scan_info))
-		if (scan_in_progress && !IS_AS_IN_PROGRESS(scan_info))
-			wlc_scan_callback(scan_info, WLC_E_STATUS_ABORT);
-#endif /* STA */
-
-	/* use default if sa_override not provided */
 	if (!sa_override || ETHER_ISNULLADDR(sa_override)) {
 		sa_override = &scan_info->bsscfg->cur_etheraddr;
 	}
@@ -2054,16 +2203,15 @@ int _wlc_scan(
 	if (WLSCAN_PS_ENAB(wlc->pub)) {
 		/* Support for MIMO force depends on underlying WLSCAN_PS code */
 		if (scan_flags & WL_SCANFLAGS_MIMO)
-			scan_info->scan_mimo_override = TRUE;
+			scan_info->scan_cmn->scan_mimo_override = TRUE;
 		else
-			scan_info->scan_mimo_override = FALSE;
+			scan_info->scan_cmn->scan_mimo_override = FALSE;
 	}
 #endif /* WLSCAN_PS */
 
 	if ((ret = _wlc_scan_schd_channels(wlc_scan_info)) != BCME_OK) {
 		/* call wlc_scantimer to get the scan state machine going */
 		/* DUALBAND - Don't call wlc_scantimer() directly from DPC... */
-		WL_ERROR(("wl%d: %s: scan request failed\n", scan_info->unit, __FUNCTION__));
 		/* send out AF as soon as possible to aid reliability of GON */
 		wlc_scan_abort(wlc_scan_info, WLC_SCAN_STATE_ABORT);
 		goto end;
@@ -2353,6 +2501,7 @@ resume:
 	return _wlc_scan_schd_channels_complete(wlc_scan_info, NULL, FALSE);
 }
 
+/** Called back by the Multichannel (msch) scheduler */
 static int
 wlc_scan_chnsw_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 {
@@ -2360,7 +2509,6 @@ wlc_scan_chnsw_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 	scan_info_t *scan_info = (scan_info_t *)wlc_scan_info->scan_priv;
 	wlc_info_t *wlc = SCAN_WLC(scan_info);
 	uint32 type = cb_info->type;
-	wlc_msch_info_t *msch_info = wlc->msch_info;
 	uint32  dummy_tsf_h, start_tsf;
 	char chanbuf[CHANSPEC_STR_LEN];
 	BCM_REFERENCE(chanbuf);
@@ -2384,10 +2532,13 @@ wlc_scan_chnsw_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 			break;
 		}
 
+		if (type & MSCH_CT_ON_CHAN) {
+			wlc_txqueue_start(wlc, NULL, cb_info->chanspec, NULL);
+		}
+
 		if (type & MSCH_CT_SLOT_START) {
 			wlc_msch_onchan_info_t *onchan =
 				(wlc_msch_onchan_info_t *)cb_info->type_specific;
-
 			scan_info->cur_scan_chanspec = cb_info->chanspec;
 #ifdef STA
 			/* TODO: remove this backward dependency */
@@ -2402,24 +2553,16 @@ wlc_scan_chnsw_clbk(void* handler_ctxt, wlc_msch_cb_info_t *cb_info)
 			wlc_scan_skip_adjtsf(scan_info, TRUE, NULL, WLC_SKIP_ADJTSF_SCAN,
 				WLC_BAND_ALL);
 
-			if (!wlc_msch_query_ts_shared(msch_info, onchan->timeslot_id) &&
-				!wlc->excursion_active) {
-				wlc_suspend_mac_and_wait(wlc);
-				/* suspend normal tx queue operation for channel excursion */
-				wlc_excursion_start(wlc);
-				wlc_enable_mac(wlc);
-
 #ifdef WLSCAN_SUMEVT
-				if (SCAN_SUMEVT_ENAB(SCAN_WLC(scan_info)->pub)) {
-					if (scan_info->scan_sum_chan_info->scan_flags &
-						SCAN_SUM_CHAN_INFO) {
-						wlc_scan_send_evntlog_scan_summary(
-							scan_info,
-							scan_info->scan_sum_chan_info);
-					}
+			if (SCAN_SUMEVT_ENAB(SCAN_WLC(scan_info)->pub)) {
+				if (scan_info->scan_sum_chan_info->scan_flags &
+					SCAN_SUM_CHAN_INFO) {
+					wlc_scan_send_evntlog_scan_summary(
+						scan_info,
+						scan_info->scan_sum_chan_info);
 				}
-#endif /* WLSCAN_SUMEVT */
 			}
+#endif /* WLSCAN_SUMEVT */
 
 			SCAN_BCN_PROMISC(scan_info) =
 				wlc_scan_usage_scan(scan_info->scan_pub);
@@ -2735,6 +2878,7 @@ wlc_scan_abort(wlc_scan_info_t *wlc_scan_info, int status)
 	WL_INFORM_SCAN(("wl%d: %s: aborting scan in progress\n", scan_info->unit, __FUNCTION__));
 #ifdef WLRCC
 	if ((WLRCC_ENAB(scan_info->wlc->pub)) && scan_cfg &&
+		scan_info->bsscfg->roam &&
 		(scan_info->bsscfg->roam->n_rcc_channels > 0))
 		scan_info->bsscfg->roam->rcc_valid = TRUE;
 #endif
@@ -2844,7 +2988,7 @@ wlc_scan_terminate(wlc_scan_info_t *wlc_scan_info, int status)
 	if (scan_info->msch_req_hdl) {
 		if ((err = wlc_msch_timeslot_unregister(wlc->msch_info,
 			&scan_info->msch_req_hdl)) != BCME_OK) {
-			WL_ERROR(("wl%d: %s: MSCH timeslot unregister failed, err %d\n",
+			WL_SCAN_ERROR(("wl%d: %s: MSCH timeslot unregister failed, err %d\n",
 			         scan_info->unit, __FUNCTION__, err));
 		}
 
@@ -2946,7 +3090,7 @@ wlc_scantimer(void *arg)
 			goto exit;
 		}
 
-		WL_ERROR(("wl%d: %s: Error, failed to scan %d channels\n",
+		WL_SCAN_ERROR(("wl%d: %s: Error, failed to scan %d channels\n",
 			scan_info->unit, __FUNCTION__,
 			(scan_info->channel_num - scan_info->channel_idx)));
 
@@ -2963,10 +3107,26 @@ wlc_scantimer(void *arg)
 	if (scan_info->state == WLC_SCAN_STATE_START) {
 		scan_info->state = WLC_SCAN_STATE_SEND_PROBE;
 		scan_info->pass = scan_info->npasses;
+#ifdef WL_OCE
+		if (OCE_ENAB(wlc->pub)) {
+			if (wlc_oce_is_oce_environment(wlc->oce))
+				scan_info->defer_probe = TRUE;
+			else
+				scan_info->defer_probe = FALSE;
+		}
+#endif
 	}
 
 	if (scan_info->state == WLC_SCAN_STATE_SEND_PROBE) {
 		if (scan_info->pass > 0) {
+#ifdef WL_OCE
+			if (OCE_ENAB(wlc->pub) && scan_info->defer_probe == TRUE) {
+				scan_info->defer_probe = FALSE;
+				uint8 def_to = wlc_oce_get_probe_defer_time(wlc->oce);
+				WLC_SCAN_ADD_TIMER(scan_info, def_to, 0);
+				goto exit;
+			}
+#endif /* WL_OCE */
 #ifdef WLSCAN_PS
 			/* scan started, switch to one tx/rx core */
 			if (WLSCAN_PS_ENAB(wlc->pub))
@@ -2974,6 +3134,10 @@ wlc_scantimer(void *arg)
 #endif /* WLSCAN_PS */
 			wlc_scan_do_pass(scan_info, scan_info->cur_scan_chanspec);
 			scan_info->pass--;
+#ifdef WL_OCE
+		if (OCE_ENAB(wlc->pub))
+			scan_info->defer_probe = TRUE;
+#endif
 			goto exit;
 		} else {
 			if (scan_info->timeslot_id) {
@@ -3019,7 +3183,7 @@ wlc_scantimer(void *arg)
 	scan_info->state = WLC_SCAN_STATE_START;
 	wlc_scan_info->state |= SCAN_STATE_TERMINATE;
 
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	if (scan_info->nssid == 1) {
 		char ssidbuf[SSID_FMT_BUF_LEN];
 		wlc_ssid_t *ssid = scan_info->ssid_list;
@@ -3038,7 +3202,7 @@ wlc_scantimer(void *arg)
 		if (WL_INFORM_ON())
 			wlc_scan_print_ssids(scan_info->ssid_list, scan_info->nssid);
 	}
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 #ifdef WLSCAN_PS
 	/* scan is done, revert core mask */
@@ -3086,9 +3250,6 @@ wlc_scantimer(void *arg)
 	 */
 	WL_MPC(("wl%d: scan done, SCAN_IN_PROGRESS==FALSE, update mpc\n", scan_info->unit));
 	wlc->mpc_scan = FALSE;
-#if defined(WL_CFG80211) && !defined(BCMDONGLEHOST)
-	wlc->mpc_delay_off = 1;
-#endif /* WL_CFG80211 && !BCMDONGLEHOST */
 	wlc_scan_radio_mpc_upd(scan_info);
 	wlc_scan_radio_upd(scan_info);	/* Bring down the radio immediately */
 #endif /* STA */
@@ -3119,6 +3280,9 @@ static void
 wlc_scan_act(scan_info_t *si, uint dwell)
 {
 	wlc_info_t *wlc = si->wlc;
+#ifdef BCMDBG
+	uint saved = dwell;
+#endif
 	/* real scan request */
 	if (si->act_cb == NULL) {
 		wlc_scan_sendprobe(si);
@@ -3128,6 +3292,12 @@ wlc_scan_act(scan_info_t *si, uint dwell)
 	/* other requests using the scan engine */
 	(si->act_cb)(wlc, si->act_cb_arg, &dwell);
 
+#ifdef BCMDBG
+	if (dwell != saved) {
+		WL_SCAN(("wl%d: %s: adjusting dwell time from %u to %u ms\n",
+		         si->unit, __FUNCTION__, saved, dwell));
+	}
+#endif
 
 set_timer:
 	WLC_SCAN_ADD_TIMER(si, dwell, 0);
@@ -3229,6 +3399,193 @@ wlc_scan_radar_clear(wlc_scan_info_t *wlc_scan_info)
 	}
 }
 
+#ifdef BCMDBG
+static void
+print_valid_channel_error(scan_info_t *scan_info, chanspec_t chspec)
+{
+	uint8 channel = CHSPEC_CHANNEL(chspec);
+	uint bandunit = CHSPEC_WLCBANDUNIT(chspec);
+	char chanbuf[CHANSPEC_STR_LEN];
+	wlc_info_t *wlc = scan_info->wlc;
+	BCM_REFERENCE(chanbuf);
+
+	WL_PRINT(("chspec=%s\n", wf_chspec_ntoa_ex(chspec, chanbuf)));
+
+	if (CHANNEL_BANDUNIT(wlc, CHSPEC_CHANNEL(chspec)) != bandunit) {
+			WL_PRINT(("CHANNEL_BANDUNIT(wlc, CHSPEC_CHANNEL(chspec))=%x\n",
+			CHANNEL_BANDUNIT(wlc, CHSPEC_CHANNEL(chspec))));
+		return;
+	}
+
+	/* Check a 20Mhz channel -- always assumed to be dual-band */
+	if (CHSPEC_IS20(chspec)) {
+		if (!VALID_CHANNEL20_DB(wlc, chspec)) {
+			WL_PRINT(("VALID_CHANNEL20_DB = %d\n",
+			VALID_CHANNEL20_DB(wlc, chspec)));
+		} else {
+			WL_PRINT(("%s: no error found\n", __FUNCTION__));
+		}
+		return;
+	} else if (CHSPEC_IS40(chspec)) {
+		/* Check a 40Mhz channel */
+		if (!wlc->pub->phy_bw40_capable) {
+			WL_PRINT(("phy not bw40 capable\n"));
+			return;
+		}
+
+		if (!VALID_40CHANSPEC_IN_BAND(wlc, CHSPEC_WLCBANDUNIT(chspec))) {
+			WL_PRINT(("!VALID_40CHANSPEC_IN_BAND(%p, %d)\n",
+				OSL_OBFUSCATE_BUF(wlc), chspec));
+			return;
+		}
+		if (!VALID_CHANNEL20_DB(wlc, LOWER_20_SB(channel)) ||
+			!VALID_CHANNEL20_DB(wlc, UPPER_20_SB(channel))) {
+			WL_PRINT(("dual bands not both valid = [%x, %x]\n",
+				LOWER_20_SB(channel), UPPER_20_SB(channel)));
+			return;
+		}
+
+		/* check that the lower sideband allows an upper sideband */
+			WL_PRINT(("%s: lower sideband not allow upper one"
+					"OR error not found\n",	__FUNCTION__));
+
+	} else if (CHSPEC_IS80(chspec)) {
+		/* Check a 80MHz channel - only 5G band supports 80MHz */
+
+		chanspec_t chspec40;
+
+		/* Only 5G supports 80MHz
+		 * Check the chanspec band with BAND_5G() instead of the more straightforward
+		 * CHSPEC_IS5G() since BAND_5G() is conditionally compiled on BAND5G support. This
+		 * check will turn into a constant check when compiling without BAND5G support.
+		 */
+		if (!BAND_5G(CHSPEC2WLC_BAND(chspec))) {
+			WL_PRINT(("band not 5g for 80MHz\n"));
+			return;
+		}
+
+		/* Make sure that the phy is 80MHz capable and that
+		 * we are configured for 80MHz on the band
+		 */
+		if (!wlc->pub->phy_bw80_capable ||
+		    !WL_BW_CAP_80MHZ(SCAN_GET_BANDSTATE(scan_info, BAND_5G_INDEX)->bw_cap)) {
+			WL_PRINT(("!phy_bw80_capable (%x) || !mimo_cap_80 (%x)\n",
+				!wlc->pub->phy_bw80_capable,
+				!WL_BW_CAP_80MHZ(SCAN_GET_BANDSTATE(scan_info,
+				BAND_5G_INDEX)->bw_cap)));
+			return;
+		}
+		/* Check that the 80MHz center channel is a defined channel */
+		/* Make sure both 40 MHz side channels are valid
+		 * Create a chanspec for each 40MHz side side band and check
+		 */
+		chspec40 = (chanspec_t)((channel - CH_20MHZ_APART) |
+			WL_CHANSPEC_CTL_SB_L |
+			WL_CHANSPEC_BW_40 |
+			WL_CHANSPEC_BAND_5G);
+
+		if (!wlc_scan_valid_chanspec_db(scan_info, chspec40)) {
+			WL_PRINT(("wl%d: %s: 80MHz: chanspec %0X -> chspec40 %0X "
+					"failed valid check\n",
+					scan_info->unit, __FUNCTION__, chspec, chspec40));
+
+			return;
+		}
+		chspec40 = (chanspec_t)((channel + CH_20MHZ_APART) |
+			WL_CHANSPEC_CTL_SB_L |
+			WL_CHANSPEC_BW_40 |
+			WL_CHANSPEC_BAND_5G);
+
+		if (!wlc_scan_valid_chanspec_db(scan_info, chspec40)) {
+			WL_PRINT(("wl%d: %s: 80MHz: chanspec %0X -> chspec40 %0X "
+					"failed valid check\n",
+					scan_info->unit, __FUNCTION__, chspec, chspec40));
+			return;
+		}
+		WL_PRINT(("%s: err not found or 80MHz has no"
+				"channel %d\n", __FUNCTION__, channel));
+		return;
+	}
+	else if (CHSPEC_IS8080(chspec) || CHSPEC_IS160(chspec)) {
+		chanspec_t chspec40;
+
+		/* Only 5G supports 80+80/160 MHz
+		 * Check the chanspec band with BAND_5G() instead of the more straightforward
+		 * CHSPEC_IS5G() since BAND_5G() is conditionally compiled on BAND5G support. This
+		 * check will turn into a constant check when compiling without BAND5G support.
+		 */
+		if (!BAND_5G(CHSPEC2WLC_BAND(chspec))) {
+			WL_PRINT(("band not 5g for 80+80/160 MHz\n"));
+			return;
+		}
+
+		/* Make sure that the phy is 80MHz capable and that
+		 * we are configured for 80MHz on the band
+		 */
+		if (!wlc->pub->phy_bw8080_capable || !wlc->pub->phy_bw160_capable ||
+		    !WL_BW_CAP_160MHZ(SCAN_GET_BANDSTATE(scan_info, BAND_5G_INDEX)->bw_cap)) {
+			WL_PRINT(("!phy_bw8080_capable (%x) || !phy_bw8080_capable (%x) ||"
+				"!mimo_cap_160 (%x)\n",
+				!wlc->pub->phy_bw8080_capable,
+				!wlc->pub->phy_bw160_capable,
+				!WL_BW_CAP_160MHZ(SCAN_GET_BANDSTATE(scan_info,
+				BAND_5G_INDEX)->bw_cap)));
+			return;
+		}
+
+		/* Check whether primary 80 channel is valid */
+		channel = wf_chspec_primary80_channel(chspec);
+		chspec40 = (chanspec_t)((channel - CH_20MHZ_APART) |
+			WL_CHANSPEC_CTL_SB_L |
+			WL_CHANSPEC_BW_40 |
+			WL_CHANSPEC_BAND_5G);
+
+		if (!wlc_scan_valid_chanspec_db(scan_info, chspec40)) {
+			WL_PRINT(("wl%d: %s: 80MHz: chanspec %0X -> chspec40 %0X "
+					"failed valid check\n",
+					scan_info->unit, __FUNCTION__, chspec, chspec40));
+
+			return;
+		}
+		chspec40 = (chanspec_t)((channel + CH_20MHZ_APART) |
+			WL_CHANSPEC_CTL_SB_L |
+			WL_CHANSPEC_BW_40 |
+			WL_CHANSPEC_BAND_5G);
+
+		if (!wlc_scan_valid_chanspec_db(scan_info, chspec40)) {
+			WL_PRINT(("wl%d: %s: 80MHz: chanspec %0X -> chspec40 %0X "
+					"failed valid check\n",
+					scan_info->unit, __FUNCTION__, chspec, chspec40));
+			return;
+		}
+
+		/* Check whether secondary 80 channel is valid */
+		channel = wf_chspec_secondary80_channel(chspec);
+		chspec40 = (chanspec_t)((channel - CH_20MHZ_APART) |
+		WL_CHANSPEC_CTL_SB_L |
+		WL_CHANSPEC_BW_40 |
+		WL_CHANSPEC_BAND_5G);
+
+		if (!wlc_scan_valid_chanspec_db(scan_info, chspec40)) {
+			WL_PRINT(("wl%d: %s: 80MHz: chanspec %0X -> chspec40 %0X "
+					"failed valid check\n",
+					scan_info->unit, __FUNCTION__, chspec, chspec40));
+			return;
+		}
+		chspec40 = (chanspec_t)((channel + CH_20MHZ_APART) |
+			WL_CHANSPEC_CTL_SB_L |
+			WL_CHANSPEC_BW_40 |
+			WL_CHANSPEC_BAND_5G);
+
+		if (!wlc_scan_valid_chanspec_db(scan_info, chspec40)) {
+			WL_PRINT(("wl%d: %s: 80MHz: chanspec %0X -> chspec40 %0X "
+					"failed valid check\n",
+					scan_info->unit, __FUNCTION__, chspec, chspec40));
+			return;
+		}
+	}
+}
+#endif /* BCMDBG */
 
 /*
  * Returns default channels for this locale in band 'band'
@@ -3240,6 +3597,13 @@ int band, chanspec_t *chanspec_list, int *channel_count)
 	scan_info_t *scan_info = (scan_info_t *)wlc_scan_info->scan_priv;
 	int num;
 
+#ifdef BCMDBG
+	if (!wlc_scan_valid_chanspec_db(scan_info, chanspec_start)) {
+		WL_SCAN_ERROR(("wlc_scan_valid_chanspec_db(%p, %x)==FALSE\n",
+			OSL_OBFUSCATE_BUF(SCAN_CMIPTR(scan_info)), chanspec_start));
+		print_valid_channel_error(scan_info, chanspec_start);
+	}
+#endif /* BCMDBG */
 	ASSERT(wlc_scan_valid_chanspec_db(scan_info, chanspec_start));
 
 	/* enumerate all the active (non-quiet) channels first */
@@ -3273,23 +3637,51 @@ wlc_scan_channels(scan_info_t *scan_info, chanspec_t *chanspec_list,
 	int num = 0;
 	uint i;
 
+#ifdef SLAVE_RADAR
+	wlc_info_t *wlc = scan_info->wlc;
+#endif
 	/* chanspec start should be for a 2.5/5/10/20MHZ channel */
 	ASSERT(CHSPEC_ISLE20(chanspec_start));
 	bandunit = CHSPEC_WLCBANDUNIT(chanspec_start);
 	for (i = 0; i < SCAN_NBANDS(scan_info); i++) {
 		channel = CHSPEC_CHANNEL(chanspec_start);
-		chanspec = BSSCFG_MINBW_CHSPEC(scan_info->wlc, scan_info->bsscfg, channel);
+		chanspec = CH20MHZ_CHSPEC(channel);
+
+#ifdef WL_OCE
+		if (OCE_ENAB(scan_info->wlc->pub) && bandunit == BAND_2G_INDEX) {
+			/* populate chanspec list with OCE channels first */
+			if (channel_type != CHAN_TYPE_QUIET)
+				num += wlc_oce_get_pref_channels(chanspec_list + num);
+		}
+#endif /* WL_OCE */
+
 		while (num < channel_max) {
-			if (WLC_LE20_VALID_SCAN_CHANNEL_IN_BAND(scan_info, bandunit,
-				CHSPEC_BW(chanspec), channel) &&
+			if (SCAN_VALID_CHANNEL20_IN_BAND(scan_info, bandunit,
+				channel) &&
 			    ((channel_type == CHAN_TYPE_CHATTY &&
 				!wlc_scan_quiet_chanspec(scan_info, chanspec)) ||
 			     (channel_type == CHAN_TYPE_QUIET &&
-				wlc_scan_quiet_chanspec(scan_info, chanspec))))
+				wlc_scan_quiet_chanspec(scan_info, chanspec) &&
+#ifdef SLAVE_RADAR
+				/*
+				 * If radar was detected on this chanspec and Non Occupancy
+				 * period is not yet over, then exclude this chanspec from
+				 * scan.
+				 */
+				wlc_dfs_valid_ap_chanspec(wlc, chanspec) &&
+#endif
+				TRUE))) {
+#ifdef WL_OCE
+				/* skip adding OCE channels to the list since its already done */
+				if (!(OCE_ENAB(scan_info->wlc->pub) &&
+					bandunit == BAND_2G_INDEX &&
+					wlc_oce_is_pref_channel(chanspec)))
+#endif /* WL_OCE */
 					chanspec_list[num++] = chanspec;
+			}
 
 			channel = (channel + 1) % MAXCHANNEL;
-			chanspec = BSSCFG_MINBW_CHSPEC(scan_info->wlc, scan_info->bsscfg, channel);
+			chanspec = CH20MHZ_CHSPEC(channel);
 			if (wf_chspec_ctlchan(chanspec) == wf_chspec_ctlchan(chanspec_start))
 				break;
 		}
@@ -3300,7 +3692,7 @@ wlc_scan_channels(scan_info_t *scan_info, chanspec_t *chanspec_list,
 		if (band == WLC_BAND_ALL) {
 			/* prepare to find the other band's channels */
 			bandunit = ((bandunit == 1) ? 0 : 1);
-			chanspec_start = BSSCFG_MINBW_CHSPEC(scan_info->wlc, scan_info->bsscfg, 0);
+			chanspec_start = CH20MHZ_CHSPEC(0);
 		} else
 			/* We are done with current band. */
 			break;
@@ -3338,11 +3730,9 @@ wlc_scan_prohibited_channels(scan_info_t *scan_info, chanspec_t *chanspec_list,
 		maxchannel = BAND_2G(band->bandtype) ? (CH_MAX_2G_CHANNEL + 1) : MAXCHANNEL;
 		for (channel = 0; channel < maxchannel; channel++) {
 			if (isset(sup_chanvec.vec, channel) &&
-				!WLC_LE20_VALID_SCAN_CHANNEL_IN_BAND(scan_info, band->bandunit,
-					WLC_ULB_GET_BSS_MIN_BW(scan_info->wlc,
-					scan_info->bsscfg), channel)) {
-				chanspec_list[num++] = BSSCFG_MINBW_CHSPEC(scan_info->wlc,
-					scan_info->bsscfg, channel);
+				!SCAN_VALID_CHANNEL20_IN_BAND(scan_info, band->bandunit,
+					channel)) {
+				chanspec_list[num++] = CH20MHZ_CHSPEC(channel);
 				if (num >= channel_max)
 					return num;
 			}
@@ -3667,6 +4057,93 @@ wlc_scan_ioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif)
 	return bcmerror;
 }
 
+#ifdef BCMDBG
+/* test case support - requires wl UP (wl mpc 0; wl up) */
+static void
+wlc_scan_test_done(void *arg, int status, wlc_bsscfg_t *cfg)
+{
+	scan_info_t *scan_info = (scan_info_t *)arg;
+	wlc_info_t *wlc = scan_info->wlc;
+
+	BCM_REFERENCE(status);
+	BCM_REFERENCE(cfg);
+
+	scan_info->test = SCAN_TEST_NONE;
+
+	if (scan_info->test_timer != NULL) {
+		wl_del_timer(wlc->wl, scan_info->test_timer);
+		wl_free_timer(wlc->wl, scan_info->test_timer);
+		scan_info->test_timer = NULL;
+	}
+}
+
+static void
+wlc_scan_test_timer(void *arg)
+{
+	scan_info_t *scan_info = (scan_info_t *)arg;
+	wlc_scan_info_t	*wlc_scan_info = scan_info->scan_pub;
+	wlc_ssid_t ssid;
+	int err;
+
+	ssid.SSID_len = 0;
+
+	switch (scan_info->test) {
+	case SCAN_TEST_ABORT_ENTRY:
+	case SCAN_TEST_ABORT_PSPEND:
+	case SCAN_TEST_ABORT_WSUSPEND:
+		wlc_scan_terminate(wlc_scan_info, WLC_E_STATUS_SUCCESS);
+		break;
+	case SCAN_TEST_ABORT_PSPEND_AND_SCAN:
+	case SCAN_TEST_ABORT_WSUSPEND_AND_SCAN:
+		wlc_scan_terminate(wlc_scan_info, WLC_E_STATUS_SUCCESS);
+		err = wlc_scan(wlc_scan_info, DOT11_BSSTYPE_ANY, &ether_bcast, 1, &ssid,
+		               -1, -1, -1, -1, -1,
+		               NULL, 0, 0, FALSE,
+		               wlc_scan_test_done, scan_info, 0, FALSE, FALSE,
+		               SCANCACHE_ENAB(wlc_scan_info),
+		               0, NULL, SCAN_ENGINE_USAGE_NORM, NULL, NULL, NULL);
+		if (err != BCME_OK) {
+			WL_SCAN_ERROR(("%s: wlc_scan failed, err %d\n", __FUNCTION__, err));
+		}
+		break;
+	}
+}
+
+static int
+wlc_scan_test(scan_info_t *scan_info, uint8 test_case)
+{
+	wlc_scan_info_t	*wlc_scan_info = scan_info->scan_pub;
+	wlc_info_t *wlc = scan_info->wlc;
+	wlc_ssid_t ssid;
+
+	WL_PRINT(("%s: test case %d\n", __FUNCTION__, test_case));
+
+	if (scan_info->test != SCAN_TEST_NONE)
+		return BCME_BUSY;
+
+	if (test_case == SCAN_TEST_NONE)
+		return BCME_OK;
+
+	ssid.SSID_len = 0;
+
+	if (scan_info->test_timer == NULL)
+		scan_info->test_timer =
+		        wl_init_timer(wlc->wl, wlc_scan_test_timer, scan_info, "testtimer");
+	if (scan_info->test_timer == NULL)
+		return BCME_NORESOURCE;
+
+	if ((scan_info->test = test_case) == SCAN_TEST_ABORT_ENTRY)
+		/* do this out of order because the timer is served FIFO */
+		wl_add_timer(wlc->wl, scan_info->test_timer, 0, 0);
+
+	return wlc_scan(wlc_scan_info, DOT11_BSSTYPE_ANY, &ether_bcast, 1, &ssid,
+	                -1, -1, -1, -1, -1,
+	                NULL, 0, 0, FALSE,
+	                wlc_scan_test_done, scan_info, 0, FALSE, FALSE,
+	                SCANCACHE_ENAB(wlc_scan_info),
+	                0, NULL, SCAN_ENGINE_USAGE_NORM, NULL, NULL, NULL);
+}
+#endif	/* BCMDBG */
 
 #ifdef WLC_SCAN_IOVARS
 static int
@@ -3756,12 +4233,12 @@ wlc_scan_doiovar(void *hdl, uint32 actionid,
 
 #ifdef WLSCANCACHE
 	case IOV_GVAL(IOV_SCANCACHE):
-		*ret_int_ptr = scan_info->scan_pub->_scancache;
+		*ret_int_ptr = scan_info->scan_pub->wlc_scan_cmn->_scancache;
 		break;
 
 	case IOV_SVAL(IOV_SCANCACHE):
-		if (SCANCACHE_SUPPORT(wlc->pub)) {
-			scan_info->scan_pub->_scancache = bool_val;
+		if (SCANCACHE_SUPPORT(wlc)) {
+			scan_info->scan_pub->wlc_scan_cmn->_scancache = bool_val;
 #ifdef WL11K
 			/* Enable Table mode beacon report in RRM cap if scancache enabled */
 			if (WL11K_ENAB(wlc->pub)) {
@@ -3795,7 +4272,7 @@ wlc_scan_doiovar(void *hdl, uint32 actionid,
 		/* scancache might be disabled while clearing the cache.
 		 * So check for scancache_support instead of scancache_enab.
 		 */
-		if (SCANCACHE_SUPPORT(wlc->pub))
+		if (SCANCACHE_SUPPORT(wlc))
 			wlc_scandb_clear(scan_info->sdb);
 		else
 			err = BCME_UNSUPPORTED;
@@ -3820,6 +4297,14 @@ wlc_scan_doiovar(void *hdl, uint32 actionid,
 	case IOV_GVAL(IOV_SCAN_PASSIVE_TIME_DEFAULT):
 		*ret_int_ptr = WLC_SCAN_PASSIVE_TIME;
 		break;
+#ifdef BCMDBG
+	case IOV_SVAL(IOV_SCAN_DBG):
+		scan_info->debug = (uint8)int_val;
+		break;
+	case IOV_SVAL(IOV_SCAN_TEST):
+		err = wlc_scan_test(scan_info, (uint8)int_val);
+		break;
+#endif
 #ifdef STA
 	case IOV_GVAL(IOV_SCAN_HOME_AWAY_TIME):
 		*ret_int_ptr = (int32)scan_info->scan_cmn->home_away_time;
@@ -3840,7 +4325,11 @@ wlc_scan_doiovar(void *hdl, uint32 actionid,
 			err = BCME_UNSUPPORTED;
 		break;
 	case IOV_SVAL(IOV_SCAN_RSDB_PARALLEL_SCAN):
-		if (RSDB_ENAB(wlc->pub)) {
+		if (WLC_DUALMAC_RSDB(wlc->cmn)) {
+		/* scan_parallel shouldn't be turned off for dual mac rsdb chips */
+			if (!bool_val)
+				err = BCME_BADARG;
+		} else if (RSDB_ENAB(wlc->pub)) {
 			if (ANY_SCAN_IN_PROGRESS(scan_info->scan_pub)) {
 				err = BCME_BUSY;
 			} else {
@@ -3853,14 +4342,61 @@ wlc_scan_doiovar(void *hdl, uint32 actionid,
 #endif /* WLRSDB */
 
 #ifdef WLSCAN_PS
+#if defined(BCMDBG)
+	case IOV_GVAL(IOV_SCAN_RX_PWRSAVE):
+		if (WLSCAN_PS_ENAB(wlc->pub)) {
+			*ret_int_ptr = (uint8)scan_info->scan_rx_pwrsave;
+		} else {
+			err = BCME_UNSUPPORTED;
+		}
+		break;
+
+	case IOV_SVAL(IOV_SCAN_RX_PWRSAVE):
+		if (WLSCAN_PS_ENAB(wlc->pub)) {
+			switch (int_val) {
+				case 0:
+				case 1:
+					scan_info->scan_rx_pwrsave = (uint8)int_val;
+					break;
+				default:
+					err = BCME_BADARG;
+			}
+		} else {
+			err = BCME_UNSUPPORTED;
+		}
+		break;
+
+	case IOV_GVAL(IOV_SCAN_TX_PWRSAVE):
+		if (WLSCAN_PS_ENAB(wlc->pub)) {
+			*ret_int_ptr = (uint8)scan_info->scan_tx_pwrsave;
+		} else {
+			err = BCME_UNSUPPORTED;
+		}
+		break;
+
+	case IOV_SVAL(IOV_SCAN_TX_PWRSAVE):
+		if (WLSCAN_PS_ENAB(wlc->pub)) {
+			switch (int_val) {
+				case 0:
+				case 1:
+					scan_info->scan_tx_pwrsave = (uint8)int_val;
+					break;
+				default:
+					err = BCME_BADARG;
+			}
+		} else {
+			err = BCME_UNSUPPORTED;
+		}
+		break;
+#endif 
 	case IOV_GVAL(IOV_SCAN_PWRSAVE):
-		*ret_int_ptr = (uint8)scan_info->scan_pwrsave_enable;
+		*ret_int_ptr = (uint8)scan_info->scan_cmn->scan_pwrsave_enable;
 		break;
 	case IOV_SVAL(IOV_SCAN_PWRSAVE):
 		if (int_val < 0 || int_val > 1)
 			err = BCME_BADARG;
 		else
-			scan_info->scan_pwrsave_enable = (uint8)int_val;
+			scan_info->scan_cmn->scan_pwrsave_enable = (uint8)int_val;
 		break;
 #endif /* WLSCAN_PS */
 	case IOV_GVAL(IOV_SCANMAC):
@@ -4310,6 +4846,32 @@ wlc_scan_bsscfg(wlc_scan_info_t *wlc_scan_info)
 /* This function configures tx & rxcores to save power.
  *  flag: TRUE to set & FALSE to revert config
  */
+#ifdef WL_STF_ARBITRATOR
+static void
+wlc_scan_ps_config_cores_arb(wlc_scan_info_t *scan_pub, bool flag)
+{
+	scan_info_t *scan_info = (scan_info_t *) scan_pub->scan_priv;
+	wlc_info_t *wlc = scan_info->wlc;
+	uint8 rxchains = 0, txchains = 0;
+
+	/* Default to full chains */
+	txchains = wlc->stf->hw_txchain;
+	rxchains = wlc->stf->hw_rxchain;
+
+	/* Scanning is started */
+	/* On activate, adjust as specified by scan_ps iovar and mimo_override flag */
+	if (!scan_info->scan_cmn->scan_mimo_override && scan_info->scan_cmn->scan_pwrsave_enable) {
+		txchains = ONE_CHAIN_CORE0;
+		rxchains = ONE_CHAIN_CORE0;
+	}
+	/* Pass the selected configuration to the STF arbitrator */
+	wlc_stf_nss_request_update(wlc, scan_info->stf_scan_req,
+		(flag ? WLC_STF_ARBITRATOR_REQ_STATE_RXTX_ACTIVE :
+			WLC_STF_ARBITRATOR_REQ_STATE_RXTX_INACTIVE),
+		txchains, WLC_BITSCNT(txchains), rxchains, WLC_BITSCNT(rxchains));
+}
+#endif /* WL_STF_ARBITRATOR */
+
 static int
 wlc_scan_ps_config_cores_non_arb(scan_info_t *scan_info, bool flag)
 {
@@ -4321,7 +4883,7 @@ wlc_scan_ps_config_cores_non_arb(scan_info_t *scan_info, bool flag)
 	if (!scan_info->scan_tx_pwrsave &&
 	    !scan_info->scan_rx_pwrsave) {
 		WL_SCAN(("wl%d: %s(%d): tx_ps %d rx_ps\n",
-		                scan_info->unit, func, line,
+		                scan_info->unit, __FUNCTION__, __LINE__,
 		                scan_info->scan_tx_pwrsave,
 		                scan_info->scan_rx_pwrsave));
 		return BCME_OK;
@@ -4331,7 +4893,7 @@ wlc_scan_ps_config_cores_non_arb(scan_info_t *scan_info, bool flag)
 	SCAN_FOREACH_AS_STA(scan_info, idx, cfg) {
 		if (cfg->BSS && cfg->pm->PM == PM_OFF) {
 			WL_SCAN(("wl%d: %s(%d): pm %d\n",
-				scan_info->unit, func, line, cfg->pm->PM));
+				scan_info->unit, __FUNCTION__, __LINE__, cfg->pm->PM));
 
 			/* If PM becomes 0 after scan initiated,
 			  * we need to reset the cores
@@ -4339,8 +4901,8 @@ wlc_scan_ps_config_cores_non_arb(scan_info_t *scan_info, bool flag)
 			if (!scan_info->scan_ps_rxchain &&
 			    !scan_info->scan_ps_txchain) {
 				WL_SCAN(("wl%d: %s(%d): txchain %d rxchain %d\n",
-				    scan_info->unit, func, line, scan_info->scan_ps_txchain,
-				    scan_info->scan_ps_rxchain));
+				    scan_info->unit, __FUNCTION__, __LINE__,
+				    scan_info->scan_ps_txchain, scan_info->scan_ps_rxchain));
 				return BCME_ERROR;
 			}
 		}
@@ -4351,7 +4913,10 @@ wlc_scan_ps_config_cores_non_arb(scan_info_t *scan_info, bool flag)
 	if (flag) {
 		/* Scanning is started */
 		if ((
-			scan_info->scan_pwrsave_enable) && !scan_info->scan_ps_txchain) {
+#if defined(BCMDBG)
+			scan_info->scan_tx_pwrsave ||
+#endif 
+			scan_info->scan_cmn->scan_pwrsave_enable) && !scan_info->scan_ps_txchain) {
 		/* if txchains doesn't match with hw defaults, don't modify chain mask
 		  * and also ignore for 1x1. scan pwrsave iovar should be enabled otherwise ignore.
 		  */
@@ -4365,7 +4930,10 @@ wlc_scan_ps_config_cores_non_arb(scan_info_t *scan_info, bool flag)
 			}
 		}
 		if ((
-			scan_info->scan_pwrsave_enable) && !scan_info->scan_ps_rxchain) {
+#if defined(BCMDBG)
+			scan_info->scan_rx_pwrsave ||
+#endif 
+			scan_info->scan_cmn->scan_pwrsave_enable) && !scan_info->scan_ps_rxchain) {
 		/* if rxchain doesn't match with hw defaults, don't modify chain mask
 		  * and also ignore for 1x1. scan pwrsave iovar should be enabled otherwise ignore.
 		  */
@@ -4410,7 +4978,7 @@ wlc_scan_ps_config_cores(scan_info_t *scan_info, bool flag)
 #ifdef WL_STF_ARBITRATOR
 	wlc_info_t *wlc = scan_info->wlc;
 	if (WLC_STF_ARB_ENAB(wlc->pub)) {
-		wlc_stf_arbi_handle_scan_ps_config_cores_intermediate(scan_info->scan_pub, flag);
+		wlc_scan_ps_config_cores_arb(scan_info->scan_pub, flag);
 		return BCME_OK;
 	} else
 #endif /* WL_STF_ARBITRATOR */
@@ -4420,6 +4988,72 @@ wlc_scan_ps_config_cores(scan_info_t *scan_info, bool flag)
 }
 #endif /* WLSCAN_PS */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_scan_dump(scan_info_t *si, struct bcmstrbuf *b)
+{
+	const bcm_bit_desc_t scan_flags[] = {
+		{SCAN_STATE_SUPPRESS, "SUPPRESS"},
+		{SCAN_STATE_SAVE_PRB, "SAVE_PRB"},
+		{SCAN_STATE_PASSIVE, "PASSIVE"},
+		{SCAN_STATE_WSUSPEND, "WSUSPEND"},
+		{SCAN_STATE_RADAR_CLEAR, "RADAR_CLEAR"},
+		{SCAN_STATE_PSPEND, "PSPEND"},
+		{SCAN_STATE_DLY_WSUSPEND, "DLY_WSUSPEND"},
+		{SCAN_STATE_READY, "READY"},
+		{SCAN_STATE_INCLUDE_CACHE, "INC_CACHE"},
+		{SCAN_STATE_PROHIBIT, "PROHIBIT"},
+		{SCAN_STATE_IN_TMR_CB, "IN_TMR_CB"},
+		{SCAN_STATE_OFFCHAN, "OFFCHAN"},
+		{SCAN_STATE_TERMINATE, "TERMINATE"},
+		{0, NULL}
+	};
+	const char *scan_usage[] = {
+		"normal",
+		"escan",
+		"af",
+		"rm",
+		"excursion"
+	};
+	char state_str[64];
+	char ssidbuf[SSID_FMT_BUF_LEN];
+	char eabuf[ETHER_ADDR_STR_LEN];
+	const char *bss_type_str;
+	uint32 tsf_l, tsf_h;
+	struct wlc_scan_info *scan_pub = si->scan_pub;
+
+	wlc_format_ssid(ssidbuf, si->ssid_list[0].SSID, si->ssid_list[0].SSID_len);
+	bcm_format_flags(scan_flags, scan_pub->state, state_str, 64);
+
+	bss_type_str = wlc_bsstype_dot11name(scan_pub->wlc_scan_cmn->bss_type);
+
+	bcm_bprintf(b, "in_progress %d SSID \"%s\" type %s BSSID %s state 0x%x [%s] "
+	            "usage %u [%s]\n",
+	            scan_pub->in_progress, ssidbuf, bss_type_str,
+	            bcm_ether_ntoa(&scan_pub->bssid, eabuf),
+	            scan_pub->state, state_str,
+	            scan_pub->wlc_scan_cmn->usage,
+	            scan_pub->wlc_scan_cmn->usage < ARRAYSIZE(scan_usage) ?
+	            scan_usage[scan_pub->wlc_scan_cmn->usage] : "unknown");
+
+	bcm_bprintf(b, "extdscan %d\n", si->extdscan);
+
+	if (SCAN_IN_PROGRESS(scan_pub))
+		bcm_bprintf(b, "wlc->home_chanspec: %x chanspec_current %x\n",
+		            SCAN_HOME_CHANNEL(si), si->chanspec_list[si->channel_idx]);
+
+	bcm_bprintf(b, "suppress_ssid %d\n", si->suppress_ssid);
+
+	if (SCAN_ISUP(si)) {
+		SCAN_READ_TSF(si, &tsf_l, &tsf_h);
+		bcm_bprintf(b, "start_tsf 0x%08x current tsf 0x%08x\n", si->start_tsf, tsf_l);
+	} else {
+		bcm_bprintf(b, "start_tsf 0x%08x current tsf <not up>\n", si->start_tsf);
+	}
+
+	return 0;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* scanmac enable */
 static int
@@ -4448,7 +5082,7 @@ scanmac_enable(scan_info_t *scan_info, int enable)
 
 		/* bsscfg with the MAC address exists */
 		if (wlc_bsscfg_find_by_hwaddr(wlc, &scan_info->scanmac_config.mac) != NULL) {
-			WL_ERROR(("wl%d: MAC address is in use\n", wlc->pub->unit));
+			WL_SCAN_ERROR(("wl%d: MAC address is in use\n", wlc->pub->unit));
 			return BCME_BUSY;
 		}
 
@@ -4463,7 +5097,7 @@ scanmac_enable(scan_info_t *scan_info, int enable)
 			return BCME_NOMEM;
 		}
 		else if (wlc_bsscfg_init(wlc, bsscfg) != BCME_OK) {
-			WL_ERROR(("wl%d: cannot init bsscfg\n", wlc->pub->unit));
+			WL_SCAN_ERROR(("wl%d: cannot init bsscfg\n", wlc->pub->unit));
 			err = BCME_ERROR;
 			goto free;
 		}
@@ -4617,7 +5251,7 @@ scanmac_config(scan_info_t *scan_info, wl_scanmac_config_t *config)
 	if (ETHER_ISNULLADDR(&config->random_mask)) {
 		wlc_bsscfg_t *match = wlc_bsscfg_find_by_hwaddr(wlc, &config->mac);
 		if (match != NULL && match != bsscfg) {
-			WL_ERROR(("wl%d: MAC address is in use\n", wlc->pub->unit));
+			WL_SCAN_ERROR(("wl%d: MAC address is in use\n", wlc->pub->unit));
 			return BCME_BUSY;
 		}
 	}
@@ -4658,7 +5292,7 @@ scanmac_get(scan_info_t *scan_info, void *params, uint p_len, void *arg, int len
 	/* verify length */
 	if (p_len < OFFSETOF(wl_scanmac_t, data) ||
 		sm->len > p_len - OFFSETOF(wl_scanmac_t, data)) {
-		WL_ERROR((WLC_SCAN_LENGTH_ERR, __FUNCTION__, p_len, sm->len));
+		WL_SCAN_ERROR((WLC_SCAN_LENGTH_ERR, __FUNCTION__, p_len, sm->len));
 		return BCME_BUFTOOSHORT;
 	}
 
@@ -4710,7 +5344,6 @@ scanmac_set(scan_info_t *scan_info, void *arg, int len)
 	/* verify length */
 	if (len < (int)OFFSETOF(wl_scanmac_t, data) ||
 		sm->len > len - OFFSETOF(wl_scanmac_t, data)) {
-		WL_ERROR((WLC_SCAN_LENGTH_ERR, __FUNCTION__, len, sm->len));
 		return BCME_BUFTOOSHORT;
 	}
 
@@ -4820,7 +5453,7 @@ wlc_scan_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	/* Make sure that any active scan is not associated to this cfg */
 	if (scan_cfg) {
 		/* ASSERT(bsscfg != wlc_scan_bsscfg(wlc->scan)); */
-		WL_ERROR(("wl%d.%d: %s: scan still active using cfg %p\n", WLCWLUNIT(wlc),
+		WL_SCAN_ERROR(("wl%d.%d: %s: scan still active using cfg %p\n", WLCWLUNIT(wlc),
 		          WLC_BSSCFG_IDX(cfg), __FUNCTION__, OSL_OBFUSCATE_BUF(cfg)));
 		wlc_scan_abort(wlc->scan, WLC_E_STATUS_ABORT);
 	}
@@ -4841,9 +5474,116 @@ wlc_scan_excursion_end(scan_info_t *scan_info)
 	wlc_scan_mac_bcn_promisc(scan_info);
 
 	/* check & resume normal tx queue operation */
-	if (scan_info->wlc->excursion_active) {
-		wlc_suspend_mac_and_wait(scan_info->wlc);
-		wlc_excursion_end(scan_info->wlc);
-		wlc_enable_mac(scan_info->wlc);
-	}
+	wlc_txqueue_end(scan_info->wlc, NULL, NULL);
 }
+
+#ifdef RSDB_APSCAN
+/*
+ * Checks if chanspeclist contain channels of AP band.
+ * return: Num of channels available after truncation of channels in AP bands based on prunetype
+ *	-ROAM_PRUNE_APBAND_CHANNELS: Remove the channels in the AP band other than AP's
+ *		operating channel
+ *	-ROAM_PRUNE_NON_APBAND_CHANNELS: Removes all the channels other than the channels
+ *		in the AP band other than the AP's operating channel
+ */
+static int
+wlc_scan_filter_ap_band_channels(scan_info_t * scan, chanspec_t *chspec_list, int num)
+{
+	wlc_info_t *wlc = SCAN_WLC(scan);
+	int cfgidx;
+	int chanidx;
+	wlc_bsscfg_t *cfg;
+	int sync_idx = num;
+	bool prune_chanlist = FALSE;
+	chanspec_t ap_chspec = 0;
+	chanspec_t *ch_list = chspec_list;
+	roam_prune_type_t prune_type = ROAM_PRUNE_APBAND_CHANNELS;
+	int chnum_to_remove = 0;
+
+	/* it is a roam scan and roam prune active. */
+	prune_type = wlc_assoc_get_prune_type(wlc);
+
+	if (prune_type == ROAM_PRUNE_NONE)
+		return num;
+
+	/* Running through ALL cfg's irrespective of WLC. */
+	FOR_ALL_UP_AP_BSS(wlc, cfgidx, cfg) {
+		/* Only infrastructure AP's should be considered */
+		if (P2P_GO(wlc, cfg))
+			continue;
+
+		ap_chspec = wf_chspec_ctlchspec(cfg->current_bss->chanspec);
+		chspec_list = ch_list;
+		for (chanidx = 0; chanidx < num; chanidx++) {
+			if (prune_type == ROAM_PRUNE_APBAND_CHANNELS) {
+				/* Removing the AP's band channels */
+				if (CHSPEC_BAND(ap_chspec) == CHSPEC_BAND(*chspec_list) &&
+					ap_chspec != *chspec_list) {
+					/* set the chanspec to zero to truncate. */
+					*chspec_list = 0;
+					chnum_to_remove++;
+					prune_chanlist = TRUE;
+				}
+			} else if (prune_type == ROAM_PRUNE_NON_APBAND_CHANNELS) {
+				/* Removing the Non AP band channels and AP operating channels */
+				if (CHSPEC_BAND(ap_chspec) != CHSPEC_BAND(*chspec_list) ||
+					ap_chspec == *chspec_list) {
+					/* set the chanspec to zero to truncate. */
+					*chspec_list = 0;
+					chnum_to_remove++;
+					prune_chanlist = TRUE;
+				}
+			}
+			chspec_list++;
+		}
+	}
+
+	chspec_list = ch_list;
+	if (prune_chanlist) {
+		chanidx = 0;
+		sync_idx = 0;
+		while (chanidx < num) {
+			if (*chspec_list != 0) {
+				*(ch_list + sync_idx) = *chspec_list;
+				sync_idx++;
+			}
+			chspec_list++;
+			chanidx++;
+		}
+	}
+
+	/* return the channel number remaining after truncation */
+	return (num - chnum_to_remove);
+}
+
+/* Find if prune will applied based on roam->prune_type.
+ * input: Roam Chanspec list. (RCC list)
+ * num: Number of channels.
+ * Return Value:
+ * Number of channels remaining after pruning depending on the prune type
+ */
+int
+wlc_scan_filter_channels(wlc_scan_info_t *scan_pub, chanspec_t *chspec_list, int num)
+{
+	scan_info_t *scan = (scan_info_t*) scan_pub->scan_priv;
+	bool pruned_scan;
+
+	/* return the exact number of channels that are received */
+	int ret = num;
+
+	if (chspec_list == NULL || !num)
+		goto end;
+
+	pruned_scan = (RSDB_APSCAN_ENAB(SCAN_WLC(scan)->pub) &&
+			wlc_rsdb_any_aps_active(SCAN_WLC(scan)) &&
+			!wlc_rsdb_any_go_active(SCAN_WLC(scan)));
+
+	if (pruned_scan == FALSE)
+		goto end;
+
+	ret = wlc_scan_filter_ap_band_channels(scan, chspec_list, num);
+
+end:
+	return ret;
+}
+#endif /* RSDB_APSCAN */

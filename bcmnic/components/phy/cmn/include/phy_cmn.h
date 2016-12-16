@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_cmn.h 619656 2016-02-17 21:16:33Z gkatzir $
+ * $Id: phy_cmn.h 619656 2016-02-17 21:16:33Z $
  */
 
 #ifndef _phy_cmn_h_

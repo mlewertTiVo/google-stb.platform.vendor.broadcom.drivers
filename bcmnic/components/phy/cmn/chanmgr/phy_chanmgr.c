@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_chanmgr.c 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_chanmgr.c 659833 2016-09-16 05:39:06Z $
  */
 
 #include <phy_cfg.h>
@@ -29,6 +29,10 @@
 #include <phy_chanmgr_api.h>
 #include <phy_chanmgr.h>
 #include <phy_tpc.h>
+#include <sbchipc.h>
+#include <saverestore.h>
+
+#define CHANNEL_UNDEFINED       0xEF
 
 /* forward declaration */
 typedef struct phy_chanmgr_mem phy_chanmgr_mem_t;
@@ -127,7 +131,7 @@ WLBANDINITFN(phy_chanmgr_set_bw)(phy_init_ctx_t *ctx)
 	phy_chanmgr_info_t *ti = (phy_chanmgr_info_t *)ctx;
 	phy_info_t *pi = ti->pi;
 
-	PHY_TRACE(("%s\n", __FUNCTION__));
+	PHY_TRACE(("%s\n", "phy_chanmgr_set_bw"));
 
 	/* sanitize bw here to avoid later mess. wlc_set_bw will invoke phy_reset,
 	 *  but phy_init recursion is avoided by using init_in_progress
@@ -150,7 +154,7 @@ WLBANDINITFN(phy_chanmgr_init_chanspec)(phy_init_ctx_t *ctx)
 	phy_chanmgr_info_t *chanmgri = (phy_chanmgr_info_t *)ctx;
 	phy_type_chanmgr_fns_t *fns = chanmgri->fns;
 
-	PHY_TRACE(("%s\n", __FUNCTION__));
+	PHY_TRACE(("%s\n", "phy_chanmgr_init_chanspec"));
 
 	if (fns->init_chanspec != NULL) {
 		return (fns->init_chanspec)(fns->ctx);
@@ -176,6 +180,32 @@ BCMATTACHFN(phy_chanmgr_unregister_impl)(phy_chanmgr_info_t *ti)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 }
 
+/* band specific init */
+int
+WLBANDINITFN(phy_chanmgr_bsinit)(phy_info_t *pi, chanspec_t chanspec, bool forced)
+{
+	/* if chanswitch path, skip phy_init for D11REV > 40 */
+	phy_type_chanmgr_fns_t *fns = pi->chanmgri->fns;
+	if (fns->bsinit != NULL) {
+		return (fns->bsinit)(fns->ctx, chanspec, forced);
+	} else {
+		return phy_init(pi, chanspec);
+	}
+}
+
+/* band width init */
+int
+WLBANDINITFN(phy_chanmgr_bwinit)(phy_info_t *pi, chanspec_t chanspec)
+{
+	phy_type_chanmgr_fns_t *fns = pi->chanmgri->fns;
+	if (fns->bwinit != NULL) {
+		return (fns->bwinit)(fns->ctx, chanspec);
+	} else {
+		return phy_init(pi, chanspec);
+	}
+}
+
+#if defined(PHYCAL_CACHING)
 /*
  * Create/Destroy an operating chanspec context for 'chanspec'.
  */
@@ -184,7 +214,7 @@ phy_chanmgr_create_ctx(phy_info_t *pi, chanspec_t chanspec)
 {
 	phy_chanmgr_notif_data_t data;
 
-	PHY_TRACE(("%s: chanspec 0x%x\n", __FUNCTION__, chanspec));
+	PHY_TRACE(("phy_chanmgr_create_ctx: chanspec 0x%x\n", chanspec));
 
 	data.event = PHY_CHANMGR_NOTIF_OPCHCTX_OPEN;
 	data.new = chanspec;
@@ -197,13 +227,14 @@ phy_chanmgr_destroy_ctx(phy_info_t *pi, chanspec_t chanspec)
 {
 	phy_chanmgr_notif_data_t data;
 
-	PHY_TRACE(("%s: chanspec 0x%x\n", __FUNCTION__, chanspec));
+	PHY_TRACE(("phy_chanmgr_destroy_ctx: chanspec 0x%x\n", chanspec));
 
 	data.event = PHY_CHANMGR_NOTIF_OPCHCTX_CLOSE;
 	data.new = chanspec;
 
 	(void)phy_chanmgr_notif_signal(pi->chanmgr_notifi, &data, FALSE);
 }
+#endif /* PHYCAL_CACHING */
 
 bool
 wlc_phy_is_txbfcal(wlc_phy_t *ppi)
@@ -234,6 +265,7 @@ wlc_phy_chanspec_bandrange_get(phy_info_t *pi, chanspec_t chanspec)
 	return range;
 }
 
+#if defined(PHYCAL_CACHING)
 /*
  * Use the operating chanspec context associated with the 'chanspec' as
  * the current operating chanspec context.
@@ -245,8 +277,7 @@ int
 phy_chanmgr_set_oper(phy_info_t *pi, chanspec_t chanspec)
 {
 	phy_chanmgr_notif_data_t data;
-
-	PHY_TRACE(("%s: chanspec 0x%x\n", __FUNCTION__, chanspec));
+	PHY_TRACE(("phy_chanmgr_set_oper: 0x%x\n", chanspec));
 
 	data.event = PHY_CHANMGR_NOTIF_OPCH_CHG;
 	data.new = chanspec;
@@ -266,7 +297,7 @@ phy_chanmgr_set(phy_info_t *pi, chanspec_t chanspec)
 {
 	phy_chanmgr_notif_data_t data;
 
-	PHY_TRACE(("%s: chanspec 0x%x\n", __FUNCTION__, chanspec));
+	PHY_TRACE(("phy_chanmgr_set: 0x%x\n", chanspec));
 
 	data.event = PHY_CHANMGR_NOTIF_CH_CHG;
 	data.new = chanspec;
@@ -274,6 +305,7 @@ phy_chanmgr_set(phy_info_t *pi, chanspec_t chanspec)
 
 	return phy_chanmgr_notif_signal(pi->chanmgr_notifi, &data, FALSE);
 }
+#endif /* PHYCAL_CACHING */
 
 /*
  * Update the radio chanspec.
@@ -300,14 +332,10 @@ wlc_phy_chanspec_set(wlc_phy_t *ppi, chanspec_t chanspec)
 	phy_chanmgr_info_t *chanmgri = pi->chanmgri;
 	phy_type_chanmgr_fns_t *fns = chanmgri->fns;
 
-#if defined(PHYCAL_CACHING)
-	ch_calcache_t *ctx = NULL;
-	ctx = wlc_phy_get_chanctx(pi, chanspec);
-#endif
 	if (!SCAN_RM_IN_PROGRESS(pi) &&	(chanmgri->home_chanspec != chanspec))
 		chanmgri->home_chanspec = chanspec;
 
-	PHY_TRACE(("wl%d: %s: chanspec %x\n", pi->sh->unit, __FUNCTION__, chanspec));
+	PHY_TRACE(("wl%d: wlc_phy_chanspec_set: %x\n", pi->sh->unit, chanspec));
 
 	ASSERT(!wf_chspec_malformed(chanspec));
 
@@ -318,28 +346,17 @@ wlc_phy_chanspec_set(wlc_phy_t *ppi, chanspec_t chanspec)
 #endif /* WLSRVSDB */
 
 	/* Update ucode channel value */
-	wlc_phy_chanspec_shm_set(pi, chanspec);
+	phy_chanmgr_set_shm(pi, chanspec);
 
 #if defined(AP) && defined(RADAR)
 	/* indicate first time radar detection */
 	if (pi->radari != NULL)
-		phy_radar_first_indicator_set(pi->radari);
+		phy_radar_first_indicator_set(pi);
 #endif
 	/* Update interference mode for ACPHY, as now init is not called on band/bw change */
 	if ((!SCAN_RM_IN_PROGRESS(pi)) && (fns->interfmode_upd != NULL)) {
 		fns->interfmode_upd(fns->ctx, chanspec);
 	}
-
-#if defined(PHYCAL_CACHING)
-	/* If a channel context exists, retrieve the multi-phase info from there, else use
-	 * the default one
-	 */
-	/* A context has to be explicitly created */
-	if (ctx)
-		pi->cal_info = &ctx->cal_info;
-	else
-		pi->cal_info = pi->def_cal_info;
-#endif
 
 	ASSERT(pi->cal_info);
 
@@ -390,62 +407,255 @@ wlc_phy_chanspec_set(wlc_phy_t *ppi, chanspec_t chanspec)
 			FALSE);
 	}
 
-#if defined(PHYCAL_CACHING)
-	/* Switched the context so restart a pending MPHASE cal, else clear the state */
-	if (ctx) {
-		if (wlc_phy_cal_cache_restore(pi) == BCME_ERROR) {
-			PHY_CAL(("%s cal cache restore on chanspec 0x%x Failed\n",
-				__FUNCTION__, pi->radio_chanspec));
-		}
-
-		if (CHIPID(pi->sh->chip) != BCM43237_CHIP_ID) {
-			/* Calibrate if now > last_cal_time + glacial */
-			if (PHY_PERICAL_MPHASE_PENDING(pi)) {
-				PHY_CAL(("%s: Restarting calibration for 0x%x phase %d\n",
-					__FUNCTION__, chanspec, pi->cal_info->cal_phase_id));
-				/* Delete any existing timer just in case */
-				wlapi_del_timer(pi->sh->physhim, pi->phycal_timer);
-				wlapi_add_timer(pi->sh->physhim, pi->phycal_timer, 0, 0);
-			} else if ((pi->phy_cal_mode != PHY_PERICAL_DISABLE) &&
-				(pi->phy_cal_mode != PHY_PERICAL_MANUAL) &&
-				((pi->sh->now - pi->cal_info->last_cal_time) >=
-				pi->sh->glacial_timer)) {
-				wlc_phy_cal_perical((wlc_phy_t *)pi, PHY_PERICAL_WATCHDOG);
-			}
-		} else {
-			if (PHY_PERICAL_MPHASE_PENDING(pi))
-				wlapi_del_timer(pi->sh->physhim, pi->phycal_timer);
-		}
-	}
-#endif /* PHYCAL_CACHING */
-
 	wlapi_update_bt_chanspec(pi->sh->physhim, chanspec,
 		SCAN_INPROG_PHY(pi), RM_INPROG_PHY(pi));
 	PHY_CHANLOG(pi, __FUNCTION__, TS_EXIT, 0);
 }
 
-#if defined(WLTEST)
-int
-phy_chanmgr_get_smth(phy_info_t *pi, int32* ret_int_ptr)
+
+
+
+/* **************************************** */
+/*     VSDB, RVSDB Module related definitions         */
+/* **************************************** */
+/* ***               Internal functions  (PHY use)    *** */
+
+#ifdef WLSRVSDB
+void
+phy_sr_vsdb_reset(wlc_phy_t * ppi)
 {
+	phy_info_t *pi = (phy_info_t*)ppi;
+
+	pi->srvsdb_state->swbkp_snapshot_valid[0] = 0;
+	pi->srvsdb_state->swbkp_snapshot_valid[1] = 0;
+	pi->srvsdb_state->sr_vsdb_bank_valid[0] = FALSE;
+	pi->srvsdb_state->sr_vsdb_bank_valid[1] = FALSE;
+	pi->srvsdb_state->prev_chanspec = CHANNEL_UNDEFINED;
+	pi->srvsdb_state->vsdb_trig_cnt = 0;
+}
+
+void
+phy_reset_srvsdb_engine(wlc_phy_t *ppi)
+{
+	/** reset SR VSDB hw */
+	uint origidx;
+	chipcregs_t *cc;
+	si_t *sih;
+	phy_info_t *pi = (phy_info_t*)ppi;
 	phy_chanmgr_info_t *chanmgri = pi->chanmgri;
-	phy_type_chanmgr_fns_t *fns = chanmgri->fns;
-	if (fns->get_smth != NULL) {
-		return (fns->get_smth)(fns->ctx, ret_int_ptr);
-	} else {
-		return BCME_UNSUPPORTED;
+
+	sih = (si_t*)pi->sh->sih;
+
+	origidx = si_coreidx(sih);
+
+	/* setcore to chipcmn */
+	cc = si_setcoreidx(sih, SI_CC_IDX);
+
+	/* Jira-SWWLAN-28550: A fix of Sr related changes from B0 to B1 created a problem for VSDB
+	For VSDB, Bit 9 of PMU chip control 2 gates off the clock to the SR engine, in VSDB
+	mode this Bit is always SET.
+	Fix: RESET the Bit Before SRVSDB, and SET it back after SRVSDB, this is done presently
+	only for 4324B4 chips
+	*/
+	if (CHIP_4324_B4(pi)) {
+		uint32 temp, temp1;
+		W_REG(si_osh(pi->sh->sih), &cc->chipcontrol_addr, 2);
+		temp = R_REG(si_osh(pi->sh->sih), &cc->chipcontrol_data);
+		temp1 = temp & 0xFFFFFDFF;
+		W_REG(si_osh(pi->sh->sih), &cc->chipcontrol_data, temp1);
 	}
+
+	/* Reset 2nd bit */
+	sr_chipcontrol(sih, 0x4, 0x0);
+	/* Set 2nd bit */
+	sr_chipcontrol(sih, 0x4, 0x4);
+
+	/* Jira-SWWLAN-28550: A fix of Sr related changes from B0 to B1 created a problem for VSDB
+	For VSDB, Bit 9 of PMU chip control 2 gates off the clock to the SR engine, in VSDB
+	mode this Bit is always SET.
+	Fix: RESET the Bit Before SRVSDB, and SET it back after SRVSDB, this is done presently
+	only for 4324B4 chips
+	*/
+	if (CHIP_4324_B4(pi)) {
+		uint32 temp, temp1;
+		W_REG(si_osh(pi->sh->sih), &cc->chipcontrol_addr, 2);
+		temp = R_REG(si_osh(pi->sh->sih), &cc->chipcontrol_data);
+		temp1 = temp | 0x200;
+		W_REG(si_osh(pi->sh->sih), &cc->chipcontrol_data, temp1);
+	}
+
+	/* Set core orig core */
+	si_setcoreidx(sih, origidx);
+
+}
+#endif /* WLSRVSDB */
+
+/* **************************************** */
+/* ***                External functions (HAL)         *** */
+/* **************************************** */
+#ifdef WLSRVSDB
+int
+phy_chanmgr_vsdb_force_chans(wlc_phy_t *ppi, uint16* vsdb_chans, uint8 set)
+{
+	uint16 chans[2];
+	phy_info_t *pi = (phy_info_t*)ppi;
+
+	if (set) {
+		pi->srvsdb_state->force_vsdb = 1;
+
+		bcopy(vsdb_chans, chans, 2*sizeof(uint16));
+
+		phy_chanmgr_vsdb_sr_attach_module(ppi, chans[0], chans[1]);
+
+
+		pi->srvsdb_state->prev_chanspec = chans[0];
+		pi->srvsdb_state->force_vsdb_chans[0] = chans[0];
+		pi->srvsdb_state->force_vsdb_chans[1] = chans[1];
+
+	} else {
+		phy_chanmgr_vsdb_sr_detach_module(ppi);
+
+		/* Reset force vsdb chans */
+		pi->srvsdb_state->force_vsdb_chans[0] = 0;
+		pi->srvsdb_state->force_vsdb_chans[1] = 0;
+		pi->srvsdb_state->force_vsdb = 0;
+	}
+
+	return BCME_OK;
 }
 
 int
-phy_chanmgr_set_smth(phy_info_t *pi, int8 int_val)
+phy_chanmgr_vsdb_sr_detach_module(wlc_phy_t *ppi)
 {
-	phy_chanmgr_info_t *chanmgri = pi->chanmgri;
-	phy_type_chanmgr_fns_t *fns = chanmgri->fns;
-	if (fns->set_smth != NULL) {
-		return (fns->set_smth)(fns->ctx, int_val);
-	} else {
-		return BCME_UNSUPPORTED;
+	uint8 i;
+	phy_info_t *pi = (phy_info_t*)ppi;
+
+	/* Disable the flags */
+	phy_sr_vsdb_reset(ppi);
+
+	for (i = 0; i < SR_MEMORY_BANK; i++) {
+		if (pi->vsdb_bkp[i] != NULL) {
+			if (pi->vsdb_bkp[i]->pi_nphy != NULL) {
+				phy_mfree(pi, pi->vsdb_bkp[i]->pi_nphy, sizeof(phy_info_nphy_t));
+				pi->vsdb_bkp[i]->pi_nphy = NULL;
+			}
+
+			if (pi->vsdb_bkp[i]->tx_power_offset != NULL)
+				ppr_delete(pi->sh->osh, pi->vsdb_bkp[i]->tx_power_offset);
+			phy_mfree(pi, pi->vsdb_bkp[i], sizeof(vsdb_backup_t));
+			pi->vsdb_bkp[i] = NULL;
+			PHY_INFORM(("de allocate %d of mem \n", (sizeof(vsdb_backup_t) +
+				sizeof(phy_info_nphy_t))));
+		}
 	}
+	pi->srvsdb_state->sr_vsdb_channels[0] = 0;
+	pi->srvsdb_state->sr_vsdb_channels[1] = 0;
+	pi->srvsdb_state->srvsdb_active = 0;
+
+	pi->srvsdb_state->acimode_noisemode_reset_done[0] = FALSE;
+	pi->srvsdb_state->acimode_noisemode_reset_done[1] = FALSE;
+
+	/* srvsdb switch status */
+	pi->srvsdb_state->switch_successful = FALSE;
+
+	/* Timers */
+	bzero(pi->srvsdb_state->prev_timer, 2 * sizeof(uint32));
+	bzero(pi->srvsdb_state->sum_delta_timer, 2 * sizeof(uint32));
+
+	/* counter for no of switch iterations */
+	bzero(pi->srvsdb_state->num_chan_switch, 2 * sizeof(uint8));
+
+	/* crsglitch */
+	bzero(pi->srvsdb_state->prev_crsglitch_cnt, 2 * sizeof(uint32));
+	bzero(pi->srvsdb_state->sum_delta_crsglitch, 2 * sizeof(uint32));
+	/* bphy_crsglitch */
+	bzero(pi->srvsdb_state->prev_bphy_rxcrsglitch_cnt, 2 * sizeof(uint32));
+	bzero(pi->srvsdb_state->sum_delta_bphy_crsglitch, 2 * sizeof(uint32));
+	/* badplcp */
+	bzero(pi->srvsdb_state->prev_badplcp_cnt, 2 * sizeof(uint32));
+	bzero(pi->srvsdb_state->sum_delta_prev_badplcp, 2 * sizeof(uint32));
+	/* bphy_badplcp */
+	bzero(pi->srvsdb_state->prev_bphy_badplcp_cnt, 2 * sizeof(uint32));
+	bzero(pi->srvsdb_state->sum_delta_prev_bphy_badplcp, 2 * sizeof(uint32));
+
+	return BCME_OK;
 }
-#endif /* defined(WLTEST) */
+
+/**
+ * Despite the 'attach' in its name: is not meant to be called in the 'attach' phase.
+ * Returns TRUE on success. Caller supplied arguments chan0 and chan1 may not reside in the same
+ * band.
+ */
+uint8
+phy_chanmgr_vsdb_sr_attach_module(wlc_phy_t *ppi, chanspec_t chan0, chanspec_t chan1)
+{
+
+	uint8 i;
+	phy_info_t *pi = (phy_info_t*)ppi;
+
+	/* Detach allready existing structire */
+	phy_chanmgr_vsdb_sr_detach_module(ppi);
+
+	/* reset srvsdb enigne */
+	phy_reset_srvsdb_engine(ppi);
+
+	/* Alloc mem for sw backup structures */
+	for (i = 0; i < SR_MEMORY_BANK; i++) {
+		pi->vsdb_bkp[i] = phy_malloc_fatal(pi, sizeof(vsdb_backup_t));
+		pi->vsdb_bkp[i]->pi_nphy = phy_malloc_fatal(pi, sizeof(phy_info_nphy_t));
+		PHY_INFORM(("allocate %d of mem \n", (sizeof(vsdb_backup_t) +
+			sizeof(phy_info_nphy_t))));
+	}
+
+	pi->srvsdb_state->sr_vsdb_channels[0] = CHSPEC_CHANNEL(chan0);
+	pi->srvsdb_state->sr_vsdb_channels[1] = CHSPEC_CHANNEL(chan1);
+	pi->srvsdb_state->srvsdb_active = 1;
+
+	return TRUE;
+}
+#endif /* WLSRVSDB */
+
+/**
+ * Reduce channel switch time by attempting to use hardware acceleration.
+ */
+uint8
+phy_chanmgr_vsdb_sr_set_chanspec(wlc_phy_t *ppi, chanspec_t chanspec, uint8 *last_chan_saved)
+{
+	uint8 switched = FALSE;
+#ifdef WLSRVSDB
+	phy_info_t *pi = (phy_info_t*)ppi;
+	phy_type_chanmgr_fns_t *fns = pi->chanmgri->fns;
+
+	if (fns->set_chanspec_sr_vsdb) {
+		switched = (fns->set_chanspec_sr_vsdb)(fns->ctx, chanspec, last_chan_saved);
+	}
+#endif /* WLSRVSDB */
+
+	return switched;
+}
+
+int
+phy_chanmgr_set_shm(phy_info_t *pi, chanspec_t chanspec)
+{
+	uint16 curchannel;
+
+	/* Update ucode channel value */
+	if (D11REV_LT(pi->sh->corerev, 40)) {
+		/* d11 rev < 40: compose a channel info value */
+		curchannel = CHSPEC_CHANNEL(chanspec);
+#ifdef BAND5G
+		if (CHSPEC_IS5G(chanspec))
+			curchannel |= D11_CURCHANNEL_5G;
+#endif /* BAND5G */
+		if (CHSPEC_IS40(chanspec))
+			curchannel |= D11_CURCHANNEL_40;
+	} else {
+		/* d11 rev >= 40: store the chanspec */
+		curchannel = chanspec;
+	}
+
+	PHY_TRACE(("wl%d: %s: M_CURCHANNEL %x\n", pi->sh->unit, __FUNCTION__, curchannel));
+	wlapi_bmac_write_shm(pi->sh->physhim, M_CURCHANNEL(pi), curchannel);
+
+	return BCME_OK;
+}

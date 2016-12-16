@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_wowl.h 615961 2016-01-29 07:36:40Z $
+ * $Id: wlc_wowl.h 665388 2016-10-17 21:59:15Z $
 */
 
 
@@ -25,6 +25,9 @@ extern wowl_info_t *wlc_wowl_attach(wlc_info_t *wlc);
 extern void wlc_wowl_detach(wowl_info_t *wowl);
 extern bool wlc_wowl_cap(struct wlc_info *wlc);
 extern bool wlc_wowl_enable(wowl_info_t *wowl);
+#ifdef BCMULP
+extern bool wlc_wowl_pm2_to_pm1(wowl_info_t *wowl);
+#endif /* BCMULP */
 extern uint32 wlc_wowl_clear(wowl_info_t *wowl);
 extern uint32 wlc_wowl_clear_bmac(wowl_info_t *wowl);
 extern int wlc_wowl_wake_reason_process(wowl_info_t *wowl);
@@ -90,11 +93,6 @@ extern int wlc_wowl_verify_d3_exit(wlc_info_t * wlc);
 #define MAXPATTERNS(wlc) \
 	(wlc_wowl_cap(wlc) ?									\
 	(D11REV_LT((wlc)->pub->corerev, 40) ? 12 : 4)	: 0)
-#ifdef WOWL_OS_OFFLOADS
-#define WOWL_OFFLOAD_ENABLED(wlc) \
-	((CHIPID(wlc->pub->sih->chip) == BCM4360_CHIP_ID) || \
-	WLEXTSTA_ENAB(wlc->pub) || BCMULP_ENAB())
-#endif /* WOWL_OS_OFFLOADS */
 
 #define WOWL_KEEPALIVE_FIXED_PARAM	11
 

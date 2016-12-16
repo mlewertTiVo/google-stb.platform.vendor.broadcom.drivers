@@ -18,23 +18,10 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.c 661501 2016-09-26 09:50:11Z $
+ * $Id: linux_osl.c 673442 2016-12-02 01:16:17Z $
  */
 
 #define LINUX_PORT
-
-#ifdef WLCXO_DATA
-/* Custom override for linux specific file built as part of cxo sim
- * offload driver.
- */
-#ifndef WLCXO_LX_OSL
-#define WLCXO_LX_OSL
-#endif
-#ifndef WLCXO_LX_PKT
-#define WLCXO_LX_PKT
-#endif
-#undef WLCXO_CXO_PKT
-#endif /* WLCXO_DATA */
 
 #include <typedefs.h>
 #include <bcmendian.h>
@@ -62,6 +49,9 @@
 #include <linux/vmalloc.h>
 #include <pcicfg.h>
 
+#if defined(BCMASSERT_LOG) && !defined(OEM_ANDROID)
+#include <bcm_assert_log.h>
+#endif
 
 #ifdef BCM_SECURE_DMA
 #include <linux/module.h>
@@ -125,8 +115,11 @@ struct pcmcia_dev {
 };
 #endif 
 
-/* Global ASSERT type flag */
+#if defined(STB_SOC_WIFI) && !defined(BCMDBG)
+uint32 g_assert_type = 1; /* For STB_SOC_WIFI without BCMDBG bypass Kernel Panic */
+#else
 uint32 g_assert_type = 0; /* By Default Kernel Panic */
+#endif /* defined(STB_SOC_WIFI) && !defined(BCMDBG) */
 
 module_param(g_assert_type, int, 0);
 #ifdef	BCM_SECURE_DMA
@@ -410,6 +403,13 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 #endif /* BCMDBG_CTRACE */
 
 
+#ifdef BCMDBG_ASSERT
+	if (pkttag) {
+		struct sk_buff *skb;
+		BCM_REFERENCE(skb);
+		ASSERT(OSL_PKTTAG_SZ <= sizeof(skb->cb));
+	}
+#endif
 	return osh;
 }
 
@@ -519,7 +519,7 @@ osl_prefetch(const void *ptr)
 }
 
 #elif (defined(__ARM_ARCH_7A__) && !defined(DHD_USE_COHERENT_MEM_FOR_RING)) || \
-	defined(BCM7271)
+	defined(STB_SOC_WIFI)
 
 inline int BCMFASTPATH
 osl_arch_is_coherent(void)
@@ -550,12 +550,12 @@ osl_cache_flush(void *va, uint size)
 #endif /* BCM47XX_CA9 */
 
 	if (size > 0)
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 		dma_sync_single_for_device(OSH_NULL, virt_to_phys(va), size, DMA_TX);
-#else /* BCM7271 */
+#else /* STB_SOC_WIFI */
 		dma_sync_single_for_device(OSH_NULL, virt_to_dma(OSH_NULL, va), size,
 			DMA_TO_DEVICE);
-#endif /* BCM7271 */
+#endif /* STB_SOC_WIFI */
 }
 
 inline void BCMFASTPATH
@@ -566,17 +566,17 @@ osl_cache_inv(void *va, uint size)
 		return;
 #endif /* BCM47XX_CA9 */
 
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 	dma_sync_single_for_cpu(OSH_NULL, virt_to_phys(va), size, DMA_RX);
-#else /* BCM7271 */
+#else /* STB_SOC_WIFI */
 	dma_sync_single_for_cpu(OSH_NULL, virt_to_dma(OSH_NULL, va), size, DMA_FROM_DEVICE);
-#endif /* BCM7271 */
+#endif /* STB_SOC_WIFI */
 }
 
 inline void BCMFASTPATH
 osl_prefetch(const void *ptr)
 {
-#if !defined(BCM7271)
+#if !defined(STB_SOC_WIFI)
 	__asm__ __volatile__("pld\t%0" :: "o"(*(const char *)ptr) : "cc");
 #endif
 }
@@ -600,6 +600,11 @@ osl_pci_read_config(osl_t *osh, uint offset, uint size)
 			break;
 	} while (retry--);
 
+#ifdef BCMDBG
+	if (retry < PCI_CFG_RETRY)
+		printk("PCI CONFIG READ access to %d required %d retries\n", offset,
+		       (PCI_CFG_RETRY - retry));
+#endif /* BCMDBG */
 
 	return (val);
 }
@@ -622,6 +627,11 @@ osl_pci_write_config(osl_t *osh, uint offset, uint size, uint val)
 			break;
 	} while (retry--);
 
+#ifdef BCMDBG
+	if (retry < PCI_CFG_RETRY)
+		printk("PCI CONFIG WRITE access to %d required %d retries\n", offset,
+		       (PCI_CFG_RETRY - retry));
+#endif /* BCMDBG */
 }
 
 /* return bus # for the pci device pointed by osh->pdev */
@@ -944,7 +954,7 @@ osl_dma_alloc_consistent(osl_t *osh, uint size, uint16 align_bits, uint *alloced
 
 #ifndef	BCM_SECURE_DMA
 #if (defined(__ARM_ARCH_7A__) && !defined(DHD_USE_COHERENT_MEM_FOR_RING)) || \
-	defined(BCM7271)
+	defined(STB_SOC_WIFI)
 	va = kmalloc(size, GFP_ATOMIC | __GFP_ZERO);
 	if (va)
 		*pap = (ulong)__virt_to_phys((ulong)va);
@@ -983,7 +993,7 @@ osl_dma_free_consistent(osl_t *osh, void *va, uint size, dmaaddr_t pa)
 
 #ifndef BCM_SECURE_DMA
 #if (defined(__ARM_ARCH_7A__) && !defined(DHD_USE_COHERENT_MEM_FOR_RING)) || \
-	defined(BCM7271)
+	defined(STB_SOC_WIFI)
 	kfree(va);
 #else
 #ifdef BCMDMA64OSL
@@ -1006,18 +1016,14 @@ osl_virt_to_phys(void *va)
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 36)
 #include <asm/cacheflush.h>
-void BCMFASTPATH_CXO
+void BCMFASTPATH
 osl_dma_flush(osl_t *osh, void *va, uint size, int direction, void *p, hnddma_seg_map_t *dmah)
 {
-#if defined(WLCXO) && !defined(WLCXO_SIM)
-	dmac_flush_range(va, (void *)(((uint32)va) + size));
-	outer_flush_range((uint32)VIRT_TO_PHYS(va), ((uint32)VIRT_TO_PHYS(va)) + size);
-#endif
 	return;
 }
 #endif /* LINUX_VERSION_CODE >= 2.6.36 */
 
-dmaaddr_t BCMFASTPATH_CXO
+dmaaddr_t BCMFASTPATH
 osl_dma_map(osl_t *osh, void *va, uint size, int direction, void *p, hnddma_seg_map_t *dmah)
 {
 	int dir;
@@ -1087,7 +1093,7 @@ no_cache_ops:
 	}
 #endif /* BCM47XX_CA9 */
 
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 #if (__LINUX_ARM_ARCH__ == 8)
 	/* need to flush or invalidate the cache here */
 	if (dir == DMA_TX) { /* to device */
@@ -1102,9 +1108,9 @@ no_cache_ops:
 #else /* (__LINUX_ARM_ARCH__ == 8) */
 	return dma_map_single(osh->pdev, va, size, dir);
 #endif /* (__LINUX_ARM_ARCH__ == 8) */
-#else /* ! BCM7271 */
+#else /* ! STB_SOC_WIFI */
 	map_addr = pci_map_single(osh->pdev, va, size, dir);
-#endif	/* ! BCM7271 */
+#endif	/* ! STB_SOC_WIFI */
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))
 	ret = pci_dma_mapping_error(osh->pdev, map_addr);
@@ -1125,7 +1131,7 @@ no_cache_ops:
 	return ret_addr;
 }
 
-void BCMFASTPATH_CXO
+void BCMFASTPATH
 osl_dma_unmap(osl_t *osh, dmaaddr_t pa, uint size, int direction)
 {
 	int dir;
@@ -1146,7 +1152,7 @@ osl_dma_unmap(osl_t *osh, dmaaddr_t pa, uint size, int direction)
 	pci_unmap_single(osh->pdev, paddr, size, dir);
 #else /* BCMDMA64OSL */
 
-#ifdef BCM7271
+#ifdef STB_SOC_WIFI
 #if (__LINUX_ARM_ARCH__ == 8)
 	if (dir == DMA_TX) { /* to device */
 		dma_sync_single_for_device(OSH_NULL, pa, size, DMA_TX);
@@ -1159,9 +1165,9 @@ osl_dma_unmap(osl_t *osh, dmaaddr_t pa, uint size, int direction)
 #else /* (__LINUX_ARM_ARCH__ == 8) */
 	dma_unmap_single(osh->pdev, (uintptr)pa, size, dir);
 #endif /* (__LINUX_ARM_ARCH__ == 8) */
-#else /* BCM7271 */
+#else /* STB_SOC_WIFI */
 	pci_unmap_single(osh->pdev, (uint32)pa, size, dir);
-#endif /* BCM7271 */
+#endif /* STB_SOC_WIFI */
 
 #endif /* BCMDMA64OSL */
 }
@@ -1183,6 +1189,61 @@ extern void osl_preempt_enable(osl_t *osh)
 	preempt_enable();
 }
 
+#if defined(BCMDBG_ASSERT) || defined(BCMASSERT_LOG)
+void
+osl_assert(const char *exp, const char *file, int line)
+{
+	char tempbuf[256];
+	const char *basename;
+
+	basename = strrchr(file, '/');
+	/* skip the '/' */
+	if (basename)
+		basename++;
+
+	if (!basename)
+		basename = file;
+
+#ifdef BCMASSERT_LOG
+	snprintf(tempbuf, 64, "\"%s\": file \"%s\", line %d\n",
+		exp, basename, line);
+#ifndef OEM_ANDROID
+	bcm_assert_log(tempbuf);
+#endif /* OEM_ANDROID */
+#endif /* BCMASSERT_LOG */
+
+#ifdef BCMDBG_ASSERT
+	snprintf(tempbuf, 256, "assertion \"%s\" failed: file \"%s\", line %d\n",
+		exp, basename, line);
+
+	/* Print assert message and give it time to be written to /var/log/messages */
+	if (!in_interrupt() && g_assert_type != 1 && g_assert_type != 3) {
+		const int delay = 3;
+		printk("%s", tempbuf);
+		printk("panic in %d seconds\n", delay);
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(delay * HZ);
+	}
+#endif /* BCMDBG_ASSERT */
+
+	switch (g_assert_type) {
+	case 0:
+		panic("%s", tempbuf);
+		break;
+	case 1:
+		/* fall through */
+	case 3:
+		printk("%s", tempbuf);
+		break;
+	case 2:
+		printk("%s", tempbuf);
+		BUG();
+		break;
+	default:
+		break;
+	}
+}
+#endif /* BCMDBG_ASSERT || BCMASSERT_LOG */
 
 void
 osl_delay(uint usec)

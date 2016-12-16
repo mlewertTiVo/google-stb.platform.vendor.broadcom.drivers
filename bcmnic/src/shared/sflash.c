@@ -32,7 +32,11 @@
 #include <bcmdevs.h>
 #include <sflash.h>
 
+#ifdef BCMDBG
+#define	SFL_MSG(args)	printf args
+#else
 #define	SFL_MSG(args)
+#endif	/* BCMDBG */
 
 /* Private global state */
 static struct sflash sflash;

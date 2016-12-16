@@ -12,12 +12,13 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_wd.c 612466 2016-01-14 02:49:29Z jqliu $
+ * $Id: phy_wd.c 658638 2016-09-08 19:31:07Z $
  */
 
 #include <phy_cfg.h>
 #include <typedefs.h>
 #include <bcmdefs.h>
+#include <bcmdevs.h>
 #include <bcmutils.h>
 #include <phy_dbg.h>
 #include <phy_mem.h>
@@ -54,13 +55,13 @@ struct phy_wd_info {
 	phy_wd_cb_reg_t *cb_tbl;
 	phy_wd_cache_t *ctx;
 	phy_cache_cubby_id_t ccid;
+	uint8 phywatchdog_override_ctr;
 };
 
 /* module private states memory layout */
 typedef struct {
 	phy_wd_info_t info;
 	phy_wd_cb_reg_t cb[PHY_WD_CB_REG_SZ];
-	phy_wd_cache_t ctx;
 /* add other variable size variables here at the end */
 } phy_wd_mem_t;
 
@@ -75,18 +76,18 @@ static uint32 wdmgr_dbgmsg = WDMGR_DBGMSG_VERBOSE;
 
 /* local function declaration */
 static int phy_wd_dowd(phy_wd_info_t *wi, bool mchan, bool non_mchan);
-#ifdef NEW_PHY_CAL_ARCH
-static void phy_wd_init_ctx(phy_cache_ctx_t *ctx);
-static int phy_wd_save_ctx(phy_cache_ctx_t *ctx, uint8 *buf);
-static int phy_wd_restore_ctx(phy_cache_ctx_t *ctx, uint8 *buf);
+#if defined(PHYCAL_CACHING)
+static void phy_wd_init_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf);
+static int phy_wd_save_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf);
+static int phy_wd_restore_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf);
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-static int phy_wd_dump_ctx(phy_cache_ctx_t *ctx, uint8 *buf, struct bcmstrbuf *b);
+static int phy_wd_dump_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf, struct bcmstrbuf *b);
 #else
 #define phy_wd_dump_ctx NULL
 #endif
 
 static int phy_wd_chanmgr_notif(phy_chanmgr_notif_ctx_t *ctx, phy_chanmgr_notif_data_t *data);
-#endif /* NEW_PHY_CAL_ARCH */
+#endif /* PHYCAL_CACHING */
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
 static int phy_wd_dump(void *ctx, struct bcmstrbuf *b);
@@ -109,16 +110,11 @@ BCMATTACHFN(phy_wd_attach)(phy_info_t *pi)
 
 	info->cb_sz = PHY_WD_CB_REG_SZ;
 	info->cb_tbl = ((phy_wd_mem_t *)info)->cb;
-
-	info->ctx = &((phy_wd_mem_t *)info)->ctx;
-	info->ctx->last_wd = ~0;
-
-#ifdef NEW_PHY_CAL_ARCH
+#if defined(PHYCAL_CACHING)
 	/* reserve some space in cache */
 	if (phy_cache_reserve_cubby(pi->cachei, phy_wd_init_ctx,
 	                phy_wd_save_ctx, phy_wd_restore_ctx, phy_wd_dump_ctx, info,
-	                sizeof(phy_wd_cache_t), PHY_CACHE_FLAG_AUTO_SAVE,
-	                &info->ccid) != BCME_OK) {
+	                sizeof(phy_wd_cache_t), &info->ccid) != BCME_OK) {
 		PHY_ERROR(("%s: phy_cache_reserve_cubby failed\n", __FUNCTION__));
 		goto fail;
 	}
@@ -130,13 +126,13 @@ BCMATTACHFN(phy_wd_attach)(phy_info_t *pi)
 		PHY_ERROR(("%s: phy_chanmgr_notif_add_interest failed\n", __FUNCTION__));
 		goto fail;
 	}
-#endif /* NEW_PHY_CAL_ARCH */
+#endif /* PHYCAL_CACHING */
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
 	/* register dump callback */
 	phy_dbg_add_dump_fn(pi, "phywd", phy_wd_dump, info);
 #endif
-
+	info->phywatchdog_override_ctr = 0;
 	return info;
 
 	/* error */
@@ -215,10 +211,33 @@ BCMATTACHFN(phy_wd_add_fn)(phy_wd_info_t *wi, phy_wd_fn_t fn, phy_wd_ctx_t *ctx,
 	return BCME_OK;
 }
 
+void
+phy_wd_override(phy_info_t *pi, bool val)
+{
+	pi->phywatchdog_override = val;
+}
+
 static bool
 phy_wd_detect_mchan(phy_wd_info_t *wi)
 {
 	return wi->opch_chg > 0;
+}
+
+void
+phy_watchdog_suspend(phy_info_t *pi)
+{
+	phy_wd_info_t *wi = pi->wdi;
+	wi->phywatchdog_override_ctr++;
+}
+
+void
+phy_watchdog_resume(phy_info_t *pi)
+{
+	phy_wd_info_t *wi = pi->wdi;
+	ASSERT(wi->phywatchdog_override_ctr > 0);
+	if (wi->phywatchdog_override_ctr > 0) {
+		wi->phywatchdog_override_ctr--;
+	}
 }
 
 /* watchdog */
@@ -236,7 +255,7 @@ phy_watchdog(phy_info_t *pi)
 	if (ISSIM_ENAB(pi->sh->sih))
 		return BCME_OK;
 
-	if (!pi->phywatchdog_override)
+	if ((!pi->phywatchdog_override) || (wi->phywatchdog_override_ctr != 0))
 		return BCME_OK;
 
 	ret = phy_wd_dowd(wi, !phy_wd_detect_mchan(wi), TRUE);
@@ -251,8 +270,8 @@ phy_wd_dowd(phy_wd_info_t *wi, bool mchan, bool non_mchan)
 	phy_info_t *pi = wi->pi;
 	uint16 j;
 
-	PHY_WDMGR(("%s: mchan %d non-mchan %d now %u\n",
-	           __FUNCTION__, mchan, non_mchan, pi->sh->now));
+	PHY_WDMGR(("%s: mchan %d non-mchan %d now %u chanspec %d\n",
+	           "phy_wd_dowd", mchan, non_mchan, pi->sh->now, pi->radio_chanspec));
 
 	for (j = 0; j < wi->cb_cnt; j ++) {
 		bool defer = (wi->cb_tbl[j].states & CB_STATE_DEFER) != 0;
@@ -296,18 +315,19 @@ phy_wd_dowd(phy_wd_info_t *wi, bool mchan, bool non_mchan)
 		}
 	}
 
-	return wlc_phy_watchdog((wlc_phy_t *)pi);
+	return BCME_OK;
 }
 
-#ifdef NEW_PHY_CAL_ARCH
+#if defined(PHYCAL_CACHING)
 static int
 phy_wd_dosim(phy_wd_info_t *wi)
 {
 	phy_info_t *pi = wi->pi;
 
-	PHY_TRACE(("%s\n", __FUNCTION__));
+	PHY_TRACE(("phy_wd_dosim\n"));
 
-	if (pi->sh->now - wi->ctx->last_wd > 0) {
+	if (wi->ctx != NULL &&
+	    pi->sh->now - wi->ctx->last_wd > 0) {
 		wi->ctx->last_wd = pi->sh->now;
 		return phy_wd_dowd(wi, TRUE, FALSE);
 	}
@@ -320,56 +340,75 @@ static int
 phy_wd_chanmgr_notif(phy_chanmgr_notif_ctx_t *ctx, phy_chanmgr_notif_data_t *data)
 {
 	phy_wd_info_t *wi = (phy_wd_info_t *)ctx;
+	phy_info_t *pi = wi->pi;
 
-	PHY_TRACE(("%s\n", __FUNCTION__));
+	PHY_TRACE(("phy_wd_chanmgr_notif\n"));
 
-	wi->opch_chg ++;
-
-	return phy_wd_dosim(wi);
+	if (wi->ctx) {
+		wi->opch_chg ++;
+		if (CHIPID(pi->sh->chip) != BCM43237_CHIP_ID) {
+			/* Calibrate if now > last_cal_time + glacial */
+			if (PHY_PERICAL_MPHASE_PENDING(pi)) {
+				PHY_CAL(("%s: Restarting calibration for 0x%x phase %d\n",
+				    __FUNCTION__, pi->radio_chanspec, pi->cal_info->cal_phase_id));
+				/* Delete any existing timer just in case */
+				wlapi_del_timer(pi->sh->physhim, pi->phycal_timer);
+				wlapi_add_timer(pi->sh->physhim, pi->phycal_timer, 0, 0);
+			}
+		} else {
+			if (PHY_PERICAL_MPHASE_PENDING(pi))
+				wlapi_del_timer(pi->sh->physhim, pi->phycal_timer);
+		}
+		return phy_wd_dosim(wi);
+	} else {
+		PHY_TRACE(("%s Don't do anything\n", "phy_wd_chanmgr_notif"));
+		return BCME_OK;
+	}
 }
 
 /* init wd states */
 static void
-phy_wd_init_ctx(phy_cache_ctx_t *ctx)
+phy_wd_init_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf)
 {
-	phy_wd_info_t *wi = (phy_wd_info_t *)ctx;
+	PHY_TRACE(("phy_wd_init_ctx\n"));
 
-	PHY_TRACE(("%s\n", __FUNCTION__));
-
-	wi->ctx->last_wd = ~0;
+	((phy_wd_cache_t *) buf)->last_wd = ~0;
 }
 
 /* save wd states */
 static int
-phy_wd_save_ctx(phy_cache_ctx_t *ctx, uint8 *buf)
+phy_wd_save_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf)
 {
 	phy_wd_info_t *wi = (phy_wd_info_t *)ctx;
 
-	PHY_TRACE(("%s: buf %p\n", __FUNCTION__, buf));
+	PHY_TRACE(("phy_wd_save_ctx\n"));
 
-	bcopy((uint8 *)wi->ctx, buf, sizeof(phy_wd_cache_t));
-
+	wi->ctx = NULL;
 	return BCME_OK;
 }
 
 /* restore wd states */
 static int
-phy_wd_restore_ctx(phy_cache_ctx_t *ctx, uint8 *buf)
+phy_wd_restore_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf)
 {
 	phy_wd_info_t *wi = (phy_wd_info_t *)ctx;
 
-	PHY_TRACE(("%s: buf %p\n", __FUNCTION__, buf));
+	PHY_TRACE(("phy_wd_restore_ctx: buf %p\n", buf));
 
-	bcopy(buf, (uint8 *)wi->ctx, sizeof(phy_wd_cache_t));
+	wi->ctx = (phy_wd_cache_t *) buf;
 
 	return BCME_OK;
 }
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
 static int
-phy_wd_dump_ctx(phy_cache_ctx_t *ctx, uint8 *buf, struct bcmstrbuf *b)
+phy_wd_dump_ctx(phy_cache_ctx_t *ctx, void *unused, uint8 *buf, struct bcmstrbuf *b)
 {
 	phy_wd_info_t *wi = (phy_wd_info_t *)ctx;
+
+	if (wi->ctx == NULL) {
+		return BCME_OK;
+	}
 
 	bcm_bprintf(b, "wd:\n");
 	bcm_bprintf(b, "  last_wd %u\n", wi->ctx->last_wd);
@@ -377,7 +416,7 @@ phy_wd_dump_ctx(phy_cache_ctx_t *ctx, uint8 *buf, struct bcmstrbuf *b)
 	return BCME_OK;
 }
 #endif /* BCMDBG || BCMDBG_DUMP */
-#endif /* NEW_PHY_CAL_ARCH */
+#endif /* PHYCAL_CACHING */
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
 static int

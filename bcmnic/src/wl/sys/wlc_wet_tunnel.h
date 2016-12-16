@@ -50,5 +50,8 @@ extern int wlc_wet_tunnel_recv_proc(wlc_wet_tunnel_info_t *weth, void *sdu);
 extern int wlc_wet_tunnel_multi_packet_forward(wlc_info_t *wlc, osl_t *osh,
 	struct scb *scb, struct wlc_if *wlcif, void *sdu);
 
+#ifdef BCMDBG
+extern int wlc_wet_tunnel_dump(wlc_wet_tunnel_info_t *weth, struct bcmstrbuf *b);
+#endif /* BCMDBG */
 
 #endif	/* _wlc_wet_tunnel_h_ */

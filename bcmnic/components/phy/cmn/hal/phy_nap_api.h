@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_nap_api.h 630449 2016-04-09 00:27:18Z vyass $
+ * $Id: phy_nap_api.h 630449 2016-04-09 00:27:18Z $
  */
 
 #ifndef _phy_nap_api_h_

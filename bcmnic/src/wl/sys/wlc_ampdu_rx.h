@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ampdu_rx.h 645677 2016-06-25 21:24:31Z $
+ * $Id: wlc_ampdu_rx.h 655649 2016-08-22 23:38:31Z $
 */
 
 
@@ -40,8 +40,14 @@ extern void ampdu_cleanup_tid_resp(ampdu_rx_info_t *ampdu_rx, struct scb *scb,
 extern void wlc_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, struct scb *scb, struct wlc_frminfo *f);
 
 extern void wlc_ampdu_clear_rx_dump(ampdu_rx_info_t *ampdu_rx);
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
 extern int wlc_ampdu_rx_dump(ampdu_rx_info_t *ampdu_rx, struct bcmstrbuf *b);
+#if defined(EVENT_LOG_COMPILE)
+extern int wlc_ampdu_rxmcs_counter_report(ampdu_rx_info_t *ampdu_rx, uint16 tag);
+#ifdef ECOUNTERS
+extern int wlc_ampdu_ecounter_rx_dump(ampdu_rx_info_t *ampdu_rx, uint16 tag);
+#endif
+#endif /* EVENT_LOG_COMPILE */
 #endif 
 
 extern int wlc_send_addba_resp(wlc_info_t *wlc, struct scb *scb, uint16 status,
@@ -70,6 +76,8 @@ extern void wlc_ampdu_rx_send_delba(ampdu_rx_info_t *ampdu_rx, struct scb *scb, 
 	uint16 initiator, uint16 reason);
 extern int wlc_ampdu_rx_queued_pkts(ampdu_rx_info_t * ampdu_rx,
 	struct scb * scb, int tid, uint * timestamp);
+extern void wlc_ampdu_rx_dump_queued_pkts(ampdu_rx_info_t * ampdu_rx,
+	struct scb * scb, int tid, struct bcmstrbuf *b);
 #if defined(PKTC) || defined(PKTC_DONGLE)
 extern bool wlc_ampdu_chainable(ampdu_rx_info_t *ampdu_rx, void *p, struct scb *scb,
 	uint16 seq, uint16 tid);
@@ -88,21 +96,5 @@ extern void wlc_ampdu_agg_state_update_rx_all(wlc_info_t *wlc, bool aggr);
 void wlc_ampdu_rxrates_get(ampdu_rx_info_t *ampdu_rx, wifi_rate_stat_t *rate, int i, bool vht);
 #endif
 extern bool wlc_scb_ampdurx_on_tid(struct scb *scb, uint8 prio);
-#ifdef WLCXO_CTRL
-extern void wlc_cxo_ctrl_ses_ctx_ampdu_resp_upd(ampdu_rx_info_t *ampdu_rx, struct scb *scb,
-	wlc_cx_ses_ctx_t *ctx);
-
-extern void wlc_cxo_ctrl_rsc_ampdu_rx_init(ampdu_rx_info_t *ampdu_rx, struct scb *scb, uint8 tid,
-	wlc_cx_tid_resp_t *cx_resp);
-extern void wlc_cxo_ctrl_scb_rx_ses_add(wlc_info_t *wlc, struct scb *scb);
-
-extern void wlc_cxo_ctrl_ampdu_recvdata(ampdu_rx_info_t *ampdu_rx, void *p, struct scb *scb,
-	wlc_d11rxhdr_t *wrxh, uint8 *plcp, struct dot11_header *h);
-
-#ifdef WLCXO_OFLD_REORDER
-extern void wlc_cxo_host_send_delba(wlc_info_t *wlc, wlc_cx_scb_t *scb_cx, uint8 tid,
-	uint16 initiator, uint16 reason);
-#endif /* WLCXO_OFLD_REORDER */
-#endif /* WLCXO_CTRL */
 
 #endif /* _wlc_ampdu_rx_h_ */

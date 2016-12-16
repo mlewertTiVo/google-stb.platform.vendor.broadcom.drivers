@@ -17,7 +17,7 @@
  *
  *  $ txgaintables_tcl2c.py 47xxtcl wlc_phytbl_ac_gains.h wlc_phytbl_ac_gains.c
  *
- * $Id: wlc_phytbl_ac_gains.h 647804 2016-07-07 15:46:23Z ernst $
+ * $Id: wlc_phytbl_ac_gains.h 657003 2016-08-30 17:33:52Z $
  */
 /* FILE-CSTYLED */
 
@@ -53,6 +53,7 @@ extern uint16 txgain_20693_phyrev15_5g_ipa_53573[TXGAIN_TABLES_LEN];
 extern uint16 txgain_20693_phyrev32_2g_epa[TXGAIN_TABLES_LEN];
 extern uint16 txgain_20693_phyrev32_5g_epa[TXGAIN_TABLES_LEN];
 extern const uint16 txgain_20695_phyrev36_2g_ipa[TXGAIN_TABLES_LEN];
+extern const uint16 txgain_20695_phyrev36_5g_ipa[TXGAIN_TABLES_LEN];
 extern const uint16 txgain_20695_phyrev36_2g_epa[TXGAIN_TABLES_LEN];
 extern const uint16 txgain_20695_phyrev36_5g_epa[TXGAIN_TABLES_LEN];
 extern const uint16 txgain_20695_phyrev36_5g_epa_B0[TXGAIN_TABLES_LEN];
@@ -62,4 +63,6 @@ extern const uint16 acphy28nm_txgain_epa_5g_p5_20694a0_rev5[TXGAIN_TABLES_LEN];
 extern const uint16 acphy28nm_txgain_epa_2g_p5_20694a0_rev5[TXGAIN_TABLES_LEN];
 extern const uint16 acphy28nm_txgain_epa_2g_p5_20696a0_rev0[TXGAIN_TABLES_LEN];
 extern const uint16 acphy28nm_txgain_epa_5g_p5_20696a0_rev0[TXGAIN_TABLES_LEN];
+extern const uint16 acphy28nm_txgain_epa_5g_p5_20694b0_rev8[TXGAIN_TABLES_LEN];
+extern const uint16 acphy28nm_txgain_epa_2g_p5_20694b0_rev8[TXGAIN_TABLES_LEN];
 #endif /* WLC_PHYTBL_AC_GAINS_H_ */

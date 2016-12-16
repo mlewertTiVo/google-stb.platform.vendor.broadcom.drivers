@@ -18,21 +18,8 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_pkt.c 644626 2016-06-21 06:18:02Z $
+ * $Id: linux_pkt.c 654730 2016-08-16 09:04:55Z $
  */
-
-#ifdef WLCXO_DATA
-/* Custom overrides for linux specific file built as part of cxo sim
- * offload driver.
- */
-#ifndef WLCXO_LX_OSL
-#define WLCXO_LX_OSL
-#endif
-#ifndef WLCXO_LX_PKT
-#define WLCXO_LX_PKT
-#endif
-#undef WLCXO_CXO_PKT
-#endif /* WLCXO_DATA */
 
 #include <typedefs.h>
 #include <bcmendian.h>
@@ -48,6 +35,9 @@
 #include <bcmutils.h>
 #include <pcicfg.h>
 
+#if defined(BCMASSERT_LOG) && !defined(OEM_ANDROID)
+#include <bcm_assert_log.h>
+#endif
 #include <linux/fs.h>
 #include "linux_osl_priv.h"
 
@@ -154,7 +144,7 @@ osl_fwderbuf_reset(osl_t *osh, struct sk_buff *skb)
 {
 }
 
-static struct sk_buff * BCMFASTPATH_CXO
+static struct sk_buff * BCMFASTPATH
 osl_alloc_skb(osl_t *osh, unsigned int len)
 {
 	struct sk_buff *skb;
@@ -186,7 +176,7 @@ osl_alloc_skb(osl_t *osh, unsigned int len)
 /*
  * Allocate and add an object to packet pool.
  */
-void * BCMFASTPATH_CXO
+void * BCMFASTPATH
 osl_ctfpool_add(osl_t *osh)
 {
 	struct sk_buff *skb;
@@ -238,7 +228,7 @@ osl_ctfpool_add(osl_t *osh)
 /*
  * Allocate and add an object to the specified packet pool.
  */
-void * BCMFASTPATH_CXO
+void * BCMFASTPATH
 osl_ctfpool_add_by_poolptr(osl_t *osh, void *_ctfpool)
 {
 	struct sk_buff *skb;
@@ -450,7 +440,7 @@ osl_pktfastget(osl_t *osh, uint len)
  * IP code depends on skb->cb to be setup correctly with various options
  * In our case, that means it should be 0
  */
-struct sk_buff * BCMFASTPATH_CXO
+struct sk_buff * BCMFASTPATH
 osl_pkt_tonative(osl_t *osh, void *pkt)
 {
 	struct sk_buff *nskb;
@@ -485,10 +475,10 @@ osl_pkt_tonative(osl_t *osh, void *pkt)
  * Also, a packettag is zeroed out
  */
 #ifdef BCMDBG_CTRACE
-void * BCMFASTPATH_CXO
+void * BCMFASTPATH
 osl_pkt_frmnative(osl_t *osh, void *pkt, int line, char *file)
 #else
-void * BCMFASTPATH_CXO
+void * BCMFASTPATH
 osl_pkt_frmnative(osl_t *osh, void *pkt)
 #endif /* BCMDBG_CTRACE */
 {
@@ -533,14 +523,14 @@ osl_pkt_frmnative(osl_t *osh, void *pkt)
 
 /* Return a new packet. zero out pkttag */
 #ifdef BCMDBG_CTRACE
-void * BCMFASTPATH_CXO
+void * BCMFASTPATH
 linux_pktget(osl_t *osh, uint len, int line, char *file)
 #else
 #ifdef BCM_OBJECT_TRACE
-void * BCMFASTPATH_CXO
+void * BCMFASTPATH
 linux_pktget(osl_t *osh, uint len, int line, const char *caller)
 #else
-void * BCMFASTPATH_CXO
+void * BCMFASTPATH
 linux_pktget(osl_t *osh, uint len)
 #endif /* BCM_OBJECT_TRACE */
 #endif /* BCMDBG_CTRACE */
@@ -560,8 +550,12 @@ linux_pktget(osl_t *osh, uint len)
 #else /* CTFPOOL */
 	if ((skb = osl_alloc_skb(osh, len))) {
 #endif /* CTFPOOL */
+#ifdef BCMDBG
+		skb_put(skb, len);
+#else
 		skb->tail += len;
 		skb->len  += len;
+#endif
 		skb->priority = 0;
 
 #ifdef BCMDBG_CTRACE
@@ -626,10 +620,10 @@ osl_pktfastfree(osl_t *osh, struct sk_buff *skb)
 
 /* Free the driver packet. Free the tag if present */
 #ifdef BCM_OBJECT_TRACE
-void BCMFASTPATH_CXO
+void BCMFASTPATH
 linux_pktfree(osl_t *osh, void *p, bool send, int line, const char *caller)
 #else
-void BCMFASTPATH_CXO
+void BCMFASTPATH
 linux_pktfree(osl_t *osh, void *p, bool send)
 #endif /* BCM_OBJECT_TRACE */
 {

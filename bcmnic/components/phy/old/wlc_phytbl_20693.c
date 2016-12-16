@@ -17,7 +17,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  * All Rights Reserved.
  *
- * $Id: wlc_phytbl_20693.c 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: wlc_phytbl_20693.c 654940 2016-08-17 07:52:40Z $
  */
 
 #include <wlc_cfg.h>
@@ -27,8 +27,8 @@
 #include "wlc_radioreg_20693.h"
 #include "wlc_phytbl_20693.h"
 
-#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))) || defined(BCMDBG_PHYDUMP)
+#if ((defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)) || \
+	defined(BCMDBG_PHYDUMP)
 const radio_20xx_dumpregs_t dumpregs_20693_rsdb[] = {
 	{0x000},
 	{0x001},
@@ -3146,7 +3146,7 @@ CONST radio_20xx_dumpregs_t dumpregs_20693_rev32[] = {
 	{ RFP1_20693_PLL_MUXSELECT_LINE(32)},
 	{ 0xFFFF,               }
 };
-#endif /* BCMDBG, BCMDBG_DUMP, BCMINTERNAL, DBG_PHY_IOV, BCMDBG_PHYDUMP */
+#endif 
 
 const radio_20xx_prefregs_t prefregs_20693_rev5[] = {
 	{ RF0_20693_PLL_XTAL3(5),       0x488},
@@ -4211,6 +4211,8 @@ const radio_20xx_prefregs_t prefregs_20693_rev32[] = {
 	{ RFP0_20693_WL_XTAL_CFG2(32),      0x2100},
 	{ RFP0_20693_PLL_XTALLDO1(32),       0x1c8},
 	{ RFP0_20693_PLL_LF1(32),        0x66},
+	{ RFP0_20693_PLL_VCO4(32),         0x4},
+	{ RFP0_20693_PLL_VCO5(32),        0x48},
 	{ RFP0_20693_LO2G_LOGEN0_IDAC1(32),        0x14},
 	{ RFP0_20693_LO2G_LOGEN0_IDAC2(32),        0x1d},
 	{ RFP0_20693_LO2G_VCO_DRV_CFG1(32),         0x7},
@@ -4230,6 +4232,8 @@ const radio_20xx_prefregs_t prefregs_20693_rev32[] = {
 	{ RFP1_20693_WL_XTAL_CFG2(32),      0x2100},
 	{ RFP1_20693_PLL_XTALLDO1(32),       0x1c8},
 	{ RFP1_20693_PLL_LF1(32),        0x66},
+	{ RFP1_20693_PLL_VCO4(32),         0x4},
+	{ RFP1_20693_PLL_VCO5(32),        0x48},
 	{ RFP1_20693_LO2G_LOGEN0_IDAC1(32),        0x14},
 	{ RFP1_20693_LO2G_LOGEN0_IDAC2(32),        0x1d},
 	{ RFP1_20693_LO2G_VCO_DRV_CFG1(32),         0x7},

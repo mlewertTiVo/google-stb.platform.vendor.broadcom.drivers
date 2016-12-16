@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_mfp.h 526445 2015-01-14 07:42:43Z $
+ * $Id: wlc_mfp.h 663406 2016-10-05 07:22:04Z $
  *
  * This file provides the software interface to MFP functionality - first
  * defined as 802.11w and incorporated into IEEE 802.11/2012. The
@@ -42,7 +42,7 @@
 #define WLC_MFP_SA_QUERY_MAX_TIMEOUTS 25
 
 /* SA query timeout in milliseconds */
-#define WLC_MFP_SA_QUERY_TIMEOUT_MS 200
+#define WLC_MFP_SA_QUERY_TIMEOUT_MS 25
 
 /* association come back time interval - in TUs - must be greater
  * than SA query timeout
@@ -122,6 +122,6 @@ int wlc_mfp_igtk_update(const wlc_mfp_info_t *mfp, wlc_bsscfg_t *bsscfg, int key
 	uint16 key_id, uint8 *pn, uint8 *key);
 
 bool mfp_get_bip(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg, wpa_suite_t *bip);
-
+bool mfp_has_bip(wlc_bsscfg_t *bsscfg);
 #endif /* MFP */
 #endif	/* !_wlc_mfp_h_ */

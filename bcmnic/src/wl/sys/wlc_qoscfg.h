@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_qoscfg.h 628401 2016-03-30 23:10:13Z $
+ * $Id: wlc_qoscfg.h 650062 2016-07-20 10:02:05Z $
  */
 
 #ifndef _wlc_qoscfg_h_
@@ -53,8 +53,8 @@
 #define WLC_WME_RETRY_LFB_SET(wlc, ac, val) \
 	wlc->wme_retries[ac] = SFIELD(wlc->wme_retries[ac], EDCF_LFB, val)
 
-uint16 wlc_wme_get_frame_medium_time(wlc_info_t *wlc, ratespec_t ratespec,
-	uint8 preamble_type, uint mac_len);
+uint16 wlc_wme_get_frame_medium_time(wlc_info_t *wlc, uint8 bandunit,
+	ratespec_t ratespec, uint8 preamble_type, uint mac_len);
 
 void wlc_wme_retries_write(wlc_info_t *wlc);
 void wlc_wme_shm_read(wlc_info_t *wlc);

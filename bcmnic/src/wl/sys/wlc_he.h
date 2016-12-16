@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_he.h 633860 2016-04-25 22:56:58Z $
+ * $Id: wlc_he.h 665619 2016-10-18 12:43:21Z $
  */
 
 #ifndef _wlc_he_h_
@@ -27,7 +27,6 @@ wlc_he_info_t *wlc_he_attach(wlc_info_t *wlc);
 void wlc_he_detach(wlc_he_info_t *hei);
 
 void wlc_he_init_defaults(wlc_he_info_t *hei);
-
 
 /* features */
 #define WLC_HE_FEATURES_GET(pub, mask) ((pub)->he_features & (mask))
@@ -91,5 +90,14 @@ int wlc_he_twt_teardown(wlc_he_info_t *hei, struct scb *scb, uint8 flow_id);
 
 /* twt information interface */
 int wlc_he_twt_info(wlc_he_info_t *hei, struct scb *scb, wl_twt_idesc_t *desc);
+
+#define BSSCOLOR_EN  TRUE
+#define BSSCOLOR_DIS FALSE
+
+#ifdef WL11AX
+void wlc_he_on_switch_bsscfg(wlc_he_info_t *hei, wlc_bsscfg_t *cfg, bool bsscolor_enable);
+#else
+#define wlc_he_on_switch_bsscfg(hei, cfg, bsscolor_enable)
+#endif /* WL11AX */
 
 #endif /* _wlc_he_h_ */

@@ -16,8 +16,35 @@
 #define __NAS_WKSP_H__
 
 /* debug stuff */
+#ifdef BCMDBG
+#include <stdio.h>
+#include <string.h>
+extern int debug_nwksp;
+#define NASDBG(fmt, arg...)	(\
+{ \
+	if (debug_nwksp) { \
+		fprintf(stderr, "%s: "fmt, __FUNCTION__ , ##arg); \
+	} \
+} \
+)
+#define NASHEX(mem, size)	(\
+{ \
+	if (debug_nwksp) { \
+		char buf[80]; \
+		int i, j, k; \
+		for (i = 0; i < size; ) { \
+			j = sprintf(buf, "%04X: ", i); \
+			for (k = 0; k < 16 && i < size; k++, i++) \
+				j += sprintf(&buf[j], " %02X", mem[i]); \
+			printf("%s\n", buf); \
+		} \
+	} \
+} \
+)
+#else	/* #if BCMDBG */
 #define NASDBG(fmt, arg...)
 #define NASHEX(mem, size)
+#endif	/* #if BCMDBG */
 #define NASMSG(fmt, arg...)	printf(fmt , ##arg)
 
 #include <sys/types.h>

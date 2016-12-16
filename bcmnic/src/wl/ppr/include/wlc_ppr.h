@@ -34,7 +34,15 @@
 #ifdef BCMDRIVER
 #include <osl.h>
 
+#ifdef BCMDBG_ERR
+#if defined(ERR_USE_EVENT_LOG)
+#define	PPR_ERROR(args)		EVENT_LOG_COMPACT_CAST_PAREN_ARGS(EVENT_LOG_TAG_WL_ERROR, args)
+#else
+#define	PPR_ERROR(args)		printf args
+#endif /* ERR_USE_EVENT_LOG */
+#else
 #define	PPR_ERROR(args)
+#endif /* BCMDBG_ERR */
 #else
 #include <stdio.h>
 #define osl_t void
@@ -368,9 +376,8 @@ enum txpwr_cache_info_type {
 #define TXPWR_STF_PWR_MIN_INVALID 0x80
 #define TXPWR_STF_TARGET_PWR_MIN_INVALID 0x40
 #define TXPWR_STF_TARGET_PWR_NOT_CACHED 0x20
-
-extern ppr_t* wlc_phy_get_cached_pwr(tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec,
-	uint pwr_type);
+extern bool wlc_phy_get_cached_pwr(tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec,
+		uint pwr_type, ppr_t* pprptr);
 
 extern ppr_t* wlc_phy_get_cached_ppr_ptr(tx_pwr_cache_entry_t* cacheptr, chanspec_t chanspec,
 	uint pwr_type);

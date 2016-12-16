@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_channel.c 641815 2016-06-06 10:17:42Z $
+ * $Id: wlc_channel.c 663073 2016-10-04 01:33:08Z $
  */
 
 
@@ -66,7 +66,6 @@
 #endif /* WLOLPC */
 #include <wlc_ht.h>
 #include <wlc_objregistry.h>
-#include <wlc_ulb.h>
 #include <wlc_event_utils.h>
 #include <wlc_srvsdb.h>
 #include <wlc_dump.h>
@@ -74,13 +73,15 @@
 #ifdef WLC_TXPWRCAP
 #include <phy_txpwrcap_api.h>
 #endif
+#include <phy_radio_api.h>
 
 #define	INVCHANNEL		255	/* invalid channel */
 
 #ifdef WLC_TXPWRCAP
 #define WL_TXPWRCAP(x) WL_NONE(x)
 static int wlc_channel_txcap_set_country(wlc_cm_info_t *wlc_cm);
-static int wlc_channel_txcap_phy_update(wlc_cm_info_t *wlc_cm);
+static int wlc_channel_txcap_phy_update(wlc_cm_info_t *wlc_cm,
+	wl_txpwrcap_tbl_t *txpwrcap_tbl, int* cellstatus);
 static int wlc_channel_txcapver(wlc_cm_info_t *wlc_cm, struct bcmstrbuf *b);
 #endif /* WLC_TXPWRCAP */
 
@@ -105,15 +106,6 @@ typedef struct txcap_file_header {
 	uint8	num_cc_groups;
 	txcap_file_cc_group_info_t	cc_group_info;
 } txcap_file_header_t;
-
-#ifdef WLC_TXPWRCAP
-#define WL_TXPWRCAP(x) WL_NONE(x)
-static int wlc_channel_txcap_set_country(wlc_cm_info_t *wlc_cm);
-static int wlc_channel_txcap_phy_update(wlc_cm_info_t *wlc_cm);
-static int wlc_channel_txcapver(wlc_cm_info_t *wlc_cm, struct bcmstrbuf *b);
-#endif /* WLC_TXPWRCAP */
-
-#define TXPWRCAP_NUM_SUBBANDS 5
 
 typedef struct wlc_cm_band {
 	uint16		locale_flags;		/* locale_info_t flags */
@@ -173,6 +165,9 @@ typedef struct wlc_cm_data {
 	uint8				txcap_state[TXPWRCAP_NUM_SUBBANDS];
 	uint8				txcap_wci2_cell_status_last;
 	uint8				txcap_cap_states_per_cc_group;
+	wl_txpwrcap_tbl_t               txpwrcap_tbl;
+	int                             cellstatus;
+	const rcinfo_t *rcinfo_list_11ac[MAXRCLIST_REG];
 } wlc_cm_data_t;
 
 struct wlc_cm_info {
@@ -220,8 +215,38 @@ static uint wlc_channel_tdls_calc_rc_ie_len(void *ctx, wlc_iem_calc_data_t *calc
 static int wlc_channel_tdls_write_rc_ie(void *ctx, wlc_iem_build_data_t *build);
 #endif
 
+#if defined(WL_SARLIMIT) && defined(BCMDBG)
+static void wlc_channel_sarlimit_dump(wlc_cm_info_t *wlc_cmi, sar_limit_t *sar);
+#endif /* WL_SARLIMIT && BCMDBG */
 static void wlc_channel_spurwar_locale(wlc_cm_info_t *wlc_cm, chanspec_t chanspec);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_channel_dump_reg_ppr(void *handle, struct bcmstrbuf *b);
+static int wlc_channel_dump_reg_local_ppr(void *handle, struct bcmstrbuf *b);
+static int wlc_channel_dump_srom_ppr(void *handle, struct bcmstrbuf *b);
+static int wlc_channel_dump_margin(void *handle, struct bcmstrbuf *b);
+static int wlc_channel_dump_locale(void *handle, struct bcmstrbuf *b);
+
+static int wlc_channel_init_ccode(wlc_cm_info_t *wlc_cmi, char* country_abbrev, int ca_len);
+
+static int wlc_dump_max_power_per_channel(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+static int wlc_dump_clm_limits_2G_20M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+static int wlc_dump_clm_limits_2G_40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+static int wlc_dump_clm_limits_2G_20in40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+static int wlc_dump_clm_limits_5G_20M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+static int wlc_dump_clm_limits_5G_40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+static int wlc_dump_clm_limits_5G_20in40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+
+static int wlc_dump_country_aggregate_map(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b);
+static int wlc_channel_supported_country_regrevs(void *handle, struct bcmstrbuf *b);
+
+static bool wlc_channel_clm_chanspec_valid(wlc_cm_info_t *wlc_cmi, chanspec_t chspec);
+
+const char fraction[4][4] = {"   ", ".25", ".5 ", ".75"};
+#define QDB_FRAC(x)	(x) / WLC_TXPWR_DB_FACTOR, fraction[(x) % WLC_TXPWR_DB_FACTOR]
+#define QDB_FRAC_TRUNC(x)	(x) / WLC_TXPWR_DB_FACTOR, \
+	((x) % WLC_TXPWR_DB_FACTOR) ? fraction[(x) % WLC_TXPWR_DB_FACTOR] : ""
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 #define	COPY_LIMITS(src, index, dst, cnt)	\
 		bcopy(&src.limit[index], txpwr->dst, cnt)
@@ -410,23 +435,48 @@ static const rcinfo_t rcinfo_us_20 = {
 #ifdef WL11N
 /* control channel at lower sb */
 static const rcinfo_t rcinfo_us_40lower = {
-	18,
+	19,
 	{
 	{  1, 32}, {  2, 32}, {  3, 32}, {  4, 32}, {  5, 32}, {  6, 32}, {  7, 32}, { 36, 22},
 	{ 44, 22}, { 52, 23}, { 60, 23}, {100, 24}, {108, 24}, {116, 24}, {124, 24}, {132, 24},
-	{149, 25}, {157, 25}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
+	{140, 24}, {149, 25}, {157, 25}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
 	}
 };
 /* control channel at upper sb */
 static const rcinfo_t rcinfo_us_40upper = {
-	18,
+	19,
 	{
 	{  5, 33}, {  6, 33}, {  7, 33}, {  8, 33}, {  9, 33}, { 10, 33}, { 11, 33}, { 40, 27},
 	{ 48, 27}, { 56, 28}, { 64, 28}, {104, 29}, {112, 29}, {120, 29}, {128, 29}, {136, 29},
-	{153, 30}, {161, 30}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
+	{144, 29}, {153, 30}, {161, 30}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
 	}
 };
 #endif /* WL11N */
+
+#ifdef WL11AC
+/* center channel at 80MHZ */
+static const rcinfo_t rcinfo_us_center_80 = {
+	6,
+	{
+	{ 42, 128}, { 58, 128}, {106, 128}, {122, 128}, {138, 128}, {155, 128}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}
+	}
+};
+#endif /* WL11AC */
+
+#ifdef WL11AC_160
+/* center channel at 160MHZ */
+static const rcinfo_t rcinfo_us_center_160 = {
+	2,
+	{
+	{ 50, 129}, {114, 129}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
+	}
+};
+#endif /* WL11AC_160 */
 
 #ifdef BAND5G
 /*
@@ -461,6 +511,30 @@ static const rcinfo_t rcinfo_eu_40upper = {
 };
 #endif /* WL11N */
 
+#ifdef WL11AC
+/* center channel at 80MHZ */
+static const rcinfo_t rcinfo_eu_center_80 = {
+	4,
+	{
+	{ 42, 128}, { 58, 128}, {106, 128}, {122, 128}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
+	}
+};
+#endif /* WL11AC */
+
+#ifdef WL11AC_160
+/* center channel at 160MHZ */
+static const rcinfo_t rcinfo_eu_center_160 = {
+	2,
+	{
+	{ 50, 129}, {114, 129}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
+	}
+};
+#endif /* WL11AC_160 */
+
 #ifdef BAND5G
 /*
  * channel to regulatory class map for Japan
@@ -484,11 +558,34 @@ static const rcinfo_t rcinfo_jp_40 = {
 	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
 	}
 };
-#endif
+#endif	/* WL11N */
 
+#ifdef WL11AC
+/* center channel at 80MHZ */
+static const rcinfo_t rcinfo_jp_center_80 = {
+	4,
+	{
+	{ 42, 128}, { 58, 128}, {106, 128}, {122, 128}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
+	}
+};
+#endif /* WL11Ac */
+
+#ifdef WL11AC_160
+/* center channel at 160MHZ */
+static const rcinfo_t rcinfo_jp_center_160 = {
+	2,
+	{
+	{ 50, 129}, {114, 129}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0},
+	{  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}, {  0,  0}
+	}
+};
+#endif /* WL11AC_160 */
 
 /* iovar table */
-enum {
+enum wlc_channel_iov {
 	IOV_RCLASS				= 1, /* read rclass */
 	IOV_CLMLOAD				= 2,
 	IOV_CLMLOAD_STATUS			= 3,
@@ -499,8 +596,8 @@ enum {
 	IOV_TXCAPSTATE				= 8,
 	IOV_TXCAPHIGHCAPTO			= 9,
 	IOV_TXCAPDUMP				= 10,
-	IOVT_QUIETCHAN				= 11,
-	IOVT_CLM_POWER_LIMITS			= 12,
+	IOV_QUIETCHAN				= 11,
+	IOV_CLM_POWER_LIMITS			= 12,
 	IOV_LAST
 };
 
@@ -516,7 +613,7 @@ static const bcm_iovar_t cm_iovars[] = {
 	{"txcaphighcapto", IOV_TXCAPHIGHCAPTO, 0, 0, IOVT_UINT32, 0},
 	{"txcapdump", IOV_TXCAPDUMP, 0, 0, IOVT_BUFFER, sizeof(wl_txpwrcap_dump_v3_t)},
 #ifdef WL_EXPORT_CURPOWER
-	{"clm_power_limits", IOVT_CLM_POWER_LIMITS, 0, 0, IOVT_BUFFER, 0},
+	{"clm_power_limits", IOV_CLM_POWER_LIMITS, 0, 0, IOVT_BUFFER, 0},
 #endif /* WL_EXPORT_CURPOWER */
 	{NULL, 0, 0, 0, 0, 0}
 };
@@ -762,6 +859,10 @@ wlc_lookup_advertised_cc(char* ccode, const clm_country_t country)
 	return rv;
 }
 
+static char * BCMRAMFN(wlc_channel_ccode_default)(void)
+{
+	return "#n";
+}
 
 static int
 wlc_channel_init_ccode(wlc_cm_info_t *wlc_cmi, char* country_abbrev, int ca_len)
@@ -781,7 +882,7 @@ wlc_channel_init_ccode(wlc_cm_info_t *wlc_cmi, char* country_abbrev, int ca_len)
 
 	/* Default to the NULL country(#n) which has no channels, if country US is not found */
 	if (result != CLM_RESULT_OK) {
-		strncpy(country_abbrev, "#n", ca_len - 1);
+		strncpy(country_abbrev, wlc_channel_ccode_default(), ca_len - 1);
 		result = wlc_country_lookup(wlc, country_abbrev, &country);
 	}
 
@@ -1053,7 +1154,7 @@ wlc_cm_doiovar(void *hdl, uint32 actionid,
 			FALSE);
 		FOREACH_WLC(wlc_cmi->wlc->cmn, idx, wlc_cur) {
 			wlc_cmi = wlc_cur->cmi;
-			wlc_channel_txcap_phy_update(wlc_cmi);
+			wlc_channel_txcap_phy_update(wlc_cmi, NULL, NULL);
 		}
 #ifdef WLTCMS
 		if (TCMS_ENAB(wlc_cm->wlc)) {
@@ -1130,7 +1231,7 @@ wlc_cm_doiovar(void *hdl, uint32 actionid,
 	}
 #endif /* WLC_TXPWRCAP */
 #ifdef WL_EXPORT_CURPOWER
-	case IOV_GVAL(IOVT_CLM_POWER_LIMITS):
+	case IOV_GVAL(IOV_CLM_POWER_LIMITS):
 		err = wlc_get_clm_power_limits(wlc_cmi, (wlc_clm_power_limits_req_t *)arg, len);
 		break;
 #endif /* WL_EXPORT_CURPOWER */
@@ -1156,7 +1257,7 @@ wlc_txcap_high_cap_timer(void *arg)
 
 	FOREACH_WLC(wlc_cmi->wlc->cmn, idx, wlc_cur) {
 		wlc_cmi = wlc_cur->cmi;
-		wlc_channel_txcap_phy_update(wlc_cmi);
+		wlc_channel_txcap_phy_update(wlc_cmi, NULL, NULL);
 	}
 #ifdef WLTCMS
 	if (TCMS_ENAB(wlc_cm->wlc)) {
@@ -1265,6 +1366,12 @@ BCMATTACHFN(wlc_channel_mgr_attach)(wlc_info_t *wlc)
 			        sizeof(country_abbrev) - 1);
 	}
 
+#if defined(BCMDBG)
+	/* convert "ALL/0" country code to #a/0 */
+	if (!strncmp(country_abbrev, "ALL", WLC_CNTRY_BUF_SZ)) {
+		strncpy(country_abbrev, "#a", sizeof(country_abbrev) - 1);
+	}
+#endif 
 
 	if (ref_cnt > 1) {
 		/* Since the whole of cm_data_t is shared,
@@ -1348,19 +1455,6 @@ skip_clm_init:
 		goto fail;
 	}
 
-#ifdef WLC_TXPWRCAP
-	memset(wlc_cm->txcap_config, TXPWRCAPCONFIG_WCI2, TXPWRCAP_NUM_SUBBANDS);
-	memset(wlc_cm->txcap_state, TXPWRCAPSTATE_LOW_CAP, TXPWRCAP_NUM_SUBBANDS);
-	if (!(wlc_cm->txcap_high_cap_timer =  wl_init_timer(wlc->wl, wlc_txcap_high_cap_timer,
-		wlc_cmi, "txcap_high_cap"))) {
-		WL_ERROR(("wl%d: %s wl_init_timer for txcap_high_cap_timer failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		goto fail;
-	}
-	/* Last cell status is unknown */
-	wlc_cm->txcap_wci2_cell_status_last = 2;
-#endif /* WLC_TXPWRCAP */
-
 #if defined(WLC_TXPWRCAP)
 #if !defined(WLC_TXPWRCAP_DISABLED)
 		wlc->pub->_txpwrcap = TRUE;
@@ -1379,6 +1473,35 @@ skip_clm_init:
 	}
 #endif /* WLC_TXPWRCAP */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "locale", wlc_channel_dump_locale, wlc);
+	wlc_dump_register(wlc->pub, "txpwr_reg",
+	                  (dump_fn_t)wlc_channel_dump_reg_ppr, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "txpwr_local",
+	                  (dump_fn_t)wlc_channel_dump_reg_local_ppr, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "txpwr_srom",
+	                  (dump_fn_t)wlc_channel_dump_srom_ppr, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "txpwr_margin",
+	                  (dump_fn_t)wlc_channel_dump_margin, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "country_regrevs",
+	                  (dump_fn_t)wlc_channel_supported_country_regrevs, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "agg_map",
+	                  (dump_fn_t)wlc_dump_country_aggregate_map, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "txpwr_reg_max",
+	                  (dump_fn_t)wlc_dump_max_power_per_channel, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "clm_limits_2G_20M",
+	                  (dump_fn_t)wlc_dump_clm_limits_2G_20M, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "clm_limits_2G_40M",
+	                  (dump_fn_t)wlc_dump_clm_limits_2G_40M, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "clm_limits_2G_20in40M",
+	                  (dump_fn_t)wlc_dump_clm_limits_2G_20in40M, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "clm_limits_5G_20M",
+	                  (dump_fn_t)wlc_dump_clm_limits_5G_20M, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "clm_limits_5G_40M",
+	                  (dump_fn_t)wlc_dump_clm_limits_5G_40M, (void *)wlc_cmi);
+	wlc_dump_register(wlc->pub, "clm_limits_5G_20in40M",
+	                  (dump_fn_t)wlc_dump_clm_limits_5G_20in40M, (void *)wlc_cmi);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	return wlc_cmi;
 
@@ -1635,21 +1758,25 @@ wlc_channel_apsta_restriction(wlc_cm_info_t *wlc_cmi, chanspec_t cur_chspec, cha
 	}
 	return ret;
 }
+#endif /* WL_RESTRICTED_APSTA */
 
 chanspec_t
-wlc_channel_2g_chanspec(wlc_cm_info_t *wlc_cmi)
+wlc_default_chanspec_by_band(wlc_cm_info_t *wlc_cmi, uint bandunit)
 {
 	chanspec_t chanspec;
-	/* Force 2G operation for the AP */
-	chanspec = CH20MHZ_CHSPEC(RAPSTA_2G_START_CHANNEL);
+	uint start_channel;
+	if (bandunit == BAND_2G_INDEX) {
+		start_channel = BAND_2G_START_CHANNEL;
+	} else {
+		start_channel = BAND_5G_START_CHANNEL;
+	}
+	chanspec = CH20MHZ_CHSPEC(start_channel);
 	if (!wlc_valid_chanspec_db(wlc_cmi, chanspec)) {
-		chanspec = wlc_next_chanspec_db(wlc_cmi,
-			chanspec, CHAN_TYPE_ANY, 0);
+		chanspec = wlc_next_chanspec(wlc_cmi,
+			chanspec, CHAN_TYPE_ANY, TRUE);
 	}
 	return chanspec;
-
 }
-#endif /* WL_RESTRICTED_APSTA */
 
 /* return chanvec for a given country code and band */
 bool
@@ -1690,13 +1817,22 @@ wlc_channel_get_chanvec(struct wlc_info *wlc, const char* country_abbrev,
 int
 wlc_set_countrycode(wlc_cm_info_t *wlc_cmi, const char* ccode)
 {
+	int retval;
 	WL_NONE(("wl%d: %s: ccode \"%s\"\n", wlc_cmi->wlc->pub->unit, __FUNCTION__, ccode));
-	return wlc_set_countrycode_rev(wlc_cmi, ccode, -1);
+	retval = wlc_set_countrycode_rev(wlc_cmi, ccode, -1);
+	if (retval == BCME_OK)
+		wlc_phy_set_country(WLC_PI(wlc_cmi->wlc), wlc_channel_ccode(wlc_cmi));
+	else
+		wlc_phy_set_country(WLC_PI(wlc_cmi->wlc), NULL);
+	return retval;
 }
 
 int
 wlc_set_countrycode_rev(wlc_cm_info_t *wlc_cmi, const char* ccode, int regrev)
 {
+#ifdef BCMDBG
+	wlc_info_t *wlc = wlc_cmi->wlc;
+#endif
 	clm_result_t result = CLM_RESULT_ERR;
 	clm_country_t country;
 	char mapped_ccode[WLC_CNTRY_BUF_SZ];
@@ -1765,8 +1901,9 @@ wlc_set_country_common(wlc_cm_info_t *wlc_cmi,
 	unsigned long clm_flags = 0;
 	wlc_info_t *wlc_iter;
 	int idx;
+
 #if defined WLTXPWR_CACHE && defined(WL11N)
-	wlc_phy_txpwr_cache_invalidate(wlc_phy_get_txpwr_cache(WLC_PI(wlc)));
+	wlc_phy_txpwr_cache_invalidate(phy_tpc_get_txpwr_cache(WLC_PI(wlc)));
 #endif	/* WLTXPWR_CACHE */
 	/* save current country state */
 	wlc_cm->country = country;
@@ -1814,7 +1951,7 @@ wlc_set_country_common(wlc_cm_info_t *wlc_cmi,
 #ifdef WL11N
 		/* disable/restore nmode based on country regulations */
 		if ((flags & WLC_NO_MIMO) && ((NBANDS(wlc_iter) == 2) ||
-				IS_SINGLEBAND_5G(wlc_iter->deviceid))) {
+				IS_SINGLEBAND_5G(wlc_iter->deviceid, wlc->phy_cap))) {
 			result = wlc_get_flags(&locale, CLM_BAND_5G, &flags);
 			ASSERT(result == CLM_RESULT_OK);
 		}
@@ -1832,7 +1969,7 @@ wlc_set_country_common(wlc_cm_info_t *wlc_cmi,
 
 #if defined(AP) && defined(RADAR)
 		if (RADAR_ENAB(wlc->pub) && ((NBANDS(wlc_iter) == 2) ||
-			IS_SINGLEBAND_5G(wlc_iter->deviceid))) {
+			IS_SINGLEBAND_5G(wlc_iter->deviceid, wlc_iter->phy_cap))) {
 			phy_radar_detect_mode_t mode;
 			result = wlc_get_flags(&locale, CLM_BAND_5G, &flags);
 
@@ -1841,27 +1978,21 @@ wlc_set_country_common(wlc_cm_info_t *wlc_cmi,
 		}
 #endif /* AP && RADAR */
 
-		wlc_channels_init(wlc_iter->cmi, country);
-	}
+
+		/* Set caps before wlc_channels_init() so recalc target has correct cap values */
 #ifdef WLC_TXPWRCAP
-	wlc_channel_txcap_set_country(wlc_cmi);
-	/* In case driver is up, but current channel didn't change as a result of a
-	 * country change, we need to make sure we update the phy txcaps based on this
-	 * new country's values.
-	 */
-	wlc_channel_txcap_phy_update(wlc_cmi);
+		if (WLTXPWRCAP_ENAB(wlc)) {
+			wlc_channel_txcap_set_country(wlc_cmi);
+			/* In case driver is up, but current channel didn't change as a
+			 * result of a country change, we need to make sure we update the
+			 * phy txcaps based on this new country's values.
+			 */
+			wlc_channel_txcap_phy_update(wlc_cmi, NULL, NULL);
+		}
 #endif /* WLC_TXPWRCAP */
 
-#ifdef WLC_TXPWRCAP
-	if (WLTXPWRCAP_ENAB(wlc)) {
-		wlc_channel_txcap_set_country(wlc_cmi);
-		/* In case driver is up, but current channel didn't change as a
-		 * result of a country change, we need to make sure we update the
-		 * phy txcaps based on this new country's values.
-		 */
-		wlc_channel_txcap_phy_update(wlc_cmi);
+		wlc_channels_init(wlc_iter->cmi, country);
 	}
-#endif /* WLC_TXPWRCAP */
 
 	/* Country code changed */
 	if (strlen(prev_country_abbrev) > 1 &&
@@ -1937,7 +2068,7 @@ wlc_is_dfs_eu(struct wlc_info *wlc)
 	clm_country_t country;
 	uint16 flags;
 
-	if (!((NBANDS(wlc) == 2) || IS_SINGLEBAND_5G(wlc->deviceid)))
+	if (!((NBANDS(wlc) == 2) || IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)))
 		return FALSE;
 
 	result = wlc_country_lookup_direct(wlc_cm->ccode, wlc_cm->regrev, &country);
@@ -2082,6 +2213,9 @@ static int
 wlc_country_aggregate_map(wlc_cm_info_t *wlc_cmi, const char *ccode,
                           char *mapped_ccode, uint *mapped_regrev)
 {
+#ifdef BCMDBG
+	wlc_info_t *wlc = wlc_cmi->wlc;
+#endif
 	clm_result_t result;
 	clm_agg_country_t agg = 0;
 	const char *srom_ccode = wlc_cmi->cm->srom_ccode;
@@ -2110,6 +2244,38 @@ wlc_country_aggregate_map(wlc_cm_info_t *wlc_cmi, const char *ccode,
 }
 
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_dump_country_aggregate_map(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	const char *cur_ccode = wlc_cmi->cm->ccode;
+	uint cur_regrev = wlc_cmi->cm->regrev;
+	clm_agg_country_t agg = 0;
+	clm_result_t result;
+	int agg_iter;
+
+	/* Use "ww", WorldWide, for the lookup value for '\0\0' */
+	if (cur_ccode[0] == '\0')
+		cur_ccode = "ww";
+
+	clm_iter_init(&agg_iter);
+	if ((result = clm_aggregate_country_lookup(cur_ccode, cur_regrev, &agg)) == CLM_RESULT_OK) {
+		clm_agg_map_t map_iter;
+		ccode_t cc;
+		unsigned int rev;
+
+		bcm_bprintf(b, "Map for %s/%u ->\n", cur_ccode, cur_regrev);
+		clm_iter_init(&map_iter);
+		while ((result = clm_agg_map_iter(agg, &map_iter, cc, &rev)) == CLM_RESULT_OK) {
+			bcm_bprintf(b, "%c%c/%u\n", cc[0], cc[1], rev);
+		}
+	} else {
+		bcm_bprintf(b, "No lookaside table for %s/%u\n", cur_ccode, cur_regrev);
+	}
+	return 0;
+
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 
 /* Lookup a country info structure from a null terminated country
@@ -2250,6 +2416,8 @@ wlc_channels_commit(wlc_cm_info_t *wlc_cmi)
 	uint chan;
 	ppr_t* txpwr;
 	int ret = BCME_OK;
+	uint pprsize = ppr_size(PPR_CHSPEC_BW(wlc->chanspec));
+	int8 pwr[pprsize];
 
 	/* search for the existence of any valid channel */
 	for (chan = 0; chan < MAXCHANNEL; chan++) {
@@ -2273,20 +2441,14 @@ wlc_channels_commit(wlc_cm_info_t *wlc_cmi)
 		mboolclr(wlc->pub->radio_disabled, WL_RADIO_COUNTRY_DISABLE);
 	}
 
-	/* Now that the country abbreviation is set, if the radio supports 2G, then
-	 * set channel 14 restrictions based on the new locale.
-	 */
-	if (NBANDS(wlc) > 1 || BAND_2G(wlc->band->bandtype)) {
-		wlc_phy_chanspec_ch14_widefilter_set(pi, wlc_japan(wlc) ? TRUE : FALSE);
-	}
-
 	if (wlc->pub->up && chan != INVCHANNEL) {
 		/* recompute tx power for new country info */
 
 
 		/* Where do we get a good chanspec? wlc, phy, set it ourselves? */
 
-		if ((txpwr = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
+		if ((txpwr = ppr_create_prealloc(PPR_CHSPEC_BW(wlc->chanspec), pwr, pprsize))
+			== NULL) {
 			return BCME_NOMEM;
 		}
 
@@ -2295,8 +2457,6 @@ wlc_channels_commit(wlc_cm_info_t *wlc_cmi)
 		ppr_apply_max(txpwr, WLC_TXPWR_MAX);
 		/* Where do we get a good chanspec? wlc, phy, set it ourselves? */
 		wlc_phy_txpower_limit_set(pi, txpwr, wlc->chanspec);
-
-		ppr_delete(wlc_cmi->pub->osh, txpwr);
 	}
 
 	return ret;
@@ -2673,9 +2833,24 @@ wlc_channel_set_chanspec(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec)
 	wlc_info_t *wlc = wlc_cmi->wlc;
 	ppr_t* txpwr;
 	int8 local_constraint_qdbm;
+	wl_txpwrcap_tbl_t *txpwrcap_tbl_ptr = NULL;
+	int *cellstatus_ptr = NULL;
+#if defined WLTXPWR_CACHE && defined(WL11N)
+	tx_pwr_cache_entry_t* cacheptr;
+#endif
+
+#ifdef WLC_TXPWRCAP
+	if (WLTXPWRCAP_ENAB(wlc_cmi->wlc)) {
+		if (wlc_cmi->cm->txcap_download != NULL) {
+			txpwrcap_tbl_ptr = &(wlc_cmi->cm->txpwrcap_tbl);
+			cellstatus_ptr = &(wlc_cmi->cm->cellstatus);
+			wlc_channel_txcap_phy_update(wlc_cmi, txpwrcap_tbl_ptr, cellstatus_ptr);
+		}
+	}
+#endif /* WLC_TXPWRCAP */
 
 #if defined WLTXPWR_CACHE && defined(WL11N)
-	tx_pwr_cache_entry_t* cacheptr = wlc_phy_get_txpwr_cache(WLC_PI(wlc));
+	cacheptr = phy_tpc_get_txpwr_cache(WLC_PI(wlc));
 
 	if (wlc_phy_txpwr_cache_is_cached(cacheptr, chanspec) != TRUE) {
 		int result;
@@ -2688,15 +2863,6 @@ wlc_channel_set_chanspec(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec)
 				last_chanspec);
 
 		if (kill_chan != 0) {
-			/* For dualband or RSDB (Main on 5G & AUX on 2G) chips, we
-			 * have to set pi->tx_power_offset to NULL before
-			 * deleting the memory in cache so released tx_power_offset won't
-			 * be referenced during band switching.
-			 */
-			ppr_t* txpwr_offsets;
-			txpwr_offsets = wlc_phy_get_cached_ppr_ptr(cacheptr, kill_chan,
-				TXPWR_CACHE_POWER_OFFSETS);
-			wlc_bmac_clear_band_pwr_offset(txpwr_offsets, wlc->hw);
 			wlc_phy_txpwr_cache_clear(wlc_cmi->pub->osh, cacheptr, kill_chan);
 		}
 		result = wlc_phy_txpwr_setup_entry(cacheptr, chanspec);
@@ -2706,10 +2872,11 @@ wlc_channel_set_chanspec(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec)
 	last_chanspec = chanspec;
 
 	if ((wlc_phy_get_cached_txchain_offsets(cacheptr, chanspec, 0) != WL_RATE_DISABLED) &&
-		(wlc_phy_get_cached_pwr(cacheptr, chanspec, TXPWR_CACHE_POWER_OFFSETS) != NULL)) {
+		wlc_phy_txpwr_cache_is_cached(cacheptr, chanspec)) {
 		wlc_channel_update_txchain_offsets(wlc_cmi, NULL);
 		wlc_bmac_set_chanspec(wlc->hw, chanspec,
-			(wlc_quiet_chanspec(wlc_cmi, chanspec) != 0), NULL);
+			(wlc_quiet_chanspec(wlc_cmi, chanspec) != 0), NULL,
+			txpwrcap_tbl_ptr, cellstatus_ptr);
 
 		return;
 	}
@@ -2742,17 +2909,9 @@ wlc_channel_set_chanspec(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec)
 #ifdef SRHWVSDB
 apply_chanspec:
 #endif /* SRHWVSDB */
-
-	wlc_bmac_set_chanspec(wlc->hw, chanspec, (wlc_quiet_chanspec(wlc_cmi, chanspec) != 0),
-		txpwr);
-
-#ifdef WLC_TXPWRCAP
-	wlc_channel_txcap_phy_update(wlc_cmi);
-	/* Update PHY txpwr after txpwrcap is set */
-	if (wlc->clk)
-		wlc_phy_txpower_limit_set(WLC_PI(wlc), txpwr, chanspec);
-#endif /* WLC_TXPWRCAP */
-
+	wlc_bmac_set_chanspec(wlc->hw, chanspec,
+		(wlc_quiet_chanspec(wlc_cmi, chanspec) != 0),
+		txpwr, txpwrcap_tbl_ptr, cellstatus_ptr);
 	ppr_delete(wlc_cmi->pub->osh, txpwr);
 	WL_TSLOG(wlc, __FUNCTION__, TS_EXIT, 0);
 }
@@ -2762,26 +2921,38 @@ wlc_channel_set_txpower_limit(wlc_cm_info_t *wlc_cmi, uint8 local_constraint_qdb
 {
 	wlc_info_t *wlc = wlc_cmi->wlc;
 	ppr_t *txpwr;
-
+	uint pprsize = ppr_size(PPR_CHSPEC_BW(wlc->chanspec));
+	int8 pwr[pprsize];
+	int8 tx_maxpwr;
+	int8 txpwr_cap_min = wlc_tpc_get_pwr_cap_min(wlc->tpc);
 
 
 	if (!wlc->clk)
 		return BCME_NOCLK;
-	if ((txpwr = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
+	if ((txpwr = ppr_create_prealloc(PPR_CHSPEC_BW(wlc->chanspec), pwr, pprsize)) == NULL) {
 		return BCME_ERROR;
 	}
 
 	wlc_channel_reg_limits(wlc_cmi, wlc->chanspec, txpwr);
-#if defined WLTXPWR_CACHE && defined(WL11N)
-	wlc_phy_txpwr_cache_invalidate(wlc_phy_get_txpwr_cache(WLC_PI(wlc)));
-#endif	/* WLTXPWR_CACHE */
 	ppr_apply_constraint_total_tx(txpwr, local_constraint_qdbm);
+
+	tx_maxpwr = ppr_get_max(txpwr);
+
+	/* Validate the new txpwr */
+	if ((tx_maxpwr < txpwr_cap_min) ||
+		(txpwr_cap_min == WL_RATE_DISABLED && tx_maxpwr <
+		 wlc_phy_maxtxpwr_lowlimit(WLC_PI(wlc)))) {
+		return BCME_RANGE;
+	}
+
+#if defined WLTXPWR_CACHE && defined(WL11N)
+	wlc_phy_txpwr_cache_invalidate(phy_tpc_get_txpwr_cache(WLC_PI(wlc)));
+#endif	/* WLTXPWR_CACHE */
 
 	wlc_channel_update_txchain_offsets(wlc_cmi, txpwr);
 
 	wlc_phy_txpower_limit_set(WLC_PI(wlc), txpwr, wlc->chanspec);
 
-	ppr_delete(wlc_cmi->pub->osh, txpwr);
 	return 0;
 }
 
@@ -2917,6 +3088,7 @@ clm_limits_type_t clm_get_enclosing_subchan(clm_limits_type_t ctl_subchan, uint 
 static void
 wlc_channel_sarlimit_get_default(wlc_cm_info_t *wlc_cmi, sar_limit_t *sar)
 {
+#ifndef WL_SARLIMIT_DISABLED
 	wlc_info_t *wlc = wlc_cmi->wlc;
 	uint idx;
 
@@ -2926,6 +3098,7 @@ wlc_channel_sarlimit_get_default(wlc_cm_info_t *wlc_cmi, sar_limit_t *sar)
 			break;
 		}
 	}
+#endif /* WL_SARLIMIT_DISABLED */
 }
 
 void
@@ -2942,8 +3115,29 @@ wlc_channel_sar_init(wlc_cm_info_t *wlc_cmi)
 	       (WLC_TXCORE_MAX * WLC_SUBBAND_MAX));
 
 	wlc_channel_sarlimit_get_default(wlc_cmi, &wlc_cm->sarlimit);
+#ifdef BCMDBG
+	wlc_channel_sarlimit_dump(wlc_cmi, &wlc_cm->sarlimit);
+#endif /* BCMDBG */
 }
 
+#ifdef BCMDBG
+void
+wlc_channel_sarlimit_dump(wlc_cm_info_t *wlc_cmi, sar_limit_t *sar)
+{
+	int i;
+
+	BCM_REFERENCE(wlc_cmi);
+
+	WL_ERROR(("\t2G:    %2d%s %2d%s %2d%s %2d%s\n",
+	          QDB_FRAC(sar->band2g[0]), QDB_FRAC(sar->band2g[1]),
+	          QDB_FRAC(sar->band2g[2]), QDB_FRAC(sar->band2g[3])));
+	for (i = 0; i < WLC_SUBBAND_MAX; i++) {
+		WL_ERROR(("\t5G[%1d]  %2d%s %2d%s %2d%s %2d%s\n", i,
+		          QDB_FRAC(sar->band5g[i][0]), QDB_FRAC(sar->band5g[i][1]),
+		          QDB_FRAC(sar->band5g[i][2]), QDB_FRAC(sar->band5g[i][3])));
+	}
+}
+#endif /* BCMDBG */
 int
 wlc_channel_sarlimit_get(wlc_cm_info_t *wlc_cmi, sar_limit_t *sar)
 {
@@ -3026,6 +3220,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 	clm_limits_type_t lim_types[5];
 	wl_tx_bw_t lim_ppr_bw[5];
 	uint i;
+	uint max_chains = PHYCORENUM(WLC_BITSCNT(wlc->stf->hw_txchain));
 
 	ppr_clear(txpwr);
 	BCM_REFERENCE(result);
@@ -3076,7 +3271,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 			uint32 sar_lims = (uint32)(sarlimit[0] | sarlimit[1] << 8 |
 			                           sarlimit[2] << 16 | sarlimit[3] << 24);
 #ifdef WLTXPWR_CACHE
-			tx_pwr_cache_entry_t* cacheptr = wlc_phy_get_txpwr_cache(WLC_PI(wlc));
+			tx_pwr_cache_entry_t* cacheptr = phy_tpc_get_txpwr_cache(WLC_PI(wlc));
 
 			wlc_phy_set_cached_sar_lims(cacheptr, chanspec, sar_lims);
 #endif	/* WLTXPWR_CACHE */
@@ -3089,6 +3284,19 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 		lim_params.sar = band->sar;
 	}
 
+#if defined(BCMDBG)
+	if (strcmp(wlc_cmi->cm->country_abbrev, "#a") == 0) {
+		band->sar = WLC_TXPWR_MAX;
+		lim_params.sar = WLC_TXPWR_MAX;
+#ifdef WL_SARLIMIT
+		if (wlc->clk) {
+			wlc_phy_sar_limit_set(WLC_PI_BANDUNIT(wlc, band->bandunit),
+				((WLC_TXPWR_MAX & 0xff) | (WLC_TXPWR_MAX & 0xff) << 8 |
+				(WLC_TXPWR_MAX & 0xff) << 16 | (WLC_TXPWR_MAX & 0xff) << 24));
+		}
+#endif /* WL_SARLIMIT */
+	}
+#endif 
 	result = wlc_get_locale(country, &locale);
 	if (result != CLM_RESULT_OK) {
 		ASSERT(0);
@@ -3121,35 +3329,6 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 
 	lim_types[0] = CLM_LIMITS_TYPE_CHANNEL;
 	switch (CHSPEC_BW(chanspec)) {
-#ifdef WL11ULB
-	case WL_CHANSPEC_BW_2P5:
-		if (ULB_ENAB(wlc->pub)) {
-			lim_params.bw = CLM_BW_2_5;
-			lim_count = 1;
-			lim_ppr_bw[0] = WL_TX_BW_2P5;
-		} else {
-			ASSERT(0);
-		}
-		break;
-	case WL_CHANSPEC_BW_5:
-		if (ULB_ENAB(wlc->pub)) {
-			lim_params.bw = CLM_BW_5;
-			lim_count = 1;
-			lim_ppr_bw[0] = WL_TX_BW_5;
-		} else {
-			ASSERT(0);
-		}
-		break;
-	case WL_CHANSPEC_BW_10:
-		if (ULB_ENAB(wlc->pub)) {
-			lim_params.bw = CLM_BW_10;
-			lim_count = 1;
-			lim_ppr_bw[0] = WL_TX_BW_10;
-		} else {
-			ASSERT(0);
-		}
-		break;
-#endif /* WL11ULB */
 
 	case WL_CHANSPEC_BW_20:
 		lim_params.bw = CLM_BW_20;
@@ -3250,7 +3429,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 				WL_TX_CHAINS_1, CLM_MCS_1X1_RATESET(limits));
 
 
-			if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			if (max_chains > 1) {
 				ppr_set_dsss(txpwr, lim_ppr_bw[i], WL_TX_CHAINS_2,
 					CLM_DSSS_1X2_MULTI_RATESET(limits));
 
@@ -3266,7 +3445,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 				ppr_set_vht_mcs(txpwr, lim_ppr_bw[i], WL_TX_NSS_2, WL_TX_MODE_NONE,
 					WL_TX_CHAINS_2, CLM_MCS_2X2_SDM_RATESET(limits));
 
-				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				if (max_chains > 2) {
 					ppr_set_dsss(txpwr, lim_ppr_bw[i], WL_TX_CHAINS_3,
 						CLM_DSSS_1X3_MULTI_RATESET(limits));
 
@@ -3289,7 +3468,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 						WL_TX_MODE_NONE, WL_TX_CHAINS_3,
 						CLM_MCS_3X3_SDM_RATESET(limits));
 
-					if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					if (max_chains > 3) {
 						ppr_set_dsss(txpwr, lim_ppr_bw[i], WL_TX_CHAINS_4,
 							CLM_DSSS_1X4_MULTI_RATESET(limits));
 
@@ -3320,7 +3499,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 				}
 			}
 #if defined(WL_BEAMFORMING)
-			if (TXBF_ENAB(wlc->pub) && (PHYCORENUM(wlc->stf->txstreams) > 1)) {
+			if (TXBF_ENAB(wlc->pub) && (max_chains > 1)) {
 				ppr_set_ofdm(txpwr, lim_ppr_bw[i], WL_TX_MODE_TXBF, WL_TX_CHAINS_2,
 					CLM_OFDM_1X2_TXBF_RATESET(limits));
 
@@ -3330,7 +3509,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 				ppr_set_ht_mcs(txpwr, lim_ppr_bw[i], WL_TX_NSS_2, WL_TX_MODE_TXBF,
 					WL_TX_CHAINS_2, CLM_MCS_2X2_TXBF_RATESET(limits));
 
-				if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				if (max_chains > 2) {
 					ppr_set_ofdm(txpwr, lim_ppr_bw[i], WL_TX_MODE_TXBF,
 						WL_TX_CHAINS_3,	CLM_OFDM_1X3_TXBF_RATESET(limits));
 
@@ -3346,7 +3525,7 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 						WL_TX_MODE_TXBF, WL_TX_CHAINS_3,
 						CLM_MCS_3X3_TXBF_RATESET(limits));
 
-					if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					if (max_chains > 3) {
 						ppr_set_ofdm(txpwr, lim_ppr_bw[i], WL_TX_MODE_TXBF,
 							WL_TX_CHAINS_4,
 							CLM_OFDM_1X4_TXBF_RATESET(limits));
@@ -3375,7 +3554,8 @@ wlc_channel_reg_limits(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec, ppr_t *txpwr
 	}
 	WL_NONE(("Channel(chanspec) %d (0x%4.4x)\n", chan, chanspec));
 	/* Convoluted WL debug conditional execution of function to avoid warnings. */
-	WL_NONE(("%s", (wlc_phy_txpower_limits_dump(txpwr, WLCISHTPHY(wlc->band)), "")));
+	WL_NONE(("%s", (phy_tpc_dump_txpower_limits(WLC_PI_BANDUNIT(wlc, band->bandunit),
+			txpwr), "")));
 
 }
 static clm_result_t
@@ -3429,6 +3609,14 @@ wlc_rcinfo_init(wlc_cm_info_t *wlc_cmi)
 			wlc_cm->rcinfo_list[WLC_RCLIST_40U] = &rcinfo_us_40upper;
 		}
 #endif
+#ifdef WL11AC
+		if (VHT_ENAB(pub)) {
+			wlc_cm->rcinfo_list_11ac[WLC_RCLIST_80] = &rcinfo_us_center_80;
+#ifdef WL11AC_160
+			wlc_cm->rcinfo_list_11ac[WLC_RCLIST_160] = &rcinfo_us_center_160;
+#endif
+		}
+#endif /* WL11AC */
 	} else if (wlc_japan_ccode(wlc_cm->country_abbrev)) {
 #ifdef BAND5G
 		wlc_cm->rcinfo_list[WLC_RCLIST_20] = &rcinfo_jp_20;
@@ -3439,6 +3627,14 @@ wlc_rcinfo_init(wlc_cm_info_t *wlc_cmi)
 			wlc_cm->rcinfo_list[WLC_RCLIST_40U] = &rcinfo_jp_40;
 		}
 #endif
+#ifdef WL11AC
+		if (VHT_ENAB(pub)) {
+			wlc_cm->rcinfo_list_11ac[WLC_RCLIST_80] = &rcinfo_jp_center_80;
+#ifdef WL11AC_160
+			wlc_cm->rcinfo_list_11ac[WLC_RCLIST_160] = &rcinfo_jp_center_160;
+#endif
+		}
+#endif /* WL11AC */
 	} else {
 #ifdef BAND5G
 		wlc_cm->rcinfo_list[WLC_RCLIST_20] = &rcinfo_eu_20;
@@ -3449,6 +3645,14 @@ wlc_rcinfo_init(wlc_cm_info_t *wlc_cmi)
 			wlc_cm->rcinfo_list[WLC_RCLIST_40U] = &rcinfo_eu_40upper;
 		}
 #endif
+#ifdef WL11AC
+		if (VHT_ENAB(pub)) {
+			wlc_cm->rcinfo_list_11ac[WLC_RCLIST_80] = &rcinfo_eu_center_80;
+#ifdef WL11AC_160
+			wlc_cm->rcinfo_list_11ac[WLC_RCLIST_160] = &rcinfo_eu_center_160;
+#endif
+		}
+#endif /* WL11AC */
 	}
 }
 
@@ -3461,6 +3665,12 @@ wlc_regclass_vec_init(wlc_cm_info_t *wlc_cmi)
 	wlc_info_t *wlc = wlc_cmi->wlc;
 	bool saved_cap_40, saved_db_cap_40 = TRUE;
 #endif
+#ifdef WL11AC
+	bool saved_cap_80;
+#endif
+#ifdef WL11AC_160
+	bool saved_cap_160;
+#endif
 	rcvec_t *rcvec = &wlc_cmi->cm->valid_rcvec;
 
 #ifdef WL11N
@@ -3472,6 +3682,16 @@ wlc_regclass_vec_init(wlc_cm_info_t *wlc_cmi)
 		wlc->bandstate[OTHERBANDUNIT(wlc)]->bw_cap |= WLC_BW_40MHZ_BIT;
 	}
 #endif
+#ifdef WL11AC
+	/* save 80 MHZ cap */
+	saved_cap_80 = WL_BW_CAP_80MHZ(wlc->bandstate[BAND_5G_INDEX]->bw_cap);
+	wlc->bandstate[BAND_5G_INDEX]->bw_cap |= WLC_BW_80MHZ_BIT;
+#endif /* WL11AC */
+#ifdef WL11AC_160
+	/* save 160 MHZ cap */
+	saved_cap_160 = WL_BW_CAP_160MHZ(wlc->bandstate[BAND_5G_INDEX]->bw_cap);
+	wlc->bandstate[BAND_5G_INDEX]->bw_cap |= WLC_BW_160MHZ_BIT;
+#endif /* WL11AC_160 */
 
 	bzero(rcvec, MAXRCVEC);
 	for (i = 0; i < MAXCHANNEL; i++) {
@@ -3496,7 +3716,32 @@ wlc_regclass_vec_init(wlc_cm_info_t *wlc_cmi)
 			}
 		}
 #endif /* defined(WL11N) && !defined(WL11N_20MHZONLY) */
+#ifdef WL11AC
+		if (VHT_ENAB(wlc->pub)) {
+			chanspec = CH80MHZ_CHSPEC(i, WL_CHANSPEC_CTL_SB_LL);
+			if (wlc_valid_chanspec(wlc_cmi, chanspec)) {
+				if ((idx = wlc_get_regclass(wlc_cmi, chanspec)))
+					setbit((uint8 *)rcvec, idx);
+			}
+		}
+#endif
 	}
+/* restore 160 MHZ cap */
+#ifdef WL11AC_160
+	if (saved_cap_160) {
+		wlc->bandstate[BAND_5G_INDEX]->bw_cap |= WLC_BW_160MHZ_BIT;
+	} else {
+		wlc->bandstate[BAND_5G_INDEX]->bw_cap &= ~WLC_BW_160MHZ_BIT;
+	}
+#endif /* WL11AC_160 */
+/* restore 80 MHZ cap */
+#ifdef WL11AC
+	if (saved_cap_80) {
+		wlc->bandstate[BAND_5G_INDEX]->bw_cap |= WLC_BW_80MHZ_BIT;
+	} else {
+		wlc->bandstate[BAND_5G_INDEX]->bw_cap &= ~WLC_BW_80MHZ_BIT;
+	}
+#endif /* WL11AC */
 #ifdef WL11N
 	/* restore 40 MHz cap */
 	if (saved_cap_40) {
@@ -3557,7 +3802,7 @@ exit:
 }
 #endif /* WL11N */
 
-#if defined(WLTDLS) || defined(WL_MBO)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTDLS) || defined(WL_MBO)
 /* get the ordered list of supported reg class, with current reg class
  * as first element
  */
@@ -3590,7 +3835,7 @@ wlc_get_regclass_list(wlc_cm_info_t *wlc_cmi, uint8 *rclist, uint lsize,
 
 	return idx;
 }
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || WLTDLS || WL_MBO */
 
 static uint8
 wlc_get_2g_regclass(wlc_cm_info_t *wlc_cmi, uint8 chan)
@@ -3617,11 +3862,13 @@ wlc_get_regclass(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec)
 
 #ifdef WL11AC
 	if (CHSPEC_IS80(chanspec)) {
-		chan = wf_chspec_ctlchan(chanspec);
-		if (CHSPEC_SB_UPPER(wf_chspec_primary40_chspec(chanspec)))
-			rcinfo = wlc_cm->rcinfo_list[WLC_RCLIST_40U];
-		else
-			rcinfo = wlc_cm->rcinfo_list[WLC_RCLIST_40L];
+		chan = wf_chspec_primary80_channel(chanspec);
+		rcinfo = wlc_cm->rcinfo_list_11ac[WLC_RCLIST_80];
+#ifdef WL11AC_160
+	} else if (CHSPEC_IS160(chanspec)) {
+		chan = wf_chspec_primary80_channel(chanspec);
+		rcinfo = wlc_cm->rcinfo_list_11ac[WLC_RCLIST_160];
+#endif /* WL11AC_160 */
 	} else
 #endif /* WL11AC */
 
@@ -3652,6 +3899,1280 @@ wlc_get_regclass(wlc_cm_info_t *wlc_cmi, chanspec_t chanspec)
 	return 0;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+void
+wlc_dump_rclist(const char *name, uint8 *rclist, uint8 rclen, struct bcmstrbuf *b)
+{
+	uint i;
+
+	if (!rclen)
+		return;
+
+	bcm_bprintf(b, "%s [ ", name ? name : "");
+	for (i = 0; i < rclen; i++) {
+		bcm_bprintf(b, "%d ", rclist[i]);
+	}
+	bcm_bprintf(b, "]");
+	bcm_bprintf(b, "\n");
+
+	return;
+}
+
+/* format a qdB value as integer and decimal fraction in a bcmstrbuf */
+static void
+wlc_channel_dump_qdb(struct bcmstrbuf *b, int qdb)
+{
+	if ((qdb >= 0) || (qdb % WLC_TXPWR_DB_FACTOR == 0))
+		bcm_bprintf(b, "%2d%s", QDB_FRAC(qdb));
+	else
+		bcm_bprintf(b, "%2d%s",
+			qdb / WLC_TXPWR_DB_FACTOR + 1,
+			fraction[WLC_TXPWR_DB_FACTOR - (qdb % WLC_TXPWR_DB_FACTOR)]);
+}
+
+/* helper function for wlc_channel_dump_txppr() to print one set of power targets with label */
+static void
+wlc_channel_dump_pwr_range(struct bcmstrbuf *b, const char *label, int8 *ptr, uint count)
+{
+	uint i;
+
+	bcm_bprintf(b, "%s ", label);
+	for (i = 0; i < count; i++) {
+		if (ptr[i] != WL_RATE_DISABLED) {
+			wlc_channel_dump_qdb(b, ptr[i]);
+			bcm_bprintf(b, " ");
+		} else
+			bcm_bprintf(b, "-     ");
+	}
+	bcm_bprintf(b, "\n");
+}
+
+/* helper function to print a target range line with the typical 8 targets */
+static void
+wlc_channel_dump_pwr_range8(struct bcmstrbuf *b, const char *label, int8* ptr)
+{
+	wlc_channel_dump_pwr_range(b, label, (int8*)ptr, 8);
+}
+
+#ifdef WL11AC
+
+#define NUM_MCS_RATES WL_NUM_RATES_VHT
+#define CHSPEC_TO_TX_BW(c)	(\
+	CHSPEC_IS8080(c) ? WL_TX_BW_8080 : \
+	(CHSPEC_IS160(c) ? WL_TX_BW_160 : \
+	(CHSPEC_IS80(c) ? WL_TX_BW_80 : \
+	(CHSPEC_IS40(c) ? WL_TX_BW_40 : WL_TX_BW_20))))
+
+#else
+
+#define NUM_MCS_RATES WL_NUM_RATES_MCS_1STREAM
+#define CHSPEC_TO_TX_BW(c)	(CHSPEC_IS40(c) ? WL_TX_BW_40 : WL_TX_BW_20)
+
+#endif
+
+/* helper function to print a target range line with the typical 8 targets */
+static void
+wlc_channel_dump_pwr_range_mcs(struct bcmstrbuf *b, const char *label, int8 *ptr)
+{
+	wlc_channel_dump_pwr_range(b, label, (int8*)ptr, NUM_MCS_RATES);
+}
+
+
+/* format the contents of a ppr_t structure for a bcmstrbuf */
+static void
+wlc_channel_dump_txppr(struct bcmstrbuf *b, ppr_t *txpwr, wl_tx_bw_t bw, wlc_info_t *wlc)
+{
+	ppr_dsss_rateset_t dsss_limits;
+	ppr_ofdm_rateset_t ofdm_limits;
+	ppr_vht_mcs_rateset_t mcs_limits;
+
+	if (bw == WL_TX_BW_20) {
+		bcm_bprintf(b, "\n20MHz:\n");
+		ppr_get_dsss(txpwr, WL_TX_BW_20, WL_TX_CHAINS_1, &dsss_limits);
+		wlc_channel_dump_pwr_range(b,  "DSSS              ", dsss_limits.pwr,
+			WL_RATESET_SZ_DSSS);
+		ppr_get_ofdm(txpwr, WL_TX_BW_20, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr, WL_TX_BW_20, WL_TX_CHAINS_2, &dsss_limits);
+			wlc_channel_dump_pwr_range(b, "DSSS_MULTI1       ", dsss_limits.pwr,
+				WL_RATESET_SZ_DSSS);
+			ppr_get_ofdm(txpwr, WL_TX_BW_20, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr, WL_TX_BW_20, WL_TX_CHAINS_3, &dsss_limits);
+				wlc_channel_dump_pwr_range(b,  "DSSS_MULTI2       ",
+					dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+				ppr_get_ofdm(txpwr, WL_TX_BW_20, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2, WL_TX_MODE_STBC,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_3, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr, WL_TX_BW_20, WL_TX_CHAINS_4,
+						&dsss_limits);
+					wlc_channel_dump_pwr_range(b,  "DSSS_MULTI3       ",
+						dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+					ppr_get_ofdm(txpwr, WL_TX_BW_20, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+	} else if (bw == WL_TX_BW_40) {
+
+		bcm_bprintf(b, "\n40MHz:\n");
+		ppr_get_ofdm(txpwr, WL_TX_BW_40, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_40, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_40, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2, WL_TX_MODE_STBC,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_3, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_40, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+		bcm_bprintf(b, "\n20in40MHz:\n");
+		ppr_get_dsss(txpwr, WL_TX_BW_20IN40, WL_TX_CHAINS_1, &dsss_limits);
+		wlc_channel_dump_pwr_range(b,  "DSSS              ", dsss_limits.pwr,
+			WL_RATESET_SZ_DSSS);
+		ppr_get_ofdm(txpwr, WL_TX_BW_20IN40, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr, WL_TX_BW_20IN40, WL_TX_CHAINS_2, &dsss_limits);
+			wlc_channel_dump_pwr_range(b, "DSSS_MULTI1       ", dsss_limits.pwr,
+				WL_RATESET_SZ_DSSS);
+			ppr_get_ofdm(txpwr, WL_TX_BW_20IN40, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr, WL_TX_BW_20IN40, WL_TX_CHAINS_3, &dsss_limits);
+				wlc_channel_dump_pwr_range(b,  "DSSS_MULTI2       ",
+					dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+				ppr_get_ofdm(txpwr, WL_TX_BW_20IN40, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr, WL_TX_BW_20IN40, WL_TX_CHAINS_4,
+						&dsss_limits);
+					wlc_channel_dump_pwr_range(b,  "DSSS_MULTI3       ",
+						dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+					ppr_get_ofdm(txpwr, WL_TX_BW_20IN40, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+#ifdef WL11AC
+	} else if (bw == WL_TX_BW_80) {
+		bcm_bprintf(b, "\n80MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_80, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_80, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_80, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_2, WL_TX_MODE_STBC,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_2, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_3, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_80, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+		bcm_bprintf(b, "\n20in80MHz:\n");
+		ppr_get_dsss(txpwr, WL_TX_BW_20IN80, WL_TX_CHAINS_1, &dsss_limits);
+		wlc_channel_dump_pwr_range(b,  "DSSS              ", dsss_limits.pwr,
+			WL_RATESET_SZ_DSSS);
+		ppr_get_ofdm(txpwr, WL_TX_BW_20IN80, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr, WL_TX_BW_20IN80, WL_TX_CHAINS_2, &dsss_limits);
+			wlc_channel_dump_pwr_range(b, "DSSS_MULTI1       ", dsss_limits.pwr,
+				WL_RATESET_SZ_DSSS);
+			ppr_get_ofdm(txpwr, WL_TX_BW_20IN80, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr, WL_TX_BW_20IN80, WL_TX_CHAINS_3, &dsss_limits);
+				wlc_channel_dump_pwr_range(b,  "DSSS_MULTI2       ",
+					dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+				ppr_get_ofdm(txpwr, WL_TX_BW_20IN80, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr, WL_TX_BW_20IN80, WL_TX_CHAINS_4,
+						&dsss_limits);
+					wlc_channel_dump_pwr_range(b,  "DSSS_MULTI3       ",
+						dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+					ppr_get_ofdm(txpwr, WL_TX_BW_20IN80, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN80, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+		bcm_bprintf(b, "\n40in80MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_40IN80, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_40IN80, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_40IN80, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_40IN80, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN80, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+#endif /* WL11AC */
+
+#ifdef WL11AC_160
+	} else if (bw == WL_TX_BW_160) {
+		bcm_bprintf(b, "\n160MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_160, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_160, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_160, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_2, WL_TX_MODE_STBC,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_2, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_3, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_160, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_160, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+		bcm_bprintf(b, "\n20in160MHz:\n");
+		ppr_get_dsss(txpwr, WL_TX_BW_20IN160, WL_TX_CHAINS_1, &dsss_limits);
+		wlc_channel_dump_pwr_range(b,  "DSSS              ", dsss_limits.pwr,
+			WL_RATESET_SZ_DSSS);
+		ppr_get_ofdm(txpwr, WL_TX_BW_20IN160, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+			&ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr, WL_TX_BW_20IN160, WL_TX_CHAINS_2, &dsss_limits);
+			wlc_channel_dump_pwr_range(b, "DSSS_MULTI1       ", dsss_limits.pwr,
+				WL_RATESET_SZ_DSSS);
+			ppr_get_ofdm(txpwr, WL_TX_BW_20IN160, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr, WL_TX_BW_20IN160, WL_TX_CHAINS_3,
+					&dsss_limits);
+				wlc_channel_dump_pwr_range(b,  "DSSS_MULTI2       ",
+					dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+				ppr_get_ofdm(txpwr, WL_TX_BW_20IN160, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_1,
+					WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr, WL_TX_BW_20IN160, WL_TX_CHAINS_4,
+						&dsss_limits);
+					wlc_channel_dump_pwr_range(b,  "DSSS_MULTI3       ",
+						dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+					ppr_get_ofdm(txpwr, WL_TX_BW_20IN160, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN160, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+		bcm_bprintf(b, "\n40in160MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_40IN160, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+			&ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_40IN160, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_40IN160, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_1,
+					WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_40IN160, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN160, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+		bcm_bprintf(b, "\n80in160MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_80IN160, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+			&ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_80IN160, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_80IN160, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_1,
+					WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_80IN160, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN160, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+#endif /* WL11AC_160 */
+
+#ifdef WL11AC_80P80
+	} else if (bw == WL_TX_BW_8080) {
+		bcm_bprintf(b, "\n80+80MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_8080, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_8080, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_8080, WL_TX_MODE_CDD, WL_TX_CHAINS_3,
+					&ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_2, WL_TX_MODE_STBC,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_2, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_3, WL_TX_MODE_NONE,
+					WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_8080, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+		bcm_bprintf(b, "\n80+80MHz chan2:\n");
+		ppr_get_dsss(txpwr, WL_TX_BW_8080CHAN2, WL_TX_CHAINS_1, &dsss_limits);
+		wlc_channel_dump_pwr_range(b,  "DSSS              ", dsss_limits.pwr,
+			WL_RATESET_SZ_DSSS);
+		ppr_get_ofdm(txpwr, WL_TX_BW_8080CHAN2, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+			&ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_dsss(txpwr, WL_TX_BW_8080CHAN2, WL_TX_CHAINS_2, &dsss_limits);
+			wlc_channel_dump_pwr_range(b, "DSSS_MULTI1       ", dsss_limits.pwr,
+				WL_RATESET_SZ_DSSS);
+			ppr_get_ofdm(txpwr, WL_TX_BW_8080CHAN2, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_dsss(txpwr, WL_TX_BW_8080CHAN2, WL_TX_CHAINS_3,
+					&dsss_limits);
+				wlc_channel_dump_pwr_range(b,  "DSSS_MULTI2       ",
+					dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+				ppr_get_ofdm(txpwr, WL_TX_BW_8080CHAN2, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_1,
+					WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_dsss(txpwr, WL_TX_BW_8080CHAN2, WL_TX_CHAINS_4,
+						&dsss_limits);
+					wlc_channel_dump_pwr_range(b,  "DSSS_MULTI3       ",
+						dsss_limits.pwr, WL_RATESET_SZ_DSSS);
+					ppr_get_ofdm(txpwr, WL_TX_BW_8080CHAN2, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_8080CHAN2, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+		bcm_bprintf(b, "\n20in80+80MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_20IN8080, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+			&ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_20IN8080, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_20IN8080, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_1,
+					WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_20IN8080, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_20IN8080, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+		bcm_bprintf(b, "\n40in80+80MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_40IN8080, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+			&ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_40IN8080, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_40IN8080, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_1,
+					WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_40IN8080, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_40IN8080, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+
+		bcm_bprintf(b, "\n80in80+80MHz:\n");
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_80IN8080, WL_TX_MODE_NONE, WL_TX_CHAINS_1,
+			&ofdm_limits);
+		wlc_channel_dump_pwr_range8(b, "OFDM              ", ofdm_limits.pwr);
+		ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_1, WL_TX_MODE_NONE,
+			WL_TX_CHAINS_1, &mcs_limits);
+		wlc_channel_dump_pwr_range_mcs(b, "MCS0_7            ", mcs_limits.pwr);
+
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			ppr_get_ofdm(txpwr, WL_TX_BW_80IN8080, WL_TX_MODE_CDD, WL_TX_CHAINS_2,
+				&ofdm_limits);
+			wlc_channel_dump_pwr_range8(b, "OFDM_CDD1         ", ofdm_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD1       ", mcs_limits.pwr);
+
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_2, WL_TX_MODE_STBC,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC       ", mcs_limits.pwr);
+			ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_2, WL_TX_MODE_NONE,
+				WL_TX_CHAINS_2, &mcs_limits);
+			wlc_channel_dump_pwr_range_mcs(b, "MCS8_15           ", mcs_limits.pwr);
+
+			if (PHYCORENUM(wlc->stf->txstreams) > 2) {
+				ppr_get_ofdm(txpwr, WL_TX_BW_80IN8080, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_3, &ofdm_limits);
+				wlc_channel_dump_pwr_range8(b, "OFDM_CDD2         ",
+					ofdm_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_1,
+					WL_TX_MODE_CDD, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD2       ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_2,
+					WL_TX_MODE_STBC, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP1",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_2,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP1    ",
+					mcs_limits.pwr);
+				ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_3,
+					WL_TX_MODE_NONE, WL_TX_CHAINS_3, &mcs_limits);
+				wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+					mcs_limits.pwr);
+
+				if (PHYCORENUM(wlc->stf->txstreams) > 3) {
+					ppr_get_ofdm(txpwr, WL_TX_BW_80IN8080, WL_TX_MODE_CDD,
+						WL_TX_CHAINS_4, &ofdm_limits);
+					wlc_channel_dump_pwr_range8(b, "OFDM_CDD3         ",
+						ofdm_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_1,
+						WL_TX_MODE_CDD, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_CDD3       ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_2,
+						WL_TX_MODE_STBC, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS0_7_STBC_SPEXP2",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_2,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS8_15_SPEXP2    ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_3,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS16_23          ",
+						mcs_limits.pwr);
+					ppr_get_vht_mcs(txpwr, WL_TX_BW_80IN8080, WL_TX_NSS_4,
+						WL_TX_MODE_NONE, WL_TX_CHAINS_4, &mcs_limits);
+					wlc_channel_dump_pwr_range_mcs(b, "MCS24_31          ",
+						mcs_limits.pwr);
+				}
+			}
+		}
+#endif /* WL11AC_80P80 */
+	}
+
+	bcm_bprintf(b, "\n");
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /*
  * 	if (wlc->country_list_extended) all country listable.
@@ -3908,6 +5429,152 @@ wlc_get_reg_max_power_for_channel(wlc_cm_info_t *wlc_cmi, int chan, bool externa
 	return wlc_get_reg_max_power_for_channel_ex(wlc_cmi, &locales, chan, external);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_dump_max_power_per_channel(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = wlc_cmi->wlc;
+
+	int8 ext_pwr = wlc_get_reg_max_power_for_channel(wlc_cmi,
+		wf_chspec_ctlchan(wlc->chanspec), TRUE);
+	/* int8 int_pwr = wlc_get_reg_max_power_for_channel(wlc_cm,
+	   CHSPEC_CHANNEL(wlc->chanspec), FALSE);
+	*/
+
+	/* bcm_bprintf(b, "Reg Max Power: %d External: %d\n", int_pwr, ext_pwr); */
+	bcm_bprintf(b, "Reg Max Power (External) %d\n", ext_pwr);
+	return 0;
+}
+
+static int wlc_get_clm_limits(wlc_cm_info_t *wlc_cmi, clm_band_t bandtype,
+	clm_bandwidth_t bw, clm_power_limits_t *limits,
+	clm_power_limits_t *limits20in40)
+{
+	wlc_info_t *wlc = wlc_cmi->wlc;
+	chanspec_t chanspec = wlc->chanspec;
+	unsigned int chan;
+	clm_country_t country;
+	clm_result_t result = CLM_RESULT_ERR;
+	clm_country_locales_t locale;
+	wlcband_t* band;
+	int ant_gain;
+	clm_limits_params_t lim_params;
+
+	memset(limits, (unsigned char)WL_RATE_DISABLED, sizeof(clm_power_limits_t));
+	memset(limits20in40, (unsigned char)WL_RATE_DISABLED, sizeof(clm_power_limits_t));
+
+	country = wlc_cmi->cm->country;
+	chan = CHSPEC_CHANNEL(chanspec);
+	band = wlc->bandstate[CHSPEC_WLCBANDUNIT(chanspec)];
+	ant_gain = band->antgain;
+
+	result = wlc_get_locale(country, &locale);
+	if (result != CLM_RESULT_OK)
+		WL_ERROR(("wlc_get_locale failed\n"));
+
+	if ((result == CLM_RESULT_OK) && (clm_limits_params_init(&lim_params) == CLM_RESULT_OK)) {
+		lim_params.sar = band->sar;
+		lim_params.bw = bw;
+
+		result = clm_limits(&locale, bandtype, chan, ant_gain, CLM_LIMITS_TYPE_CHANNEL,
+			&lim_params, limits);
+	}
+
+	if ((result == CLM_RESULT_OK) && (bw == CLM_BW_40) && (limits20in40 != NULL))
+		result = clm_limits(&locale, bandtype, chan, ant_gain,
+			CHSPEC_SB_UPPER(chanspec) ?
+			CLM_LIMITS_TYPE_SUBCHAN_U : CLM_LIMITS_TYPE_SUBCHAN_L,
+			&lim_params, limits20in40);
+	if (result != CLM_RESULT_OK)
+		WL_ERROR(("clm_limits failed\n"));
+
+	return 0;
+}
+
+static int wlc_dump_clm_limits_2G_20M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	clm_power_limits_t limits;
+	clm_power_limits_t limits20in40;
+	int i;
+
+	wlc_get_clm_limits(wlc_cmi, CLM_BAND_2G, CLM_BW_20, &limits, &limits20in40);
+
+	for (i = 0; i < WL_NUMRATES; i++) {
+		bcm_bprintf(b, "%d\n", limits.limit[i]);
+	}
+
+	return 0;
+}
+static int wlc_dump_clm_limits_2G_40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	clm_power_limits_t limits;
+	clm_power_limits_t limits20in40;
+	int i;
+
+	wlc_get_clm_limits(wlc_cmi, CLM_BAND_2G, CLM_BW_40, &limits, &limits20in40);
+
+	for (i = 0; i < WL_NUMRATES; i++) {
+		bcm_bprintf(b, "%d\n", limits.limit[i]);
+	}
+
+	return 0;
+}
+static int wlc_dump_clm_limits_2G_20in40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	clm_power_limits_t limits;
+	clm_power_limits_t limits20in40;
+	int i;
+
+	wlc_get_clm_limits(wlc_cmi, CLM_BAND_2G, CLM_BW_40, &limits, &limits20in40);
+
+	for (i = 0; i < WL_NUMRATES; i++) {
+		bcm_bprintf(b, "%d\n", limits20in40.limit[i]);
+	}
+
+	return 0;
+}
+static int wlc_dump_clm_limits_5G_20M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	clm_power_limits_t limits;
+	clm_power_limits_t limits20in40;
+	int i;
+
+	wlc_get_clm_limits(wlc_cmi, CLM_BAND_5G, CLM_BW_20, &limits, &limits20in40);
+
+	for (i = 0; i < WL_NUMRATES; i++) {
+		bcm_bprintf(b, "%d\n", limits.limit[i]);
+	}
+
+	return 0;
+}
+static int wlc_dump_clm_limits_5G_40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	clm_power_limits_t limits;
+	clm_power_limits_t limits20in40;
+	int i;
+
+	wlc_get_clm_limits(wlc_cmi, CLM_BAND_5G, CLM_BW_40, &limits, &limits20in40);
+
+	for (i = 0; i < WL_NUMRATES; i++) {
+		bcm_bprintf(b, "%d\n", limits.limit[i]);
+	}
+
+	return 0;
+}
+static int wlc_dump_clm_limits_5G_20in40M(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
+{
+	clm_power_limits_t limits;
+	clm_power_limits_t limits20in40;
+	int i;
+
+	wlc_get_clm_limits(wlc_cmi, CLM_BAND_5G, CLM_BW_40, &limits, &limits20in40);
+
+	for (i = 0; i < WL_NUMRATES; i++) {
+		bcm_bprintf(b, "%d\n", limits20in40.limit[i]);
+	}
+
+	return 0;
+}
+#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
 static bool
 wlc_channel_defined_80MHz_channel(uint channel)
@@ -3951,12 +5618,45 @@ wlc_valid_chanspec_ext(wlc_cm_info_t *wlc_cmi, chanspec_t chspec, bool dualband)
 {
 	wlc_info_t *wlc = wlc_cmi->wlc;
 	uint8 channel = CHSPEC_CHANNEL(chspec);
+	uint8 cmn_bwcap = 0;
 
 	/* check the chanspec */
 	if (wf_chspec_malformed(chspec)) {
 		WL_ERROR(("wl%d: malformed chanspec 0x%x\n", wlc->pub->unit, chspec));
 		ASSERT(0);
 		return FALSE;
+	}
+
+	/* For dual MAC RSDB chips we will always use common bwcap of all cores to
+	 * sanitize chanspec (Note that common bwcap is used only when bandstate is shared
+	 * with other WLCs
+	 */
+	cmn_bwcap = wlc_get_cmn_bwcap(wlc,
+			(CHSPEC_IS2G(chspec) ? WLC_BAND_2G: WLC_BAND_5G));
+
+	/* It can so happen that bandstate->bw_cap is updated in wlc_get_valid_chanspecs()
+	 * before invoking this function.
+	 * Sanitize cm_bwcap for non-RSDB(or chip that don`t share bandstate) cases based on
+	 * PHY BW Capability
+	 */
+	if (!RSDB_ENAB(wlc->pub) || !RSDB_CMN_BANDSTATE_ENAB(wlc->pub)) {
+		if (CHSPEC_IS40(chspec)) {
+			if (WL_BW_CAP_40MHZ(cmn_bwcap) && !wlc->pub->phy_bw40_capable) {
+				cmn_bwcap &= ~WLC_BW_40MHZ_BIT;
+			}
+		} else if (CHSPEC_IS80(chspec)) {
+			if (WL_BW_CAP_80MHZ(cmn_bwcap) && !wlc->pub->phy_bw80_capable) {
+				cmn_bwcap &= ~WLC_BW_80MHZ_BIT;
+			}
+		} else if (CHSPEC_IS160(chspec)) {
+			if (WL_BW_CAP_160MHZ(cmn_bwcap) && !wlc->pub->phy_bw160_capable) {
+				cmn_bwcap &= ~WLC_BW_160MHZ_BIT;
+			}
+		} else if (CHSPEC_IS8080(chspec)) {
+			if (WL_BW_CAP_160MHZ(cmn_bwcap) && !wlc->pub->phy_bw8080_capable) {
+				cmn_bwcap &= ~WLC_BW_160MHZ_BIT;
+			}
+		}
 	}
 
 	/* check channel range is in band range */
@@ -3972,30 +5672,12 @@ wlc_valid_chanspec_ext(wlc_cm_info_t *wlc_cmi, chanspec_t chspec, bool dualband)
 			return (VALID_CHANNEL20(wlc_cmi->wlc, channel));
 	}
 
-	/* Check a 2.5/5/10Mhz channel */
-	if (CHSPEC_IS_ULB(wlc, chspec)) {
-		if (CHSPEC_IS2P5(chspec) && !WLC_2P5MHZ_ULB_SUPP_BAND(wlc, CHSPEC_BANDUNIT(chspec)))
-			return FALSE;
-
-		if (CHSPEC_IS5(chspec) && !WLC_5MHZ_ULB_SUPP_BAND(wlc, CHSPEC_BANDUNIT(chspec)))
-			return FALSE;
-
-		if (CHSPEC_IS10(chspec) && !WLC_10MHZ_ULB_SUPP_BAND(wlc, CHSPEC_BANDUNIT(chspec)))
-			return FALSE;
-
-		if (dualband)
-			return (WLC_LE20_VALID_CHANNEL_DB(wlc_cmi->wlc, CHSPEC_BW(chspec),
-				channel));
-		else
-			return (WLC_LE20_VALID_CHANNEL(wlc_cmi->wlc, CHSPEC_BW(chspec), channel));
-	}
-
 	/* Check a 40Mhz channel */
 	if (CHSPEC_IS40(chspec)) {
 		uint8 upper_sideband = 0, idx;
 		uint8 num_ch20_entries = sizeof(chan20_info)/sizeof(struct chan20_info);
 
-		if (!wlc->pub->phy_bw40_capable) {
+		if (!WL_BW_CAP_40MHZ(cmn_bwcap)) {
 			return FALSE;
 		}
 
@@ -4043,8 +5725,7 @@ wlc_valid_chanspec_ext(wlc_cm_info_t *wlc_cmi, chanspec_t chspec, bool dualband)
 		/* Make sure that the phy is 80MHz capable and that
 		 * we are configured for 80MHz on the band
 		 */
-		if (!wlc->pub->phy_bw80_capable ||
-		    !WL_BW_CAP_80MHZ(wlc->bandstate[BAND_5G_INDEX]->bw_cap)) {
+		if (!WL_BW_CAP_80MHZ(cmn_bwcap)) {
 			return FALSE;
 		}
 
@@ -4109,8 +5790,7 @@ wlc_valid_chanspec_ext(wlc_cm_info_t *wlc_cmi, chanspec_t chspec, bool dualband)
 		 * we are configured for 160MHz on the band
 		 */
 		if (CHSPEC_IS8080(chspec)) {
-			if (!wlc->pub->phy_bw8080_capable ||
-				!WL_BW_CAP_160MHZ(wlc->bandstate[BAND_5G_INDEX]->bw_cap))
+			if (!WL_BW_CAP_160MHZ(cmn_bwcap))
 				return FALSE;
 		}
 
@@ -4118,8 +5798,7 @@ wlc_valid_chanspec_ext(wlc_cm_info_t *wlc_cmi, chanspec_t chspec, bool dualband)
 		 * we are configured for 160MHz on the band
 		 */
 		if (CHSPEC_IS160(chspec)) {
-			if (!wlc->pub->phy_bw160_capable ||
-				!WL_BW_CAP_160MHZ(wlc->bandstate[BAND_5G_INDEX]->bw_cap))
+			if (!WL_BW_CAP_160MHZ(cmn_bwcap))
 				return FALSE;
 		}
 
@@ -4223,11 +5902,21 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 	bool saved_cap_80;
 	bool saved_cap_160;
 #endif /* WL11AC */
+	uint8 cmn_bwcap;
 
 	/* Check if this is a valid band for this card */
 	if ((NBANDS(wlc) == 1) &&
 	    (BAND_5G(wlc->band->bandtype) == band2G))
 		return;
+
+	/* For RSDB chips we will always use common bw cap of all cores to evaluate and
+	 * sanitize chanspec
+	 * In non RSDB case, wlc->bandstate[BAND_XX_INDEX]->bw_cap is always updated from
+	 * pub->phy_bwXX_capable. We will initialize common BW cap to bandstate->bw_cap
+	 * in this scenario for any sanitization of chanspec
+	 */
+	cmn_bwcap = wlc_get_cmn_bwcap(wlc,
+			(band2G ? WLC_BAND_2G: WLC_BAND_5G));
 
 	/* see if we need to look up country. Else, current locale */
 	if (strcmp(abbrev, "")) {
@@ -4288,30 +5977,6 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 
 #endif /* WL11N */
 
-#ifdef WL11ULB
-	if (WLC_ULB_MODE_ENABLED(wlc)) {
-		uint16 ulb_bw = WL_CHANSPEC_BW_20;
-		uint16 band   = WL_CHANSPEC_BAND_2G;
-
-		if (!band2G)
-			band = WL_CHANSPEC_BAND_5G;
-
-		if (bw == WL_CHANSPEC_BW_2P5 && WLC_2P5MHZ_ULB_SUPP_HW(wlc))
-			ulb_bw = WL_CHANSPEC_BW_2P5;
-
-		if (bw == WL_CHANSPEC_BW_5 && WLC_5MHZ_ULB_SUPP_HW(wlc))
-			ulb_bw = WL_CHANSPEC_BW_5;
-
-		if (bw == WL_CHANSPEC_BW_10 && WLC_10MHZ_ULB_SUPP_HW(wlc))
-			ulb_bw = WL_CHANSPEC_BW_10;
-
-		if (ulb_bw != WL_CHANSPEC_BW_20) {
-			chanspec = (band | ulb_bw);
-			wlc_chanspec_list(wlc, list, chanspec);
-		}
-	}
-#endif /* WL11ULB */
-
 	/* Go through 2G 20MHZ chanspecs */
 	if (band2G && bw == WL_CHANSPEC_BW_20) {
 		chanspec = WL_CHANSPEC_BAND_2G | WL_CHANSPEC_BW_20;
@@ -4327,7 +5992,7 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 #ifdef WL11N
 	/* Go through 2G 40MHZ chanspecs only if N mode and PHY is capable of 40MHZ */
 	if (band2G && bw == WL_CHANSPEC_BW_40 &&
-	    N_ENAB(wlc->pub) && wlc->pub->phy_bw40_capable) {
+	    N_ENAB(wlc->pub) && WL_BW_CAP_40MHZ(cmn_bwcap)) {
 		chanspec = WL_CHANSPEC_BAND_2G | WL_CHANSPEC_BW_40 | WL_CHANSPEC_CTL_SB_UPPER;
 		wlc_chanspec_list(wlc, list, chanspec);
 		chanspec = WL_CHANSPEC_BAND_2G | WL_CHANSPEC_BW_40 | WL_CHANSPEC_CTL_SB_LOWER;
@@ -4336,8 +6001,9 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 
 	/* Go through 5G 40MHZ chanspecs only if N mode and PHY is capable of 40MHZ  */
 	if (!band2G && bw == WL_CHANSPEC_BW_40 &&
-	    N_ENAB(wlc->pub) && ((NBANDS(wlc) > 1) || IS_SINGLEBAND_5G(wlc->deviceid)) &&
-	    wlc->pub->phy_bw40_capable) {
+	    N_ENAB(wlc->pub) && ((NBANDS(wlc) > 1) ||
+	    IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)) &&
+	    WL_BW_CAP_40MHZ(cmn_bwcap)) {
 		chanspec = WL_CHANSPEC_BAND_5G | WL_CHANSPEC_BW_40 | WL_CHANSPEC_CTL_SB_UPPER;
 		wlc_chanspec_list(wlc, list, chanspec);
 		chanspec = WL_CHANSPEC_BAND_5G | WL_CHANSPEC_BW_40 | WL_CHANSPEC_CTL_SB_LOWER;
@@ -4347,8 +6013,8 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 #ifdef WL11AC
 	/* Go through 5G 80MHZ chanspecs only if VHT mode and PHY is capable of 80MHZ  */
 	if (!band2G && bw == WL_CHANSPEC_BW_80 && VHT_ENAB_BAND(wlc->pub, WLC_BAND_5G) &&
-		((NBANDS(wlc) > 1) || IS_SINGLEBAND_5G(wlc->deviceid)) &&
-		wlc->pub->phy_bw80_capable) {
+		((NBANDS(wlc) > 1) || IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)) &&
+		WL_BW_CAP_80MHZ(cmn_bwcap)) {
 
 		int i;
 		uint16 ctl_sb[] = {
@@ -4366,8 +6032,8 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 
 	 /* Go through 5G 8080MHZ chanspecs only if VHT mode and PHY is capable of 8080MHZ  */
 	if (!band2G && bw == WL_CHANSPEC_BW_8080 && VHT_ENAB_BAND(wlc->pub, WLC_BAND_5G) &&
-		((NBANDS(wlc) > 1) || IS_SINGLEBAND_5G(wlc->deviceid)) &&
-		wlc->pub->phy_bw8080_capable) {
+		((NBANDS(wlc) > 1) || IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)) &&
+		WL_BW_CAP_160MHZ(cmn_bwcap)) {
 
 		uint i;
 		int j;
@@ -4420,8 +6086,8 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 
 	/* Go through 5G 160MHZ chanspecs only if VHT mode and PHY is capable of 160MHZ  */
 	if (!band2G && bw == WL_CHANSPEC_BW_160 && VHT_ENAB_BAND(wlc->pub, WLC_BAND_5G) &&
-		((NBANDS(wlc) > 1) || IS_SINGLEBAND_5G(wlc->deviceid)) &&
-		wlc->pub->phy_bw160_capable) {
+		((NBANDS(wlc) > 1) || IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap)) &&
+		WL_BW_CAP_160MHZ(cmn_bwcap)) {
 		/* Valid 160 channels */
 		uint8 chan[] = {50, 114};
 		uint i;
@@ -4473,9 +6139,9 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 
 	if (NBANDS(wlc) > 1) {
 		if (saved_db_cap_40) {
-			wlc->bandstate[OTHERBANDUNIT(wlc)]->bw_cap |= WLC_BW_CAP_40MHZ;
+			wlc->bandstate[OTHERBANDUNIT(wlc)]->bw_cap |= WLC_BW_40MHZ_BIT;
 		} else {
-			wlc->bandstate[OTHERBANDUNIT(wlc)]->bw_cap &= ~WLC_BW_CAP_40MHZ;
+			wlc->bandstate[OTHERBANDUNIT(wlc)]->bw_cap &= ~WLC_BW_40MHZ_BIT;
 		}
 	}
 
@@ -4496,6 +6162,75 @@ wlc_get_valid_chanspecs(wlc_cm_info_t *wlc_cmi, wl_uint32_list_t *list, uint bw,
 			      &wlc_cm->bandstate[OTHERBANDUNIT(wlc)].valid_channels,
 			      sizeof(chanvec_t));
 	}
+}
+
+/*
+ * API identifies passed chanspec present in the passed country.
+ * Returns TRUE if chanspec queried to country match else FALSE
+ * Caller should ensure to pass valid chanspec and country present in the CLM data
+ */
+bool
+wlc_valid_chanspec_cntry(wlc_cm_info_t *wlc_cm, const char *country_abbrev,
+		chanspec_t home_chanspec)
+{
+	uint i;
+	wl_uint32_list_t *list;
+	wlc_info_t *wlc = wlc_cm->wlc;
+	char abbrev[WLC_CNTRY_BUF_SZ];
+	chanspec_t chanspec = home_chanspec;
+	bool found_chanspec = FALSE;
+	bool ch2g = FALSE;
+	uint bw = WL_CHANSPEC_BW_20;
+
+	bzero(abbrev, WLC_CNTRY_BUF_SZ);
+	list = (wl_uint32_list_t *)MALLOCZ(wlc->osh, (WL_NUMCHANSPECS+1) * sizeof(uint32));
+
+
+	if (!list) {
+		WL_ERROR(("wl%d: %s: out of mem, %d bytes malloced\n", wlc->pub->unit,
+		          __FUNCTION__, MALLOCED(wlc->osh)));
+		return FALSE;
+	}
+
+	list->count = 0;
+
+	strncpy(abbrev, country_abbrev, WLC_CNTRY_BUF_SZ - 1);
+	abbrev[WLC_CNTRY_BUF_SZ - 1] = '\0';
+
+	/* chanspec is valid during associated case only. */
+	if (CHSPEC_IS2G(chanspec) || (chanspec == 0)) {
+		ch2g = TRUE;
+	} else if (CHSPEC_IS5G(chanspec)) {
+		ch2g = FALSE;
+	}
+
+	if (CHSPEC_IS20(chanspec) || (chanspec == 0)) {
+		bw = WL_CHANSPEC_BW_20;
+	} else if (CHSPEC_IS40(chanspec)) {
+		bw = WL_CHANSPEC_BW_40;
+	} else if (CHSPEC_IS80(chanspec)) {
+		bw = WL_CHANSPEC_BW_80;
+	}
+
+	wlc_get_valid_chanspecs(wlc->cmi, list, bw, ch2g, abbrev);
+
+
+	for (i = 0; i < list->count; i++) {
+		chanspec_t chanspec_e = (chanspec_t) list->element[i];
+
+		if (chanspec == chanspec_e) {
+			found_chanspec = TRUE;
+			WL_ERROR(("wl%d: %s: found chanspec 0x%04x\n",
+			           wlc->pub->unit, __FUNCTION__, chanspec_e));
+			break;
+		}
+	}
+
+
+	if (list)
+		MFREE(wlc->osh, list, (WL_NUMCHANSPECS+1) * sizeof(uint32));
+
+	return found_chanspec;
 }
 
 /* query the channel list given a country and a regulatory class */
@@ -4649,6 +6384,213 @@ wlc_has_restricted_chanspec(wlc_cm_info_t *wlc_cmi)
 	return wlc_cmi->cm->has_restricted_ch;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+
+const bcm_bit_desc_t fc_flags[] = {
+	{WLC_EIRP, "EIRP"},
+	{WLC_DFS_TPC, "DFS/TPC"},
+	{WLC_NO_80MHZ, "No 80MHz"},
+	{WLC_NO_40MHZ, "No 40MHz"},
+	{WLC_NO_MIMO, "No MIMO"},
+	{WLC_RADAR_TYPE_EU, "EU_RADAR"},
+	{WLC_FILT_WAR, "FILT_WAR"},
+	{WLC_TXBF, "TxBF"},
+	{0, NULL}
+};
+
+/* FTODO need to add 80mhz to this function */
+static int
+wlc_channel_dump_locale(void *handle, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = (wlc_info_t*)handle;
+	wlc_cm_info_t* wlc_cmi = wlc->cmi;
+	wlc_cm_data_t *wlc_cm = wlc_cmi->cm;
+	ppr_t *txpwr;
+
+	char max_ofdm_str[32];
+	char max_ht20_str[32];
+	char max_ht40_str[32];
+	char max_cck_str[32];
+	int chan, i;
+	int restricted;
+	int radar = 0;
+	int max_cck, max_ofdm;
+	int max_ht20 = 0, max_ht40 = 0;
+	char flagstr[64];
+	uint8 rclist[MAXRCLISTSIZE], rclen;
+	chanspec_t chanspec;
+	int quiet;
+	ppr_dsss_rateset_t dsss_limits;
+	ppr_ofdm_rateset_t ofdm_limits;
+#ifdef WL11N
+	ppr_ht_mcs_rateset_t mcs_limits;
+#endif
+
+	clm_country_locales_t locales;
+	clm_country_t country;
+
+	clm_result_t result = wlc_country_lookup_direct(wlc_cm->ccode,
+		wlc_cm->regrev, &country);
+
+	if (result != CLM_RESULT_OK) {
+		return -1;
+	}
+
+	if ((txpwr = ppr_create(wlc->pub->osh, ppr_get_max_bw())) == NULL) {
+		return BCME_ERROR;
+	}
+
+	bcm_bprintf(b, "srom_ccode \"%s\" srom_regrev %u\n",
+	            wlc_cm->srom_ccode, wlc_cm->srom_regrev);
+
+	result = wlc_get_locale(country, &locales);
+	if (result != CLM_RESULT_OK) {
+		ppr_delete(wlc->pub->osh, txpwr);
+		return -1;
+	}
+
+	if (NBANDS(wlc) > 1) {
+		uint16 flags;
+		wlc_get_flags(&locales, CLM_BAND_2G, &flags);
+		bcm_format_flags(fc_flags, flags, flagstr, 64);
+		bcm_bprintf(b, "2G Flags: %s\n", flagstr);
+		wlc_get_flags(&locales, CLM_BAND_5G, &flags);
+		bcm_format_flags(fc_flags, flags, flagstr, 64);
+		bcm_bprintf(b, "5G Flags: %s\n", flagstr);
+	} else {
+		uint16 flags;
+		if (BAND_2G(wlc->band->bandtype))
+			wlc_get_flags(&locales, CLM_BAND_2G, &flags);
+		else
+			wlc_get_flags(&locales, CLM_BAND_5G, &flags);
+		bcm_format_flags(fc_flags, flags, flagstr, 64);
+		bcm_bprintf(b, "%dG Flags: %s\n", BAND_2G(wlc->band->bandtype)?2:5, flagstr);
+	}
+
+	if (N_ENAB(wlc->pub))
+		bcm_bprintf(b, "  Ch Rdr/reS DSSS  OFDM   HT    20/40\n");
+	else
+		bcm_bprintf(b, "  Ch Rdr/reS DSSS  OFDM\n");
+
+	for (chan = 0; chan < MAXCHANNEL; chan++) {
+		chanspec = CH20MHZ_CHSPEC(chan);
+		if (!wlc_valid_chanspec_db(wlc->cmi, chanspec)) {
+			chanspec = CH40MHZ_CHSPEC(chan, WL_CHANSPEC_CTL_SB_LOWER);
+			if (!wlc_valid_chanspec_db(wlc->cmi, chanspec)) {
+				chanspec = CH80MHZ_CHSPEC(chan, WL_CHANSPEC_CTL_SB_LOWER);
+				if (!wlc_valid_chanspec_db(wlc->cmi, chanspec))
+					continue;
+			}
+		}
+
+		radar = wlc_radar_chanspec(wlc->cmi, chanspec);
+		restricted = wlc_restricted_chanspec(wlc->cmi, chanspec);
+		quiet = wlc_quiet_chanspec(wlc->cmi, chanspec);
+
+		wlc_channel_reg_limits(wlc->cmi, chanspec, txpwr);
+
+		ppr_get_dsss(txpwr, WL_TX_BW_20, WL_TX_CHAINS_1, &dsss_limits);
+		max_cck = dsss_limits.pwr[0];
+
+		ppr_get_ofdm(txpwr, WL_TX_BW_20, WL_TX_MODE_NONE, WL_TX_CHAINS_1, &ofdm_limits);
+		max_ofdm = ofdm_limits.pwr[0];
+
+#if defined(WL11N)
+		if (PHYCORENUM(wlc->stf->txstreams) > 1) {
+			if (WLCISHTPHY(wlc->band) && CHSPEC_IS40(chanspec))
+				ppr_get_ht_mcs(txpwr, WL_TX_BW_20IN40, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_2, &mcs_limits);
+			else
+				ppr_get_ht_mcs(txpwr, WL_TX_BW_20, WL_TX_NSS_1, WL_TX_MODE_CDD,
+					WL_TX_CHAINS_2, &mcs_limits);
+			max_ht20 = mcs_limits.pwr[0];
+
+			ppr_get_ht_mcs(txpwr, WL_TX_BW_40, WL_TX_NSS_1, WL_TX_MODE_CDD,
+				WL_TX_CHAINS_2, &mcs_limits);
+			max_ht40 = mcs_limits.pwr[0];
+		}
+#endif /* WL11N */
+
+		if (CHSPEC_IS2G(chanspec))
+			if (max_cck != WL_RATE_DISABLED)
+			snprintf(max_cck_str, sizeof(max_cck_str),
+			         "%2d%s", QDB_FRAC(max_cck));
+			else
+				strncpy(max_cck_str, "-    ", sizeof(max_cck_str));
+
+		else
+			strncpy(max_cck_str, "     ", sizeof(max_cck_str));
+
+		if (max_ofdm != WL_RATE_DISABLED)
+			snprintf(max_ofdm_str, sizeof(max_ofdm_str),
+		         "%2d%s", QDB_FRAC(max_ofdm));
+		else
+			strncpy(max_ofdm_str, "-    ", sizeof(max_ofdm_str));
+
+		if (N_ENAB(wlc->pub)) {
+
+			if (max_ht20 != WL_RATE_DISABLED)
+				snprintf(max_ht20_str, sizeof(max_ht20_str),
+			         "%2d%s", QDB_FRAC(max_ht20));
+			else
+				strncpy(max_ht20_str, "-    ", sizeof(max_ht20_str));
+
+			if (max_ht40 != WL_RATE_DISABLED)
+				snprintf(max_ht40_str, sizeof(max_ht40_str),
+			         "%2d%s", QDB_FRAC(max_ht40));
+			else
+				strncpy(max_ht40_str, "-    ", sizeof(max_ht40_str));
+
+			bcm_bprintf(b, "%s%3d %s%s%s     %s %s  %s %s\n",
+			            (CHSPEC_IS40(chanspec)?">":" "), chan,
+			            (radar ? "R" : "-"), (restricted ? "S" : "-"),
+			            (quiet ? "Q" : "-"),
+			            max_cck_str, max_ofdm_str,
+			            max_ht20_str, max_ht40_str);
+		}
+		else
+			bcm_bprintf(b, "%s%3d %s%s%s     %s %s\n",
+			            (CHSPEC_IS40(chanspec)?">":" "), chan,
+			            (radar ? "R" : "-"), (restricted ? "S" : "-"),
+			            (quiet ? "Q" : "-"),
+			            max_cck_str, max_ofdm_str);
+	}
+
+	bzero(rclist, MAXRCLISTSIZE);
+	chanspec = wlc->pub->associated ?
+	        wlc->home_chanspec : WLC_BAND_PI_RADIO_CHANSPEC;
+	rclen = wlc_get_regclass_list(wlc->cmi, rclist, MAXRCLISTSIZE, chanspec, FALSE);
+	if (rclen) {
+		bcm_bprintf(b, "supported regulatory class:\n");
+		for (i = 0; i < rclen; i++)
+			bcm_bprintf(b, "%d ", rclist[i]);
+		bcm_bprintf(b, "\n");
+	}
+
+	bcm_bprintf(b, "has_restricted_ch %s\n", wlc_cm->has_restricted_ch ? "TRUE" : "FALSE");
+
+#if HTCONF
+	{
+	struct wlc_channel_txchain_limits *lim;
+
+	lim = &wlc_cm->bandstate[BAND_2G_INDEX].chain_limits;
+	bcm_bprintf(b, "chain limits 2g:");
+	for (i = 0; i < WLC_CHAN_NUM_TXCHAIN; i++)
+		bcm_bprintf(b, " %2d%s", QDB_FRAC(lim->chain_limit[i]));
+	bcm_bprintf(b, "\n");
+
+	lim = &wlc_cm->bandstate[BAND_5G_INDEX].chain_limits;
+	bcm_bprintf(b, "chain limits 5g:");
+	for (i = 0; i < WLC_CHAN_NUM_TXCHAIN; i++)
+		bcm_bprintf(b, " %2d%s", QDB_FRAC(lim->chain_limit[i]));
+	bcm_bprintf(b, "\n");
+	}
+#endif /* HTCONF */
+
+	ppr_delete(wlc->pub->osh, txpwr);
+	return 0;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 static void
 wlc_channel_margin_summary_mapfn(void *context, uint8 *a, uint8 *b)
@@ -4904,6 +6846,8 @@ wlc_channel_band_chain_limit(wlc_cm_info_t *wlc_cmi, uint bandtype,
 {
 	wlc_info_t *wlc = wlc_cmi->wlc;
 	ppr_t* txpwr;
+	uint pprsize = ppr_size(PPR_CHSPEC_BW(wlc->chanspec));
+	int8 pwr[pprsize];
 	int bandunit = (bandtype == WLC_BAND_2G) ? BAND_2G_INDEX : BAND_5G_INDEX;
 
 	if (!PHYTYPE_HT_CAP(wlc_cmi->wlc->band))
@@ -4915,10 +6859,10 @@ wlc_channel_band_chain_limit(wlc_cm_info_t *wlc_cmi, uint bandtype,
 		return 0;
 
 #if defined(WLTXPWR_CACHE) && defined(WL11N)
-		wlc_phy_txpwr_cache_invalidate(wlc_phy_get_txpwr_cache(WLC_PI(wlc)));
+		wlc_phy_txpwr_cache_invalidate(phy_tpc_get_txpwr_cache(WLC_PI(wlc)));
 #endif
 
-	if ((txpwr = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
+	if ((txpwr = ppr_create_prealloc(PPR_CHSPEC_BW(wlc->chanspec), pwr, pprsize)) == NULL) {
 		return 0;
 	}
 
@@ -4926,7 +6870,6 @@ wlc_channel_band_chain_limit(wlc_cm_info_t *wlc_cmi, uint bandtype,
 	wlc_channel_txpower_limits(wlc_cmi, txpwr);
 	wlc_channel_update_txchain_offsets(wlc_cmi, txpwr);
 
-	ppr_delete(wlc_cmi->pub->osh, txpwr);
 	return 0;
 }
 
@@ -4940,16 +6883,21 @@ wlc_channel_update_txchain_offsets(wlc_cm_info_t *wlc_cmi, ppr_t *txpwr)
 	struct wlc_channel_txchain_limits *lim;
 	wl_txchain_pwr_offsets_t offsets;
 	chanspec_t chanspec;
-	ppr_t* srompwr;
 	int i, err;
 	int max_pwr;
 	int band, bw;
 	int limits_present = FALSE;
 	uint8 delta, margin, err_margin;
 	wl_txchain_pwr_offsets_t cur_offsets;
-#if defined WLTXPWR_CACHE && defined(WL11N)
-	tx_pwr_cache_entry_t* cacheptr = wlc_phy_get_txpwr_cache(WLC_PI(wlc));
+#ifdef BCMDBG
+	char chanbuf[CHANSPEC_STR_LEN];
 #endif
+#if defined WLTXPWR_CACHE && defined(WL11N)
+	tx_pwr_cache_entry_t* cacheptr = phy_tpc_get_txpwr_cache(WLC_PI(wlc));
+#endif
+	uint pprsize = ppr_size(PPR_CHSPEC_BW(wlc->chanspec));
+	ppr_t* srompwr;
+	int8 pwr[pprsize];
 
 	if (!PHYTYPE_HT_CAP(wlc->band)) {
 		return BCME_UNSUPPORTED;
@@ -4976,7 +6924,7 @@ wlc_channel_update_txchain_offsets(wlc_cm_info_t *wlc_cmi, ppr_t *txpwr)
 	band = CHSPEC_BAND(chanspec);
 	bw = CHSPEC_BW(chanspec);
 
-	if ((srompwr = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(chanspec))) == NULL) {
+	if ((srompwr = ppr_create_prealloc(PPR_CHSPEC_BW(chanspec), pwr, pprsize)) == NULL) {
 		WL_ERROR(("wl%d: %s:PPR create failed!\n", WLCWLUNIT(wlc_cmi->wlc), __FUNCTION__));
 		return BCME_ERROR;
 	}
@@ -5076,11 +7024,173 @@ wlc_channel_update_txchain_offsets(wlc_cm_info_t *wlc_cmi, ppr_t *txpwr)
 			WLCWLUNIT(wlc), err));
 	}
 
-	if (srompwr != NULL)
-		ppr_delete(wlc_cmi->pub->osh, srompwr);
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_channel_dump_reg_ppr(void *handle, struct bcmstrbuf *b)
+{
+	wlc_cm_info_t *wlc_cmi = (wlc_cm_info_t*)handle;
+	wlc_info_t *wlc = wlc_cmi->wlc;
+	ppr_t* txpwr;
+	char chanbuf[CHANSPEC_STR_LEN];
+	int ant_gain;
+	int sar;
+
+	wlcband_t* band = wlc->band;
+
+	ant_gain = band->antgain;
+	sar = band->sar;
+
+	if ((txpwr = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
+		return BCME_ERROR;
+	}
+	wlc_channel_reg_limits(wlc_cmi, wlc->chanspec, txpwr);
+
+	bcm_bprintf(b, "Regulatory Limits for channel %s (SAR:",
+		wf_chspec_ntoa(wlc->chanspec, chanbuf));
+	if (sar == WLC_TXPWR_MAX)
+		bcm_bprintf(b, " -  ");
+	else
+		bcm_bprintf(b, "%2d%s", QDB_FRAC_TRUNC(sar));
+	bcm_bprintf(b, " AntGain: %2d%s)\n", QDB_FRAC_TRUNC(ant_gain));
+	wlc_channel_dump_txppr(b, txpwr, CHSPEC_TO_TX_BW(wlc->chanspec), wlc);
+
+	ppr_delete(wlc_cmi->pub->osh, txpwr);
+	return 0;
+}
+
+/* dump of regulatory power with local constraint factored in for the current channel */
+static int
+wlc_channel_dump_reg_local_ppr(void *handle, struct bcmstrbuf *b)
+{
+	wlc_cm_info_t *wlc_cmi = (wlc_cm_info_t*)handle;
+	wlc_info_t *wlc = wlc_cmi->wlc;
+	ppr_t* txpwr;
+	char chanbuf[CHANSPEC_STR_LEN];
+
+	if ((txpwr = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
+		return BCME_ERROR;
+	}
+
+	wlc_channel_txpower_limits(wlc_cmi, txpwr);
+
+	bcm_bprintf(b, "Regulatory Limits with constraint for channel %s\n",
+	            wf_chspec_ntoa(wlc->chanspec, chanbuf));
+	wlc_channel_dump_txppr(b, txpwr, CHSPEC_TO_TX_BW(wlc->chanspec), wlc);
+
+	ppr_delete(wlc_cmi->pub->osh, txpwr);
+	return 0;
+}
+
+/* dump of srom per-rate max/min values for the current channel */
+static int
+wlc_channel_dump_srom_ppr(void *handle, struct bcmstrbuf *b)
+{
+	wlc_cm_info_t *wlc_cmi = (wlc_cm_info_t*)handle;
+	wlc_info_t *wlc = wlc_cmi->wlc;
+	ppr_t* srompwr;
+	char chanbuf[CHANSPEC_STR_LEN];
+
+	if ((srompwr = ppr_create(wlc_cmi->pub->osh, ppr_get_max_bw())) == NULL) {
+		return BCME_ERROR;
+	}
+
+	wlc_channel_srom_limits(wlc_cmi, wlc->chanspec, NULL, srompwr);
+
+	bcm_bprintf(b, "PHY/SROM Max Limits for channel %s\n",
+	            wf_chspec_ntoa(wlc->chanspec, chanbuf));
+	wlc_channel_dump_txppr(b, srompwr, CHSPEC_TO_TX_BW(wlc->chanspec), wlc);
+
+	wlc_channel_srom_limits(wlc_cmi, wlc->chanspec, srompwr, NULL);
+
+	bcm_bprintf(b, "PHY/SROM Min Limits for channel %s\n",
+	            wf_chspec_ntoa(wlc->chanspec, chanbuf));
+	wlc_channel_dump_txppr(b, srompwr, CHSPEC_TO_TX_BW(wlc->chanspec), wlc);
+
+	ppr_delete(wlc_cmi->pub->osh, srompwr);
+	return 0;
+}
+
+static void
+wlc_channel_margin_calc_mapfn(void *ignore, uint8 *a, uint8 *b)
+{
+	BCM_REFERENCE(ignore);
+
+	if (*a > *b)
+		*a = *a - *b;
+	else
+		*a = 0;
+}
+
+/* dumps dB margin between a rate an the lowest allowable power target, and
+ * summarize the min of the margins for the current channel
+ */
+static int
+wlc_channel_dump_margin(void *handle, struct bcmstrbuf *b)
+{
+	wlc_cm_info_t *wlc_cmi = (wlc_cm_info_t*)handle;
+	wlc_info_t *wlc = wlc_cmi->wlc;
+	ppr_t* txpwr;
+	ppr_t* srommin;
+	chanspec_t chanspec;
+	int band, bw;
+	uint8 margin;
+	char chanbuf[CHANSPEC_STR_LEN];
+
+	chanspec = wlc->chanspec;
+	band = CHSPEC_BAND(chanspec);
+	bw = CHSPEC_BW(chanspec);
+
+	if ((txpwr = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(chanspec))) == NULL) {
+		return 0;
+	}
+	if ((srommin = ppr_create(wlc_cmi->pub->osh, PPR_CHSPEC_BW(chanspec))) == NULL) {
+		ppr_delete(wlc_cmi->pub->osh, txpwr);
+		return 0;
+	}
+
+	wlc_channel_txpower_limits(wlc_cmi, txpwr);
+
+	/* get the srom min powers */
+	wlc_channel_srom_limits(wlc_cmi, wlc->chanspec, srommin, NULL);
+
+	/* find the dB margin we can use to adjust tx power */
+	margin = wlc_channel_txpwr_margin(txpwr, srommin, band, bw, wlc);
+
+	/* calulate the per-rate margins */
+	wlc_channel_map_txppr_binary(wlc_channel_margin_calc_mapfn, NULL,
+	                             band, bw, txpwr, srommin, wlc);
+
+	bcm_bprintf(b, "Power margin for channel %s, min = %u\n",
+	            wf_chspec_ntoa(wlc->chanspec, chanbuf), margin);
+	wlc_channel_dump_txppr(b, txpwr, CHSPEC_TO_TX_BW(wlc->chanspec), wlc);
+
+	ppr_delete(wlc_cmi->pub->osh, srommin);
+	ppr_delete(wlc_cmi->pub->osh, txpwr);
+	return 0;
+}
+
+static int
+wlc_channel_supported_country_regrevs(void *handle, struct bcmstrbuf *b)
+{
+	int iter;
+	ccode_t cc;
+	unsigned int regrev;
+
+	BCM_REFERENCE(handle);
+
+	if (clm_iter_init(&iter) == CLM_RESULT_OK) {
+		while (clm_country_iter((clm_country_t*)&iter, cc, &regrev) == CLM_RESULT_OK) {
+			bcm_bprintf(b, "%c%c/%u\n", cc[0], cc[1], regrev);
+
+		}
+	}
+	return 0;
+}
+
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 void
 wlc_dump_clmver(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
@@ -5108,12 +7218,14 @@ wlc_dump_clmver(wlc_cm_info_t *wlc_cmi, struct bcmstrbuf *b)
 void wlc_channel_update_txpwr_limit(wlc_info_t *wlc)
 {
 	ppr_t *txpwr;
-	if ((txpwr = ppr_create(wlc->osh, PPR_CHSPEC_BW(wlc->chanspec))) == NULL) {
+	uint pprsize = ppr_size(PPR_CHSPEC_BW(wlc->chanspec));
+	int8 pwr[pprsize];
+
+	if ((txpwr = ppr_create_prealloc(PPR_CHSPEC_BW(wlc->chanspec), pwr, pprsize)) == NULL) {
 		return;
 	}
 	wlc_channel_reg_limits(wlc->cmi, wlc->chanspec, txpwr);
 	wlc_phy_txpower_limit_set(WLC_PI(wlc), txpwr, wlc->chanspec);
-	ppr_delete(wlc->osh, txpwr);
 }
 
 #ifdef WLTDLS
@@ -5169,12 +7281,15 @@ wlc_channel_tx_power_target_min_max(struct wlc_info *wlc,
 	int8 min_srom;
 	chanspec_t channel = wf_chspec_ctlchan(chanspec) |
 		CHSPEC_BAND(chanspec) | WL_CHANSPEC_BW_20;
+	uint pprsize = ppr_size(PPR_CHSPEC_BW(chanspec));
+	int8 pwr[pprsize];
+	int8 srom[pprsize];
 
-	if ((txpwr = ppr_create(wlc->osh, PPR_CHSPEC_BW(channel))) == NULL) {
+
+	if ((txpwr = ppr_create_prealloc(PPR_CHSPEC_BW(channel), pwr, pprsize)) == NULL) {
 		return;
 	}
-	if ((srommax = ppr_create(wlc->osh, PPR_CHSPEC_BW(channel))) == NULL) {
-		ppr_delete(wlc->osh, txpwr);
+	if ((srommax = ppr_create_prealloc(PPR_CHSPEC_BW(channel), srom, pprsize)) == NULL) {
 		return;
 	}
 	/* use the control channel to get the regulatory limits and srom max/min */
@@ -5190,9 +7305,6 @@ wlc_channel_tx_power_target_min_max(struct wlc_info *wlc,
 
 	cur_min = ppr_get_min(txpwr, min_srom);
 	cur_max = ppr_get_max(txpwr);
-
-	ppr_delete(wlc->osh, srommax);
-	ppr_delete(wlc->osh, txpwr);
 
 	*min_pwr = (int)cur_min;
 	*max_pwr = (int)cur_max;
@@ -5367,7 +7479,8 @@ exit:
 }
 
 static int
-wlc_channel_txcap_phy_update(wlc_cm_info_t *wlc_cmi)
+wlc_channel_txcap_phy_update(wlc_cm_info_t *wlc_cmi,
+	wl_txpwrcap_tbl_t *txpwrcap_tbl, int* cellstatus)
 {
 	wlc_info_t *wlc = wlc_cmi->wlc;
 	wlc_cm_data_t *wlc_cm = wlc_cmi->cm;
@@ -5494,10 +7607,20 @@ wlc_channel_txcap_phy_update(wlc_cm_info_t *wlc_cmi)
 			memcpy(&wl_txpwrcap_tbl.pwrcap_cell_on, pwrcap, num_antennas);
 			memcpy(&wl_txpwrcap_tbl.pwrcap_cell_off, pwrcap, num_antennas);
 		}
-		err = wlc_phy_txpwrcap_tbl_set(WLC_PI(wlc), &wl_txpwrcap_tbl);
-		WL_TXPWRCAP(("%s: setting phy cell status to %s\n",
-			__FUNCTION__, new_cell_status ? "ON" : "OFF"));
-		wlc_phyhal_txpwrcap_set_cellstatus(WLC_PI(wlc), new_cell_status);
+		if (txpwrcap_tbl) {
+			memcpy(txpwrcap_tbl, &wl_txpwrcap_tbl, sizeof(wl_txpwrcap_tbl_t));
+		} else {
+			err = wlc_phy_txpwrcap_tbl_set(WLC_PI(wlc), &wl_txpwrcap_tbl);
+		}
+
+		if (cellstatus) {
+			*cellstatus = new_cell_status;
+		}
+		else {
+			WL_TXPWRCAP(("%s: setting phy cell status to %s\n",
+				__FUNCTION__, new_cell_status ? "ON" : "OFF"));
+			wlc_phyhal_txpwrcap_set_cellstatus(WLC_PI(wlc), new_cell_status);
+		}
 	} else {
 	}
 	return err;
@@ -5558,7 +7681,7 @@ wlc_handle_txcap_dload(wlc_info_t *wlc, wlc_blob_segment_t *segments, uint32 seg
 	wlc_channel_txcap_set_country(wlc_cmi);
 	FOREACH_WLC(wlc_cmi->wlc->cmn, idx, wlc_cur) {
 		wlc_cmi = wlc_cur->cmi;
-		wlc_channel_txcap_phy_update(wlc_cmi);
+		wlc_channel_txcap_phy_update(wlc_cmi, NULL, NULL);
 	}
 	return status;
 }
@@ -5609,7 +7732,7 @@ wlc_channel_txcap_cellstatus_cb(wlc_cm_info_t *wlc_cmi, int cellstatus)
 			WLC_PI(wlc_cmi->wlc),
 			new_cell_status);
 	} else {
-		wlc_channel_txcap_phy_update(wlc_cmi);
+		wlc_channel_txcap_phy_update(wlc_cmi, NULL, NULL);
 	}
 }
 #endif /* WLC_TXPWRCAP */
@@ -5803,14 +7926,6 @@ wlc_get_clm_power_limits(wlc_cm_info_t *wlc_cmi, wlc_clm_power_limits_req_t *arg
 	char unused_mapped_ccode[WLC_CNTRY_BUF_SZ];
 	/* WL_CHANSPEC_BW_... -> clm_bandwidth_t translation */
 	static const wlc_enum_translation_t bw_translation[] = {
-#ifdef WL11ULB
-#ifdef WL_CHANSPEC_BW_5
-		{WL_CHANSPEC_BW_5, CLM_BW_5},
-#endif /* WL_CHANSPEC_BW_5 */
-#ifdef WL_CHANSPEC_BW_10
-		{WL_CHANSPEC_BW_10, CLM_BW_10},
-#endif /* WL_CHANSPEC_BW_10 */
-#endif /* WL11ULB */
 		{WL_CHANSPEC_BW_20, CLM_BW_20},
 		{WL_CHANSPEC_BW_40, CLM_BW_40},
 #ifdef WL11AC
@@ -5827,10 +7942,6 @@ wlc_get_clm_power_limits(wlc_cm_info_t *wlc_cmi, wlc_clm_power_limits_req_t *arg
 	};
 	/* WL_CHANSPEC_BW_... -> wl_tx_bw_t translation */
 	static const wlc_enum_translation_t tx_bw_translation[] = {
-#ifdef WL11ULB
-		{WL_CHANSPEC_BW_5, WL_TX_BW_5},
-		{WL_CHANSPEC_BW_10, WL_TX_BW_10},
-#endif /* WL11ULB */
 		{WL_CHANSPEC_BW_20, WL_TX_BW_20},
 		{WL_CHANSPEC_BW_40, WL_TX_BW_40},
 #ifdef WL11AC

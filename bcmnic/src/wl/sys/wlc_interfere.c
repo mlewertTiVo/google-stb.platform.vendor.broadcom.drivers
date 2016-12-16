@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_interfere.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_interfere.c 665208 2016-10-16 23:44:23Z $
  */
 
 #include <wlc_cfg.h>
@@ -77,28 +77,6 @@ FALSE, TRUE},
 {ITFR_MICROWAVE_OVEN, 300, 700, 300, 250, 150, 3000, 0, (uint32)(-1), 2, 4, 2, FALSE, TRUE},
 /* Baby monitor */
 {ITFR_BABY_MONITOR, 200, 1500, 200, 0, 200, (uint32)(-1), 0, (uint32)(-1), 4, CH_MAX_2G_CHANNEL,
-5, FALSE, FALSE},
-/* Bluetooth */
-{ITFR_BLUETOOTH, 100, 400, 100, 0, 100, 500, 0, 1000, 1, CH_MAX_2G_CHANNEL, 1, FALSE, FALSE},
-/* Unidentified */
-{ITFR_UNIDENTIFIED, 0, 1500, (uint32)(-1), 0, 0, (uint32)(-1), 0, (uint32)(-1), 0,
-CH_MAX_2G_CHANNEL, 0, FALSE, FALSE}
-};
-
-/* 4313 interference data pattern */
-static const itfr_data_pattern_t itfr_4313_pattern[] = {
-/* Uniden phone */
-{ITFR_PHONE, 850, 1500, 150, 700, 300, 1000, 0, 10, 1, 1, 1, FALSE, FALSE},
-/* VTech phone */
-{ITFR_PHONE, 800, 1500, 100, 700, 300, 1000, 0, 100, 3, 3, 3, FALSE, TRUE},
-/* Lorex and Swann video camera */
-{ITFR_VIDEO_CAMERA, 700, 1500, 700, 0, 10, (uint32)(-1), 0, (uint32)(-1), 3, 8, 3, FALSE, TRUE},
-/* Microwave oven */
-{ITFR_MICROWAVE_OVEN, 500, 900, 500, 250, 150, 20000, 0, 1000, 2, 6, 2, FALSE, TRUE},
-/* Microwave oven */
-{ITFR_MICROWAVE_OVEN, 350, 700, 350, 250, 50, 3000, 0, (uint32)(-1), 2, 4, 2, FALSE, TRUE},
-/* Baby monitor */
-{ITFR_BABY_MONITOR, 200, 1500, 200, 0, 200, (uint32)(-1), 0, (uint32)(-1), 5, CH_MAX_2G_CHANNEL,
 5, FALSE, FALSE},
 /* Bluetooth */
 {ITFR_BLUETOOTH, 100, 400, 100, 0, 100, 500, 0, 1000, 1, CH_MAX_2G_CHANNEL, 1, FALSE, FALSE},
@@ -215,6 +193,9 @@ static void itfr_identify_source(itfr_info_t *itfr, itfr_sample_t *itfr_sample);
 static void itfr_stats_watchdog(void *ctx);
 static int wlc_itfr_doiovar(void *ctx, uint32 actionid,
         void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
+#if defined(BCMDBG_DUMP)
+static int wlc_itfr_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* IOVar table */
 enum {
@@ -285,6 +266,13 @@ BCMATTACHFN(wlc_itfr_attach)(wlc_info_t *wlc)
 
 	itfr_init_stats(itfr);
 
+#if defined(BCMDBG_DUMP)
+	if (wlc_dump_register(wlc->pub, ITFR_MODULE_NAME, wlc_itfr_dump, itfr) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif
 
 	if (wlc_module_register(wlc->pub, wlc_itfr_iovars, rstr_interference,
 	    (void *)itfr, wlc_itfr_doiovar, itfr_stats_watchdog, NULL,
@@ -434,6 +422,24 @@ wlc_itfr_doiovar(void *ctx, uint32 actionid,
 }
 
 
+#ifdef BCMDBG
+/* need keeping sync with interference_source in wlioctl.h */
+static const char *itf_source_str[] = {
+	"no interference",
+	"wireless phone",
+	"video camera",
+	"microwave oven",
+	"baby monitor",
+	"bluetooth",
+	"video camera or baby monitor",
+	"bluetooth or baby monitor",
+	"video camera or phone",
+	"unidentified"
+};
+
+static const char *itfr_state_str[] =
+	{"clean", "scan", "scan completed", "identified", "stopped"};
+#endif /* BCMDBG */
 
 
 static void
@@ -840,19 +846,24 @@ itfr_identify_source(itfr_info_t *itfr, itfr_sample_t *itfr_sample)
 	const itfr_data_pattern_t *itfr_pattern;
 
 	BCM_REFERENCE(wlc);
-	if (CHIPID(wlc->pub->sih->chip) == BCM4313_CHIP_ID) {
-		itfr_pattern = itfr_4313_pattern;
-		patterns = ARRAYSIZE(itfr_4313_pattern);
-	} else {
-		itfr_pattern = itfr_43224_pattern;
-		patterns = ARRAYSIZE(itfr_43224_pattern);
-	}
+
+	itfr_pattern = itfr_43224_pattern;
+	patterns = ARRAYSIZE(itfr_43224_pattern);
+
 	/* detecting interference source */
 	for (i = 0; i < patterns; i++) {
 		if (itfr_match_pattern(itfr, itfr_sample, &itfr_pattern[i]))
 			break;
 	}
 }
+#if defined(BCMDBG_DUMP)
+static int wlc_itfr_dump(void *ctx, struct bcmstrbuf *b)
+{
+	bcm_bprintf(b, "%s:  If I had something to say, it would go here\n",
+		__FUNCTION__);
+	return BCME_OK;
+}
+#endif
 
 /* monitor interference on b/g band */
 static void

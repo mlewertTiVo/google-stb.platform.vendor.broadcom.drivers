@@ -15,7 +15,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_txbf.h 632204 2016-04-18 13:44:37Z $
+ * $Id: wlc_txbf.h 664177 2016-10-11 01:51:26Z $
  */
 
 
@@ -61,7 +61,7 @@ extern bool wlc_txbf_murx_capable(wlc_txbf_info_t *txbf);
 #endif /* WL_BEAMFORMING */
 
 #ifdef WL_PSMX
-extern void wlc_txbf_mutimer_update(wlc_txbf_info_t *txbf);
+extern void wlc_txbf_mutimer_update(wlc_txbf_info_t *txbf, bool force_disable);
 #endif
 
 #define TXBF_SU_BFR_CAP 0x01
@@ -109,21 +109,28 @@ extern uint8 wlc_txbf_get_applied2ovr(wlc_txbf_info_t *txbf);
 extern void wlc_txbf_imp_txstatus(wlc_txbf_info_t *txbf, struct scb *scb, tx_status_t *txs);
 extern uint8 wlc_txbf_get_bfe_sts_cap(wlc_txbf_info_t *txbf, struct scb *scb);
 #ifdef WL_MUPKTENG
-extern int wlc_txbf_mupkteng_addsta(wlc_txbf_info_t *txbf, struct scb *scb, int idx, int rxchain);
+extern int wlc_txbf_mupkteng_addsta(wlc_txbf_info_t *txbf, struct scb *scb,
+        uint8 idx, uint8 rxchain);
 extern int wlc_txbf_mupkteng_clrsta(wlc_txbf_info_t *txbf, struct scb *scb);
 #endif
 #if defined(WL_BEAMFORMING) && !defined(WLTXBF_DISABLED)
 extern bool wlc_txbf_bfmspexp_enable(wlc_txbf_info_t *txbf);
 #endif /* WL_BEAMFORMING && !defined(WLTXBF_DISABLED) */
 extern bool wlc_txbf_bfrspexp_enable(wlc_txbf_info_t *txbf);
+extern uint8 wlc_txbf_get_bfi_idx(wlc_txbf_info_t *txbf, struct scb *scb);
 #ifdef WL_PSMX
 extern uint8 wlc_txbf_get_mubfi_idx(wlc_txbf_info_t *txbf, struct scb *scb);
-extern int wlc_txbf_mu_cap_stas(wlc_txbf_info_t *txbf);
+extern int wlc_txbf_mu_cap_stas(wlc_txbf_info_t *txbf, wlc_bsscfg_t *bsscfg, uint32 bw_policy);
+extern uint8 wlc_txbf_get_free_su_bfr_links(wlc_txbf_info_t *txbf);
 extern void wlc_txbf_scb_ps_notify(wlc_txbf_info_t *txbf, struct scb *scb, bool ps_on);
+extern wlc_bsscfg_t *wlc_txbf_get_mu_bsscfg(wlc_txbf_info_t *txbf);
+extern void wlc_txbf_set_mu_bsscfg(wlc_txbf_info_t *txbf, wlc_bsscfg_t *bsscfg);
 #else
 #define wlc_txbf_get_mubfi_idx(a, b) BF_SHM_IDX_INV
 #define wlc_txbf_scb_ps_notify(a, b, c) do {} while (0)
 #endif
 extern void wlc_txbf_scb_state_upd(wlc_txbf_info_t *txbf, struct scb *scb, uint cap_info);
+extern void wlc_txbf_link_upd(wlc_txbf_info_t *txbf, struct scb *scb);
 extern int wlc_txbf_mu_max_links_upd(wlc_txbf_info_t *txbf, uint8 num);
+extern bool wlc_txbf_max_mu_link_limit(wlc_txbf_info_t *txbf, wlc_bsscfg_t *bsscfg);
 #endif /* _wlc_txbf_h_ */

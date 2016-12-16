@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_tblid.h 649330 2016-07-15 16:17:13Z mvermeid $
+ * $Id: phy_ac_tblid.h 665117 2016-10-15 01:10:10Z $
  */
 
 #ifndef _phy_ac_tblid_h_
@@ -118,6 +118,8 @@
 #define ACPHY_TBL_ID_ETMFTABLE0				137
 #define ACPHY_TBL_ID_WBCAL_PTBL0			140
 #define ACPHY_TBL_ID_WBCAL_TXDELAY_BUF0			144
+#define ACPHY_TBL_ID_MCLPAGCCLIP2TBL0			127
+#define ACPHY_TBL_ID_MCLPAGCCLIP2TBL1			159
 
 /* ******************************************************** */
 

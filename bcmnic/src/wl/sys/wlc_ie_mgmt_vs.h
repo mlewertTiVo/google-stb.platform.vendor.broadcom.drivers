@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ie_mgmt_vs.h 641815 2016-06-06 10:17:42Z $
+ * $Id: wlc_ie_mgmt_vs.h 665073 2016-10-14 20:33:29Z $
  */
 
 #ifndef _wlc_ie_mgmt_vs_h_
@@ -20,14 +20,15 @@
 
 #include <typedefs.h>
 #include <wlc_types.h>
+#include <wlc_ie_mgmt_lib.h>
 
 /*
- * Special id (250 - 255).
+ * Special id (WLC_IEM_VS_ID_MAX to WLC_IEM_ID_MAX).
  */
-#define WLC_IEM_VS_IE_ID_UNK		250
+#define WLC_IEM_VS_ID_MAX	(WLC_IEM_ID_MAX - 5)
 
 /*
- * Priority/id (0 - 249).
+ * Priority/id (0 to WLC_IEM_VS_ID_MAX - 1).
  *
  * - It is used as a Priority when registering a Vendor Specific IE's
  *   calc_len/build callback pair. The IE management's IE calc_len/build
@@ -62,11 +63,15 @@
 #define WLC_IEM_VS_IE_PRIO_BRCM_BTCX	200
 #define WLC_IEM_VS_IE_PRIO_ULB		204
 #define WLC_IEM_VS_IE_PRIO_MBO      210
+#define WLC_IEM_VS_IE_PRIO_MBO_OCE  210
 
 /*
  * Map Vendor Specific IE to an id
  */
-extern uint8 wlc_iem_vs_get_id(wlc_iem_info_t *iem, uint8 *ie);
+extern wlc_iem_tag_t wlc_iem_vs_get_id(uint8 *ie);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+extern int wlc_iem_vs_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 #endif /* _wlc_ie_mgmt_vs_h_ */

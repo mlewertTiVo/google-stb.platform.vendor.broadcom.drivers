@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_hirssi.c 639713 2016-05-24 18:02:57Z vyass $
+ * $Id: phy_ac_hirssi.c 655464 2016-08-19 23:20:17Z $
  */
 
 #include <typedefs.h>
@@ -53,12 +53,12 @@ struct phy_ac_hirssi_info {
 
 /* local functions */
 static void phy_ac_hirssi_std_params_attach(phy_ac_hirssi_info_t *info);
-static int wlc_phy_hirssi_elnabypass_init_acphy(phy_type_hirssi_ctx_t *ctx);
+static int phy_ac_hirssi_init(phy_type_hirssi_ctx_t *ctx);
 
-static bool phy_ac_wd_hirssi_elnabypass_engine(phy_wd_ctx_t *ctx);
-static void wlc_phy_hirssi_elnabypass_engine(phy_ac_hirssi_info_t *info);
-static void wlc_phy_hirssi_elnabypass_apply_acphy(phy_ac_hirssi_info_t *info);
-static bool wlc_phy_hirssi_elnabypass_status_acphy(phy_ac_hirssi_info_t *info);
+static bool phy_ac_wd_hirssi_engine(phy_wd_ctx_t *ctx);
+static void phy_ac_hirssi_engine(phy_ac_hirssi_info_t *info);
+static void phy_ac_hirssi_apply(phy_ac_hirssi_info_t *info);
+static bool phy_ac_hirssi_status(phy_ac_hirssi_info_t *info);
 
 static int phy_ac_hirssi_get_period(phy_type_hirssi_ctx_t *ctx, int32 *period);
 static int phy_ac_hirssi_set_period(phy_type_hirssi_ctx_t *ctx, int32 period);
@@ -90,7 +90,7 @@ BCMATTACHFN(phy_ac_hirssi_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	info->hirssii = hirssii;
 
 	/* register watchdog fn */
-	if (phy_wd_add_fn(pi->wdi, phy_ac_wd_hirssi_elnabypass_engine, info,
+	if (phy_wd_add_fn(pi->wdi, phy_ac_wd_hirssi_engine, info,
 		PHY_WD_PRD_1TICK, PHY_WD_1TICK_AC_HIRSSI_ELNABYPASS,
 		PHY_WD_FLAG_NONE) != BCME_OK) {
 		PHY_ERROR(("%s: phy_wd_add_fn failed\n", __FUNCTION__));
@@ -102,7 +102,7 @@ BCMATTACHFN(phy_ac_hirssi_register_impl)(phy_info_t *pi, phy_ac_info_t *aci,
 	if (!ACMAJORREV_3(pi->pubpi->phy_rev)) {
 		/* Only supported in ucode for mac revid 40 and 42 */
 		/* ucode hirssi detect - bypass lna1 to save it */
-		fns.init_hirssi = wlc_phy_hirssi_elnabypass_init_acphy;
+		fns.init_hirssi = phy_ac_hirssi_init;
 	}
 	fns.getperiod = phy_ac_hirssi_get_period;
 	fns.setperiod = phy_ac_hirssi_set_period;
@@ -165,12 +165,12 @@ BCMATTACHFN(phy_ac_hirssi_std_params_attach)(phy_ac_hirssi_info_t *pi_ac)
 	}
 
 	/* Only supported in ucode for mac revid 40 and 42 */
-	wlc_phy_hirssi_elnabypass_init_acphy(pi_ac);
+	phy_ac_hirssi_init(pi_ac);
 }
 
 /* ******************  HIRSSI ELNABYPASS (uCode supported). Begin ****************** */
 static bool
-phy_ac_wd_hirssi_elnabypass_engine(phy_wd_ctx_t *ctx)
+phy_ac_wd_hirssi_engine(phy_wd_ctx_t *ctx)
 {
 	phy_ac_hirssi_info_t *pi_ac = (phy_ac_hirssi_info_t *)ctx;
 	phy_info_t *pi = pi_ac->pi;
@@ -179,12 +179,12 @@ phy_ac_wd_hirssi_elnabypass_engine(phy_wd_ctx_t *ctx)
 	 * Applicable only for 4360 A0/B0 designs
 	 */
 	if (PHY_SW_HIRSSI_UCODE_CAP(pi))
-		wlc_phy_hirssi_elnabypass_engine(pi_ac);
+		phy_ac_hirssi_engine(pi_ac);
 	return TRUE;
 }
 
 static void
-wlc_phy_hirssi_elnabypass_engine(phy_ac_hirssi_info_t *pi_ac)
+phy_ac_hirssi_engine(phy_ac_hirssi_info_t *pi_ac)
 {
 	int16 timer;
 	phy_info_t *pi = pi_ac->pi;
@@ -204,7 +204,7 @@ wlc_phy_hirssi_elnabypass_engine(phy_ac_hirssi_info_t *pi_ac)
 	if (timer > PHY_SW_HIRSSI_OFF) {
 		timer--;
 		if (timer == PHY_SW_HIRSSI_OFF) {
-			ucode_hirssi = wlc_phy_hirssi_elnabypass_shmem_read_clear_acphy(pi);
+			ucode_hirssi = phy_ac_hirssi_shmem_read_clear(pi);
 			if (ucode_hirssi) {
 				PHY_ERROR(("wl%d: %s state:Already ON\n", pi->sh->unit,
 				           __FUNCTION__));
@@ -217,7 +217,7 @@ wlc_phy_hirssi_elnabypass_engine(phy_ac_hirssi_info_t *pi_ac)
 			}
 		}
 	} else {
-		ucode_hirssi = wlc_phy_hirssi_elnabypass_shmem_read_clear_acphy(pi);
+		ucode_hirssi = phy_ac_hirssi_shmem_read_clear(pi);
 		if (ucode_hirssi) {
 			PHY_ERROR(("wl%d: %s state:ON\n", pi->sh->unit, __FUNCTION__));
 			timer = pi_ac->hirssi_period;
@@ -234,13 +234,13 @@ wlc_phy_hirssi_elnabypass_engine(phy_ac_hirssi_info_t *pi_ac)
 
 	/* Update uCode & apply gainctrl changes */
 	if (upd) {
-		wlc_phy_hirssi_elnabypass_set_ucode_params_acphy(pi);
-		wlc_phy_hirssi_elnabypass_apply_acphy(pi_ac);
+		phy_ac_hirssi_set_ucode_params(pi);
+		phy_ac_hirssi_apply(pi_ac);
 	}
 }
 
 static void
-wlc_phy_hirssi_elnabypass_apply_acphy(phy_ac_hirssi_info_t *pi_ac)
+phy_ac_hirssi_apply(phy_ac_hirssi_info_t *pi_ac)
 {
 	phy_info_t *pi = pi_ac->pi;
 	if (!(pi->sh->clk))
@@ -269,7 +269,7 @@ wlc_phy_hirssi_elnabypass_apply_acphy(phy_ac_hirssi_info_t *pi_ac)
 }
 
 static bool
-wlc_phy_hirssi_elnabypass_status_acphy(phy_ac_hirssi_info_t *pi_ac)
+phy_ac_hirssi_status(phy_ac_hirssi_info_t *pi_ac)
 {
 	bool status;
 	phy_info_t *pi = pi_ac->pi;
@@ -285,7 +285,7 @@ wlc_phy_hirssi_elnabypass_status_acphy(phy_ac_hirssi_info_t *pi_ac)
 }
 
 static int
-wlc_phy_hirssi_elnabypass_init_acphy(phy_type_hirssi_ctx_t *ctx)
+phy_ac_hirssi_init(phy_type_hirssi_ctx_t *ctx)
 {
 	phy_ac_hirssi_info_t  *pi_ac = (phy_ac_hirssi_info_t *)ctx;
 	pi_ac->hirssi_timer2g = PHY_SW_HIRSSI_OFF;
@@ -295,7 +295,7 @@ wlc_phy_hirssi_elnabypass_init_acphy(phy_type_hirssi_ctx_t *ctx)
 		pi_ac->hirssi_elnabyp2g_en = pi_ac->hirssi_en;
 		pi_ac->hirssi_elnabyp5g_en = pi_ac->hirssi_en;
 		if (pi_ac->pi->sh->clk) {
-			wlc_phy_hirssi_elnabypass_set_ucode_params_acphy(pi_ac->pi);
+			phy_ac_hirssi_set_ucode_params(pi_ac->pi);
 			wlapi_bmac_write_shm(pi_ac->pi->sh->physhim, M_SLP_RDY_INT(pi_ac->pi), 0);
 		}
 	} else {
@@ -306,7 +306,7 @@ wlc_phy_hirssi_elnabypass_init_acphy(phy_type_hirssi_ctx_t *ctx)
 }
 
 bool
-wlc_phy_hirssi_elnabypass_shmem_read_clear_acphy(phy_info_t *pi)
+phy_ac_hirssi_shmem_read_clear(phy_info_t *pi)
 {
 	bool hirssi = FALSE;
 	if (PHY_SW_HIRSSI_UCODE_CAP(pi)) {
@@ -318,7 +318,7 @@ wlc_phy_hirssi_elnabypass_shmem_read_clear_acphy(phy_info_t *pi)
 }
 
 void
-wlc_phy_hirssi_elnabypass_set_ucode_params_acphy(phy_info_t *pi)
+phy_ac_hirssi_set_ucode_params(phy_info_t *pi)
 {
 	int16 hirssi_rssi = 50;
 	uint16 hirssi_w1_reg =  PHY_SW_HIRSSI_W1_BYP_REG;
@@ -414,9 +414,9 @@ phy_ac_hirssi_set_en(phy_type_hirssi_ctx_t *ctx, int32 enable)
 	phy_ac_hirssi_info_t *aci = (phy_ac_hirssi_info_t *) ctx;
 	aci->hirssi_en = (enable == 0) ? FALSE : TRUE;
 	if (PHY_SW_HIRSSI_UCODE_CAP(aci->pi)) {
-		wlc_phy_hirssi_elnabypass_init_acphy(aci);
+		phy_ac_hirssi_init(aci);
 		if (!aci->hirssi_en) {
-			wlc_phy_hirssi_elnabypass_apply_acphy(aci);
+			phy_ac_hirssi_apply(aci);
 		}
 	}
 	return BCME_OK;
@@ -454,7 +454,7 @@ phy_ac_hirssi_set_rssi(phy_type_hirssi_ctx_t *ctx, int32 rssi, phy_hirssi_t opt)
 			return BCME_BADARG;
 	}
 	if (PHY_SW_HIRSSI_UCODE_CAP(aci->pi)) {
-		wlc_phy_hirssi_elnabypass_init_acphy(aci);
+		phy_ac_hirssi_init(aci);
 	}
 	return BCME_OK;
 }
@@ -493,7 +493,7 @@ phy_ac_hirssi_set_cnt(phy_type_hirssi_ctx_t *ctx, int32 cnt, phy_hirssi_t opt)
 			return BCME_BADARG;
 	}
 	if (PHY_SW_HIRSSI_UCODE_CAP(aci->pi)) {
-		wlc_phy_hirssi_elnabypass_init_acphy(aci);
+		phy_ac_hirssi_init(aci);
 	}
 	return BCME_OK;
 }
@@ -506,7 +506,7 @@ phy_ac_hirssi_get_status(phy_type_hirssi_ctx_t *ctx, int32 *status)
 	BCM_REFERENCE(pi);
 	*status = 0;
 	if (PHY_SW_HIRSSI_UCODE_CAP(pi)) {
-		*status = (int32) wlc_phy_hirssi_elnabypass_status_acphy(aci);
+		*status = (int32) phy_ac_hirssi_status(aci);
 	}
 	return BCME_OK;
 }

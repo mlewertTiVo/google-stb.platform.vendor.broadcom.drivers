@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_export.h 632491 2016-04-19 13:26:38Z $
+ * $Id: wl_export.h 656565 2016-08-29 05:30:52Z $
  */
 
 #ifndef _wl_export_h_
@@ -32,6 +32,7 @@ struct wlc_if;
 struct wlc_event;
 struct wl_timer;
 struct wl_rxsts;
+struct wl_txsts;
 struct reorder_rxcpl_id_list;
 
 /** wl_init() is called upon fault ('big hammer') conditions and as part of a 'wlc up' */
@@ -52,7 +53,9 @@ extern bool wl_alloc_dma_resources(struct wl_info *wl, uint dmaddrwidth);
 #ifdef TKO
 extern void * wl_get_tko(struct wl_info *wl, struct wl_if *wlif);
 #endif	/* TKO */
-
+#ifdef ICMP
+extern void * wl_get_icmp(struct wl_info *wl, struct wl_if *wlif);
+#endif	/* ICMP */
 /* timer functions */
 extern struct wl_timer *wl_init_timer(struct wl_info *wl, void (*fn)(void* arg), void *arg,
 	const char *name);
@@ -68,7 +71,7 @@ extern bool wl_del_timer(struct wl_info *wl, struct wl_timer *timer);
 
 #ifdef WLATF_DONGLE
 int wlfc_upd_flr_weight(struct wl_info *wl, uint8 mac_handle, uint8 tid, void* params);
-int wlfc_enab_fair_fetch_scheduling(struct wl_info *wl, void* params);
+int wlfc_enab_fair_fetch_scheduling(struct wl_info *wl, uint32 enab);
 int wlfc_get_fair_fetch_scheduling(struct wl_info *wl, uint32 *status);
 #endif /* WLATF_DONGLE */
 
@@ -116,7 +119,7 @@ extern void wl_wowl_dngldown(struct wl_info *wl);
 extern void wl_down_postwowlenab(struct wl_info *wl);
 #endif
 
-#if defined(VASIP_HW_SUPPORT)
+#if defined(WLVASIP)
 extern uint32 wl_pcie_bar1(struct wl_info *wl, uchar** addr);
 extern uint32 wl_pcie_bar2(struct wl_info *wl, uchar** addr);
 #endif
@@ -142,31 +145,6 @@ extern int wl_tkip_keyset(struct wl_info *wl, const struct wlc_key_info *key_inf
 #define wl_chain_rxcomplete_id_head(a, b) 0
 #define wl_chain_rxcompletions_amsdu(a, b, c) do {} while (0)
 #define wl_inform_additional_buffers(a, b) do { } while (0)
-
-#if defined(WLCXO) && !defined(WLCXO_IPC)
-extern void *wl_lockvar(struct wl_info *wl);
-#endif /* WLCXO && !WLCXO_IPC */
-#ifdef WLCXO_CTRL
-extern void wl_cxo_ret_msg_intr(struct wl_info *wl);
-extern void wl_cxo_wait_for_ipc_event(struct wl_info *wl);
-extern int32 wl_cxo_schedule_fn(struct wl_info *wl, void (*fn)(void *ctx), void *context);
-#ifdef WLCXO_FULL
-extern void* wl_get_wl_cxo(struct wl_info *wl);
-#endif /* WLCXO_FULL */
-#ifdef WLCXO_SIM
-extern void wl_cxo_new_msg_intr(struct wl_info *wl);
-#endif /* WLCXO_SIM */
-#ifdef HNDCTF
-extern ctf_t *wl_cihvar(struct wl_info *wl);
-#endif
-#ifdef WLCXO_IPC
-extern void wl_cxo_ctrl_ipc_init(struct wl_info *wl);
-#endif /* !WLCXO_IPC */
-#endif /* WLCXO_CTRL */
-
-#ifdef WLCXO_SIM
-extern void wl_txhpktq_free(struct wl_info *wl);
-#endif
 
 extern int wl_fatal_error(void * wl, int rc);
 
@@ -200,7 +178,7 @@ extern int wl_log_system_state(void * wl, const char * reason, bool capture);
 extern void wl_dump_mem(char *addr, int len, int type);
 
 #ifdef HEALTH_CHECK
-typedef int (*wl_health_check_fn)(uint8 *buffer, int16 length, void *context,
+typedef int (*wl_health_check_fn)(uint8 *buffer, uint16 length, void *context,
 		int16 *bytes_written);
 typedef struct health_check_info health_check_info_t;
 typedef struct health_check_client_info health_check_client_info_t;
@@ -208,6 +186,8 @@ typedef struct health_check_client_info health_check_client_info_t;
 /* WL wrapper to health check APIs. */
 extern health_check_client_info_t* wl_health_check_module_register(struct wl_info *wl,
 	const char* name, wl_health_check_fn fn, void *context, int module_id);
+
+extern void wl_health_check_execute(void *wl);
 
 extern int wl_health_check_execute_clients(struct wl_info *wl,
 	health_check_client_info_t** modules, uint16 num_modules);

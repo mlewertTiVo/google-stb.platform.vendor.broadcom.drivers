@@ -22,6 +22,18 @@
 #include <phy_ac.h>
 #include <phy_nap.h>
 
+#if defined(WL_NAP)
+	#if defined(WL_ENAB_RUNTIME_CHECK) || !defined(DONGLEBUILD)
+		#define PHY_NAP_ENAB(physhim)		(wlapi_nap_enab_check(physhim))
+	#elif defined(WL_NAP_DISABLED)
+		#define PHY_NAP_ENAB(physhim)		(0)
+	#else
+		#define PHY_NAP_ENAB(physhim)		(wlapi_nap_enab_check(physhim))
+	#endif
+#else
+	#define PHY_NAP_ENAB(physhim)			(0)
+#endif /* WL_NAP */
+
 /* forward declaration */
 typedef struct phy_ac_nap_info phy_ac_nap_info_t;
 
@@ -33,6 +45,7 @@ bool phy_ac_nap_is_enabled(phy_ac_nap_info_t *nap_info);
 
 #ifdef WL_NAP
 void phy_ac_config_napping_28nm_ulp(phy_info_t *pi);
+void phy_ac_config_napping_28nm(phy_info_t *pi);
 void phy_ac_nap_ed_thresh_cal(phy_info_t *pi, int8 *cmplx_pwr_dBm);
 void phy_ac_nap_enable(phy_info_t *pi, bool enable, bool agc_reconfig);
 #endif /* WL_NAP */

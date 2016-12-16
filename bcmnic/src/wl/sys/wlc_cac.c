@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_cac.c 644781 2016-06-21 18:23:32Z $
+ * $Id: wlc_cac.c 665073 2016-10-14 20:33:29Z $
  */
 
 /**
@@ -51,6 +51,7 @@
 #include <wlc_channel.h>
 #include <wlc_bsscfg.h>
 #include <wlc.h>
+#include <wlc_assoc.h>
 #include <wlc_scb.h>
 #include <wlc_frmutil.h>
 #include <wlc_phy_hal.h>
@@ -143,27 +144,63 @@ typedef struct wlc_cac_ac {
 	uint8 inactivity_tid;			/* Inactive TID */
 } wlc_cac_ac_t;
 
-/* CAC main structure */
-struct wlc_cac {
-	wlc_info_t *wlc;					/* access to wlc_info_t structure */
-	wlc_cac_ac_t ac_settings[AC_COUNT];	/* Admission control info each ac */
-	bool waiting_resp;					/* tspec waiting for addts resp */
-	uint ts_delay;						/* minimum inter- ADDTS time (TU) */
-	uint addts_timeout;				/* timeout before sending DELTS (ms) */
-	struct wl_timer *addts_timer;	/* timer for addts response timeout */
+/* Admission control information per scb */
+typedef struct cac_scb_acinfo {
+	wlc_cac_ac_t cac_ac[AC_COUNT];	/* Admission control info each ac */
+#ifdef AP
+	tsentry_t *tsentryq;			/* pointer to tspec list */
+#endif
+} cac_scb_acinfo_t;
+
+/* CAC information per bsscfg */
+typedef struct cac_bss_info {
 	struct ether_addr curr_bssid;	/* current bssid */
-	wlc_bsscfg_t	*curr_bsscfg;	/* current bsscfg */
-	int	scb_handle;					/* scb cubby handle */
 	bool roamed;			/* roamed to a new AP */
+
 	uint8 ccx_roam_cnt;		/* count # of roam between reporting interval */
 	uint16 ccx_roam_delay;	/* latest roam delay in usec */
-	uint32	flags;					/* bit map for indicating various states */
-	uint16	available_medium_time;	/* Total available medium time AP specific 32us units */
-	uint16	admctl_bw_percent;		/* Percentage of bw that is admission controlled */
-	uint	cached_medium_time;		/* previously alloted medium time before update */
+
+	uint16 available_medium_time;	/* Total available medium time AP specific 32us units */
+	uint16 admctl_bw_percent;		/* Percentage of bw that is admission controlled */
+
+	struct wl_timer *addts_timer;	/* timer for addts response timeout */
+	uint32 addts_timer_added_at;	/* time when timer was added */
+	uint32 addts_timer_to;			/* configured timeout in ms */
+	uint32 addts_timer_pending_to; /* time for pending timeout .. used during clone */
+	bool addts_timer_active;		/* is the timer is running currently */
+
+	bool waiting_resp;				/* tspec waiting for addts resp */
+	uint addts_timeout;				/* timeout before sending DELTS (ms) */
+	uint ts_delay;						/* minimum inter- ADDTS time (TU) */
+	uint cached_medium_time;	/* previously alloted medium time before update */
+	uint32 flags;					/* bit map for indicating various states */
+
 	tsentry_t *tsentryq;			/* pointer to tspec list, present only for STA */
-	int	rfaware_lifetime;		/* RF awareness lifetime when no TSPEC */
+
+	int rfaware_lifetime;		/* RF awareness lifetime when no TSPEC */
+
+	cac_scb_acinfo_t *cp_scb_cubby; /* used during roam + clone in RSDB case */
+} cac_bss_info_t;
+
+typedef struct wlc_cac_cmn {
+	wlc_cac_ac_t ac_settings[AC_COUNT];	/* Admission control info each ac */
+} wlc_cac_cmn_t;
+
+/* CAC main structure */
+struct wlc_cac {
+	wlc_info_t *wlc;				/* access to wlc_info_t structure */
+
+	int cfgh;						/* bsscfg cubby handle */
+	int scb_handle;				/* scb cubby handle */
+
+	wlc_cac_cmn_t *cac_cmn;
 };
+
+#define CAC_BSSCFG_CUBBY_LOC(cac, cfg) ((cac_bss_info_t **) \
+	BSSCFG_CUBBY((cfg), (cac)->cfgh))
+#define CAC_BSSCFG_CUBBY(cac, cfg) (*(CAC_BSSCFG_CUBBY_LOC(cac, cfg)))
+
+#define CAC_CUBBY_CONFIG_SIZE   sizeof(cac_bss_info_t)
 
 static void wlc_cac_watchdog(void *hdl);
 
@@ -181,22 +218,12 @@ enum {
 	IOV_CAC_AC_BW
 };
 
-/* Admission control information */
-struct cac_scb_acinfo {
-	wlc_cac_ac_t cac_ac[AC_COUNT];	/* Admission control info each ac */
-#ifdef	AP
-	tsentry_t *tsentryq;			/* pointer to tspec list */
-#endif
-};
-
-typedef struct cac_scb_acinfo cac_scb_acinfo_t;
-
 #define SCB_ACINFO(acinfo, scb) ((struct cac_scb_acinfo *)SCB_CUBBY(scb, (acinfo)->scb_handle))
 
 static const bcm_iovar_t cac_iovars[] = {
-	{"cac", IOV_CAC, (IOVF_SET_DOWN | IOVF_RSDB_SET), 0, IOVT_BOOL, 0},
+	{"cac", IOV_CAC, IOVF_SET_DOWN, 0, IOVT_BOOL, 0},
 	{"cac_addts_timeout", IOV_CAC_ADDTS_TIMEOUT, IOVF_RSDB_SET, 0, IOVT_INT32, 0},
-	{"cac_addts", IOV_CAC_ADDTS, 0, 0, IOVT_BUFFER, sizeof(tspec_arg_t)},
+	{"cac_addts", IOV_CAC_ADDTS, IOVF_BSSCFG_STA_ONLY, 0, IOVT_BUFFER, sizeof(tspec_arg_t)},
 	{"cac_delts", IOV_CAC_DELTS, 0, 0, IOVT_BUFFER, sizeof(tspec_arg_t)},
 	{"cac_tslist", IOV_CAC_TSLIST, 0, 0, IOVT_BUFFER, 0},
 	{"cac_tspec", IOV_CAC_TSPEC, 0, 0, IOVT_BUFFER, sizeof(tspec_arg_t)},
@@ -205,29 +232,29 @@ static const bcm_iovar_t cac_iovars[] = {
 	sizeof(tspec_per_sta_arg_t)},
 	{"cac_delts_ea", IOV_CAC_DELTS_EA, 0, 0, IOVT_BUFFER,
 	sizeof(tspec_per_sta_arg_t)},
-	{"cac_ac_bw", IOV_CAC_AC_BW, (IOVF_SET_DOWN | IOVF_RSDB_SET), 0, IOVT_INT8, 0},
+	{"cac_ac_bw", IOV_CAC_AC_BW, IOVF_SET_DOWN, 0, IOVT_INT8, 0},
 	{NULL, 0, 0, 0, 0, 0}
 };
 
 static int wlc_cac_iovar(void *hdl, uint32 actionid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
-static int wlc_cac_down(void *hdl);
 static tsentry_t *wlc_cac_tsentry_find(tsentry_t *ts, uint8 tid);
 static void wlc_cac_tsentry_append(wlc_cac_t *cac, tsentry_t *ts, tsentry_t **ptsentryq);
-static int wlc_cac_tsentry_removefree(wlc_cac_t *cac, uint8 tid, uint event_status, uint code,
-	tsentry_t **ptsentryq, bool call_event);
-static void wlc_cac_medium_time_recal(wlc_cac_t *cac, struct cac_scb_acinfo *scb_acinfo);
+static int wlc_cac_tsentry_removefree(wlc_cac_t *cac, struct scb *scb, uint8 tid,
+	uint event_status, uint code, tsentry_t **ptsentryq, bool call_event);
+static void wlc_cac_medium_time_recal(wlc_cac_t *cac, struct scb *scb);
 static int wlc_cac_tspec_req_send(wlc_cac_t *cac, tspec_t *ts, uint8 action,
 	uint8 dialog_token, int reason_code, void **pkt, struct scb *scb);
-static int wlc_cac_addts_req_send(wlc_cac_t *cac, tspec_t *ts, uint8 dialog_token);
-static int wlc_cac_tspec_send(wlc_cac_t *cac, tsentry_t *tsentryq);
+static int wlc_cac_addts_req_send(wlc_cac_t *cac, struct scb *scb,
+	tspec_t *ts, uint8 dialog_token);
+static int wlc_cac_tspec_send(wlc_cac_t *cac, struct scb *scb);
 static uint8 *wlc_cac_ie_find(uint8 *tlvs, uint *tlvs_len, uint8 id, uint max_len,
 const	int8 *str, uint str_len);
-static int wlc_cac_sta_addts(wlc_cac_t *cac, tspec_arg_t *tspec_arg);
+static int wlc_cac_sta_addts(wlc_cac_t *cac, wlc_bsscfg_t *cfg, tspec_arg_t *tspec_arg);
 static int wlc_cac_sta_delts(wlc_cac_t *cac, tspec_arg_t *tspec_arg, struct scb *scb,
 	tsentry_t *tsentryq);
 static uint8 *wlc_cac_tspec_rx_process(wlc_cac_t *cac, uint8 *body, uint *body_len,
-	uint8 *tid, uint8 *user_prio, struct cac_scb_acinfo *scb_acinfo, int *err);
+	uint8 *tid, uint8 *user_prio, struct scb *scb, int *err);
 static int wlc_cac_ie_process(wlc_cac_t *cac, uint8 *tlvs, uint tlvs_len,
 	uint8 *tid, uint8 *user_prio, struct scb *scb);
 static void wlc_cac_addts_resp(wlc_cac_t *cac, uint8 *body, uint body_len,
@@ -236,16 +263,29 @@ static void wlc_cac_delts_req(wlc_cac_t *cac, uint8 *body, uint body_len,
 	struct scb *scb);
 static void wlc_cac_addts_timeout(void *arg);
 static void wlc_cac_addts_ind_complete(wlc_info_t *wlc, uint status, struct ether_addr *addr,
-        uint wme_status, uint tid, uint ts_delay);
+        uint wme_status, uint tid, uint ts_delay, struct scb *scb);
 static void wlc_cac_delts_ind_complete(wlc_info_t *wlc, uint status, struct ether_addr *addr,
         uint wme_status, uint tid);
 static void wlc_cac_tspec_state_change(wlc_cac_t *cac, int old_state,
 	uint new_state, tsentry_t *tsentryq);
-static void wlc_cac_ac_param_reset(wlc_cac_t *cac, uint8 ac,
-	struct cac_scb_acinfo *scb_acinfo);
+static void wlc_cac_ac_param_reset(wlc_cac_t *cac, struct scb *scb, uint8 ac);
 static int wlc_cac_scb_acinfo_init(void *context, struct scb *scb);
 static void wlc_cac_scb_acinfo_deinit(void *context, struct scb *scb);
+static int wlc_cac_scb_update(void *context, struct scb *scb, wlc_bsscfg_t *new_cfg);
+#ifdef BCMDBG
+static void wlc_cac_scb_acinfo_dump(void *context, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_cac_scb_acinfo_dump NULL
+#endif /* BCMDBG */
+
+/* up/down */
+static void wlc_cac_bsscfg_up_down(void *ctx, bsscfg_up_down_event_data_t *evt_data);
+static void wlc_cac_disassoc_cb(void *ctx, bss_disassoc_notif_data_t *notif_data);
+static void wlc_cac_assoc_state_upd(void *ctx, bss_assoc_state_data_t *notif_data);
+
+static cac_scb_acinfo_t *wlc_cac_scb_cubby_copy(wlc_cac_t *cac, wlc_bsscfg_t *cfg);
+static void wlc_cac_scb_cubby_apply(wlc_cac_t *cac, wlc_bsscfg_t *cfg, cac_scb_acinfo_t **acinfo);
+
 static int wlc_cac_get_tsinfo_list(wlc_cac_t *cac, tsentry_t *ts, void *buff, uint32 bufflen);
 static int
 wlc_cac_get_tspec(wlc_cac_t *cac, tsentry_t *tsentryq, tspec_arg_t *tspec_arg, uint8 tid);
@@ -263,6 +303,9 @@ static int wlc_cac_process_addts_req(wlc_cac_t *cac, uint8 *body,
 static uint16 wlc_cac_generate_medium_time(wlc_cac_t *cac, tspec_t *ts, struct scb *scb);
 #endif /* AP */
 
+#ifdef BCMDBG
+void wlc_print_tspec(tspec_t *ts);
+#endif /* BCMDBG */
 
 /* IE mgmt */
 
@@ -270,6 +313,13 @@ static uint16 wlc_cac_generate_medium_time(wlc_cac_t *cac, tspec_t *ts, struct s
 static uint wlc_cac_fbt_calc_tspec_ie_len(void *ctx, wlc_iem_calc_data_t *data);
 static int wlc_cac_fbt_write_tspec_ie(void *ctx, wlc_iem_build_data_t *data);
 #endif /* WLFBT */
+
+static uint32 wlc_cac_tsentry_count(tsentry_t *ts);
+
+static int wlc_cac_bss_init(void *ctx, wlc_bsscfg_t *cfg);
+static void wlc_cac_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+static int wlc_cac_cubby_get(void *ctx, wlc_bsscfg_t *cfg, uint8 *data, int *len);
+static int wlc_cac_cubby_set(void *ctx, wlc_bsscfg_t *cfg, const uint8 *data, int len);
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -282,55 +332,102 @@ wlc_cac_t *
 BCMATTACHFN(wlc_cac_attach)(wlc_info_t *wlc)
 {
 	wlc_cac_t *cac;
+	wlc_cac_cmn_t *cac_cmn;
 	int i;
+	bsscfg_cubby_params_t bsscfg_cubby_params;
+	scb_cubby_params_t cubby_params;
 
-	if (!(cac = (wlc_cac_t *)MALLOC(wlc->osh, sizeof(wlc_cac_t)))) {
+	if (!(cac = (wlc_cac_t *)MALLOCZ(wlc->osh, sizeof(*cac)))) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
 			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
 		goto fail;
 	}
-
-	bzero((char *)cac, sizeof(wlc_cac_t));
 	cac->wlc = wlc;
+
+	/* module shared states */
+	cac_cmn = (wlc_cac_cmn_t *) obj_registry_get(wlc->objr, OBJR_CAC_CMN_INFO);
+	if (cac_cmn == NULL) {
+		if (!(cac_cmn = (wlc_cac_cmn_t *)MALLOCZ(wlc->osh, sizeof(*cac_cmn)))) {
+			WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			goto fail;
+		}
+
+		/* initialize nominal rate based on band type and mode */
+		for (i = 0; i < AC_COUNT; i++) {
+			if ((wlc->band->bandtype == WLC_BAND_2G) &&
+				(wlc->band->gmode == GMODE_LEGACY_B))
+				cac_cmn->ac_settings[i].nom_phy_rate = WLC_RATE_11M;
+			else
+				cac_cmn->ac_settings[i].nom_phy_rate = WLC_RATE_24M;
+		}
+		obj_registry_set(wlc->objr, OBJR_CAC_CMN_INFO, cac_cmn);
+	}
+	(void)obj_registry_ref(wlc->objr, OBJR_CAC_CMN_INFO);
+	cac->cac_cmn = cac_cmn;
+
+	/* reserve cubby space in the bsscfg container for per-bsscfg private data */
+	bzero(&bsscfg_cubby_params, sizeof(bsscfg_cubby_params));
+	bsscfg_cubby_params.context = cac;
+	bsscfg_cubby_params.fn_init = wlc_cac_bss_init;
+	bsscfg_cubby_params.fn_deinit = wlc_cac_bss_deinit;
+	bsscfg_cubby_params.fn_get = wlc_cac_cubby_get;
+	bsscfg_cubby_params.fn_set = wlc_cac_cubby_set;
+	bsscfg_cubby_params.config_size = CAC_CUBBY_CONFIG_SIZE;
+
+	if ((cac->cfgh = wlc_bsscfg_cubby_reserve_ext(wlc,
+		sizeof(cac_bss_info_t *), &bsscfg_cubby_params)) < 0) {
+		WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+
+	/* register bsscfg up/down callbacks */
+	if (wlc_bsscfg_updown_register(wlc, wlc_cac_bsscfg_up_down, cac) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bsscfg_updown_register() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+
+	/* disassoc state change notification */
+	if (wlc_bss_disassoc_notif_register(wlc, wlc_cac_disassoc_cb, cac) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bss_disassoc_notif_register() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+
+	/* assoc state change notification */
+	if (wlc_bss_assoc_state_register(wlc, wlc_cac_assoc_state_upd, cac) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_bss_assoc_state_register() failed\n",
+			wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
 
 	WL_CAC(("wl%d: wlc_cac_attach: registering CAC module\n", wlc->pub->unit));
 	if (wlc_module_register(wlc->pub, cac_iovars, "cac", cac, wlc_cac_iovar,
-		wlc_cac_watchdog, NULL, wlc_cac_down)) {
+		wlc_cac_watchdog, NULL, NULL)) {
 		WL_ERROR(("wl%d: %s wlc_module_register() failed\n",
 		          wlc->pub->unit, __FUNCTION__));
 		goto fail;
 	}
 
-	/* initialize nominal rate based on band type and mode */
-	for (i = 0; i < AC_COUNT; i++) {
-		if ((wlc->band->bandtype == WLC_BAND_2G) &&
-			(wlc->band->gmode == GMODE_LEGACY_B))
-			cac->ac_settings[i].nom_phy_rate = WLC_RATE_11M;
-		else
-			cac->ac_settings[i].nom_phy_rate = WLC_RATE_24M;
-	}
+#ifdef BCMDBG
+	wlc_dump_register(wlc->pub, "cac", (dump_fn_t)wlc_dump_cac, (void *)cac);
+#endif
 
-	if (!(cac->addts_timer = wl_init_timer(wlc->wl, wlc_cac_addts_timeout, wlc, "addts"))) {
-		WL_ERROR(("wl%d: wlc_cac_attach: wl_init_timer for addts-timer failed\n",
-			wlc->pub->unit));
-		goto fail;
-	}
-
-	cac->addts_timeout = CAC_ADDTS_RESP_TIMEOUT;
-	cac->tsentryq = NULL;
-
-	cac->available_medium_time = AVAILABLE_MEDIUM_TIME_32US - MEDIUM_TIME_BE_32US;
-	cac->admctl_bw_percent = AC_BW_DEFAULT ;	/* 70% by default */
-
-	/* reserve the cubby in the scb container for per-scb private data */
-	cac->scb_handle = wlc_scb_cubby_reserve(wlc, sizeof(struct cac_scb_acinfo),
-		wlc_cac_scb_acinfo_init, wlc_cac_scb_acinfo_deinit,
-		(scb_cubby_dump_t) wlc_cac_scb_acinfo_dump, (void *)wlc);
+	/* reserve cubby in the scb container for per-scb private data */
+	bzero(&cubby_params, sizeof(cubby_params));
+	cubby_params.context = wlc;
+	cubby_params.fn_init = wlc_cac_scb_acinfo_init;
+	cubby_params.fn_deinit = wlc_cac_scb_acinfo_deinit;
+	cubby_params.fn_dump = wlc_cac_scb_acinfo_dump;
+	cubby_params.fn_update = wlc_cac_scb_update;
+	cac->scb_handle = wlc_scb_cubby_reserve_ext(wlc,
+			sizeof(struct cac_scb_acinfo), &cubby_params);
 
 	if (cac->scb_handle < 0) {
-		WL_ERROR(("wl%d: %s: wlc_scb_cubby_reserve() failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		goto fail;
+		 WL_ERROR(("wl%d: wlc_scb_cubby_reserve_ext() failed\n", wlc->pub->unit));
+		 goto fail;
 	}
 
 	/* register IE mgmt calc/build callbacks */
@@ -355,23 +452,18 @@ fail:
 void
 BCMATTACHFN(wlc_cac_detach)(wlc_cac_t *cac)
 {
-	tsentry_t *ts;
-#ifdef	AP
+#ifdef AP
 	struct scb *scb = NULL;
 	struct scb_iter scbiter;
 	struct cac_scb_acinfo *scb_acinfo = NULL;
+	tsentry_t *ts;
 #endif
 
 	if (!cac) {
 		return;
 	}
 
-	if (cac->addts_timer) {
-		wl_free_timer(cac->wlc->wl, cac->addts_timer);
-		cac->addts_timer = NULL;
-	}
-
-#ifdef	AP
+#ifdef AP
 	/* free all TSPEC for AP */
 	if (AP_ENAB(cac->wlc->pub)) {
 		FOREACHSCB(cac->wlc->scbstate, &scbiter, scb) {
@@ -386,28 +478,201 @@ BCMATTACHFN(wlc_cac_detach)(wlc_cac_t *cac)
 	}
 #endif /* AP */
 
-#ifdef	STA
-	/* free all TSPEC for STA */
-	while ((ts = cac->tsentryq)) {
-		cac->tsentryq = ts->next;
-		MFREE(cac->wlc->osh, ts, sizeof(tsentry_t));
+	if (obj_registry_unref(cac->wlc->objr, OBJR_CAC_CMN_INFO) == 0) {
+		obj_registry_set(cac->wlc->objr, OBJR_CAC_CMN_INFO, NULL);
+		MFREE(cac->wlc->osh, cac->cac_cmn, sizeof(*cac->cac_cmn));
 	}
-#endif
+
+	/* unregister bsscfg up/down callbacks */
+	wlc_bsscfg_updown_unregister(cac->wlc, wlc_cac_bsscfg_up_down, cac);
+
+	/* unregister disassoc state change notification callback */
+	wlc_bss_disassoc_notif_unregister(cac->wlc, wlc_cac_disassoc_cb, cac);
+
+	/* unregister assoc state change notification callback */
+	wlc_bss_assoc_state_unregister(cac->wlc, wlc_cac_assoc_state_upd, cac);
 
 	wlc_module_unregister(cac->wlc->pub, "cac", cac);
-	MFREE(cac->wlc->osh, cac, sizeof(wlc_cac_t));
+
+	MFREE(cac->wlc->osh, cac, sizeof(*cac));
 }
 
+/* bsscfg cubby */
 static int
-wlc_cac_down(void *hdl)
+wlc_cac_bss_init(void *ctx, wlc_bsscfg_t *cfg)
 {
-	int callbacks = 0;
-	wlc_cac_t *cac = (wlc_cac_t *)hdl;
+	wlc_cac_t *cac = (wlc_cac_t *)ctx;
+	wlc_info_t *wlc = cfg->wlc;
+	cac_bss_info_t **pbss_info = CAC_BSSCFG_CUBBY_LOC(cac, cfg);
+	cac_bss_info_t *bss_info = NULL;
+	UNUSED_PARAMETER(wlc);
 
-	if (cac->addts_timer && !wl_del_timer(cac->wlc->wl, cac->addts_timer))
-		callbacks = 1;
+	/* Allocate only for AP || TDLS || AIBSS bsscfg */
+	if (!(bss_info = (cac_bss_info_t *)MALLOCZ(wlc->osh,
+		sizeof(*bss_info)))) {
+		WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+		return BCME_NOMEM;
+	}
 
-	return callbacks;
+	bss_info->addts_timeout = CAC_ADDTS_RESP_TIMEOUT;
+
+	bss_info->available_medium_time = AVAILABLE_MEDIUM_TIME_32US - MEDIUM_TIME_BE_32US;
+	bss_info->admctl_bw_percent = AC_BW_DEFAULT ;	/* 70% by default */
+
+	if (!(bss_info->addts_timer = wl_init_timer(wlc->wl,
+			wlc_cac_addts_timeout, cfg, "addts"))) {
+		WL_ERROR(("wl%d: wlc_cac_bss_init: wl_init_timer failed\n",
+			wlc->pub->unit));
+	}
+
+	*pbss_info = bss_info;
+	return BCME_OK;
+}
+
+static void
+wlc_cac_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
+{
+	wlc_cac_t *cac = (wlc_cac_t *)ctx;
+	wlc_info_t *wlc = cfg->wlc;
+	cac_bss_info_t **pbss_info = CAC_BSSCFG_CUBBY_LOC(cac, cfg);
+	cac_bss_info_t *bss_info = *pbss_info;
+	tsentry_t *ts;
+
+	if (bss_info != NULL) {
+		if (bss_info->addts_timer_active) {
+			wl_del_timer(wlc->wl, bss_info->addts_timer);
+			bss_info->addts_timer_active = FALSE;
+		}
+		wl_free_timer(wlc->wl, bss_info->addts_timer);
+
+		/* free the tsentryq if present */
+		while ((ts = bss_info->tsentryq)) {
+			bss_info->tsentryq = ts->next;
+			MFREE(wlc->osh, ts, sizeof(*ts));
+		}
+
+		if (bss_info->cp_scb_cubby) {
+			MFREE(wlc->osh, bss_info->cp_scb_cubby,
+				sizeof(*bss_info->cp_scb_cubby));
+		}
+
+		MFREE(wlc->osh, bss_info, sizeof(*bss_info));
+		*pbss_info = NULL;
+	}
+
+	return;
+}
+
+static void
+wlc_cac_bsscfg_up_down(void *ctx, bsscfg_up_down_event_data_t *evt_data)
+{
+	wlc_cac_t *cac = (wlc_cac_t *)ctx;
+	wlc_info_t *wlc = cac->wlc;
+	cac_bss_info_t *bss_info = CAC_BSSCFG_CUBBY(cac, evt_data->bsscfg);
+
+	/* Only process bsscfg down events. */
+	if (!evt_data->up) {
+		ASSERT(bss_info != NULL);
+
+		/* cancel any cac timer */
+		evt_data->callbacks_pending =
+			(wl_del_timer(wlc->wl, bss_info->addts_timer) ? 0 : 1);
+		bss_info->addts_timer_active = FALSE;
+	}
+}
+
+/* bsscfg cubby copy */
+static int
+wlc_cac_cubby_get(void *ctx, wlc_bsscfg_t *cfg, uint8 *data, int *len)
+{
+	wlc_cac_t *cac = (wlc_cac_t *)ctx;
+	cac_bss_info_t *bss_info = NULL;
+	int config_len = sizeof(*bss_info);
+	tsentry_t *ts;
+
+	ASSERT(cfg != NULL);
+	ASSERT(data != NULL);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
+	ASSERT(bss_info != NULL);
+
+	config_len += wlc_cac_tsentry_count(bss_info->tsentryq) * sizeof(tsentry_t);
+	if (config_len > *len) {
+		*len = config_len;
+		return BCME_BUFTOOSHORT;
+	}
+	memcpy(data, (uint8*)bss_info, sizeof(*bss_info));
+	data += sizeof(*bss_info);
+
+	for (ts = bss_info->tsentryq; ts; ts = ts->next) {
+		memcpy(data, (uint8*)ts, sizeof(*ts));
+		data += sizeof(*ts);
+	}
+
+	if (bss_info->addts_timer_active) {
+		int32 pending_time = (bss_info->addts_timer_added_at +
+			bss_info->addts_timer_to) - OSL_SYSUPTIME();
+
+		if (pending_time > 0) {
+			bss_info->addts_timer_pending_to = pending_time;
+		}
+	}
+
+	ASSERT(bss_info->cp_scb_cubby == NULL);
+
+	/* Incase of RSDB roam-clone, copy scb_leave cubby to temp */
+	bss_info->cp_scb_cubby = wlc_cac_scb_cubby_copy(cac, cfg);
+
+	*len = config_len;
+	return BCME_OK;
+}
+
+/* bsscfg cubby copy */
+static int
+wlc_cac_cubby_set(void *ctx, wlc_bsscfg_t *cfg, const uint8 *data, int len)
+{
+	wlc_cac_t *cac = (wlc_cac_t *)ctx;
+	cac_bss_info_t *bss_info = NULL;
+
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
+	ASSERT(cfg != NULL);
+	ASSERT(data != NULL);
+
+	/* set the info in new bsscfg */
+	/* data will contain "bss_info + tsentry + tsentry... */
+	memcpy((uint8*)bss_info, data, sizeof(*bss_info));
+	data += sizeof(*bss_info);
+	len -= sizeof(*bss_info);
+
+	bss_info->tsentryq = NULL;
+	ASSERT(!(len % sizeof(tsentry_t)));
+
+	if (len > 0) {
+		tsentry_t *ts;
+		if (!(ts = (tsentry_t *)MALLOCZ(cac->wlc->osh, len))) {
+			WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
+				cac->wlc->pub->unit, __FUNCTION__, MALLOCED(cac->wlc->osh)));
+			return BCME_NORESOURCE;
+		}
+
+		memcpy((uint8*)ts, data, len);
+		while (len > 0) {
+			wlc_cac_tsentry_append(cac, ts, &bss_info->tsentryq);
+			len -= sizeof(tsentry_t);
+			ts++;
+		}
+	}
+
+	if (bss_info->addts_timer_pending_to > 0) {
+		wl_add_timer(cac->wlc->wl, bss_info->addts_timer,
+			bss_info->addts_timer_pending_to, 0);
+		/* update addts timer details */
+		bss_info->addts_timer_added_at = OSL_SYSUPTIME();
+		bss_info->addts_timer_to = bss_info->addts_timer_pending_to;
+		bss_info->addts_timer_active = TRUE;
+	}
+
+	return BCME_OK;
 }
 
 /* count number of accepted TSPEC in queue */
@@ -481,52 +746,55 @@ wlc_cac_iovar(void *hdl, uint32 actionid,
 	int32 int_val = 0;
 	int32 *ret_int_ptr = (int32 *)a;
 	wlc_bsscfg_t *bsscfg;
+	cac_bss_info_t *bss_info;
 
 	/* update bsscfg pointer */
 	bsscfg = wlc_bsscfg_find_by_wlcif(cac->wlc, wlcif);
 	ASSERT(bsscfg != NULL);
+
+	bss_info = CAC_BSSCFG_CUBBY(cac, bsscfg);
 
 	if (plen >= (int)sizeof(int_val))
 		bcopy(p, &int_val, sizeof(int_val));
 
 	switch (actionid) {
 		case IOV_GVAL(IOV_CAC):
-			*ret_int_ptr = cac->wlc->pub->_cac;
+			*ret_int_ptr = cac->wlc->pub->cmn->_cac;
 			break;
 
 		case IOV_SVAL(IOV_CAC):
 			if (!WME_ENAB(cac->wlc->pub))
 				return BCME_WME_NOT_ENABLED;
 
-			cac->wlc->pub->_cac = (int_val != 0);	/* set CAC enable/disable */
+			cac->wlc->pub->cmn->_cac = (int_val != 0);	/* set CAC enable/disable */
 			break;
 
 		case IOV_GVAL(IOV_CAC_ADDTS_TIMEOUT):
-			*ret_int_ptr = cac->addts_timeout;
+			*ret_int_ptr = bss_info->addts_timeout;
 			break;
 
 		case IOV_SVAL(IOV_CAC_ADDTS_TIMEOUT):
-			cac->addts_timeout = int_val;
+			bss_info->addts_timeout = int_val;
 			break;
 
 		case IOV_SVAL(IOV_CAC_ADDTS):
 			if (!CAC_ENAB(cac->wlc->pub))
 				return BCME_UNSUPPORTED;
-			err = wlc_cac_sta_addts(cac, (tspec_arg_t*)a);
+			err = wlc_cac_sta_addts(cac, bsscfg, (tspec_arg_t*)a);
 			break;
 
 		case IOV_SVAL(IOV_CAC_DELTS):
-			{
-				struct scb *scb;
-				if (!CAC_ENAB(cac->wlc->pub))
-					return BCME_UNSUPPORTED;
+		{
+			struct scb *scb;
+			if (!CAC_ENAB(cac->wlc->pub))
+				return BCME_UNSUPPORTED;
 
-				if (!(scb = wlc_scbfind(cac->wlc, bsscfg, &cac->curr_bssid)))
-					return BCME_NOTFOUND;
+			if (!(scb = wlc_scbfind(cac->wlc, bsscfg, &bsscfg->BSSID)))
+				return BCME_NOTFOUND;
 
-				err = wlc_cac_sta_delts(cac, (tspec_arg_t*)a, scb, cac->tsentryq);
-			}
-			break;
+			err = wlc_cac_sta_delts(cac, (tspec_arg_t*)a, scb, bss_info->tsentryq);
+		}
+		break;
 
 		case IOV_GVAL(IOV_CAC_TSLIST):
 		{
@@ -536,7 +804,7 @@ wlc_cac_iovar(void *hdl, uint32 actionid,
 				return BCME_ERROR;
 
 			if (BSSCFG_STA(bsscfg))
-				err = wlc_cac_get_tsinfo_list(cac, cac->tsentryq, a, alen);
+				err = wlc_cac_get_tsinfo_list(cac, bss_info->tsentryq, a, alen);
 			else
 				err = BCME_UNSUPPORTED;
 
@@ -621,20 +889,21 @@ wlc_cac_iovar(void *hdl, uint32 actionid,
 		break;
 
 		case IOV_SVAL(IOV_CAC_AC_BW):
-			if (AP_ENAB(cac->wlc->pub)) {
+			if (BSSCFG_AP(bsscfg)) {
 				if ((int_val < 0) || (int_val > 100))
 					return BCME_BADARG;
-				cac->admctl_bw_percent = (uint8)int_val;
-				cac->available_medium_time = AVAILABLE_MEDIUM_TIME_32US -
-					(AVAILABLE_MEDIUM_TIME_32US * cac->admctl_bw_percent)/100;
+				bss_info->admctl_bw_percent = (uint8)int_val;
+				bss_info->available_medium_time =
+					AVAILABLE_MEDIUM_TIME_32US - (AVAILABLE_MEDIUM_TIME_32US *
+					bss_info->admctl_bw_percent) / 100;
 			} else {
 				return BCME_UNSUPPORTED;
 			}
 			break;
 
 		case IOV_GVAL(IOV_CAC_AC_BW):
-			if (AP_ENAB(cac->wlc->pub))
-				*ret_int_ptr = cac->admctl_bw_percent;
+			if (BSSCFG_AP(bsscfg))
+				*ret_int_ptr = bss_info->admctl_bw_percent;
 			else
 				return BCME_UNSUPPORTED;
 			break;
@@ -652,7 +921,7 @@ wlc_cac_iovar(void *hdl, uint32 actionid,
 			if (BSSCFG_STA(bsscfg) && bsscfg->associated) {
 				tspec_arg = (tspec_arg_t *)p;
 
-				err = wlc_cac_get_tspec(cac, cac->tsentryq, (tspec_arg_t *)a,
+				err = wlc_cac_get_tspec(cac, bss_info->tsentryq, (tspec_arg_t *)a,
 					WLC_CAC_GET_TID(tspec_arg->tsinfo));
 
 			} else {
@@ -690,6 +959,17 @@ wlc_cac_tspec_state_find(tsentry_t *ts, int state)
 	return NULL;
 }
 
+static uint32
+wlc_cac_tsentry_count(tsentry_t *ts)
+{
+	uint32 count = 0;
+
+	for (; ts; ts = ts->next) {
+		count++;
+	}
+	return count;
+}
+
 static void
 wlc_cac_tsentry_append(wlc_cac_t *cac, tsentry_t *ts, tsentry_t **ptsentryq)
 {
@@ -704,11 +984,17 @@ wlc_cac_tsentry_append(wlc_cac_t *cac, tsentry_t *ts, tsentry_t **ptsentryq)
 }
 
 static int
-wlc_cac_tsentry_removefree(wlc_cac_t *cac, uint8 tid, uint event_status, uint code,
-	tsentry_t **ptsentryq, bool call_event)
+wlc_cac_tsentry_removefree(wlc_cac_t *cac, struct scb *scb, uint8 tid, uint event_status,
+	uint code, tsentry_t **ptsentryq, bool call_event)
 {
 	tsentry_t *ts;
 	tsentry_t **prev;
+#ifdef AP
+	cac_bss_info_t *bss_info;
+
+	ASSERT(cac && scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
+#endif
 
 	for (prev = ptsentryq; *prev != NULL; prev = &(*prev)->next)
 		if (WLC_CAC_GET_TID((*prev)->tspec.tsinfo) == tid)
@@ -727,10 +1013,10 @@ wlc_cac_tsentry_removefree(wlc_cac_t *cac, uint8 tid, uint event_status, uint co
 
 	*prev = ts->next;
 
-#ifdef	AP
+#ifdef AP
 	/* restore the global available medium time for all non downlink traffic */
-	if (AP_ENAB(cac->wlc->pub))
-		cac->available_medium_time += ts->tspec.medium_time;
+	if (BSSCFG_AP(scb->bsscfg))
+		bss_info->available_medium_time += ts->tspec.medium_time;
 #endif
 
 	MFREE(cac->wlc->osh, ts, sizeof(tsentry_t));
@@ -739,24 +1025,29 @@ wlc_cac_tsentry_removefree(wlc_cac_t *cac, uint8 tid, uint event_status, uint co
 	        tid, event_status, code));
 	if (call_event)
 		wlc_cac_delts_ind_complete(cac->wlc, event_status,
-		        &cac->wlc->cfg->target_bss->BSSID,
-			code, tid);
+			&scb->bsscfg->target_bss->BSSID, code, tid);
 
 	return 0;
 }
 
 /* recalculate medium time for each AC */
 static void
-wlc_cac_medium_time_recal(wlc_cac_t *cac, struct cac_scb_acinfo *scb_acinfo)
+wlc_cac_medium_time_recal(wlc_cac_t *cac, struct scb *scb)
 {
 	uint8 ac;
 	tsentry_t *ts;
 	int i;
+	struct cac_scb_acinfo *scb_acinfo;
+	cac_bss_info_t *bss_info;
+
+	ASSERT(cac && scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
+	scb_acinfo = SCB_ACINFO(cac, scb);
 
 	for (i = 0; i < AC_COUNT; i++)
 		scb_acinfo->cac_ac[i].tot_medium_time = 0;
 
-	for (ts = cac->tsentryq; ts; ts = ts->next) {
+	for (ts = bss_info->tsentryq; ts; ts = ts->next) {
 		ac = WME_PRIO2AC(WLC_CAC_GET_USER_PRIO(ts->tspec.tsinfo));
 		scb_acinfo->cac_ac[ac].tot_medium_time =
 			USEC32_TO_USEC(ltoh16_ua(&ts->tspec.medium_time));
@@ -815,8 +1106,8 @@ wlc_cac_tspec_req_send(wlc_cac_t *cac, tspec_t *ts, uint8 action,
 	len = DOT11_MGMT_NOTIFICATION_LEN +
 		(TLV_HDR_LEN + WME_TSPEC_LEN);
 
-	if ((*pkt = wlc_frame_get_action(wlc, da, &wlc->pub->cur_etheraddr,
-		&wlc->cfg->BSSID, len, &body, DOT11_ACTION_NOTIFICATION)) == NULL)
+	if ((*pkt = wlc_frame_get_action(wlc, da, &scb->bsscfg->cur_etheraddr,
+		&scb->bsscfg->BSSID, len, &body, DOT11_ACTION_NOTIFICATION)) == NULL)
 		return BCME_ERROR;
 
 	len = 0;
@@ -862,25 +1153,12 @@ wlc_cac_tspec_req_send(wlc_cac_t *cac, tspec_t *ts, uint8 action,
 
 /* This function send ADDTS request */
 static int
-wlc_cac_addts_req_send(wlc_cac_t *cac, tspec_t *ts, uint8 dialog_token)
+wlc_cac_addts_req_send(wlc_cac_t *cac, struct scb *scb, tspec_t *ts, uint8 dialog_token)
 {
 	int err;
 	void *pkt;
-	struct scb *scb;
 
-#ifdef MBSS
-	if (MBSS_ENAB(cac->wlc->pub)) {
-		/* There's a BSS id in wlc_cac_t; maybe use that? */
-		if (!(scb = wlc_scbfind(cac->wlc, cac->curr_bsscfg, &cac->curr_bssid)) &&
-		    !(scb = wlc_scbfind(cac->wlc, cac->wlc->cfg, &cac->wlc->cfg->BSSID))) {
-			return BCME_NOTFOUND;
-		}
-	} else
-#endif /* MBSS */
-	if (!(scb = wlc_scbfind(cac->wlc, cac->wlc->cfg, &cac->wlc->cfg->BSSID))) {
-		return BCME_NOTFOUND;
-	}
-
+	ASSERT(scb);
 	if ((err = wlc_cac_tspec_req_send(cac, ts, WME_ADDTS_REQUEST, dialog_token, 0, &pkt, scb)))
 		return err;
 
@@ -889,13 +1167,21 @@ wlc_cac_addts_req_send(wlc_cac_t *cac, tspec_t *ts, uint8 dialog_token)
 
 /* send next pending TSPEC in the tsentry queue */
 static int
-wlc_cac_tspec_send(wlc_cac_t *cac, tsentry_t *tsentryq)
+wlc_cac_tspec_send(wlc_cac_t *cac, struct scb *scb)
 {
 	int err = 0;
+	tsentry_t *tsentryq;
 	tsentry_t *ts;
+	cac_bss_info_t *bss_info;
+	wlc_bsscfg_t *cfg;
+
+	ASSERT(cac && scb);
+	cfg = SCB_BSSCFG(scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
+	tsentryq = bss_info->tsentryq;
 
 	/* check if there is a TSPEC in progress */
-	if (cac->waiting_resp)
+	if (bss_info->waiting_resp)
 		return 0;
 
 	WL_CAC(("wl%d: %s: find next TSPEC pending queue\n",
@@ -911,10 +1197,9 @@ wlc_cac_tspec_send(wlc_cac_t *cac, tsentry_t *tsentryq)
 	if (ts == NULL)
 		return 0;
 
-	if (!(err = wlc_cac_addts_req_send(cac, &ts->tspec, ts->dialog_token))) {
-		uint32 timeout = cac->addts_timeout;
-		wlc_bsscfg_t *cfg = cac->wlc->cfg;
-		cac->waiting_resp = TRUE;
+	if (!(err = wlc_cac_addts_req_send(cac, scb, &ts->tspec, ts->dialog_token))) {
+		uint32 timeout = bss_info->addts_timeout;
+		bss_info->waiting_resp = TRUE;
 		if (cfg->pm->PMenabled)
 			timeout += CAC_ADDTS_RESP_TIMEOUT_FF;
 		if (ts->ts_state == CAC_STATE_TSPEC_UPDATE_PENDING)
@@ -924,15 +1209,19 @@ wlc_cac_tspec_send(wlc_cac_t *cac, tsentry_t *tsentryq)
 
 		WL_CAC(("wl%d: %s: start addts"
 			" response timer\n", cac->wlc->pub->unit, __FUNCTION__));
-		wl_add_timer(cac->wlc->wl, cac->addts_timer, timeout, 0);
+		wl_add_timer(cac->wlc->wl, bss_info->addts_timer, timeout, 0);
+		/* update addts timer details */
+		bss_info->addts_timer_added_at = OSL_SYSUPTIME();
+		bss_info->addts_timer_to = timeout;
+		bss_info->addts_timer_active = TRUE;
 	} else {
 		uint8 tid = WLC_CAC_GET_TID(ts->tspec.tsinfo);
 
 		WL_CAC(("wl%d: %s: tid %d Err %d\n",
 			cac->wlc->pub->unit, __FUNCTION__, tid, err));
 		ts->ts_state = CAC_STATE_TSPEC_REJECTED;
-		wlc_cac_tsentry_removefree(cac, tid, WLC_E_STATUS_UNSOLICITED,
-			DOT11E_STATUS_UNKNOWN_TS, &cac->tsentryq, TRUE);
+		wlc_cac_tsentry_removefree(cac, scb, tid, WLC_E_STATUS_UNSOLICITED,
+			DOT11E_STATUS_UNKNOWN_TS, &bss_info->tsentryq, TRUE);
 	}
 	return err;
 }
@@ -942,13 +1231,17 @@ wlc_cac_tspec_send(wlc_cac_t *cac, tsentry_t *tsentryq)
  * transmit action frame
  */
 static int
-wlc_cac_sta_addts(wlc_cac_t *cac, tspec_arg_t *tspec_arg)
+wlc_cac_sta_addts(wlc_cac_t *cac, wlc_bsscfg_t *cfg, tspec_arg_t *tspec_arg)
 {
 	tspec_t *tspec;
 	tsentry_t *ts;
 	int err = 0;
 	uint8 tid;
-	wlc_bsscfg_t *cfg = cac->wlc->cfg;
+	cac_bss_info_t *bss_info;
+	struct scb *scb;
+
+	ASSERT(cac && cfg);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
 
 	if (tspec_arg->version != TSPEC_ARG_VERSION)
 		return BCME_BADARG;
@@ -959,6 +1252,12 @@ wlc_cac_sta_addts(wlc_cac_t *cac, tspec_arg_t *tspec_arg)
 	if (tspec_arg->length < sizeof(tspec_arg_t) - (sizeof(uint16) * 2))
 		return BCME_BADLEN;
 
+	if (!BSSCFG_STA(cfg))
+		return BCME_BADARG;
+
+	if (!(scb = wlc_scbfind(cac->wlc, cfg, &cfg->BSSID)))
+		return BCME_NOTFOUND;
+
 
 
 	/* check if we support APSD */
@@ -968,7 +1267,7 @@ wlc_cac_sta_addts(wlc_cac_t *cac, tspec_arg_t *tspec_arg)
 	}
 
 	tid = WLC_CAC_GET_TID(tspec_arg->tsinfo);
-	if ((ts = wlc_cac_tsentry_find(cac->tsentryq, tid))) {
+	if ((ts = wlc_cac_tsentry_find(bss_info->tsentryq, tid))) {
 		/* check if target TSPEC is currently waiting for resp or roaming */
 		if (ts->ts_state == CAC_STATE_TSPEC_WAIT_RESP)
 			return BCME_BUSY;
@@ -977,10 +1276,10 @@ wlc_cac_sta_addts(wlc_cac_t *cac, tspec_arg_t *tspec_arg)
 			/* TSPEC is already accepted and this request
 			 * is an update to the existing one
 			 */
-			cac->cached_medium_time = (uint)ts->tspec.medium_time;
+			bss_info->cached_medium_time = (uint)ts->tspec.medium_time;
 			tspec = &ts->tspec;
 			WL_CAC(("Update the existing tspec : Previous medium time ix %d\n",
-				cac->cached_medium_time));
+				bss_info->cached_medium_time));
 		} else {
 			return BCME_ERROR;
 		}
@@ -1000,7 +1299,7 @@ wlc_cac_sta_addts(wlc_cac_t *cac, tspec_arg_t *tspec_arg)
 		tspec->subtype = WME_SUBTYPE_TSPEC;
 		tspec->version = WME_VER;
 
-		wlc_cac_tsentry_append(cac, ts, &cac->tsentryq);
+		wlc_cac_tsentry_append(cac, ts, &bss_info->tsentryq);
 	}
 
 	/* convert input to 802.11 little-endian order */
@@ -1035,7 +1334,7 @@ wlc_cac_sta_addts(wlc_cac_t *cac, tspec_arg_t *tspec_arg)
 	else
 		ts->ts_state = CAC_STATE_TSPEC_PENDING;
 
-	err = wlc_cac_tspec_send(cac, cac->tsentryq);
+	err = wlc_cac_tspec_send(cac, scb);
 
 	return err;
 }
@@ -1052,8 +1351,10 @@ wlc_cac_sta_delts(wlc_cac_t *cac, tspec_arg_t *tspec_arg, struct scb *scb,
 	void *pkt;
 	struct cac_scb_acinfo *scb_acinfo;
 	tsentry_t **ptsentryq = NULL;
+	cac_bss_info_t *bss_info;
 
-	ASSERT(scb);
+	ASSERT(cac && scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
 
 	scb_acinfo = SCB_ACINFO(cac, scb);
 
@@ -1089,7 +1390,7 @@ wlc_cac_sta_delts(wlc_cac_t *cac, tspec_arg_t *tspec_arg, struct scb *scb,
 
 	ASSERT(scb->bsscfg);
 	if (!BSSCFG_AP(scb->bsscfg)) {
-		ptsentryq = &cac->tsentryq;
+		ptsentryq = &bss_info->tsentryq;
 	}
 #ifdef AP
 	else {
@@ -1098,7 +1399,7 @@ wlc_cac_sta_delts(wlc_cac_t *cac, tspec_arg_t *tspec_arg, struct scb *scb,
 #endif
 
 	if (ptsentryq) {
-		wlc_cac_tsentry_removefree(cac, tid, WLC_E_STATUS_SUCCESS,
+		wlc_cac_tsentry_removefree(cac, scb, tid, WLC_E_STATUS_SUCCESS,
 			DOT11E_STATUS_QSTA_LEAVE_QBSS, ptsentryq, TRUE);
 	}
 
@@ -1121,7 +1422,7 @@ wlc_cac_sta_delts(wlc_cac_t *cac, tspec_arg_t *tspec_arg, struct scb *scb,
 
 	/* reset the admitted flag */
 	scb_acinfo->cac_ac[ac].admitted = FALSE;
-	wlc_cac_ac_param_reset(cac, ac, scb_acinfo);
+	wlc_cac_ac_param_reset(cac, scb, ac);
 
 	return 0;
 }
@@ -1129,11 +1430,23 @@ wlc_cac_sta_delts(wlc_cac_t *cac, tspec_arg_t *tspec_arg, struct scb *scb,
 /* parse TSPEC and update medium time received tspec */
 static uint8 *
 wlc_cac_tspec_rx_process(wlc_cac_t *cac, uint8 *body, uint *body_len,
-	uint8 *tid, uint8 *user_prio, struct cac_scb_acinfo *scb_acinfo, int *err)
+	uint8 *tid, uint8 *user_prio, struct scb *scb, int *err)
 {
 	uint8 ac;
 	tsentry_t *ts;
 	tspec_t *tspec;
+	cac_bss_info_t *bss_info;
+#ifdef BCMDBG
+	struct cac_scb_acinfo *scb_acinfo;
+#endif
+
+	ASSERT(cac && scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
+
+#ifdef BCMDBG
+	scb_acinfo = SCB_ACINFO(cac, scb);
+	ASSERT(scb_acinfo);
+#endif
 
 	WL_CAC(("%s: Entering\n", __FUNCTION__));
 
@@ -1152,8 +1465,13 @@ wlc_cac_tspec_rx_process(wlc_cac_t *cac, uint8 *body, uint *body_len,
 	ac = WME_PRIO2AC(*user_prio);
 	BCM_REFERENCE(ac);
 
-	ts = wlc_cac_tsentry_find(cac->tsentryq, *tid);
+	ts = wlc_cac_tsentry_find(bss_info->tsentryq, *tid);
 
+#ifdef	BCMDBG
+	if (ts && (ts->ts_state == CAC_STATE_TSPEC_UPDATE_WAIT_RESP))
+		WL_CAC(("Previous alloted medium time is %d\n",
+			bss_info->cached_medium_time));
+#endif	/* BCMDBG */
 
 	/* need to filter receiving duplicated response */
 	if (ts && (ts->ts_state != CAC_STATE_TSPEC_ACCEPTED))
@@ -1163,11 +1481,12 @@ wlc_cac_tspec_rx_process(wlc_cac_t *cac, uint8 *body, uint *body_len,
 		bcopy(tspec, &ts->tspec, WME_TSPEC_LEN);
 
 	/* recal total medium time */
-	wlc_cac_medium_time_recal(cac, scb_acinfo);
+	wlc_cac_medium_time_recal(cac, scb);
 
 	WL_CAC(("wl%d: wlc_cac_tspec_rx_process: add TSPEC to AC %d queue,"
 		" tid %d, user priority %d, total medium time %d (microseconds)\n",
-		cac->wlc->pub->unit, ac, *tid, *user_prio, scb_acinfo->cac_ac[ac].tot_medium_time));
+		cac->wlc->pub->unit, ac, *tid, *user_prio,
+		scb_acinfo->cac_ac[ac].tot_medium_time));
 
 	/* update the length of the buffer */
 	*body_len -= body[TLV_LEN_OFF] + TLV_HDR_LEN;
@@ -1185,10 +1504,12 @@ wlc_cac_ie_process(wlc_cac_t *cac, uint8 *tlvs, uint tlvs_len, uint8 *tid,
 	uint8 *user_prio, struct scb *scb)
 {
 	int err;
-	struct cac_scb_acinfo *scb_acinfo;
+	wlc_bsscfg_t *cfg;
+	cac_bss_info_t *bss_info;
 
-	scb_acinfo = SCB_ACINFO(cac, scb);
-	ASSERT(scb_acinfo);
+	ASSERT(scb);
+	cfg = SCB_BSSCFG(scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
 
 	while (tlvs_len > 0 && tlvs) {
 		err = 0;
@@ -1198,14 +1519,14 @@ wlc_cac_ie_process(wlc_cac_t *cac, uint8 *tlvs, uint tlvs_len, uint8 *tid,
 		if (tlvs) {
 			uint8 ac;
 			tlvs = wlc_cac_tspec_rx_process(cac, tlvs, &tlvs_len, tid,
-				user_prio, scb_acinfo, &err);
+				user_prio, scb, &err);
 			if (err)
 				return err;
 
 			ac = WME_PRIO2AC(*user_prio);
 
 
-			AC_BITMAP_SET(cac->flags, ac);
+			AC_BITMAP_SET(bss_info->flags, ac);
 
 		}
 	}
@@ -1224,6 +1545,13 @@ wlc_cac_addts_resp(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 	uint8 tid = -1;
 	uint ts_delay = 0;
 	struct cac_scb_acinfo *scb_acinfo = SCB_ACINFO(cac, scb);
+	cac_bss_info_t *bss_info;
+	wlc_bsscfg_t *cfg;
+
+	ASSERT(cac && scb);
+	cfg = SCB_BSSCFG(scb);
+	ASSERT(cfg);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
 
 	if (body_len < (WME_TSPEC_LEN + DOT11_MGMT_NOTIFICATION_LEN))
 		return;
@@ -1237,16 +1565,15 @@ wlc_cac_addts_resp(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 
 
 	/* no TSPEC waiting for ADDTS response */
-	if ((ts = wlc_cac_tspec_state_find(cac->tsentryq,
+	if ((ts = wlc_cac_tspec_state_find(bss_info->tsentryq,
 		CAC_STATE_TSPEC_WAIT_RESP)) == NULL) {
 
 		/* no TSPEC waiting for update */
-		if ((ts = wlc_cac_tspec_state_find(cac->tsentryq,
+		if ((ts = wlc_cac_tspec_state_find(bss_info->tsentryq,
 			CAC_STATE_TSPEC_UPDATE_WAIT_RESP)) == NULL) {
 			return;
 		}
 	}
-
 
 	/* handle specific error */
 	if (ts_status == DOT11E_STATUS_ADDTS_INVALID_PARAM) {
@@ -1264,22 +1591,20 @@ wlc_cac_addts_resp(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 	WL_CAC(("wl%d: wlc_cac_addts_resp: CAC_ADMISSION_ACCEPTED"
 		" status %d\n", cac->wlc->pub->unit, ts_status));
 
-
 	/* TSPEC admission accepted */
 	if (wlc_cac_ie_process(cac, body, body_len, &tid, &user_prio, scb) == 0) {
 		/* cancel timer only if we received the TSPEC with matching TID */
 		if (tid == WLC_CAC_GET_TID(ts->tspec.tsinfo)) {
-			wl_del_timer(cac->wlc->wl, cac->addts_timer);
+			wl_del_timer(cac->wlc->wl, bss_info->addts_timer);
+			bss_info->addts_timer_active = FALSE;
 			WL_CAC(("wl%d: wlc_cac_addts_resp: Kill timer tid %d"
 				" Admission Accepted\n", cac->wlc->pub->unit, tid));
-			cac->waiting_resp = FALSE;
+			bss_info->waiting_resp = FALSE;
 			scb_acinfo->cac_ac[WME_PRIO2AC(user_prio)].admitted = TRUE;
 
 			/* update the power save behavior */
 			if (CAC_ENAB(cac->wlc->pub)) {
 				int ac;
-				wlc_bsscfg_t *cfg;
-				cfg = SCB_BSSCFG(scb);
 				ASSERT(cfg != NULL);
 				if (WLC_CAC_GET_PSB(ts->tspec.tsinfo) && cfg->wme->wme_apsd) {
 					ac = WME_PRIO2AC(WLC_CAC_GET_USER_PRIO(ts->tspec.tsinfo));
@@ -1319,8 +1644,8 @@ wlc_cac_addts_resp(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 	}
 
 event:
-	wlc_cac_addts_ind_complete(cac->wlc, status, &cac->wlc->cfg->target_bss->BSSID,
-		ts_status, tid, ts_delay);
+	wlc_cac_addts_ind_complete(cac->wlc, status, &cfg->target_bss->BSSID,
+		ts_status, tid, ts_delay, scb);
 
 	/* if status != WLC_E_STATUS_SUCCESS need to check if this response is for
 	 * outstanding TSPEC that are waiting for response
@@ -1333,7 +1658,8 @@ event:
 			tid = WLC_CAC_GET_TID(tspec->tsinfo);
 			/* cancel timer only if we received the TSPEC with matching TID */
 			if (tid == WLC_CAC_GET_TID(ts->tspec.tsinfo)) {
-				wl_del_timer(cac->wlc->wl, cac->addts_timer);
+				wl_del_timer(cac->wlc->wl, bss_info->addts_timer);
+				bss_info->addts_timer_active = FALSE;
 				WL_CAC(("wl%d: wlc_cac_addts_resp: Kill timer tid %d"
 					" Admission Failed\n", cac->wlc->pub->unit, tid));
 
@@ -1342,22 +1668,20 @@ event:
 					 * can get rid of it
 					 */
 					ts->ts_state = CAC_STATE_TSPEC_REJECTED;
-					wlc_cac_tsentry_removefree(cac, tid,
+					wlc_cac_tsentry_removefree(cac, scb, tid,
 						WLC_E_STATUS_UNSOLICITED, ts_status,
-						&cac->tsentryq, TRUE);
-					cac->waiting_resp = FALSE;
+						&bss_info->tsentryq, TRUE);
+					bss_info->waiting_resp = FALSE;
 				}
-				else {
-					if (!CCX_ENAB(cac->wlc->pub)) {
-						WL_CAC(("Restore the previous tspec settings\n"));
-						ASSERT(cac->cached_medium_time);
-						scb_acinfo->cac_ac[WME_PRIO2AC(user_prio)].
-							tot_medium_time = cac->cached_medium_time;
-						ts->tspec.medium_time =
-							(uint16)cac->cached_medium_time;
-						ts->ts_state = CAC_STATE_TSPEC_ACCEPTED;
-						cac->cached_medium_time = 0;
-					}
+				else if (!CCX_ENAB(cac->wlc->pub)) {
+					WL_CAC(("Restore the previous tspec settings\n"));
+					ASSERT(bss_info->cached_medium_time);
+					scb_acinfo->cac_ac[WME_PRIO2AC(user_prio)].
+						tot_medium_time = bss_info->cached_medium_time;
+					ts->tspec.medium_time =
+						(uint16)bss_info->cached_medium_time;
+					ts->ts_state = CAC_STATE_TSPEC_ACCEPTED;
+					bss_info->cached_medium_time = 0;
 				}
 			}
 		}
@@ -1366,7 +1690,7 @@ event:
 	}
 
 	/* send next tspec pending */
-	wlc_cac_tspec_send(cac, cac->tsentryq);
+	wlc_cac_tspec_send(cac, scb);
 }
 
 /* On DELTS request, delete the TSPEC */
@@ -1374,12 +1698,20 @@ static void
 wlc_cac_delts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 {
 	struct dot11_management_notification* mgmt_hdr;
-	struct cac_scb_acinfo *scb_acinfo;
 	tspec_t *tspec;
 	tsentry_t **ptsentryq = NULL;
 	uint8 tid, ac;
+	cac_bss_info_t *bss_info;
+#ifdef AP
+	struct cac_scb_acinfo *scb_acinfo;
+#endif
 
+	ASSERT(cac && scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
+
+#ifdef AP
 	scb_acinfo = SCB_ACINFO(cac, scb);
+#endif
 
 	if (body_len < WME_TSPEC_LEN) {
 		WLCNTINCR(cac->wlc->pub->_cnt->rxbadcm);
@@ -1393,7 +1725,7 @@ wlc_cac_delts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 	tid = WLC_CAC_GET_TID(tspec->tsinfo);
 	ac = WME_PRIO2AC(WLC_CAC_GET_USER_PRIO(tspec->tsinfo));
 
-	wlc_cac_ac_param_reset(cac, ac, scb_acinfo);
+	wlc_cac_ac_param_reset(cac, scb, ac);
 
 	/* Reset the power save to default settings */
 	if (scb->apsd.ac_defl & (1 << ac)) {
@@ -1410,20 +1742,20 @@ wlc_cac_delts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 
 	ASSERT(scb->bsscfg);
 	if (!BSSCFG_AP(scb->bsscfg)) {
-		ptsentryq = &cac->tsentryq;
+		ptsentryq = &bss_info->tsentryq;
 	}
-#ifdef	AP
+#ifdef AP
 	else {
 		ptsentryq = &scb_acinfo->tsentryq;
 	}
 #endif
 
 	/* not found or try to remove TSPEC in progress, exit */
-	if (wlc_cac_tsentry_removefree(cac, tid, WLC_E_STATUS_UNSOLICITED,
+	if (wlc_cac_tsentry_removefree(cac, scb, tid, WLC_E_STATUS_UNSOLICITED,
 		DOT11E_STATUS_END_TS, ptsentryq, TRUE))
 		return;
 
-	wlc_cac_medium_time_recal(cac, scb_acinfo);
+	wlc_cac_medium_time_recal(cac, scb);
 }
 
 /* addts response timeout handler. This function shall send a DELTS to
@@ -1433,12 +1765,17 @@ wlc_cac_delts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 static void
 wlc_cac_addts_timeout(void *arg)
 {
-	wlc_info_t *wlc = (wlc_info_t*)arg;
+	wlc_bsscfg_t *cfg = (wlc_bsscfg_t *)arg;
+	wlc_info_t *wlc = cfg->wlc;
 	uint err;
 	uint8 tid;
 	tsentry_t *ts;
 	void *pkt;
 	struct scb *scb;
+	cac_bss_info_t *bss_info;
+
+	ASSERT(wlc->cac && cfg);
+	bss_info = CAC_BSSCFG_CUBBY(wlc->cac, cfg);
 
 	WL_TRACE(("wl%d: %s\n", wlc->pub->unit, __FUNCTION__));
 
@@ -1453,13 +1790,13 @@ wlc_cac_addts_timeout(void *arg)
 
 	WL_CAC(("wl%d: %s: send DELTS\n", wlc->pub->unit, __FUNCTION__));
 
-	if (!(scb = wlc_scbfind(wlc, wlc->cac->curr_bsscfg, &wlc->cac->curr_bssid)))
+	if (!(scb = wlc_scbfind(wlc, cfg, &bss_info->curr_bssid)))
 		return;
 
 	/* ADDTS timeout triggered; get the TSPEC waiting for response */
-	ts = wlc_cac_tspec_state_find(wlc->cac->tsentryq, CAC_STATE_TSPEC_WAIT_RESP);
+	ts = wlc_cac_tspec_state_find(bss_info->tsentryq, CAC_STATE_TSPEC_WAIT_RESP);
 	if (!ts) {
-		wlc_cac_tspec_send(wlc->cac, wlc->cac->tsentryq);
+		wlc_cac_tspec_send(wlc->cac, scb);
 		return;
 	}
 
@@ -1473,18 +1810,18 @@ wlc_cac_addts_timeout(void *arg)
 
 	/* change ts entry state inorder to removefree */
 	ts->ts_state = CAC_STATE_TSPEC_REJECTED;
-	wlc_cac_tsentry_removefree(wlc->cac, tid, 0, 0, &wlc->cac->tsentryq, FALSE);
-	wlc->cac->waiting_resp = FALSE;
+	wlc_cac_tsentry_removefree(wlc->cac, scb, tid, 0, 0, &bss_info->tsentryq, FALSE);
+	bss_info->waiting_resp = FALSE;
 
-	wlc_cac_addts_ind_complete(wlc, WLC_E_STATUS_TIMEOUT, &wlc->cfg->target_bss->BSSID,
-		0, tid, 0);
+	wlc_cac_addts_ind_complete(wlc, WLC_E_STATUS_TIMEOUT, &cfg->target_bss->BSSID,
+		0, tid, 0, scb);
 
-	wlc_cac_tspec_send(wlc->cac, wlc->cac->tsentryq);
+	wlc_cac_tspec_send(wlc->cac, scb);
 }
 
 static void
 wlc_cac_addts_ind_complete(wlc_info_t *wlc, uint status, struct ether_addr *addr,
-        uint wme_status, uint tid, uint ts_delay)
+	uint wme_status, uint tid, uint ts_delay, struct scb *scb)
 {
 	if (status == WLC_E_STATUS_SUCCESS)
 		WL_CAC(("ADDTS: success ...\n"));
@@ -1528,9 +1865,14 @@ wlc_cac_tspec_state_change(wlc_cac_t *cac, int old_state, uint new_state, tsentr
 
 /* reset all ac parameters */
 static void
-wlc_cac_ac_param_reset(wlc_cac_t *cac, uint8 ac, struct cac_scb_acinfo *scb_acinfo)
+wlc_cac_ac_param_reset(wlc_cac_t *cac, struct scb *scb, uint8 ac)
 {
+	cac_bss_info_t *bss_info;
+	struct cac_scb_acinfo *scb_acinfo;
 	wlc_cac_ac_t *cac_ac;
+
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
+	scb_acinfo = SCB_ACINFO(cac, scb);
 	cac_ac = &scb_acinfo->cac_ac[ac];
 
 	cac_ac->tot_medium_time = 0;
@@ -1548,7 +1890,7 @@ wlc_cac_ac_param_reset(wlc_cac_t *cac, uint8 ac, struct cac_scb_acinfo *scb_acin
 		cac_ac->nom_phy_rate = WLC_RATE_24M;
 
 	/* if there is a TS */
-	if (AC_BITMAP_TST(cac->flags, ac)) {
+	if (AC_BITMAP_TST(bss_info->flags, ac)) {
 		wl_lifetime_t lifetime;
 		/* clear lifetime */
 		lifetime.ac = (uint32)ac;
@@ -1558,14 +1900,16 @@ wlc_cac_ac_param_reset(wlc_cac_t *cac, uint8 ac, struct cac_scb_acinfo *scb_acin
 			WL_ERROR(("wl%d: %s: setting lifetime failed\n",
 				cac->wlc->pub->unit, __FUNCTION__));
 
-		AC_BITMAP_RESET(cac->flags, ac);
+		AC_BITMAP_RESET(bss_info->flags, ac);
 
 		/* if no more TS */
-		if (!(cac->flags & AC_BITMAP_ALL) && cac->rfaware_lifetime) {
+		if (!(bss_info->flags & AC_BITMAP_ALL) && bss_info->rfaware_lifetime) {
 			/* restore RF awareness */
-			if (wlc_iovar_setint(cac->wlc, "rfaware_lifetime", cac->rfaware_lifetime))
+			if (wlc_iovar_setint(cac->wlc, "rfaware_lifetime",
+					bss_info->rfaware_lifetime)) {
 				WL_ERROR(("wl%d: %s: setting RF awareness lifetime failed\n",
 					cac->wlc->pub->unit, __FUNCTION__));
+			}
 		}
 	}
 }
@@ -1574,14 +1918,24 @@ wlc_cac_ac_param_reset(wlc_cac_t *cac, uint8 ac, struct cac_scb_acinfo *scb_acin
  * and have the ADDTS state machine to handle TSPEC rejects
  */
 void
-wlc_cac_tspec_state_reset(wlc_cac_t *cac)
+wlc_cac_tspec_state_reset(wlc_cac_t *cac, wlc_bsscfg_t *cfg)
 {
+	cac_bss_info_t *bss_info;
+	struct scb *scb;
+
+	ASSERT(cac && cfg);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
+
+	if (!(scb = wlc_scbfind(cac->wlc, cfg, &cfg->BSSID))) {
+		return;
+	}
+
 	WL_CAC(("wl%d: wlc_cac_roam_tspec: change all roaming state to pending"
 		" state\n", cac->wlc->pub->unit));
 	/* change all TSPEC from ROAMING to PENDING */
 	wlc_cac_tspec_state_change(cac, CAC_STATE_TSPEC_ACCEPTED,
-		CAC_STATE_TSPEC_PENDING, cac->tsentryq);
-	wlc_cac_tspec_send(cac, cac->tsentryq);
+		CAC_STATE_TSPEC_PENDING, bss_info->tsentryq);
+	wlc_cac_tspec_send(cac, scb);
 }
 
 /* Reset all cac parameters after disassoc, including release all
@@ -1594,49 +1948,49 @@ wlc_cac_param_reset_all(wlc_cac_t *cac, struct scb *scb)
 	uint8 ac;
 	tsentry_t *ts;
 	uint8 tid;
-	struct cac_scb_acinfo *scb_acinfo;
+	cac_bss_info_t *bss_info;
+	wlc_bsscfg_t *cfg;
 
-	scb_acinfo = SCB_ACINFO(cac, scb);
+	ASSERT(cac && scb);
+	cfg = SCB_BSSCFG(scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
 
 	WL_CAC(("wl%d: %s: free all TSPEC & reset AC parameters\n",
 		cac->wlc->pub->unit, __FUNCTION__));
 
 	/* timer start when any TSPEC is in state WAIT_RESP */
-	if ((ts = wlc_cac_tspec_state_find(cac->tsentryq,
-		CAC_STATE_TSPEC_WAIT_RESP)) == NULL)
-		wl_del_timer(cac->wlc->wl, cac->addts_timer);
+	if ((ts = wlc_cac_tspec_state_find(bss_info->tsentryq,
+		CAC_STATE_TSPEC_WAIT_RESP)) == NULL) {
+		wl_del_timer(cac->wlc->wl, bss_info->addts_timer);
+		bss_info->addts_timer_active = FALSE;
+	}
 
 	for (ac = 0; ac < AC_COUNT; ac++)
-		wlc_cac_ac_param_reset(cac, ac, scb_acinfo);
+		wlc_cac_ac_param_reset(cac, scb, ac);
 
-	while ((ts = cac->tsentryq)) {
+	while ((ts = bss_info->tsentryq)) {
 		tid = WLC_CAC_GET_TID(ts->tspec.tsinfo);
 		/* indicated up all TSPEC has been deleted */
 		wlc_cac_delts_ind_complete(cac->wlc, WLC_E_STATUS_UNSOLICITED,
-			&cac->wlc->cfg->target_bss->BSSID, DOT11E_STATUS_QSTA_LEAVE_QBSS, tid);
-		cac->tsentryq = ts->next;
+			&cfg->target_bss->BSSID, DOT11E_STATUS_QSTA_LEAVE_QBSS, tid);
+		bss_info->tsentryq = ts->next;
 		MFREE(cac->wlc->osh, ts, sizeof(tsentry_t));
 	}
 }
 
-/* CAC watchdog routine, call by wlc_watchdog */
 static void
-wlc_cac_watchdog(void *hdl)
+wlc_cac_bss_watchdog(wlc_cac_t *cac, wlc_bsscfg_t *cfg)
 {
-	uint8 ac;
-	wlc_cac_ac_t *cac_ac;
-	wlc_cac_t *cac = (wlc_cac_t *)hdl;
 	struct scb *scb = NULL;
 	struct cac_scb_acinfo *scb_acinfo = NULL;
-#ifdef	AP
+#ifdef AP
 	struct scb_iter scbiter;
-#endif	/* AP */
+#endif /* AP */
+	wlc_cac_ac_t *cac_ac;
+	uint8 ac;
 
-	if (!(WME_ENAB(cac->wlc->pub) && CAC_ENAB(cac->wlc->pub)))
-		return;
-
-	if (cac->curr_bsscfg &&
-		(scb = wlc_scbfind(cac->wlc, cac->curr_bsscfg, &cac->curr_bssid)) &&
+	if (cfg &&
+		(scb = wlc_scbfind(cac->wlc, cfg, &cfg->BSSID)) &&
 		!BSSCFG_AP(scb->bsscfg) &&
 		SCB_WME(scb)) {
 		scb_acinfo = SCB_ACINFO(cac, scb);
@@ -1652,11 +2006,10 @@ wlc_cac_watchdog(void *hdl)
 				cac_ac->used_time -= cac_ac->tot_medium_time;
 				/* Indicate to host that used time has been exceeded */
 				wlc_mac_event(cac->wlc, WLC_E_EXCEEDED_MEDIUM_TIME,
-					&cac->wlc->cfg->target_bss->BSSID, ac, 0, 0, 0, 0);
+					&cfg->target_bss->BSSID, ac, 0, 0, 0, 0);
 			}
 
 		}
-
 	}
 
 #ifdef AP
@@ -1665,8 +2018,7 @@ wlc_cac_watchdog(void *hdl)
 			if (!SCB_WME(scb) || !SCB_ASSOCIATED(scb))
 				continue;
 			scb_acinfo = SCB_ACINFO(cac, scb);
-			if (!scb_acinfo)
-				continue;
+
 			/* reset used time for each AC */
 			for (ac = 0; ac < AC_COUNT; ac++) {
 				if (!AC_BITMAP_TST(scb->bsscfg->wme->wme_admctl, ac))
@@ -1683,7 +2035,31 @@ wlc_cac_watchdog(void *hdl)
 			}
 		}
 	}
-#endif	/* AP */
+#endif /* AP */
+
+}
+
+/* CAC watchdog routine, call by wlc_watchdog */
+static void
+wlc_cac_watchdog(void *hdl)
+{
+	wlc_cac_t *cac = (wlc_cac_t *)hdl;
+	int idx;
+	wlc_bsscfg_t *cfg;
+
+	if (!(WME_ENAB(cac->wlc->pub) && CAC_ENAB(cac->wlc->pub)))
+		return;
+
+	FOREACH_BSS(cac->wlc, idx, cfg) {
+		cac_bss_info_t *bss_info;
+		bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
+
+		if (bss_info == NULL) {
+			continue;
+		}
+
+		wlc_cac_bss_watchdog(cac, cfg);
+	}
 }
 
 /* function to update used time. return TRUE if run out of time */
@@ -1844,7 +2220,51 @@ wlc_cac_scb_acinfo_deinit(void *context, struct scb *scb)
 #endif
 }
 
+#ifdef BCMDBG
+static void
+wlc_cac_scb_acinfo_dump(void *context, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_info_t *wlc = (wlc_info_t *)context;
+	struct cac_scb_acinfo *scb_acinfo;
+	wlc_cac_ac_t *ac;
+	uint32 i = 0;
 
+	scb_acinfo = SCB_ACINFO(wlc->cac, scb);
+	ASSERT(scb_acinfo);
+
+	for (i = 0; i < AC_COUNT; i++) {
+		ac = &scb_acinfo->cac_ac[i];
+		if (ac->admitted) {
+			bcm_bprintf(b, "%s: admt time 0x%x :used time 0x%x "
+					":cached time 0x%x :nom phy rate 0x%x ac %d\n",
+					aci_names[i],
+					ac->tot_medium_time, ac->used_time,
+					ac->cached_dur, ac->nom_phy_rate, i);
+		}
+	}
+}
+#endif /* BCMDBG */
+
+static int
+wlc_cac_scb_update(void *context, struct scb *scb, wlc_bsscfg_t *new_cfg)
+{
+	wlc_info_t *wlc = (wlc_info_t *)context;
+	wlc_info_t *new_wlc = new_cfg->wlc;
+
+	BCM_REFERENCE(wlc);
+	BCM_REFERENCE(new_wlc);
+
+	return BCME_OK;
+}
+
+#ifdef	BCMDBG
+int
+wlc_dump_cac(wlc_cac_t *cac, struct bcmstrbuf *b)
+{
+	bcm_bprintf(b, "Use dump scb to get per scb related cac information\n");
+	return 0;
+}
+#endif	/* BCMDBG */
 
 /*
  * AP feature : Process the ADDTS request from the associated STA.
@@ -1855,6 +2275,7 @@ static int
 wlc_cac_process_addts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb *scb)
 {
 	struct dot11_management_notification *mgmt_hdr;
+	cac_bss_info_t *bss_info;
 	struct cac_scb_acinfo *scb_acinfo;
 	uint8 tid, ac, dialog_token;
 	uint16 tspec_medium_time = 0;
@@ -1863,6 +2284,14 @@ wlc_cac_process_addts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb
 	tspec_t ts_param;
 	wlc_info_t *wlc = cac->wlc;
 	wlc_bsscfg_t *cfg;
+#ifdef	BCMDBG
+	char buff[ETHER_ADDR_STR_LEN];
+
+	WL_CAC(("%s: ADDTS Request from %s\n", __FUNCTION__, bcm_ether_ntoa(&scb->ea, buff)));
+#endif
+
+	ASSERT(cac && scb->bsscfg);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
 
 	if (body_len < (WME_TSPEC_LEN + DOT11_MGMT_NOTIFICATION_LEN))
 		return -1;
@@ -1934,7 +2363,7 @@ wlc_cac_process_addts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb
 			bcopy(ts, &new_ts_entry->tspec, sizeof(tspec_t));
 			new_ts_entry->ts_state = CAC_STATE_TSPEC_ACCEPTED;
 			/* restore the available medium time */
-			cac->available_medium_time +=
+			bss_info->available_medium_time +=
 				USEC_TO_USEC32((uint16)scb_acinfo->cac_ac[ac].tot_medium_time);
 		}
 
@@ -1952,7 +2381,7 @@ wlc_cac_process_addts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb
 		scb_acinfo->cac_ac[ac].tot_medium_time = USEC32_TO_USEC(ts_param.medium_time);
 
 		/* decrease the global medium time */
-		cac->available_medium_time -= ts_param.medium_time;
+		bss_info->available_medium_time -= ts_param.medium_time;
 
 		/* update the power save behavior */
 		if (WLC_CAC_GET_PSB(ts->tsinfo) && cfg->wme->wme_apsd) {
@@ -1979,7 +2408,7 @@ wlc_cac_process_addts_req(wlc_cac_t *cac, uint8 *body, uint body_len, struct scb
 
 		WL_CAC(("Inactivity interval %d\n", scb_acinfo->cac_ac[ac].inactivity_limit));
 		WL_CAC(("Total medium time %d\n", scb_acinfo->cac_ac[ac].tot_medium_time));
-		WL_CAC(("Available medium time %d\n", cac->available_medium_time));
+		WL_CAC(("Available medium time %d\n", bss_info->available_medium_time));
 		WL_CAC(("Tspec medium time %d\n", ts_param.medium_time));
 	}
 
@@ -2002,10 +2431,11 @@ wlc_cac_check_tspec_for_admission(wlc_cac_t *cac, tspec_t *ts,
 {
 	struct cac_scb_acinfo *scb_acinfo;
 	uint8 ac = WME_PRIO2AC(WLC_CAC_GET_USER_PRIO(ts->tsinfo));
+	cac_bss_info_t *bss_info;
 
-
+	ASSERT(cac && scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
 	scb_acinfo = SCB_ACINFO(cac, scb);
-
 
 	/* Is admission enabled on given ac ? */
 	if (!AC_BITMAP_TST(scb->bsscfg->wme->wme_admctl, ac))
@@ -2021,7 +2451,7 @@ wlc_cac_check_tspec_for_admission(wlc_cac_t *cac, tspec_t *ts,
 		} else {
 			/* check if tspec update is possible */
 			if (tspec_medium_time >
-					(cac->available_medium_time +
+					(bss_info->available_medium_time +
 					 USEC_TO_USEC32(scb_acinfo->cac_ac[ac].tot_medium_time)))
 				return WME_ADMISSION_REFUSED;
 			else
@@ -2030,7 +2460,7 @@ wlc_cac_check_tspec_for_admission(wlc_cac_t *cac, tspec_t *ts,
 	}
 
 	/* early protection : reject if we cannot support the tspec */
-	if (tspec_medium_time >= cac->available_medium_time) {
+	if (tspec_medium_time >= bss_info->available_medium_time) {
 		WL_CAC(("%s: Not enough budget resource\n", __FUNCTION__));
 		return WME_ADMISSION_REFUSED;
 	}
@@ -2050,6 +2480,10 @@ wlc_cac_addts_resp_send(wlc_cac_t *cac, tspec_t *ts, struct scb *scb,
 	uint32 status, uint8 dialog_token)
 {
 	void *pkt;
+#ifdef	BCMDBG
+	char buff[ETHER_ADDR_STR_LEN];
+	WL_CAC(("%s: ADDTS response (%s)\n", __FUNCTION__, bcm_ether_ntoa(&scb->ea, buff)));
+#endif
 	return wlc_cac_tspec_resp_send(cac, ts, WME_ADDTS_RESPONSE,
 		status, dialog_token, &pkt, scb);
 }
@@ -2106,8 +2540,8 @@ wlc_cac_tspec_resp_send(wlc_cac_t *cac, tspec_t *ts, uint8 action,
 		(TLV_HDR_LEN + WME_TSPEC_LEN);
 
 	/* Format the TSPEC ADDTS response frame */
-	if ((*pkt = wlc_frame_get_action(wlc, &scb->ea, &wlc->pub->cur_etheraddr,
-			&wlc->cfg->BSSID, len, &body, DOT11_ACTION_NOTIFICATION)) == NULL)
+	if ((*pkt = wlc_frame_get_action(wlc, &scb->ea, &scb->bsscfg->cur_etheraddr,
+			&scb->bsscfg->BSSID, len, &body, DOT11_ACTION_NOTIFICATION)) == NULL)
 		return BCME_ERROR;
 
 	/* update the mgmt notification header fields */
@@ -2179,8 +2613,9 @@ wlc_cac_generate_medium_time(wlc_cac_t *cac, tspec_t *ts, struct scb *scb)
 
 	/* convert bps to 500kbps */
 	min_phy_rate = (ts->min_phy_rate / (500000));
-	duration = wlc_wme_get_frame_medium_time(cac->wlc, min_phy_rate,
-		preamble_type, ts->nom_msdu_size & TSPEC_NOM_MSDU_MASK);
+	duration = wlc_wme_get_frame_medium_time(cac->wlc,
+		CHSPEC2WLC_BAND(SCB_BSSCFG(scb)->current_bss->chanspec),
+		min_phy_rate, preamble_type, ts->nom_msdu_size & TSPEC_NOM_MSDU_MASK);
 
 	ASSERT(ts->nom_msdu_size & TSPEC_NOM_MSDU_MASK);
 	medium_time = CEIL((ts->mean_data_rate/8),
@@ -2291,9 +2726,9 @@ wlc_cac_is_traffic_admitted(wlc_cac_t *cac, int ac, struct scb *scb)
 	if (!AC_BITMAP_TST(scb->bsscfg->wme->wme_admctl, ac))
 		return TRUE;
 
-	if (!scb_acinfo->cac_ac[ac].admitted) {
+	if (!cac_ac->admitted) {
 		WL_CAC(("%s: acm on for ac %d but admitted 0x%x\n",
-			__FUNCTION__, ac, scb_acinfo->cac_ac[ac].admitted));
+			__FUNCTION__, ac, cac_ac->admitted));
 		return FALSE;
 	}
 
@@ -2324,30 +2759,189 @@ wlc_cac_reset_inactivity_interval(wlc_cac_t *cac, int ac, struct scb *scb)
 	scb_acinfo->cac_ac[ac].inactivity_interval = 0;
 }
 
-void
-wlc_cac_on_join_bss(wlc_cac_t *cac, wlc_bsscfg_t *bsscfg, struct ether_addr *bssid, bool roam)
+/* copy prev_scb cubby to temp */
+static cac_scb_acinfo_t *
+wlc_cac_scb_cubby_copy(wlc_cac_t *cac, wlc_bsscfg_t *cfg)
 {
+	struct scb *scb_leave;
+	struct cac_scb_acinfo *scb_acinfo_leave;
+	wlc_info_t *wlc = cac->wlc;
+	cac_bss_info_t *bss_info;
+	cac_scb_acinfo_t *cp_scb_acinfo;
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	char buff[ETHER_ADDR_STR_LEN];
+#endif
 
-	/* update curr_bsscfg */
-	cac->curr_bsscfg = wlc_bsscfg_find_by_bssid(cac->wlc, bssid);
-	ASSERT(cac->curr_bsscfg != NULL);
+	if (!CAC_ENAB(wlc->pub))
+		return NULL;
+
+	if (!BSSCFG_INFRA_STA(cfg) || !cfg->associated)
+		return NULL;
+
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
+	BCM_REFERENCE(bss_info);
+
+	/* current_bss->BSSID is prev_bssid at this point */
+	scb_leave = wlc_scbfind(wlc, cfg, &cfg->current_bss->BSSID);
+	ASSERT(scb_leave);
+	if (!scb_leave) {
+		WL_ERROR(("wl%d: %s: find scb for leaving bss %s failed\n",
+			wlc->pub->unit, __FUNCTION__,
+			bcm_ether_ntoa(&cfg->current_bss->BSSID, buff)));
+		return NULL;
+	}
+
+	cp_scb_acinfo = MALLOCZ(wlc->osh, sizeof(*cp_scb_acinfo));
+	if (cp_scb_acinfo == NULL) {
+		WL_ERROR(("wl%d: %s: out of memory %d bytes\n",
+			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+		return NULL;
+	}
 
 
-	/* update curr_bssid */
-	bcopy((uint8*)bssid, (uint8*)&cac->curr_bssid, ETHER_ADDR_LEN);
+	scb_acinfo_leave = SCB_ACINFO(cac, scb_leave);
+	ASSERT(scb_acinfo_leave);
+	/* move scb acinfo from leaving scb to temp */
+	*cp_scb_acinfo = *scb_acinfo_leave;
+	memset(scb_acinfo_leave, 0, sizeof(*scb_acinfo_leave));
+
+	wlc_cac_scb_acinfo_init(wlc, scb_leave);
+
+	return cp_scb_acinfo;
 }
 
-void
-wlc_cac_on_leave_bss(wlc_cac_t *cac)
+static void
+wlc_cac_scb_cubby_apply(wlc_cac_t *cac, wlc_bsscfg_t *cfg, cac_scb_acinfo_t **acinfo)
 {
+	struct scb *scb_join;
+	struct cac_scb_acinfo *scb_acinfo_join;
+	wlc_info_t *wlc = cac->wlc;
+	cac_bss_info_t *bss_info;
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	char buff[ETHER_ADDR_STR_LEN];
+#endif
+
+	if (!CAC_ENAB(wlc->pub))
+		return;
+
+	if (!BSSCFG_INFRA_STA(cfg) || !cfg->associated)
+		return;
+
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
+	BCM_REFERENCE(bss_info);
+
+	/* current_bss->BSSID is join_bssid at this point */
+	scb_join = wlc_scbfind_dualband(wlc, cfg, &cfg->current_bss->BSSID);
+	ASSERT(scb_join);
+	if (!scb_join) {
+		WL_ERROR(("wl%d: %s: find scb for join bss %s failed\n",
+			wlc->pub->unit, __FUNCTION__,
+			bcm_ether_ntoa(&cfg->current_bss->BSSID, buff)));
+		return;
+	}
+
+	scb_acinfo_join = SCB_ACINFO(cac, scb_join);
+	ASSERT(scb_acinfo_join);
+	/* move scb acinfo from temp to join scb */
+	*scb_acinfo_join = **acinfo;
+
+
+	MFREE(wlc->osh, *acinfo, sizeof(**acinfo));
+	*acinfo = NULL;
+}
+
+static void
+wlc_cac_disassoc_cb(void *ctx, bss_disassoc_notif_data_t *notif_data)
+{
+	wlc_cac_t *cac = (wlc_cac_t *)ctx;
+	cac_bss_info_t *bss_info;
 	tsentry_t *ts;
 
-	while ((ts = cac->tsentryq)) {
-		cac->tsentryq = ts->next;
-		MFREE(cac->wlc->osh, ts, sizeof(tsentry_t));
+	ASSERT(notif_data != NULL);
+
+	if (!CAC_ENAB(cac->wlc->pub))
+		return;
+
+	if (BSSCFG_STA(notif_data->cfg)) {
+		bss_info = CAC_BSSCFG_CUBBY(cac, notif_data->cfg);
+
+		while ((ts = bss_info->tsentryq)) {
+			bss_info->tsentryq = ts->next;
+			MFREE(cac->wlc->osh, ts, sizeof(tsentry_t));
+		}
 	}
 }
 
+/* assoc state change notification */
+static void
+wlc_cac_assoc_state_upd(void *ctx, bss_assoc_state_data_t *notif_data)
+{
+	wlc_cac_t *cac = (wlc_cac_t *)ctx;
+	wlc_bsscfg_t *cfg = notif_data->cfg;
+	cac_bss_info_t *bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
+
+	if (!CAC_ENAB(cac->wlc->pub) || !BSSCFG_STA(cfg) || !cfg->BSS)
+		return;
+
+	if (notif_data->type == AS_ROAM) {
+		if (notif_data->state == AS_JOIN_START) {
+			/* Incase of RSDB roam-clone,
+			 * 1. wlc_cac_cubby_get() have already done scb_leave cubby copy.
+			 * 2. Doing "scb_leave cubby copy" now is not correct,
+			 *    since we are on target cfg/wlc.
+			 */
+			if (bss_info->cp_scb_cubby == NULL)
+				bss_info->cp_scb_cubby = wlc_cac_scb_cubby_copy(cac, cfg);
+		} else if (notif_data->state == AS_JOIN_ADOPT) {
+			/* copy scb_temp cubby to scb_join cubby */
+			if (!memcmp(&cfg->prev_BSSID, &bss_info->curr_bssid,
+					sizeof(bss_info->curr_bssid))) {
+				wlc_cac_scb_cubby_apply(cac, cfg, &bss_info->cp_scb_cubby);
+			}
+		}
+	}
+
+	if (notif_data->state == AS_JOIN_ADOPT) {
+		/* update curr_bssid */
+		memcpy(&bss_info->curr_bssid, &cfg->current_bss->BSSID, ETHER_ADDR_LEN);
+	}
+}
+
+#ifdef BCMDBG
+void
+wlc_print_tspec(tspec_t *ts)
+{
+
+	ASSERT(ts);
+
+	if (ts->version != TSPEC_ARG_VERSION) {
+		printf("\tIncorrect version of TSPEC struct: expected %d; got %d\n",
+			TSPEC_ARG_VERSION, ts->version);
+	}
+
+	/* TODO : Change to bcm_bprintf */
+
+	printf("TID %d \n", WLC_CAC_GET_TID(ts->tsinfo));
+	printf("tsinfo 0x%02x 0x%02x 0x%02x\n", ts->tsinfo.octets[0],
+		ts->tsinfo.octets[1], ts->tsinfo.octets[2]);
+	printf("nom_msdu_size %d %s\n", (ts->nom_msdu_size & 0x7fff),
+		(ts->nom_msdu_size & 0x8000) ? "fixed size" : "");
+	printf("max_msdu_size %d\n", ts->max_msdu_size);
+	printf("min_srv_interval %d\n", ts->min_srv_interval);
+	printf("max_srv_interval %d\n", ts->max_srv_interval);
+	printf("inactivity_interval %d\n", ts->inactivity_interval);
+	printf("suspension_interval %d\n", ts->suspension_interval);
+	printf("srv_start_time %d\n", ts->srv_start_time);
+	printf("min_data_rate %d\n", ts->min_data_rate);
+	printf("mean_data_rate %d\n", ts->mean_data_rate);
+	printf("peak_data_rate %d\n", ts->peak_data_rate);
+	printf("max_burst_size %d\n", ts->max_burst_size);
+	printf("delay_bound %d\n", ts->delay_bound);
+	printf("min_phy_rate %d\n", ts->min_phy_rate);
+	printf("surplus_bw %d\n", ts->surplus_bw);
+	printf("medium_time %d\n", ts->medium_time);
+}
+#endif /* DEBUG */
 
 #if defined(WLFBT)
 /* Calculate length of RIC IEs */
@@ -2357,12 +2951,16 @@ wlc_cac_calc_ric_len(wlc_cac_t *cac, wlc_bsscfg_t *cfg)
 	wlc_info_t *wlc = cac->wlc;
 	tsentry_t *ts;
 	uint len = 0;
+	cac_bss_info_t *bss_info;
+
+	ASSERT(cac && cfg);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
 
 	if (!CAC_ENAB(wlc->pub))
 		return 0;
 
 	/* calc IEs' length */
-	for (ts = cac->tsentryq; ts != NULL; ts = ts->next) {
+	for (ts = bss_info->tsentryq; ts != NULL; ts = ts->next) {
 		len += wlc_ier_calc_len(wlc->ier_ric, cfg, 0, NULL);
 	}
 	return len;
@@ -2377,6 +2975,10 @@ wlc_cac_write_ric(wlc_cac_t *cac, wlc_bsscfg_t *cfg, uint8 *cp, int *ricie_count
 	wlc_iem_cbparm_t cbparm;
 	int cp_len;
 	tsentry_t *ts;
+	cac_bss_info_t *bss_info;
+
+	ASSERT(cac && cfg);
+	bss_info = CAC_BSSCFG_CUBBY(cac, cfg);
 
 	if (!CAC_ENAB(wlc->pub))
 		return FALSE;
@@ -2394,10 +2996,10 @@ wlc_cac_write_ric(wlc_cac_t *cac, wlc_bsscfg_t *cfg, uint8 *cp, int *ricie_count
 	/* length of a single Resource request in RIC */
 	cp_len = wlc_ier_calc_len(wlc->ier_ric, cfg, 0, NULL);
 
-	for (ts = cac->tsentryq; ts != NULL; ts = ts->next) {
+	for (ts = bss_info->tsentryq; ts != NULL; ts = ts->next) {
 		ftcbparm.fbtric.ts_count += 1;
 		ftcbparm.fbtric.ts = (uint8 *)ts;
-		if (wlc_ier_build_frame(wlc->ier_ric, cfg, WLC_IEM_FC_UNK,
+		if (wlc_ier_build_frame(wlc->ier_ric, cfg, WLC_IEM_FC_IER,
 			&cbparm, cp, cp_len) != BCME_OK) {
 			WL_ERROR(("wl%d: %s: wlc_ier_build_frame failed\n",
 				wlc->pub->unit, __FUNCTION__));
@@ -2447,22 +3049,6 @@ wlc_cac_fbt_write_tspec_ie(void *ctx, wlc_iem_build_data_t *data)
 	return BCME_OK;
 }
 
-/*
- * For V-E fast transition any TSPECs are transferred from the previous AP to the new one.
- * So copy the CAC state.
- */
-void wlc_cac_copy_state(wlc_cac_t *cac, struct scb *prev_scb, struct scb *scb)
-{
-
-	if (scb != prev_scb) {
-		struct cac_scb_acinfo *prev_scb_acinfo = SCB_ACINFO(cac, prev_scb);
-		struct cac_scb_acinfo *scb_acinfo = SCB_ACINFO(cac, scb);
-
-		*scb_acinfo = *prev_scb_acinfo;
-		bzero(prev_scb_acinfo, sizeof(*prev_scb_acinfo));
-	}
-}
-
 #ifdef AP
 uint
 wlc_cac_ap_write_ricdata(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
@@ -2477,11 +3063,14 @@ wlc_cac_ap_write_ricdata(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 	uint32	status = WME_ADMISSION_REFUSED;
 	uint16 tspec_medium_time = 0;
 	tspec_t ts_param;
+	cac_bss_info_t *bss_info;
 
 	if (!CAC_ENAB(wlc->pub))
 		return FALSE;
 
 	cac = wlc->cac;
+	ASSERT(cac && scb);
+	bss_info = CAC_BSSCFG_CUBBY(cac, scb->bsscfg);
 	scb_acinfo = SCB_ACINFO(cac, scb);
 	ASSERT(scb_acinfo);
 
@@ -2555,7 +3144,7 @@ wlc_cac_ap_write_ricdata(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 				bcopy(ts, &new_ts_entry->tspec, sizeof(tspec_t));
 				new_ts_entry->ts_state = CAC_STATE_TSPEC_ACCEPTED;
 				/* restore the available medium time */
-				cac->available_medium_time +=
+				bss_info->available_medium_time +=
 				USEC_TO_USEC32((uint16)scb_acinfo->cac_ac[ac].tot_medium_time);
 			}
 
@@ -2576,7 +3165,7 @@ wlc_cac_ap_write_ricdata(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 			USEC32_TO_USEC(ts_param.medium_time);
 
 			/* decrease the global medium time */
-			cac->available_medium_time -= ts_param.medium_time;
+			bss_info->available_medium_time -= ts_param.medium_time;
 
 			/* update the power save behavior */
 			if (WLC_CAC_GET_PSB(ts->tsinfo) && cfg->wme->wme_apsd) {
@@ -2604,7 +3193,7 @@ wlc_cac_ap_write_ricdata(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 			WL_CAC(("Inactivity interval %d\n",
 				scb_acinfo->cac_ac[ac].inactivity_limit));
 			WL_CAC(("Total medium time %d\n", scb_acinfo->cac_ac[ac].tot_medium_time));
-			WL_CAC(("Available medium time %d\n", cac->available_medium_time));
+			WL_CAC(("Available medium time %d\n", bss_info->available_medium_time));
 			WL_CAC(("Tspec medium time %d\n", ts_param.medium_time));
 		}
 
@@ -2619,12 +3208,3 @@ wlc_cac_ap_write_ricdata(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 }
 #endif /* AP */
 #endif /* WLFBT */
-#ifdef WLCAC
-void
-wlc_cac_update_cfg(wlc_cac_t *cac, wlc_bsscfg_t *cfg)
-{
-	if (cac) {
-		cac->curr_bsscfg = cfg;
-	}
-}
-#endif /* WLCAC */

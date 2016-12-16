@@ -11,7 +11,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_he.c 642695 2016-06-09 15:09:17Z $
+ * $Id: wlc_he.c 665837 2016-10-19 06:46:05Z $
  */
 
 #ifdef WL11AX
@@ -41,6 +41,7 @@
 #include <wlc_pcb.h>
 #include <wlc_event_utils.h>
 #include <wlc_mcnx.h>
+#include <phy_hecap_api.h>
 
 /* forward declaration */
 struct he_ppe_threshold {
@@ -49,14 +50,18 @@ struct he_ppe_threshold {
 };
 typedef struct he_ppe_threshold he_ppet_t;
 
+/* for building & parsing Tx Rx HE MCS Support for this node */
+#define HE_MCS_NSS_NUM_TX_RX_DESC_MIN	0	/* Min number of TX & RX Desc in HE MCS sup field */
+
+typedef struct {
+	uint8 mcs_nss_cap_len;
+	he_txrx_mcs_nss_hdr_t mcs_nss_cap;
+} he_mcs_nss_sup_t;
+
 /* module info */
 struct wlc_he_info {
 	wlc_info_t *wlc;
 	int scbh;
-	/* HE capabilities of this node being advertised in outgoing mgmt frames.
-	* Do not modify this while processing incoming mgmt frames.
-	*/
-	he_cap_ie_t he_cap; /* HE capabilities of this node */
 	he_ppet_t ppet;
 
 	/* next action frame dialog token (for AUTO only) */
@@ -69,16 +74,28 @@ struct wlc_he_info {
 	uint twt_req_errs;	/* # request errors */
 	uint twt_resp_errs;	/* # response errors */
 	uint fsm_busy_errs;	/* # FSMs busy errors */
+
+	/* HE capabilities of this node being advertised in outgoing mgmt frames.
+	* Do not modify this while processing incoming mgmt frames.
+	*/
+	he_mac_cap_t mac_cap; /* HE MAC capabilities of this node */
+	he_phy_cap_t phy_cap; /* HE PHY capabilities of this node */
+	he_mcs_nss_sup_t mcs_nss_sup; /* HE MCS NSS supports of this node */
 };
 
 /* debug */
 #define HECNTRINC(hei, cntr)	do {(hei)->cntr++;} while (0)
 #define WLUNIT(hei)	((hei)->wlc->pub->unit)
 #define WL_HE_ERR(x)	WL_ERROR(x)
+#ifdef BCMDBG
+#define ERR_ONLY_VAR(x)	WL_PRINT(x)
+#define INFO_ONLY_VAR(x) WL_PRINT(x)
+#define WL_HE_INFO(x)	WL_PRINT(x)
+#else
 #define ERR_ONLY_VAR(x)
-#define WL_HE_INFO(x)	WL_ERROR(x)
 #define INFO_ONLY_VAR(x)
-#define WL_HE_LOG(x)	WL_PRINT(x)
+#define WL_HE_INFO(x)
+#endif
 
 /* handy macros */
 #define _SIZEOF_(type, field) sizeof(((type *)0)->field)
@@ -86,7 +103,7 @@ struct wlc_he_info {
 /* scb cubby */
 /* TODO: compress the structure as much as possible */
 typedef struct {
-	uint8 frag_level;	/* fragmentation level supported by the peer */
+	he_mac_cap_t mac_cap;	/* capabilities info in the HE Cap IE */
 	/* FSMs */
 	uint8 af_pend;	/* tells what state we're in. See HE_AF_PEND_XXX. af='action frame'. */
 	uint8 af_to;	/* # ticks till timeout (also indicates the process in progress).
@@ -138,6 +155,9 @@ static int wlc_he_wlc_init(void *ctx);
 static void wlc_he_watchdog(void *ctx);
 static int wlc_he_doiovar(void *context, uint32 actionid,
 	void *params, uint plen, void *arg, uint alen, uint vsize, struct wlc_if *wlcif);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_he_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 
 /* bsscfg module */
 static void wlc_he_bsscfg_state_upd(void *ctx, bsscfg_state_upd_data_t *evt);
@@ -146,15 +166,18 @@ static void wlc_he_bsscfg_state_upd(void *ctx, bsscfg_state_upd_data_t *evt);
 static int wlc_he_scb_init(void *ctx, struct scb *scb);
 static void wlc_he_scb_deinit(void *ctx, struct scb *scb);
 static uint wlc_he_scb_secsz(void *, struct scb *);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_he_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#endif
 
 /* IE mgmt */
 static uint wlc_he_calc_cap_ie_len(void *ctx, wlc_iem_calc_data_t *data);
 static int wlc_he_write_cap_ie(void *ctx, wlc_iem_build_data_t *data);
 static uint wlc_he_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data);
 static int wlc_he_write_op_ie(void *ctx, wlc_iem_build_data_t *data);
-static void _wlc_he_parse_cap_ie(struct scb *scb, he_cap_ie_t *cap);
+static void _wlc_he_parse_cap_ie(wlc_he_info_t *hei, struct scb *scb, he_cap_ie_t *cap);
 static int wlc_he_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data);
-static void _wlc_he_parse_op_ie(wlc_bsscfg_t *cfg, he_op_ie_t *op);
+static void _wlc_he_parse_op_ie(wlc_he_info_t *hei, wlc_bsscfg_t *cfg, he_op_ie_t *op);
 static int wlc_he_parse_op_ie(void *ctx, wlc_iem_parse_data_t *data);
 static int wlc_he_scan_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data);
 static int wlc_he_scan_parse_op_ie(void *ctx, wlc_iem_parse_data_t *data);
@@ -251,6 +274,9 @@ BCMATTACHFN(wlc_he_attach)(wlc_info_t *wlc)
 	cubby_params.fn_init = wlc_he_scb_init;
 	cubby_params.fn_deinit = wlc_he_scb_deinit;
 	cubby_params.fn_secsz = wlc_he_scb_secsz;
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	cubby_params.fn_dump = wlc_he_scb_dump;
+#endif
 
 	if ((hei->scbh = wlc_scb_cubby_reserve_ext(wlc,
 			sizeof(scb_he_t *), &cubby_params)) < 0) {
@@ -330,6 +356,10 @@ BCMATTACHFN(wlc_he_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	/* debug dump */
+	wlc_dump_register(wlc->pub, "he", wlc_he_dump, hei);
+#endif
 
 	/* enable HE by default if possible */
 	if (wlc_he_hw_cap(wlc)) {
@@ -365,7 +395,7 @@ void
 BCMATTACHFN(wlc_he_init_defaults)(wlc_he_info_t *hei)
 {
 	wlc_info_t *wlc = hei->wlc;
-	he_cap_info_t *info;
+	he_mac_cap_t *info;
 	he_ppet_t *ppet;
 
 	ASSERT(wlc);
@@ -373,23 +403,27 @@ BCMATTACHFN(wlc_he_init_defaults)(wlc_he_info_t *hei)
 	if (!HE_ENAB(wlc->pub))
 		return;
 
-	info = &hei->he_cap.info;
+	info = &hei->mac_cap;
 	ppet = &hei->ppet;
 
-	*info = 0;
+	bzero(info, sizeof(*info));
 
 	/* Initialize fragmentation level supported by HE PHY. */
-	*info |= (wlc_he_get_frag_cap(wlc) & HE_INFO_FRAG_SUPPORT_MASK) <<
-			HE_INFO_FRAG_SUPPORT_SHIFT;
+	setbits((uint8 *)info, sizeof(*info),
+	        HE_MAC_FRAG_SUPPORT_IDX, HE_MAC_FRAG_SUPPORT_FSZ,
+	        wlc_he_get_frag_cap(wlc));
+
+	/* Initialize MCS NSS Support field length (min length with 0 Tx & Rx Desc) */
+	hei->mcs_nss_sup.mcs_nss_cap_len = sizeof(hei->mcs_nss_sup.mcs_nss_cap.mcs_nss_cap_fixed) +
+		HE_MCS_NSS_NUM_TX_RX_DESC_MIN;
 
 	/* Initialize PPE Thresholds info for HE Phy  */
 	if ((ppet->ppet_len = wlc_he_get_ppet_info(wlc, ppet->ppet_info)) != 0) {
-		*info |= HE_INFO_PPE_THRESH_PRESENT;
+		setbit((uint8 *)info, HE_PHY_PPE_THRESH_PRESENT_IDX);
 	}
 
 	/* copy HE capabilities into default BSS */
-	wlc->default_bss->he_capabilities = hei->he_cap.info;
-
+	memcpy(&wlc->default_bss->he_mac_cap, info, sizeof(*info));
 }
 
 /* ======== iovar dispatch ======== */
@@ -449,7 +483,7 @@ wlc_he_cmd_twt_setup_cplt(void *ctx, struct scb *scb, wlc_he_twt_setup_cplt_data
 	wl_twt_setup_cplt_t *event = (wl_twt_setup_cplt_t *)data;
 
 	/* log */
-	WL_HE_LOG(("%s: dialog_token %u setup_cmd %u flow_id %u\n", __FUNCTION__,
+	WL_HE_INFO(("%s: dialog_token %u setup_cmd %u flow_id %u\n", __FUNCTION__,
 	           rslt->dialog_token, rslt->desc.setup_cmd, rslt->desc.flow_id));
 
 	event->version = WL_TWT_SETUP_CPLT_VER;
@@ -475,6 +509,7 @@ wlc_he_cmd_twt_setup(void *ctx, uint8 *params, uint16 plen, uint8 *result, uint1
 	wl_twt_setup_t *setup = (wl_twt_setup_t *)params;
 	uint16 hdrlen;
 	struct ether_addr *addr;
+	scb_he_t *sh;
 
 	if (!set) {
 		return BCME_UNSUPPORTED;
@@ -559,21 +594,24 @@ wlc_he_cmd_twt_setup(void *ctx, uint8 *params, uint16 plen, uint8 *result, uint1
 		return wlc_twt_setup_bcast(wlc->twti, cfg, &req.desc);
 	}
 
-	/* lookup the scb */
-	if ((scb = wlc_scbfind(wlc, cfg, addr)) == NULL) {
-		DBGONLY(char eabuf[ETHER_ADDR_STR_LEN]);
-		WL_ERROR(("wl%d: %s: scb %s not found\n", wlc->pub->unit,
-		          __FUNCTION__, bcm_ether_ntoa(addr, eabuf)));
-		return BCME_NOTFOUND;
-	}
-
 	/* are we TWT requesting STA capable? */
 	if (!wlc_twt_req_cap(wlc->twti, cfg)) {
 		return BCME_UNSUPPORTED;
 	}
 
+	/* lookup the scb */
+	if ((scb = wlc_scbfind(wlc, cfg, addr)) == NULL) {
+		DBGONLY(char eabuf[ETHER_ADDR_STR_LEN]);
+		WL_HE_INFO(("wl%d: %s: scb %s not found\n", wlc->pub->unit,
+		          __FUNCTION__, bcm_ether_ntoa(addr, eabuf)));
+		return BCME_NOTFOUND;
+	}
+
+	sh = SCB_HE(hei, scb);
+	ASSERT(sh != NULL);
+
 	/* are they TWT responding STA capable? */
-	if (!SCB_TWT_RESP_CAP(scb)) {
+	if (isclr((uint8 *)&sh->mac_cap, HE_MAC_TWT_REQ_SUPPORT_IDX)) {
 		return BCME_UNSUPPORTED;
 	}
 
@@ -652,7 +690,7 @@ wlc_he_cmd_twt_teardown(void *ctx, uint8 *params, uint16 plen, uint8 *result, ui
 	/* lookup the scb */
 	if ((scb = wlc_scbfind(wlc, cfg, addr)) == NULL) {
 		DBGONLY(char eabuf[ETHER_ADDR_STR_LEN]);
-		WL_ERROR(("wl%d: %s: scb %s not found\n", wlc->pub->unit,
+		WL_HE_INFO(("wl%d: %s: scb %s not found\n", wlc->pub->unit,
 		          __FUNCTION__, bcm_ether_ntoa(addr, eabuf)));
 		return BCME_NOTFOUND;
 	}
@@ -715,7 +753,7 @@ wlc_he_cmd_twt_info(void *ctx, uint8 *params, uint16 plen, uint8 *result, uint16
 	/* lookup the scb */
 	if ((scb = wlc_scbfind(wlc, cfg, addr)) == NULL) {
 		DBGONLY(char eabuf[ETHER_ADDR_STR_LEN]);
-		WL_ERROR(("wl%d: %s: scb %s not found\n", wlc->pub->unit,
+		WL_HE_INFO(("wl%d: %s: scb %s not found\n", wlc->pub->unit,
 		          __FUNCTION__, bcm_ether_ntoa(addr, eabuf)));
 		return BCME_NOTFOUND;
 	}
@@ -725,6 +763,30 @@ wlc_he_cmd_twt_info(void *ctx, uint8 *params, uint16 plen, uint8 *result, uint16
 	return wlc_he_twt_info(hei, scb, &info->desc);
 }
 
+/** called on './wl he bsscolor' */
+static int
+wlc_he_cmd_bsscolor(void *ctx, uint8 *params, uint16 plen, uint8 *result,
+	uint16 *rlen, bool set, wlc_if_t *wlcif)
+{
+	wlc_he_info_t *hei = ctx;
+	wlc_info_t *wlc = hei->wlc;
+	bcm_xtlv_t *xtlv = (bcm_xtlv_t *)params;
+	wlc_bsscfg_t *cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+
+	if (set) {
+		if (!wlc_he_hw_cap(wlc)) {
+			return BCME_UNSUPPORTED;
+		}
+		cfg->bss_color = *(uint8 *)(xtlv->data);
+	}
+	else {
+		*result = cfg->bss_color;
+		*rlen = sizeof(*result);
+	}
+
+	return BCME_OK;
+}
+
 /*  HE cmds  */
 static const wlc_iov_cmd_t he_cmds[] = {
 	{WL_HE_CMD_ENAB, 0, IOVT_UINT8, wlc_he_cmd_enab},
@@ -732,6 +794,7 @@ static const wlc_iov_cmd_t he_cmds[] = {
 	{WL_HE_CMD_TWT_SETUP, 0, IOVT_BUFFER, wlc_he_cmd_twt_setup},
 	{WL_HE_CMD_TWT_TEARDOWN, 0, IOVT_BUFFER, wlc_he_cmd_twt_teardown},
 	{WL_HE_CMD_TWT_INFO, 0, IOVT_BUFFER, wlc_he_cmd_twt_info},
+	{WL_HE_CMD_BSSCOLOR, 0, IOVT_UINT8, wlc_he_cmd_bsscolor},
 };
 
 static int
@@ -858,10 +921,32 @@ wlc_he_watchdog(void *ctx)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+/* debug dump */
+static int
+wlc_he_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_he_info_t *hei = ctx;
+	wlc_info_t *wlc = hei->wlc;
+
+	bcm_bprintf(b, "HE Enab: %d Features: 0x%x\n",
+	           HE_ENAB(wlc->pub), wlc->pub->he_features);
+	bcm_bprintf(b, "af_rx_errs %u af_rx_usols %u af_tx_errs %u\n",
+	            hei->af_rx_errs, hei->af_rx_usols, hei->af_tx_errs);
+	bcm_bprintf(b, "twt_req_errs %u twt_resp_errs %u\n",
+	            hei->twt_req_errs, hei->twt_resp_errs);
+	bcm_bprintf(b, "fsm_busy_errs %u\n", hei->fsm_busy_errs);
+
+	return BCME_OK;
+}
+#endif /* BCMDGB || BCMDBG_DUMP */
 
 /* ======== bsscfg module hooks ======== */
 
-/* bsscfg state change callback */
+/**
+ * bsscfg state change callback, will be invoked when a bsscfg changes its state (enable/disable/
+ * up/down).
+ */
 static void
 wlc_he_bsscfg_state_upd(void *ctx, bsscfg_state_upd_data_t *evt)
 {
@@ -919,9 +1004,64 @@ wlc_he_scb_secsz(void *ctx, struct scb *scb)
 	return sizeof(*sh);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static const bcm_bit_desc_t scb_mac_cap[] =
+{
+	{HE_MAC_PPE_THRESH_PRESENT, "PPEPresent"},
+	{HE_MAC_TWT_REQ_SUPPORT, "TWTReq"},
+	{HE_MAC_TWT_RESP_SUPPORT, "TWTResp"},
+	{HE_MAC_MAX_NSS_DCM, "Max-Nss-DCM"},
+	{HE_MAC_UL_MU_RSP_SCHED, "UL-MU-Resp"},
+	{HE_MAC_A_BSR, "A-BSR"}
+};
+
+static void
+wlc_he_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	char heinfostr[64];
+	wlc_he_info_t *hei = ctx;
+	scb_he_t *sh = SCB_HE(hei, scb);
+
+	if (sh == NULL) {
+		return;
+	}
+
+	bcm_bprintf(b, "     af_pend: 0x%x af_to: %u\n",
+	            sh->af_pend, sh->af_to);
+	switch (sh->af_pend) {
+	case WLC_HE_TWT_SETUP_ST_NOTHING:
+		break;
+	case WLC_HE_TWT_SETUP_ST_REQ_ACK:
+	case WLC_HE_TWT_SETUP_ST_RESP:
+	case WLC_HE_TWT_SETUP_ST_NOTIF_TO:
+	case WLC_HE_TWT_SETUP_ST_NOTIF:
+		bcm_bprintf(b, "     dialog_token: %u flow_id: %u\n",
+		            sh->twt_req.dialog_token, sh->twt_req.flow_id);
+		break;
+	default:
+		bcm_bprintf(b, "     flow_id: %u\n", sh->flow_id);
+		break;
+	}
+
+	bcm_format_octets(scb_mac_cap, ARRAYSIZE(scb_mac_cap),
+	                  (const uint8 *)&sh->mac_cap, sizeof(sh->mac_cap),
+	                  heinfostr, sizeof(heinfostr));
+	bcm_bprintf(b, "     he_info: %s ", heinfostr);
+	bcm_bprhex(b, NULL, TRUE, (const uint8 *)&sh->mac_cap, sizeof(sh->mac_cap));
+}
+#endif /* BCMDBG) || BCMDBG_DUMP */
 
 /* ======== IE mgmt ======== */
 
+
+/* figure out the length of the value in the TLV i.e. the length
+ * without the TLV header.
+ */
+static uint
+_wlc_he_calc_cap_ie_len(wlc_he_info_t *hei, wlc_bsscfg_t *cfg)
+{
+	return sizeof(hei->mac_cap) + hei->ppet.ppet_len;
+}
 
 /* HE Cap IE */
 static uint
@@ -932,7 +1072,7 @@ wlc_he_calc_cap_ie_len(void *ctx, wlc_iem_calc_data_t *data)
 	if (!data->cbparm->he)
 		return 0;
 
-	return sizeof(he_cap_ie_t) + hei->ppet.ppet_len;
+	return TLV_HDR_LEN + _wlc_he_calc_cap_ie_len(hei, data->cfg);
 }
 
 static int
@@ -940,59 +1080,82 @@ wlc_he_write_cap_ie(void *ctx, wlc_iem_build_data_t *data)
 {
 	wlc_he_info_t *hei = (wlc_he_info_t *)ctx;
 	wlc_info_t *wlc = hei->wlc;
-	he_cap_info_t info = 0;
+	he_mac_cap_t info = {0};
 	uint8 *buf = data->buf;
-	uint8 ppet_len = 0;
+	uint offset;
 
 	buf[TLV_TAG_OFF] = DOT11_MNG_HE_CAP_ID;
 	/* set the length of the HE cap IE */
-	ppet_len = hei->ppet.ppet_len;
-	buf[TLV_LEN_OFF] = (uint8)(sizeof(he_cap_info_t) + ppet_len);
+	buf[TLV_LEN_OFF] = (uint8)_wlc_he_calc_cap_ie_len(hei, data->cfg);
 
 	/* Initializing default HE capabilities
 	* Set other bits to add new capabilities
 	*/
-	info = hei->he_cap.info;
+	memcpy(&info, &hei->mac_cap, sizeof(hei->mac_cap));
 
-	info &= ~(HE_INFO_TWT_REQ_SUPPORT | HE_INFO_TWT_RESP_SUPPORT);
+	setbits((uint8 *)&info, sizeof(info),
+	        HE_MAC_TWT_REQ_SUPPORT_IDX, HE_MAC_TWT_REQ_SUPPORT_FSZ,
+	        TWT_ENAB(wlc->pub) && wlc_twt_req_cap(wlc->twti, data->cfg) ? 1 : 0);
+	setbits((uint8 *)&info, sizeof(info),
+	        HE_MAC_TWT_RESP_SUPPORT_IDX, HE_MAC_TWT_RESP_SUPPORT_FSZ,
+	        TWT_ENAB(wlc->pub) && wlc_twt_resp_cap(wlc->twti, data->cfg) ? 1 : 0);
 
-	info |= TWT_ENAB(wlc->pub) && wlc_twt_req_cap(wlc->twti, data->cfg) ?
-	        HE_INFO_TWT_REQ_SUPPORT : 0;
-	info |= TWT_ENAB(wlc->pub) && wlc_twt_resp_cap(wlc->twti, data->cfg) ?
-	        HE_INFO_TWT_RESP_SUPPORT : 0;
-
-	/* Copy 2 bytes of he cap info */
-	info = htol16(info);
-	memcpy(&buf[TLV_BODY_OFF], &info, sizeof(he_cap_info_t));
+	/* Copy he mac cap info */
+	offset = TLV_BODY_OFF;
+	memcpy(&buf[offset], &info, sizeof(info));
 	/* copy the ppet info from bss cubby */
-	if (hei->he_cap.info & HE_INFO_PPE_THRESH_PRESENT) {
-		memcpy(&buf[TLV_BODY_OFF + sizeof(he_cap_info_t)], hei->ppet.ppet_info, ppet_len);
+	if (isset((uint8 *)&hei->phy_cap, HE_PHY_PPE_THRESH_PRESENT_IDX)) {
+		offset += sizeof(hei->phy_cap);
+		memcpy(&buf[offset], hei->ppet.ppet_info, hei->ppet.ppet_len);
 	}
 
 	return BCME_OK;
 }
 
+/** called on reception of assocreq/reassocreq/assocresp/reassocresp */
 static void
-_wlc_he_parse_cap_ie(struct scb *scb, he_cap_ie_t *cap)
+_wlc_he_parse_cap_ie(wlc_he_info_t *hei, struct scb *scb, he_cap_ie_t *cap)
 {
-	uint16 info = 0;
+	scb_he_t *sh;
 
-	scb->flags2 &= ~(SCB2_HECAP|SCB2_TWT_REQCAP|SCB2_TWT_RESPCAP);
+	scb->flags2 &= ~(SCB2_HECAP);
 
-	if (cap == NULL) {
-		return;
+	sh = SCB_HE(hei, scb);
+	ASSERT(sh != NULL);
+
+	bzero(&sh->mac_cap, sizeof(sh->mac_cap));
+
+	if (cap != NULL) {
+		scb->flags2 |= SCB2_HECAP;
+
+		memcpy(&sh->mac_cap, &cap->mac_cap, sizeof(cap->mac_cap));
 	}
-
-	scb->flags2 |= SCB2_HECAP;
-
-	info = ltoh16_ua((uint8 *)&cap->info);
-	scb->flags2 |= ((info & HE_INFO_TWT_REQ_SUPPORT) != 0) ? SCB2_TWT_REQCAP : 0;
-	scb->flags2 |= ((info & HE_INFO_TWT_RESP_SUPPORT) != 0) ? SCB2_TWT_RESPCAP : 0;
 }
 
+#ifdef STA
+/** called on reception of assocresp/reassocresp */
+static void
+wlc_he_parse_cap_ie_assoc(wlc_he_info_t *hei, struct scb *scb, he_cap_ie_t *cap)
+{
+	scb->flags3 &= ~(SCB3_HE_TRIGGERED_TX);
+
+	if (cap != NULL) {
+#if defined(WL11AX_TRIGGERQ_ENABLED)
+		/* For HE connection, use trigger queues by default for TX */
+		scb->flags3 |= SCB3_HE_TRIGGERED_TX;
+#endif /* defined(WL11AX_TRIGGERQ_ENABLED) */
+	}
+}
+#endif /* STA */
+
+/** called on reception of assocreq/reassocreq/assocresp/reassocresp */
 static int
 wlc_he_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data)
 {
+	wlc_he_info_t *hei = ctx;
+
+	BCM_REFERENCE(hei);
+
 	switch (data->ft) {
 #ifdef AP
 	case FC_ASSOC_REQ:
@@ -1002,7 +1165,7 @@ wlc_he_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data)
 
 		ASSERT(scb != NULL);
 
-		_wlc_he_parse_cap_ie(scb, (he_cap_ie_t *)data->ie);
+		_wlc_he_parse_cap_ie(hei, scb, (he_cap_ie_t *)data->ie);
 		break;
 	}
 #endif
@@ -1014,7 +1177,8 @@ wlc_he_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data)
 
 		ASSERT(scb != NULL);
 
-		_wlc_he_parse_cap_ie(scb, (he_cap_ie_t *)data->ie);
+		_wlc_he_parse_cap_ie(hei, scb, (he_cap_ie_t *)data->ie);
+		wlc_he_parse_cap_ie_assoc(hei, scb, (he_cap_ie_t *)data->ie);
 		break;
 	}
 #endif
@@ -1036,14 +1200,14 @@ wlc_he_scan_parse_cap_ie(void *ctx, wlc_iem_parse_data_t *data)
 	bi = ftpparm->scan.result;
 
 	bi->flags3 &= ~(WLC_BSS3_HE);
-	bi->he_capabilities = 0;
+	bzero(&bi->he_mac_cap, sizeof(bi->he_mac_cap));
 
 	if ((cap = (he_cap_ie_t *)data->ie) == NULL)
 		return BCME_OK;
 
-	/* Mark the BSS as VHT capable */
+	/* Mark the BSS as HE capable */
 	bi->flags3 |= WLC_BSS3_HE;
-	bi->he_capabilities = ltoh16_ua((uint8 *)&cap->info);
+	memcpy(&bi->he_mac_cap, &cap->mac_cap, sizeof(cap->mac_cap));
 
 	return BCME_OK;
 }
@@ -1058,40 +1222,64 @@ wlc_he_calc_op_ie_len(void *ctx, wlc_iem_calc_data_t *data)
 	return sizeof(he_op_ie_t);
 }
 
+/** AP centric, called on transmit of bcn/prbrsp/assocresp/reassocresp */
 static int
 wlc_he_write_op_ie(void *ctx, wlc_iem_build_data_t *data)
 {
 	wlc_bsscfg_t *cfg = data->cfg;
-	he_op_ie_t op;
+	/* CID:35723, use initialized structure */
+	he_op_ie_t op = {0, 0, 0, {0}};
 
-	op.parms = htol16((uint16)(cfg->bss_color & HE_OP_BSS_COLOR_MASK));
+	setbits((uint8 *)&op.parms, sizeof(op.parms), HE_OP_BSS_COLOR_IDX,
+		HE_OP_BSS_COLOR_FSZ, cfg->bss_color);
 	bcm_write_tlv(DOT11_MNG_HE_OP_ID, &op.parms, sizeof(op.parms), data->buf);
 
 	return BCME_OK;
 }
 
+/** STA centric, called on reception of (re)association response */
 static void
-_wlc_he_parse_op_ie(wlc_bsscfg_t *cfg, he_op_ie_t *op)
+_wlc_he_parse_op_ie(wlc_he_info_t *hei, wlc_bsscfg_t *cfg, he_op_ie_t *op)
 {
-	cfg->bss_color = 0;
+	BCM_REFERENCE(hei);
+
+	cfg->bss_color = 0; /* 0 means: no color filtering */
 
 	if (op != NULL) {
-		uint16 parms = ltoh16_ua((uint8 *)&op->parms);
-
-		cfg->bss_color = (uint8)(parms & HE_OP_BSS_COLOR_MASK);
+		cfg->bss_color = (uint8)getbits((uint8 *)&op->parms, sizeof(op->parms),
+			HE_OP_BSS_COLOR_IDX, HE_OP_BSS_COLOR_FSZ);
 	}
 }
 
+/**
+ * Enables or disables (bss_color=0) BSS color filtering in ucode/PHY. Disabling BSS color filtering
+ * is required when e.g. scanning.
+ * Precondition: channel switch (if any) was completed, PSM is running.
+ * @param hei              11ax (he) info
+ * @param cfg              cfg BSS to target
+ * @param bsscolor_enable  enable (BSSCOLOR_EN) or disable (BSSCOLOR_DIS) for caller supplied BSS
+ */
+void wlc_he_on_switch_bsscfg(wlc_he_info_t *hei, wlc_bsscfg_t *cfg, bool bsscolor_enable)
+{
+	ASSERT(cfg != NULL);
+	/* TODO: enable or disable (bss_color=0) BSS color filtering in ucode/PHY */
+}
+
+/** called on reception of a DOT11_MNG_HE_OP_ID ie */
 static int
 wlc_he_parse_op_ie(void *ctx, wlc_iem_parse_data_t *data)
 {
+	wlc_he_info_t *hei = ctx;
+
+	BCM_REFERENCE(hei);
+
 	switch (data->ft) {
 #ifdef STA
 	case FC_ASSOC_RESP:
 	case FC_REASSOC_RESP: {
 		wlc_bsscfg_t *cfg = data->cfg;
 
-		_wlc_he_parse_op_ie(cfg, (he_op_ie_t *)data->ie);
+		_wlc_he_parse_op_ie(hei, cfg, (he_op_ie_t *)data->ie);
 		break;
 	}
 #endif
@@ -1132,8 +1320,8 @@ void
 wlc_he_update_scb_state(wlc_he_info_t *hei, int bandtype, struct scb *scb,
 	he_cap_ie_t *capie, he_op_ie_t *opie)
 {
-	_wlc_he_parse_cap_ie(scb, capie);
-	_wlc_he_parse_op_ie(SCB_BSSCFG(scb), opie);
+	_wlc_he_parse_cap_ie(hei, scb, capie);
+	_wlc_he_parse_op_ie(hei, SCB_BSSCFG(scb), opie);
 }
 
 void
@@ -1263,7 +1451,7 @@ wlc_he_twt_setup(wlc_he_info_t *hei, struct scb *scb, wlc_he_twt_setup_t *req)
 	}
 
 	/* log */
-	WL_HE_LOG(("%s: dialog %u flow %u\n", __FUNCTION__,
+	WL_HE_INFO(("%s: dialog %u flow %u\n", __FUNCTION__,
 	           req->dialog_token, req->desc.flow_id));
 
 	ASSERT(req->cplt_fn != NULL);

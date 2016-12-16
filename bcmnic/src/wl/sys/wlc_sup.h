@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_sup.h 564097 2015-06-16 14:00:38Z $
+ * $Id: wlc_sup.h 664573 2016-10-13 05:40:23Z $
  */
 
 

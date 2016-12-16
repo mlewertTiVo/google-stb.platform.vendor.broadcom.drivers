@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_utils_var.c 624896 2016-03-15 00:54:48Z lut $
+ * $Id: phy_utils_var.c 624896 2016-03-15 00:54:48Z $
  */
 
 #include <phy_cfg.h>
@@ -34,9 +34,6 @@ phy_utils_getvar(phy_info_t *pi, const char *name, const char *function)
 phy_utils_getvar(phy_info_t *pi, const char *name)
 #endif
 {
-#ifdef _MINOSL_
-	return NULL;
-#else
 #ifdef BCMDBG
 	/* Use vars pointing to itself as a flag that wlc_phy_attach is complete.
 	 * Can't use NULL because it means there are no vars but we still
@@ -51,7 +48,6 @@ phy_utils_getvar(phy_info_t *pi, const char *name)
 
 	NVRAM_RECLAIM_CHECK(name);
 	return phy_utils_getvar_internal(pi, name);
-#endif	/* _MINOSL_ */
 }
 
 char *
@@ -85,11 +81,7 @@ phy_utils_getvar_internal(phy_info_t *pi, const char *name)
 INLINE char *
 phy_utils_getvar(phy_info_t *pi, const char *name)
 {
-#ifdef _MINOSL_
-	return NULL;
-#else
 	return getvar(pi->vars, name);
-#endif /* _MINOSL_ */
 }
 #endif /* BCMDBG */
 
@@ -165,15 +157,11 @@ phy_utils_getintvar(phy_info_t *pi, const char *name)
 int
 phy_utils_getintvar_default(phy_info_t *pi, const char *name, int default_value)
 {
-#ifdef _MINOSL_
-	return 0;
-#else
 	char *val = PHY_GETVAR(pi, name);
 	if (val != NULL)
 		return (bcm_strtoul(val, NULL, 0));
 
 	return (default_value);
-#endif	/* _MINOSL_ */
 }
 
 int
@@ -354,9 +342,6 @@ phy_utils_getintvararray_slicespecific(phy_info_t *pi, const char *name, int idx
 int
 phy_utils_getintvar_default_slicespecific(phy_info_t *pi, const char *name, int default_value)
 {
-#ifdef _MINOSL_
-	return 0;
-#else
 	char *val = NULL;
 #ifdef DUAL_PHY
 	char *name_with_prefix = NULL;
@@ -375,7 +360,6 @@ phy_utils_getintvar_default_slicespecific(phy_info_t *pi, const char *name, int 
 	if (val != NULL)
 	   return (bcm_strtoul(val, NULL, 0));
 	return (default_value);
-#endif	/* _MINOSL_ */
 }
 int
 #ifdef BCMDBG

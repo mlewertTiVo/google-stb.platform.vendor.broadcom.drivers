@@ -31,8 +31,11 @@ TEST_SRC = main.c test_phy_radar.c
 # Check tool directory path (from the unit test source directory)
 CHECK_ROOT_PATH = ../../../../../src/unittest
 
+DEBUGS = -DBCMDBG_ERR -DBCMDBG_ASSERT -DBCMDBG_EXCLUDE_HW_TIMESTAMP #-DBCMDBG
+
 # Relevant flags for phy_radar_shared.c compilation.
-CFLAGS += -DWL_UNITTEST -DBCMDBG_ERR -DBCMDBG_ASSERT -DBCMPHYCORENUM=2 -DACCONF=0x2000 #-DBCMDBG
+CFLAGS += -DWL_UNITTEST -DBCMPHYCORENUM=2 -DWL11AC160 $(DEBUGS)
+
 #####################################################################################
 ##################### None customized parameter #####################################
 #####################################################################################

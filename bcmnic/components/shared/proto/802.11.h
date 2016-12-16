@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11.h 654127 2016-08-11 06:56:35Z $
+ * $Id: 802.11.h 665033 2016-10-14 16:10:13Z $
  */
 
 #ifndef _802_11_H_
@@ -1437,7 +1437,12 @@ typedef struct ti_ie ti_ie_t;
 /* should start using this one instead of above two */
 #define DOT11_MNG_VS_ID				221	/* d11 management Vendor Specific IE */
 
+/* The follwing ID extensions should be defined >= 255
+ * i.e. the values should include 255 (DOT11_MNG_ID_EXT_ID + ID Extension).
+ */
 #define DOT11_MNG_ID_EXT_ID			255	/* Element ID Extension 11mc D4.3 */
+#define DOT11_MNG_RAPS_ID	(DOT11_MNG_ID_EXT_ID+11)  /* OFDMA Random Access Parameter Set */
+
 
 #define DOT11_MNG_IE_ID_EXT_MATCH(_ie, _id) (\
 	((_ie)->id == DOT11_MNG_ID_EXT_ID) && \
@@ -1564,17 +1569,24 @@ typedef struct ti_ie ti_ie_t;
 /* Fine timing measurement - D3.0 */
 #define DOT11_EXT_CAP_FTM_RESPONDER		70
 #define DOT11_EXT_CAP_FTM_INITIATOR		71 /* tentative 11mcd3.0 */
+/* TWT support */
+#define DOT11_EXT_CAP_TWT_REQUESTER		75
+#define DOT11_EXT_CAP_TWT_RESPONDER		76
+/* TODO: Update DOT11_EXT_CAP_MAX_IDX to reflect the highest offset.
+ * Note: DOT11_EXT_CAP_MAX_IDX must only be used in attach path.
+ *       It will cause ROM invalidation otherwise.
+ */
+#define DOT11_EXT_CAP_MAX_IDX	76
+
 #ifdef WL_FTM
 #define DOT11_EXT_CAP_MAX_BIT_IDX		95	/* !!!update this please!!! */
 #else
 #define DOT11_EXT_CAP_MAX_BIT_IDX		62	/* !!!update this please!!! */
 #endif
-
 /* extended capability */
 #ifndef DOT11_EXTCAP_LEN_MAX
 #define DOT11_EXTCAP_LEN_MAX ((DOT11_EXT_CAP_MAX_BIT_IDX + 8) >> 3)
 #endif
-
 BWL_PRE_PACKED_STRUCT struct dot11_extcap {
 	uint8 extcap[DOT11_EXTCAP_LEN_MAX];
 } BWL_POST_PACKED_STRUCT;
@@ -3490,6 +3502,10 @@ typedef int vht_group_id_t;
 #define VHT_N_SERVICE           16	/* bits in SERVICE field */
 #define VHT_N_TAIL               6	/* tail bits per BCC encoder */
 
+#define HE_LTF_1_GI_1_6us		(0)
+#define HE_LTF_2_GI_0_8us		(1)
+#define HE_LTF_2_GI_1_6us		(2)
+#define HE_LTF_4_GI_3_2us		(3)
 
 /** dot11Counters Table - 802.11 spec., Annex D */
 typedef struct d11cnt {

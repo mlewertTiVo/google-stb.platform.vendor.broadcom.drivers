@@ -21,7 +21,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmcdc.h 633551 2016-04-22 22:51:06Z $
+ * $Id: bcmcdc.h 665208 2016-10-16 23:44:23Z $
  */
 #ifndef _bcmcdc_h_
 #define	_bcmcdc_h_
@@ -111,20 +111,5 @@ struct bdc_header {
 	((int)((((hdr)->flags2) & BDC_FLAG2_IF_MASK) >> BDC_FLAG2_IF_SHIFT))
 #define BDC_SET_IF_IDX(hdr, idx) \
 	((hdr)->flags2 = (((hdr)->flags2 & ~BDC_FLAG2_IF_MASK) | ((idx) << BDC_FLAG2_IF_SHIFT)))
-
-#define BDC_FLAG2_PAD_MASK		0xf0
-#define BDC_FLAG_PAD_MASK		0x03
-#define BDC_FLAG2_PAD_SHIFT		2
-#define BDC_FLAG_PAD_SHIFT		0
-#define BDC_FLAG2_PAD_IDX		0x3c
-#define BDC_FLAG_PAD_IDX		0x03
-#define BDC_GET_PAD_LEN(hdr) \
-	((int)(((((hdr)->flags2) & BDC_FLAG2_PAD_MASK) >> BDC_FLAG2_PAD_SHIFT) | \
-	((((hdr)->flags) & BDC_FLAG_PAD_MASK) >> BDC_FLAG_PAD_SHIFT)))
-#define BDC_SET_PAD_LEN(hdr, idx) \
-	((hdr)->flags2 = (((hdr)->flags2 & ~BDC_FLAG2_PAD_MASK) | \
-	(((idx) & BDC_FLAG2_PAD_IDX) << BDC_FLAG2_PAD_SHIFT))); \
-	((hdr)->flags = (((hdr)->flags & ~BDC_FLAG_PAD_MASK) | \
-	(((idx) & BDC_FLAG_PAD_IDX) << BDC_FLAG_PAD_SHIFT)))
 
 #endif /* _bcmcdc_h_ */

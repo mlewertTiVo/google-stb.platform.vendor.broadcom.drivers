@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmdefs.h 639409 2016-05-23 16:13:48Z $
+ * $Id: bcmdefs.h 664297 2016-10-12 02:49:27Z $
  */
 
 #ifndef	_bcmdefs_h_
@@ -95,6 +95,21 @@ extern bool bcm_postattach_part_reclaimed;
 #define BCMPOSTATTACHFN(_fn)	_fn
 #endif /* BCM_RECLAIM_ATTACH_FN_DATA  */
 
+#ifdef BCMDBG_SR
+/*
+ * Don't reclaim so we can compare SR ASM
+ */
+#define BCMPREATTACHDATASR(_data)	_data
+#define BCMPREATTACHFNSR(_fn)		_fn
+#define BCMATTACHDATASR(_data)		_data
+#define BCMATTACHFNSR(_fn)		_fn
+#else
+#define BCMPREATTACHDATASR(_data)	BCMPREATTACHDATA(_data)
+#define BCMPREATTACHFNSR(_fn)		BCMPREATTACHFN(_fn)
+#define BCMATTACHDATASR(_data)		BCMATTACHDATA(_data)
+#define BCMATTACHFNSR(_fn)		BCMATTACHFN(_fn)
+#endif
+
 #if defined(BCM_RECLAIM_INIT_FN_DATA)
 #define BCMINITDATA(_data)	__attribute__ ((__section__ (".dataini1." #_data))) _data
 #define BCMINITFN(_fn)		__attribute__ ((__section__ (".textini1." #_fn), noinline)) _fn
@@ -147,6 +162,10 @@ extern bool bcm_postattach_part_reclaimed;
 #define	BCMNMIATTACHDATA(_data)		_data
 #define	BCMSROMATTACHFN(_fn)		_fn
 #define	BCMSROMATTACHDATA(_data)	_data
+#define BCMPREATTACHFNSR(_fn)		_fn
+#define BCMPREATTACHDATASR(_data)	_data
+#define BCMATTACHFNSR(_fn)		_fn
+#define BCMATTACHDATASR(_data)		_data
 #define CONST				const
 
 #define RECLAIMED()			(bcm_reclaimed)
@@ -174,11 +193,6 @@ extern bool bcm_postattach_part_reclaimed;
 
 /* BCMFASTPATH Related Macro defines
 */
-#ifdef WLCXO_DATA
-#define BCMFASTPATH_CXO		__attribute__ ((__section__ (".text.fastpath_cxo")))
-#else
-#define BCMFASTPATH_CXO		BCMFASTPATH
-#endif /* WLCXO_DATA */
 #ifndef BCMFASTPATH
 #if defined(mips) || defined(BCM47XX_CA9) || defined(STB)
 #define BCMFASTPATH		__attribute__ ((__section__ (".text.fastpath")))
@@ -311,7 +325,7 @@ typedef dma64addr_t dmaaddr_t;
 #define PHYSADDRLOSET(_pa, _val) PHYSADDR64LOSET(_pa, _val)
 #define PHYSADDRTOULONG(_pa, _ulong) \
 	do { \
-		_ulong = ((unsigned long)(_pa).hiaddr << 32) | ((_pa).loaddr); \
+		_ulong = ((unsigned long long)(_pa).hiaddr << 32) | ((_pa).loaddr); \
 	} while (0)
 
 #else
@@ -360,11 +374,6 @@ typedef struct {
 #endif /* linux && BCM47XX_CA9 */
 #endif /* BCM_RPC_NOCOPY || BCM_RPC_TXNOCOPY */
 
-#ifdef WLCXO
-#undef BCMEXTRAHDROOM
-#define BCMEXTRAHDROOM 384
-#endif /* WLCXO */
-
 /* Packet alignment for most efficient SDIO (can change based on platform) */
 #ifndef SDALIGN
 #define SDALIGN	32
@@ -382,12 +391,26 @@ typedef struct {
 
 #define BCMDONGLEOVERHEAD	(BCMDONGLEHDRSZ + BCMDONGLEPADSZ)
 
+#ifdef BCMDBG
+
+#ifndef BCMDBG_ERR
+#define BCMDBG_ERR
+#endif /* BCMDBG_ERR */
+
+#ifndef BCMDBG_ASSERT
+#define BCMDBG_ASSERT
+#endif /* BCMDBG_ASSERT */
+
+#endif /* BCMDBG */
 
 #if defined(NO_BCMDBG_ASSERT)
 # undef BCMDBG_ASSERT
 # undef BCMASSERT_LOG
 #endif
 
+#if defined(BCMDBG_ASSERT) || defined(BCMASSERT_LOG)
+#define BCMASSERT_SUPPORT
+#endif /* BCMDBG_ASSERT || BCMASSERT_LOG */
 
 /* Macros for doing definition and get/set of bitfields
  * Usage example, e.g. a three-bit field (bits 4-6):
@@ -515,5 +538,16 @@ extern uint32 gFWID;
 #define _XSTR(line)     _PADLINE(line)
 #define PAD             _XSTR(__LINE__)
 #endif
+
+#ifndef FRAG_HEADROOM
+#define FRAG_HEADROOM	224	/* In absence of SFD, use default headroom of 224 */
+#endif
+
+#define MODULE_DETACH(var, detach_func)\
+	if (var) { \
+		detach_func(var); \
+		(var) = NULL; \
+	}
+#define MODULE_DETACH_TYPECASTED(var, detach_func) detach_func(var)
 
 #endif /* _bcmdefs_h_ */

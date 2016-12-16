@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: d11ucode.h 655277 2016-08-18 18:50:14Z $
+ * $Id: d11ucode.h 671425 2016-11-22 02:08:09Z $
  */
 
 #ifndef _D11UCODE_H_
@@ -56,12 +56,8 @@ extern CONST uint8 d11ucode22_sslpn[];
 extern CONST uint d11ucode22_sslpnsz;
 extern CONST uint32 d11ucode24_mimo[];
 extern CONST uint d11ucode24_mimosz;
-extern CONST uint8 d11ucode24_lcn[];
-extern CONST uint d11ucode24_lcnsz;
 extern CONST uint32 d11ucode25_mimo[];
 extern CONST uint d11ucode25_mimosz;
-extern CONST uint8 d11ucode25_lcn[];
-extern CONST uint d11ucode25_lcnsz;
 extern CONST uint32 d11ucode26_mimo[];
 extern CONST uint d11ucode26_mimosz;
 extern CONST uint32 d11ucode29_mimo[];
@@ -72,16 +68,10 @@ extern CONST uint32 d11ucode31_mimo[];
 extern CONST uint d11ucode31_mimosz;
 extern CONST uint32 d11ucode32_mimo[];
 extern CONST uint d11ucode32_mimosz;
-extern CONST uint8 d11ucode33_lcn40[];
-extern CONST uint d11ucode33_lcn40sz;
 extern CONST uint32 d11ucode34_mimo[];
 extern CONST uint d11ucode34_mimosz;
 extern CONST uint32 d11ucode36_mimo[];
 extern CONST uint d11ucode36_mimosz;
-extern CONST uint8 d11ucode37_lcn40[];
-extern CONST uint d11ucode37_lcn40sz;
-extern CONST uint8 d11ucode38_lcn40[];
-extern CONST uint d11ucode38_lcn40sz;
 extern CONST uint8 d11ucode39_lcn20[];
 extern CONST uint d11ucode39_lcn20sz;
 extern CONST uint32 d11ucode40[];
@@ -138,11 +128,10 @@ extern CONST uint32 d11ucode_mu65[];
 extern CONST uint d11ucode_mu65sz;
 extern CONST uint32 d11ucodex_mu65[];
 extern CONST uint d11ucodex_mu65sz;
-extern CONST uint32 d11ucode_mu66[];
-extern CONST uint d11ucode_mu66sz;
-extern CONST uint32 d11ucodex_mu66[];
-extern CONST uint d11ucodex_mu66sz;
-
+#ifdef WLCX_ATLAS
+extern CONST uint32 d11ucode_wlcx64[];
+extern CONST uint d11ucode_wlcx64sz;
+#endif /* WLCX_ATLAS */
 
 extern CONST d11init_t d11n0initvals16[];
 extern CONST d11init_t d11n0bsinitvals16[];
@@ -161,14 +150,10 @@ extern CONST uint8 d11ucode27_sslpn[];
 extern CONST uint d11ucode27_sslpnsz;
 extern CONST d11init_t d11n0initvals24[];
 extern CONST d11init_t d11n0bsinitvals24[];
-extern CONST d11init_t d11lcn0initvals24[];
-extern CONST d11init_t d11lcn0bsinitvals24[];
 extern CONST d11init_t d11n0initvals25[];
 extern CONST d11init_t d11n0bsinitvals25[];
 extern CONST d11init_t d11n16initvals30[];
 extern CONST d11init_t d11n16bsinitvals30[];
-extern CONST d11init_t d11lcn0initvals25[];
-extern CONST d11init_t d11lcn0bsinitvals25[];
 extern CONST d11init_t d11ht0initvals26[];
 extern CONST d11init_t d11ht0bsinitvals26[];
 extern CONST d11init_t d11ht0initvals29[];
@@ -179,16 +164,10 @@ extern CONST d11init_t d11n22initvals31[];
 extern CONST d11init_t d11n22bsinitvals31[];
 extern CONST d11init_t d11n18initvals32[];
 extern CONST d11init_t d11n18bsinitvals32[];
-extern CONST d11init_t d11lcn400initvals33[];
-extern CONST d11init_t d11lcn400bsinitvals33[];
 extern CONST d11init_t d11n19initvals34[];
 extern CONST d11init_t d11n19bsinitvals34[];
 extern CONST d11init_t d11n20initvals36[];
 extern CONST d11init_t d11n20bsinitvals36[];
-extern CONST d11init_t d11lcn406initvals37[];
-extern CONST d11init_t d11lcn406bsinitvals37[];
-extern CONST d11init_t d11lcn407initvals38[];
-extern CONST d11init_t d11lcn407bsinitvals38[];
 
 extern CONST d11init_t d11lcn200initvals39[];
 extern CONST d11init_t d11lcn200bsinitvals39[];
@@ -264,8 +243,6 @@ extern CONST d11init_t d11waken0initvals26[];
 extern CONST d11init_t d11waken0bsinitvals26[];
 extern CONST d11init_t d11waken0initvals30[];
 extern CONST d11init_t d11waken0bsinitvals30[];
-extern CONST d11init_t d11wakelcn403initvals33[];
-extern CONST d11init_t d11wakelcn403bsinitvals33[];
 
 extern CONST uint32 d11aeswakeucode16_lp[];
 extern CONST uint32 d11aeswakeucode16_sslpn[];
@@ -289,8 +266,6 @@ extern CONST uint32 d11ucode_wowl42[];
 extern CONST uint32 d11ucode_wowl46[];
 extern CONST uint32 d11ucode_ulp46[];
 extern CONST uint32 d11ucode_ulp60[];
-extern CONST uint32 d11aeswakeucode33_lcn40[];
-extern CONST uint32 d11ucode_wowl33_lcn40[];
 extern CONST uint32 d11ucode_wowl66[];
 
 extern CONST uint d11ucode_wowl16_lpsz;
@@ -304,8 +279,6 @@ extern CONST uint d11ucode_wowl42sz;
 extern CONST uint d11ucode_wowl46sz;
 extern CONST uint d11ucode_ulp46sz;
 extern CONST uint d11ucode_ulp60sz;
-extern CONST uint d11aeswakeucode33_lcn40sz;
-extern CONST uint d11ucode_wowl33_lcn40sz;
 extern CONST uint d11ucode_wowl66sz;
 
 extern CONST uint d11aeswakeucode16_lpsz;
@@ -350,12 +323,8 @@ extern CONST uint32 d11ucode_p2p22_mimo[];
 extern CONST uint d11ucode_p2p22_mimosz;
 extern CONST uint32 d11ucode_p2p24_mimo[];
 extern CONST uint d11ucode_p2p24_mimosz;
-extern CONST uint8 d11ucode_p2p24_lcn[];
-extern CONST uint d11ucode_p2p24_lcnsz;
 extern CONST uint32 d11ucode_p2p25_mimo[];
 extern CONST uint d11ucode_p2p25_mimosz;
-extern CONST uint8 d11ucode_p2p25_lcn[];
-extern CONST uint d11ucode_p2p25_lcnsz;
 extern CONST uint32 d11ucode_p2p26_mimo[];
 extern CONST uint d11ucode_p2p26_mimosz;
 extern CONST uint8 d11ucode_p2p26_lcn[];
@@ -368,16 +337,10 @@ extern CONST uint32 d11ucode_p2p31_mimo[];
 extern CONST uint d11ucode_p2p31_mimosz;
 extern CONST uint32 d11ucode_p2p32_mimo[];
 extern CONST uint d11ucode_p2p32_mimosz;
-extern CONST uint8 d11ucode_p2p33_lcn40[];
-extern CONST uint d11ucode_p2p33_lcn40sz;
 extern CONST uint32 d11ucode_p2p34_mimo[];
 extern CONST uint d11ucode_p2p34_mimosz;
 extern CONST uint32 d11ucode_p2p36_mimo[];
 extern CONST uint d11ucode_p2p36_mimosz;
-extern CONST uint8 d11ucode_p2p37_lcn40[];
-extern CONST uint d11ucode_p2p37_lcn40sz;
-extern CONST uint8 d11ucode_p2p38_lcn40[];
-extern CONST uint d11ucode_p2p38_lcn40sz;
 extern CONST uint8 d11ucode_p2p39_lcn20[];
 extern CONST uint d11ucode_p2p39_lcn20sz;
 extern CONST uint32 d11ucode_p2p40[];
@@ -412,6 +375,10 @@ extern CONST uint32 d11ucode_p2p61_D11a[];
 extern CONST uint d11ucode_p2p61_D11asz;
 extern CONST uint32 d11ucode_p2p61_D11b[];
 extern CONST uint d11ucode_p2p61_D11bsz;
+extern CONST uint32 d11ucode_p2p61_1_D11a[];
+extern CONST uint d11ucode_p2p61_1_D11asz;
+extern CONST uint32 d11ucode_p2p61_1_D11b[];
+extern CONST uint d11ucode_p2p61_1_D11bsz;
 extern CONST uint32 d11ucode_p2p62[];
 extern CONST uint d11ucode_p2p62sz;
 extern CONST uint32 d11ucode_p2p64[];
@@ -454,4 +421,17 @@ extern CONST d11axiinit_t d11ulpac36initvals62_axislave_order[];
 extern CONST d11axiinit_t d11ulpac36initvals62_axislave[];
 extern CONST d11axiinit_t d11ulpac36bsinitvals62_axislave_order[];
 extern CONST d11axiinit_t d11ulpac36bsinitvals62_axislave[];
+
+extern CONST uint32 d11ucode_p2p80_D11b[];
+extern CONST uint32 d11ucode_p2p80_D11a[];
+extern CONST uint d11ucode_p2p80_D11bsz;
+extern CONST uint d11ucode_p2p80_D11asz;
+
+extern CONST d11init_t d11ax44initvals80[];
+extern CONST d11init_t d11ax44initvals80_D11a[];
+
+extern CONST d11init_t d11ax44bsinitvals80[];
+extern CONST d11init_t d11ax44bsinitvals80_D11a[];
+
+
 #endif /* _D11UCODE_H_ */

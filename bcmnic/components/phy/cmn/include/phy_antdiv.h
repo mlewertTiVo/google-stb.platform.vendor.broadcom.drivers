@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_antdiv.h 629393 2016-04-05 06:55:25Z gpasrija $
+ * $Id: phy_antdiv.h 657347 2016-08-31 22:46:24Z $
  */
 
 #ifndef _phy_antdiv_h_
@@ -32,5 +32,6 @@ void phy_antdiv_get_sw_control(phy_info_t *pi, int32 *ret_int_ptr, int core);
 #ifdef WLC_SW_DIVERSITY
 uint16 phy_antdiv_get_swctrl_mask(phy_antdiv_info_t *di);
 #endif
-
+int phy_antdiv_set_txswctrlmap(phy_info_t *pi, int32 int_val);
+int phy_antdiv_get_txswctrlmap(phy_info_t *pi, int32 *ret_int_ptr);
 #endif /* _phy_antdiv_h_ */

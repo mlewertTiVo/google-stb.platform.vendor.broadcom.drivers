@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_11h.c 619861 2016-02-18 15:03:25Z $
+ * $Id: wlc_11h.c 657374 2016-09-01 01:08:55Z $
  */
 
 /**
@@ -88,12 +88,21 @@ struct wlc_11h_info {
 /* module */
 static int wlc_11h_doiovar(void *ctx, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_11h_dump(void *ctx, struct bcmstrbuf *b);
+#endif /* BCMDBG || BCMDBG_DUMP */
 static int wlc_11h_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif);
 
 /* cubby */
 static int wlc_11h_bsscfg_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_11h_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg);
+static int wlc_11h_cubby_get(void *ctx, wlc_bsscfg_t *bsscfg, uint8 *data, int *len);
+static int wlc_11h_cubby_set(void *ctx, wlc_bsscfg_t *bsscfg, const uint8 *data, int len);
+#ifdef BCMDBG
+static void wlc_11h_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_11h_bsscfg_dump NULL
+#endif
 
 /* spectrum management */
 static void wlc_recv_measure_request(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
@@ -104,6 +113,10 @@ static void wlc_send_measure_request(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct 
 	uint8 measure_type);
 static void wlc_send_measure_report(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct ether_addr *da,
 	uint8 token, uint8 *report, uint report_len);
+#ifdef BCMDBG
+static void wlc_print_measure_req_rep(wlc_info_t *wlc, struct dot11_management_header *hdr,
+	uint8 *body, int body_len);
+#endif
 
 /* IE mgmt */
 #ifdef STA
@@ -123,6 +136,7 @@ typedef struct {
 	uint8 spect_state;
 } wlc_11h_t;
 #define IEEE11H_BSSCFG_CUBBY(m11h, cfg) ((wlc_11h_t *)BSSCFG_CUBBY(cfg, (m11h)->cfgh))
+#define WLC_11H_BSSCFG_CUBBY_SIZE	(sizeof(wlc_11h_t))
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -135,6 +149,7 @@ wlc_11h_info_t *
 BCMATTACHFN(wlc_11h_attach)(wlc_info_t *wlc)
 {
 	wlc_11h_info_t *m11h;
+	bsscfg_cubby_params_t bsscfg_cubby_params;
 #ifdef STA
 	uint16 arqfstbmp = FT2BMP(FC_ASSOC_REQ) | FT2BMP(FC_REASSOC_REQ);
 #endif
@@ -157,13 +172,23 @@ BCMATTACHFN(wlc_11h_attach)(wlc_info_t *wlc)
 	}
 	(void) obj_registry_ref(wlc->objr, OBJR_11H_CMN_INFO);
 
-	/* reserve cubby in the bsscfg container for per-bsscfg private data */
-	if ((m11h->cfgh = wlc_bsscfg_cubby_reserve(wlc, sizeof(wlc_11h_t),
-	                wlc_11h_bsscfg_init, wlc_11h_bsscfg_deinit, wlc_11h_bsscfg_dump,
-	                m11h)) < 0) {
+	/* reserve cubby space in the bsscfg container for per-bsscfg private data */
+	bzero(&bsscfg_cubby_params, sizeof(bsscfg_cubby_params));
+	bsscfg_cubby_params.context = m11h;
+	bsscfg_cubby_params.fn_deinit = wlc_11h_bsscfg_deinit;
+	bsscfg_cubby_params.fn_init = wlc_11h_bsscfg_init;
+	bsscfg_cubby_params.fn_get = wlc_11h_cubby_get;
+	bsscfg_cubby_params.fn_set = wlc_11h_cubby_set;
+	bsscfg_cubby_params.config_size = WLC_11H_BSSCFG_CUBBY_SIZE;
+#if defined(BCMDBG) || defined(WLDUMP)
+	bsscfg_cubby_params.fn_dump = wlc_11h_bsscfg_dump;
+#endif
+	if ((m11h->cfgh = wlc_bsscfg_cubby_reserve_ext(wlc, sizeof(wlc_11h_t *),
+		&bsscfg_cubby_params)) < 0) {
 		WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve() failed\n",
-		          wlc->pub->unit, __FUNCTION__));
+			wlc->pub->unit, __FUNCTION__));
 		goto fail;
+
 	}
 
 	/* register IE mgmt calc/build callbacks */
@@ -212,6 +237,13 @@ BCMATTACHFN(wlc_11h_attach)(wlc_info_t *wlc)
 	}
 #endif /* WLTDLS */
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	if (wlc_dump_register(wlc->pub, "11h", wlc_11h_dump, m11h) != BCME_OK) {
+		WL_ERROR(("wl%d: %s: wlc_dumpe_register() failed\n",
+		          wlc->pub->unit, __FUNCTION__));
+		goto fail;
+	}
+#endif /* BCMDBG_DUMP */
 
 	if (wlc_module_register(wlc->pub, wlc_11h_iovars, "11h", m11h, wlc_11h_doiovar,
 	                        NULL, NULL, NULL) != BCME_OK) {
@@ -366,6 +398,17 @@ wlc_11h_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif)
 	return err;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_11h_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_11h_info_t *m11h = (wlc_11h_info_t *)ctx;
+
+	bcm_bprintf(b, "spect_mngmt:%d\n", m11h->cmn->_spect_management);
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* bsscfg cubby */
 static int
@@ -383,6 +426,53 @@ wlc_11h_bsscfg_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	BCM_REFERENCE(cfg);
 }
 
+/* bsscfg cubby copy */
+static int
+wlc_11h_cubby_get(void *ctx, wlc_bsscfg_t *bsscfg, uint8 *data, int *len)
+{
+	wlc_11h_info_t *m11h = (wlc_11h_info_t *)ctx;
+	wlc_11h_t *p11h = NULL;
+
+	ASSERT(bsscfg != NULL);
+	ASSERT(data != NULL);
+	if (*len < WLC_11H_BSSCFG_CUBBY_SIZE) {
+		WL_ERROR(("wl%d: %s: Buffer too short\n", m11h->wlc->pub->unit, __FUNCTION__));
+		*len = WLC_11H_BSSCFG_CUBBY_SIZE;
+		return BCME_BUFTOOSHORT;
+	}
+	p11h = IEEE11H_BSSCFG_CUBBY(m11h, bsscfg);
+	ASSERT(p11h != NULL);
+	memcpy(data, (uint8*)p11h, WLC_11H_BSSCFG_CUBBY_SIZE);
+	*len = WLC_11H_BSSCFG_CUBBY_SIZE;
+	return BCME_OK;
+}
+
+static int
+wlc_11h_cubby_set(void *ctx, wlc_bsscfg_t *bsscfg, const uint8 *data, int len)
+{
+	wlc_11h_info_t *m11h = (wlc_11h_info_t *)ctx;
+	wlc_11h_t *p11h = NULL;
+	ASSERT(bsscfg != NULL);
+	ASSERT(data != NULL);
+	ASSERT(len <= WLC_11H_BSSCFG_CUBBY_SIZE);
+	p11h = IEEE11H_BSSCFG_CUBBY(m11h, bsscfg);
+	ASSERT(p11h != NULL);
+	memcpy((uint8*)p11h, data, len);
+	return BCME_OK;
+}
+
+#ifdef BCMDBG
+static void
+wlc_11h_bsscfg_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_11h_info_t *m11h = (wlc_11h_info_t *)ctx;
+	wlc_11h_t *p11h = IEEE11H_BSSCFG_CUBBY(m11h, cfg);
+
+	ASSERT(p11h != NULL);
+
+	bcm_bprintf(b, "\tspect_state: %x\n", p11h->spect_state);
+}
+#endif
 
 void
 wlc_11h_tbtt(wlc_11h_info_t *m11h, wlc_bsscfg_t *cfg)
@@ -579,19 +669,25 @@ wlc_11h_write_pwr_cap_ie(void *ctx, wlc_iem_build_data_t *data)
 	 *   to the srom minimum. Add a small offset to the TxPwrMin to always maintain it
 	 *   slightly above the srom minimum. This also takes care of round off.
 	 */
-	txpwr_backoff = wlc_phy_get_txpwr_backoff(WLC_PI(wlc));
+	txpwr_backoff = phy_tpc_get_power_backoff(WLC_PI(wlc));
 
-	/* Include antenna gain in order to use EIRP values only for EIRP locales */
+	/* Include antenna gain in order to use EIRP values only for EIRP locales
+	 * Also save the advertised TxPwrMin for validation purpose
+	 */
+
 	if (wlc_channel_locale_flags(wlc->cmi) & WLC_EIRP) {
-		pwr_cap.min = (uint8)(min_pwr + txpwr_backoff +
+		pwr_cap.min = (int8)(min_pwr + txpwr_backoff +
 			WLC_MINTXPWR_OFFSET + wlc->band->antgain) /
 			WLC_TXPWR_DB_FACTOR; /* convert qdBm to dBm */
-		pwr_cap.max = (uint8)(max_pwr + wlc->band->antgain) /
+		pwr_cap.max = (int8)(max_pwr + wlc->band->antgain) /
 			WLC_TXPWR_DB_FACTOR; /* convert qdBm to dBm */
+		wlc_tpc_set_pwr_cap_min(wlc->tpc, pwr_cap.min -
+			wlc->band->antgain/WLC_TXPWR_DB_FACTOR);
 	} else {
-		pwr_cap.min = (uint8)(min_pwr + txpwr_backoff +
+		pwr_cap.min = (int8)(min_pwr + txpwr_backoff +
 			WLC_MINTXPWR_OFFSET) / WLC_TXPWR_DB_FACTOR;
-		pwr_cap.max = (uint8)(max_pwr) /	WLC_TXPWR_DB_FACTOR;
+		pwr_cap.max = (int8)(max_pwr) /	WLC_TXPWR_DB_FACTOR;
+		wlc_tpc_set_pwr_cap_min(wlc->tpc, pwr_cap.min);
 	}
 	WL_PRINT(("txpwr advertised by STA: min %ddbm max %ddbm\n", pwr_cap.min, pwr_cap.max));
 
@@ -679,7 +775,7 @@ wlc_recv_frameaction_specmgmt(wlc_11h_info_t *m11h, struct dot11_management_head
 	ASSERT(body[DOT11_ACTION_CAT_OFF] == DOT11_ACTION_CAT_SPECT_MNG);
 
 	if ((cfg = wlc_bsscfg_find_by_bssid(wlc, &hdr->bssid)) == NULL) {
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 		char eabuf[ETHER_ADDR_STR_LEN];
 #endif
 
@@ -777,7 +873,14 @@ wlc_recv_measure_request(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 	uint8 *report;
 	dot11_meas_req_t* ie;
 	dot11_meas_rep_t* report_ie;
+#ifdef BCMDBG_ERR
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG_ERR */
 
+#ifdef BCMDBG
+	if (WL_INFORM_ON())
+		wlc_print_measure_req_rep(wlc, hdr, body, body_len);
+#endif /* BCMDBG */
 
 	ASSERT(cfg != NULL);
 
@@ -892,14 +995,155 @@ static void
 wlc_recv_measure_report(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct dot11_management_header *hdr,
 	uint8 *body, int body_len)
 {
+#ifdef BCMDBG
+	if (WL_INFORM_ON())
+		wlc_print_measure_req_rep(wlc, hdr, body, body_len);
+#else
 	BCM_REFERENCE(wlc);
 	BCM_REFERENCE(hdr);
 	BCM_REFERENCE(body);
 	BCM_REFERENCE(body_len);
+#endif /* BCMDBG */
 
 	ASSERT(cfg != NULL);
 }
 
+#ifdef BCMDBG
+static void
+wlc_print_measure_req_rep(wlc_info_t *wlc, struct dot11_management_header *hdr,
+	uint8 *body, int body_len)
+{
+	struct dot11_action_measure * action_hdr;
+	int len;
+	int ie_tot_len;
+	dot11_meas_req_t* req_ie;
+	uint32 start_h, start_l;
+	uint16 dur;
+	const char *action_name;
+	uint8 legal_id;
+	bool is_request;
+	char da[ETHER_ADDR_STR_LEN];
+	char sa[ETHER_ADDR_STR_LEN];
+	char bssid[ETHER_ADDR_STR_LEN];
+
+	BCM_REFERENCE(wlc);
+
+	printf("Action Frame: DA %s SA %s BSSID %s\n",
+	       bcm_ether_ntoa(&hdr->da, da), bcm_ether_ntoa(&hdr->sa, sa),
+	       bcm_ether_ntoa(&hdr->bssid, bssid));
+
+	if (body_len < 3) {
+		printf("Action frame body len was %d, expected > 3\n", body_len);
+		return;
+	}
+
+	action_hdr = (struct dot11_action_measure *)body;
+	req_ie = (dot11_meas_req_t*)action_hdr->data;
+	len = body_len - DOT11_ACTION_MEASURE_LEN;
+
+	printf("Action Frame: category %d action %d dialog token %d\n",
+	       action_hdr->category, action_hdr->action, action_hdr->token);
+
+	if (action_hdr->category != DOT11_ACTION_CAT_SPECT_MNG) {
+		printf("Unexpected category, expected Spectrum Management %d\n",
+			DOT11_ACTION_CAT_SPECT_MNG);
+		return;
+	}
+
+	if (action_hdr->action == DOT11_SM_ACTION_M_REQ) {
+		action_name = "Measurement Request";
+		legal_id = DOT11_MNG_MEASURE_REQUEST_ID;
+		is_request = TRUE;
+	} else if (action_hdr->action == DOT11_SM_ACTION_M_REP) {
+		action_name = "Measurement Report";
+		legal_id = DOT11_MNG_MEASURE_REPORT_ID;
+		is_request = FALSE;
+	} else {
+		printf("Unexpected action type, expected Measurement Request (%d) or Report (%d)\n",
+		       DOT11_MNG_MEASURE_REQUEST_ID, DOT11_MNG_MEASURE_REPORT_ID);
+		return;
+	}
+
+	while (len > 0) {
+		if (len < 2) {
+			printf("Malformed Action frame, less that an IE header length (2 bytes)"
+				" remaining in buffer\n");
+			break;
+		}
+		if (req_ie->id != legal_id) {
+			printf("Unexpected IE (id %d len %d):\n", req_ie->id, req_ie->len);
+			prhex(NULL, (uint8*)req_ie + TLV_HDR_LEN, req_ie->len);
+			goto next_ie;
+		}
+		if (req_ie->len < DOT11_MNG_IE_MREQ_FIXED_LEN) {
+			printf("%s (id %d len %d): len less than minimum of %d\n",
+			       action_name, req_ie->id, req_ie->len, DOT11_MNG_IE_MREQ_FIXED_LEN);
+			prhex("IE data", (uint8*)req_ie + TLV_HDR_LEN, req_ie->len);
+			goto next_ie;
+		}
+		printf("%s (id %d len %d): measure token %d mode 0x%02x type %d%s\n",
+		       action_name, req_ie->id, req_ie->len, req_ie->token, req_ie->mode,
+		       req_ie->type,
+		       (req_ie->type == DOT11_MEASURE_TYPE_BASIC) ? " \"Basic\"" :
+		       ((req_ie->type == DOT11_MEASURE_TYPE_CCA) ? " \"CCA\"" :
+			((req_ie->type == DOT11_MEASURE_TYPE_RPI) ? " \"RPI Histogram\"" : "")));
+
+		/* more data past fixed length portion of request/report? */
+
+		if (req_ie->len <= DOT11_MNG_IE_MREP_FIXED_LEN) {
+			/* just the fixed bytes of request/report present */
+			goto next_ie;
+		}
+
+		/* here if more than fixed length portion of request/report */
+
+		if (is_request && (req_ie->mode & DOT11_MEASURE_MODE_ENABLE)) {
+			prhex("Measurement Request variable data (should be null since mode Enable"
+				" is set)",
+				&req_ie->channel, req_ie->len - 3);
+			goto next_ie;
+		}
+
+		if (!is_request &&
+		    (req_ie->mode & (DOT11_MEASURE_MODE_LATE |
+			DOT11_MEASURE_MODE_INCAPABLE |
+			DOT11_MEASURE_MODE_REFUSED))) {
+			prhex("Measurement Report variable data (should be null since mode"
+				" Late|Incapable|Refused is set)",
+				&req_ie->channel, req_ie->len - DOT11_MNG_IE_MREP_FIXED_LEN);
+			goto next_ie;
+		}
+
+		if (req_ie->type != DOT11_MEASURE_TYPE_BASIC &&
+		    req_ie->type != DOT11_MEASURE_TYPE_CCA &&
+		    req_ie->type != DOT11_MEASURE_TYPE_RPI) {
+			prhex("variable data", &req_ie->channel, req_ie->len -
+				DOT11_MNG_IE_MREP_FIXED_LEN);
+			goto next_ie;
+		}
+
+		bcopy(req_ie->start_time, &start_l, 4);
+		bcopy(&req_ie->start_time[4], &start_h, 4);
+		bcopy(&req_ie->duration, &dur, 2);
+		start_l = ltoh32(start_l);
+		start_h = ltoh32(start_h);
+		dur = ltoh16(dur);
+
+		printf("%s variable data: channel %d start time %08X:%08X dur %d TU\n",
+		       action_name, req_ie->channel, start_h, start_l, dur);
+
+		if (req_ie->len > DOT11_MNG_IE_MREQ_LEN) {
+			prhex("additional data", (uint8*)req_ie + TLV_HDR_LEN +
+				DOT11_MNG_IE_MREQ_LEN, req_ie->len - DOT11_MNG_IE_MREQ_LEN);
+		}
+
+	next_ie:
+		ie_tot_len = TLV_HDR_LEN + req_ie->len;
+		req_ie = (dot11_meas_req_t*)((int8*)req_ie + ie_tot_len);
+		len -= ie_tot_len;
+	}
+}
+#endif /* BCMDBG */
 
 static void
 wlc_send_measure_request(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct ether_addr *da,
@@ -913,9 +1157,9 @@ wlc_send_measure_request(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct ether_addr *
 	uint32 tsf_l, tsf_h;
 	uint32 measure_tsf_l, measure_tsf_h;
 	uint16 duration;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 	WL_INFORM(("wl%d: %s: sending Measure Request type %d to %s\n",
 	           wlc->pub->unit, __FUNCTION__, measure_type, bcm_ether_ntoa(da, eabuf)));
@@ -974,9 +1218,9 @@ wlc_send_measure_report(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct ether_addr *d
 	uint8* pbody;
 	uint body_len;
 	struct dot11_action_measure * action_hdr;
-#if defined(WLMSG_INFORM)
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
 	char eabuf[ETHER_ADDR_STR_LEN];
-#endif 
+#endif /* BCMDBG || WLMSG_INFORM */
 
 	WL_INFORM(("wl%d: %s: sending Measure Report (token %d) to %s\n",
 		wlc->pub->unit, __FUNCTION__, token, bcm_ether_ntoa(da, eabuf)));

@@ -41,6 +41,45 @@ struct flow_ctx_info {
 	flow_ctx_t *flow_tbl;	/* Pointer to Flow Context Table */
 };
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+#include <wlc_dump.h>
+
+static int
+wlc_flow_ctx_module_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_flow_ctx_info_t *flow_tbli = (wlc_flow_ctx_info_t *)ctx;
+	flow_ctx_t *flow_tbl;
+	uint8 i;
+
+	ASSERT(flow_tbli != NULL);
+	ASSERT(b != NULL);
+
+	if (b == NULL || flow_tbli == NULL) {
+		return BCME_BADARG;
+	}
+
+	flow_tbl = flow_tbli->flow_tbl;
+
+	bcm_bprintf(b, "\nflowID\tscb\tbsscfg\trefcnt\n");
+
+	for (i = 0; i < flow_tbli->num_entries; ++i) {
+		bcm_bprintf(b, "%d", i + 1);
+		if (flow_tbl[i].scb == NULL) {
+			bcm_bprintf(b, "\tNULL");
+		} else {
+			bcm_bprintf(b, "\t%p", flow_tbl[i].scb);
+		}
+		if (flow_tbl[i].bsscfg == NULL) {
+			bcm_bprintf(b, "\tNULL");
+		} else {
+			bcm_bprintf(b, "\t%p", flow_tbl[i].bsscfg);
+		}
+		bcm_bprintf(b, "\t%d\n", flow_tbl[i].ref_cnt);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 wlc_flow_ctx_info_t *
 BCMATTACHFN(wlc_flow_ctx_attach)(wlc_info_t *wlc)
@@ -67,6 +106,9 @@ BCMATTACHFN(wlc_flow_ctx_attach)(wlc_info_t *wlc)
 		goto fail;
 	}
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(flow_tbli->pub, "flow_ctx", wlc_flow_ctx_module_dump, (void *)flow_tbli);
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 	return flow_tbli;
 

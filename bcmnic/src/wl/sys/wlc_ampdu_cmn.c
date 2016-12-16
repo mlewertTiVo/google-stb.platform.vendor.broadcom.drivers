@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_ampdu_cmn.c 636696 2016-05-10 08:11:01Z $
+ * $Id: wlc_ampdu_cmn.c 654891 2016-08-17 05:48:40Z $
  */
 
 
@@ -55,6 +55,12 @@
 #include <wlc_ampdu_rx.h>
 #include <wlc_ampdu_cmn.h>
 #endif
+#if defined(EVENT_LOG_COMPILE)
+#include <event_log.h>
+#if defined(ECOUNTERS)
+#include <ecounters.h>
+#endif
+#endif /* EVENT_LOG_COMPILE */
 #include <wlc_scb_ratesel.h>
 #include <wl_export.h>
 #ifdef WLAIBSS
@@ -63,15 +69,18 @@
 #include <wlc_pm.h>
 #include <wlc_dump.h>
 
-#if defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
 #define WLC_AMPDU_DUMP
 #endif
 #ifdef WLCNT
-#if defined(WLPKTDLYSTAT) || defined(BCMDBG_AMPDU)
+#if defined(BCMDBG) || defined(WLPKTDLYSTAT) || defined(BCMDBG_AMPDU)
 #define WLC_AMPDU_DUMP_CLR
 #endif
 #endif /* WLCNT */
 
+#ifdef BCMDBG
+uint32 wl_ampdu_dbg = WL_AMPDU_ERR_VAL;
+#endif
 
 /** iovar table */
 enum {
@@ -87,11 +96,23 @@ static const bcm_iovar_t ampdu_iovars[] = {
 	{"ampdu", IOV_AMPDU, (IOVF_SET_DOWN|IOVF_RSDB_SET), 0, IOVT_BOOL, 0},	/* only if down */
 	{"ampdu_ba_wsize", IOV_AMPDU_BA_WSIZE, (0), 0, IOVT_INT8, 0},
 	{"ampdu_density", IOV_AMPDU_DENSITY, (0), 0, IOVT_UINT8, 0},
+#ifdef BCMDBG
+	{"ampdu_dbg", IOV_AMPDU_DBG, (0), 0, IOVT_UINT32, 0},
+#endif
 	{NULL, 0, 0, 0, 0, 0}
 };
 
 static int wlc_ampdu_doiovar(void *hdl, uint32 actionid,
         void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
+#if defined(EVENT_LOG_COMPILE)
+#if defined(ECOUNTERS)
+static int wlc_ampdu_ecounter_dump(uint16 stats_type, void *context);
+#endif
+static void wlc_ampdu_chansw_update(void *arg, wlc_chansw_notif_data_t *data);
+#endif /* EVENT_LOG_COMPILE */
+#endif 
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -105,10 +126,25 @@ wlc_ampdu_dump(void *ctx, struct bcmstrbuf *b)
 {
 	wlc_info_t *wlc = ctx;
 
+#ifndef BCMDBG_AMPDU_NO_DUMP_IOVAR
 	if (wlc->ampdu_tx != NULL)
 		wlc_ampdu_tx_dump(wlc->ampdu_tx, b);
 	if (wlc->ampdu_rx != NULL)
 		wlc_ampdu_rx_dump(wlc->ampdu_rx, b);
+#elif defined(EVENT_LOG_COMPILE)
+#if defined(ECOUNTERS)
+	/* Dump AMPDU stats through event log + ecounter
+	 * In case of no ecounter support, try to dump only the MCS rate counters
+	 */
+	if (EVENT_LOG_IS_ON(EVENT_LOG_TAG_AMPDU_DUMP)) {
+		wlc_ampdu_ecounter_dump(EVENT_LOG_TAG_AMPDU_DUMP, wlc);
+	} else
+#endif /* ECOUNTERS */
+	if (EVENT_LOG_IS_ON(EVENT_LOG_TAG_RATE_CNT)) {
+		wlc_ampdu_rxmcs_counter_report(wlc->ampdu_rx, EVENT_LOG_TAG_RATE_CNT);
+		wlc_ampdu_txmcs_counter_report(wlc->ampdu_tx, EVENT_LOG_TAG_RATE_CNT);
+	}
+#endif /* !BCMDBG_AMPDU_NO_DUMP_IOVAR && EVENT_LOG_COMPILE */
 
 	return 0;
 }
@@ -135,6 +171,22 @@ BCMATTACHFN(wlc_ampdu_init)(wlc_info_t *wlc)
 #ifdef WLC_AMPDU_DUMP
 	wlc_dump_add_fns(wlc->pub, "ampdu", wlc_ampdu_dump, wlc_ampdu_dump_clr, wlc);
 #endif
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
+#if defined(EVENT_LOG_COMPILE)
+#if defined(ECOUNTERS)
+	if (wl_ecounters_register_source(EVENT_LOG_TAG_AMPDU_DUMP,
+		wlc_ampdu_ecounter_dump, (void *)wlc)) {
+		WL_ERROR(("wl%d: ampdu ecounters_register_source() failed\n", wlc->pub->unit));
+		goto fail;
+	}
+#endif /* ECOUNTERS */
+
+	if (wlc_chansw_notif_register(wlc, wlc_ampdu_chansw_update, wlc) != BCME_OK) {
+		WL_ERROR(("wl%d: ampdu wlc_chansw_notif_unregister() failed\n", wlc->pub->unit));
+		goto fail;
+	}
+#endif /* EVENT_LOG_COMPILE */
+#endif 
 
 	/* register module */
 	if (wlc_module_register(wlc->pub, ampdu_iovars, "ampdu", wlc, wlc_ampdu_doiovar,
@@ -157,6 +209,12 @@ BCMATTACHFN(wlc_ampdu_deinit)(wlc_info_t *wlc)
 		return;
 
 	wlc_module_unregister(wlc->pub, "ampdu", wlc);
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
+#if defined(EVENT_LOG_COMPILE)
+	wlc_chansw_notif_unregister(wlc, wlc_ampdu_chansw_update, wlc);
+#endif /* EVENT_LOG_COMPILE */
+#endif 
 }
 
 /** handle AMPDU related iovars */
@@ -225,6 +283,15 @@ wlc_ampdu_doiovar(void *hdl, uint32 actionid,
 		wlc_ampdu_update_ie_param(wlc->ampdu_rx);
 		break;
 
+#ifdef BCMDBG
+	case IOV_GVAL(IOV_AMPDU_DBG):
+		*ret_int_ptr = wl_ampdu_dbg;
+		break;
+
+	case IOV_SVAL(IOV_AMPDU_DBG):
+	        wl_ampdu_dbg = (uint32)int_val;
+		break;
+#endif /* BCMDBG */
 
 	default:
 		err = BCME_UNSUPPORTED;
@@ -232,6 +299,34 @@ wlc_ampdu_doiovar(void *hdl, uint32 actionid,
 
 	return err;
 }
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_AMPDU)
+#if defined(EVENT_LOG_COMPILE)
+#if defined(ECOUNTERS)
+static int
+wlc_ampdu_ecounter_dump(uint16 type, void *context)
+{
+	wlc_info_t *wlc = (wlc_info_t *)context;
+	ASSERT(type == EVENT_LOG_TAG_AMPDU_DUMP);
+
+	wlc_ampdu_ecounter_tx_dump(wlc->ampdu_tx, type);
+	wlc_ampdu_ecounter_rx_dump(wlc->ampdu_rx, type);
+
+	return BCME_OK;
+}
+#endif /* ECOUNTERS */
+
+static void wlc_ampdu_chansw_update(void *arg, wlc_chansw_notif_data_t *data)
+{
+	wlc_info_t *wlc = (wlc_info_t *)arg;
+
+	if (EVENT_LOG_IS_ON(EVENT_LOG_TAG_RATE_CNT)) {
+		wlc_ampdu_rxmcs_counter_report(wlc->ampdu_rx, EVENT_LOG_TAG_RATE_CNT);
+		wlc_ampdu_txmcs_counter_report(wlc->ampdu_tx, EVENT_LOG_TAG_RATE_CNT);
+	}
+}
+#endif /* EVENT_LOG_COMPILE */
+#endif 
 
 /* FOLLOWING FUNCTIONS 2B MOVED TO COMMON (ampdu and ba) CODE ONCE DELAYED BA IS REVIVED */
 
@@ -292,7 +387,7 @@ wlc_frameaction_ampdu(wlc_info_t *wlc, struct scb *scb,
 		break;
 
 	default:
-		WL_ERROR(("wl%d: FC_ACTION: Invalid BA action id %d\n",
+		WL_AMPDU_ERR(("wl%d: FC_ACTION: Invalid BA action id %d\n",
 			wlc->pub->unit, action_id));
 		ret = BCME_ERROR;
 		goto action_id_err;
@@ -305,7 +400,7 @@ wlc_frameaction_ampdu(wlc_info_t *wlc, struct scb *scb,
 	return ret;
 
 err:
-	WL_ERROR(("wl%d: %s: Action id %d recd invalid frame of length %d < %d\n",
+	WL_AMPDU_ERR(("wl%d: %s: Action id %d recd invalid frame of length %d < %d\n",
 		WLCWLUNIT(wlc), __FUNCTION__, action_id, body_len, expected_len));
 action_id_err:
 	WLCNTINCR(wlc->pub->_cnt->rxbadproto);
@@ -362,7 +457,7 @@ wlc_ampdu_recv_ctl(wlc_info_t *wlc, struct scb *scb, uint8 *body, int body_len, 
 	return;
 
 err:
-	WL_ERROR(("wl%d: %s: recd invalid frame of length %d\n",
+	WL_AMPDU_ERR(("wl%d: %s: recd invalid frame of length %d\n",
 		wlc->pub->unit, __FUNCTION__, body_len));
 	WLCNTINCR(wlc->pub->_cnt->rxbadproto);
 }
@@ -568,7 +663,7 @@ wlc_send_bar(wlc_info_t *wlc, struct scb *scb, uint8 tid, uint16 start_seq,
 	bar->bar_control = htol16(tmp);
 	bar->seqnum = htol16(start_seq << SEQNUM_SHIFT);
 
-	WL_ERROR(("wl%d.%d: %s: seq 0x%x tid %d\n", wlc->pub->unit,
+	WL_AMPDU_ERR(("wl%d.%d: %s: seq 0x%x tid %d\n", wlc->pub->unit,
 		WLC_BSSCFG_IDX(scb->bsscfg),  __FUNCTION__, start_seq, tid));
 
 	/* set same priority as tid */

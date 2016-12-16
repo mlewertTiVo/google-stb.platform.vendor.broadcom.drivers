@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rrm.c 643157 2016-06-13 17:12:55Z $
+ * $Id: wlc_rrm.c 661109 2016-09-23 07:54:52Z $
  */
 
 /**
@@ -67,6 +67,7 @@
 #include <wlc_scan_utils.h>
 #include <wlc_event_utils.h>
 #include <phy_misc_api.h>
+#include <wlc_iocv.h>
 #if defined(WL_PROXDETECT) && defined(WL_FTM)
 #include <wlc_ftm.h>
 #include <wlc_ht.h>
@@ -426,6 +427,9 @@ static void wlc_rrm_flush_bcnnbrs(wlc_rrm_info_t *rrm_info, struct scb *scb);
 
 static void wlc_rrm_flush_neighbors(wlc_rrm_info_t *rrm_info, wlc_bsscfg_t *bsscfg);
 
+#ifdef BCMDBG
+static void wlc_rrm_dump_neighbors(wlc_rrm_info_t *rrm_info, wlc_bsscfg_t *bsscfg);
+#endif /* BCMDBG */
 static dot11_rm_ie_t *wlc_rrm_next_ie(dot11_rm_ie_t *ie, int *len, uint8 mea_id);
 static void wlc_rrm_report_ioctl(wlc_rrm_info_t *rrm_info, wlc_rrm_req_t *req_block, int count);
 static void wlc_rrm_next_set(wlc_rrm_info_t *rrm_info);
@@ -463,8 +467,13 @@ static int wlc_rrm_bsscfg_init(void *context, wlc_bsscfg_t *bsscfg);
 static void wlc_rrm_bsscfg_deinit(void *context, wlc_bsscfg_t *bsscfg);
 static void wlc_rrm_scb_deinit(void *ctx, struct scb *scb);
 static int wlc_rrm_scb_init(void *ctx, struct scb *scb);
+#ifdef BCMDBG
+static void wlc_rrm_bsscfg_dump(void *context, wlc_bsscfg_t *bsscfg, struct bcmstrbuf *b);
+static void wlc_rrm_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b);
+#else
 #define wlc_rrm_bsscfg_dump NULL
 #define wlc_rrm_scb_dump NULL
+#endif /* BCMDBG */
 
 static void wlc_rrm_watchdog(void *context);
 
@@ -2389,6 +2398,9 @@ wlc_rrm_bcnreq_scancache(wlc_rrm_info_t *rrm_info, wlc_ssid_t *ssid, struct ethe
 {
 	wlc_info_t *wlc = rrm_info->wlc;
 	wlc_bss_list_t bss_list;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif /* BCMDBG */
 
 	if (!SCANCACHE_ENAB(wlc->scan) || SCAN_IN_PROGRESS(wlc->scan)) {
 		WL_ERROR(("%s: scancache: %d, scan_in_progress: %d\n",
@@ -2404,6 +2416,16 @@ wlc_rrm_bcnreq_scancache(wlc_rrm_info_t *rrm_info, wlc_ssid_t *ssid, struct ethe
 	}
 	wlc_scan_get_cache(wlc->scan, bssid, 1, ssid, DOT11_BSSTYPE_ANY, NULL, 0, &bss_list);
 
+#ifdef BCMDBG
+	if (bssid) {
+		bcm_ether_ntoa(bssid, eabuf);
+		WL_ERROR(("%s: ssid: %s, bssid: %s, bss_list.count: %d\n",
+			__FUNCTION__, ssid->SSID, eabuf, bss_list.count));
+	} else {
+		WL_ERROR(("%s: ssid: %s, bssid: NULL, bss_list.count: %d\n",
+			__FUNCTION__, ssid->SSID, bss_list.count));
+	}
+#endif /* BCMDBG */
 
 	if (bss_list.count) {
 		wlc_rrm_send_bcnrep(rrm_info, &bss_list);
@@ -2933,6 +2955,9 @@ wlc_rrm_recv_nrreq(wlc_rrm_info_t *rrm_info, wlc_bsscfg_t *cfg, struct scb *scb,
 			}
 		}
 	}
+#ifdef BCMDBG
+	wlc_rrm_dump_neighbors(rrm_info, cfg);
+#endif /* BCMDBG */
 
 	/* Send Neighbor Report Response */
 	wlc_rrm_send_nbrrep(rrm_info, cfg, scb, &ssid);
@@ -5264,6 +5289,62 @@ wlc_rrm_flush_neighbors(wlc_rrm_info_t *rrm_info, wlc_bsscfg_t *bsscfg)
 	rrm_cfg->nbr_cnt_head = NULL;
 }
 
+#ifdef BCMDBG
+static void
+wlc_rrm_dump_neighbors(wlc_rrm_info_t *rrm_info, wlc_bsscfg_t *bsscfg)
+{
+	rrm_nbr_rep_t *nbr_rep;
+	reg_nbr_count_t *nbr_cnt;
+	int count = 0;
+	char eabuf[ETHER_ADDR_STR_LEN];
+	int i;
+	rrm_bsscfg_cubby_t *rrm_cfg = RRM_BSSCFG_CUBBY(rrm_info, bsscfg);
+
+	ASSERT(rrm_cfg != NULL);
+
+	WL_ERROR(("\nRRM Neighbor Report:\n"));
+	nbr_rep = rrm_cfg->nbr_rep_head;
+	while (nbr_rep) {
+		count++;
+
+		WL_ERROR(("AP %2d: ", count));
+		WL_ERROR(("bssid %s ", bcm_ether_ntoa(&nbr_rep->nbr_elt.bssid, eabuf)));
+		WL_ERROR(("bssid_info %08x ", load32_ua(&nbr_rep->nbr_elt.bssid_info)));
+		WL_ERROR(("reg %2d channel %3d phytype %d pref %3d\n", nbr_rep->nbr_elt.reg,
+			nbr_rep->nbr_elt.channel, nbr_rep->nbr_elt.phytype,
+			nbr_rep->nbr_elt.bss_trans_preference));
+#ifdef WL_FTM_11K
+		if (nbr_rep->opt_lci != NULL) {
+			dot11_meas_rep_t *lci_rep = (dot11_meas_rep_t *) nbr_rep->opt_lci;
+			WL_ERROR(("LCI meas report present, len %d, LCI subelement len %d\n",
+				lci_rep->len, lci_rep->rep.lci.length));
+		}
+		if (nbr_rep->opt_civic != NULL) {
+			dot11_meas_rep_t *civic_rep = (dot11_meas_rep_t *) nbr_rep->opt_civic;
+			WL_ERROR(("Civic meas report present, len %d,"
+				" Civic subelement type %d, len %d\n", civic_rep->len,
+				civic_rep->rep.civic.type, civic_rep->rep.civic.length));
+		}
+#endif /* WL_FTM_11K */
+
+		nbr_rep = nbr_rep->next;
+	}
+
+	WL_ERROR(("\nRRM AP Channel Report:\n"));
+	nbr_cnt = rrm_cfg->nbr_cnt_head;
+	while (nbr_cnt) {
+		WL_ERROR(("regulatory %d channel ", nbr_cnt->reg));
+
+		for (i = 0; i < MAXCHANNEL; i++) {
+			if (nbr_cnt->nbr_count_by_channel[i] > 0)
+				WL_ERROR(("%d ", i));
+		}
+		WL_ERROR(("\n"));
+
+		nbr_cnt = nbr_cnt->next;
+	}
+}
+#endif /* BCMDBG */
 
 #ifdef STA
 static int
@@ -5475,6 +5556,9 @@ wlc_rrm_recv_nrrep(wlc_rrm_info_t *rrm_info, wlc_bsscfg_t *cfg, uint8 *body, int
 	/* Push the list for consumption */
 	(void) wlc_set_roam_channel_cache(cfg, chanspec_list, channel_num);
 
+#ifdef BCMDBG
+	wlc_rrm_dump_neighbors(rrm_info, cfg);
+#endif /* BCMDBG */
 	return BCME_OK;
 }
 #endif /* STA */
@@ -5490,8 +5574,7 @@ wlc_rrm_doiovar(void *hdl, uint32 actionid,
 	int err = BCME_OK;
 
 	cfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
-	if (cfg == NULL)
-		return BCME_ERROR;
+	ASSERT(cfg != NULL);
 
 	rrm_cfg = RRM_BSSCFG_CUBBY(rrm_info, cfg);
 
@@ -6073,7 +6156,9 @@ wlc_rrm_free(wlc_rrm_info_t *rrm_info)
 	wlc_rrm_bcnreq_free(rrm_info);
 #ifdef WL_FTM_11K
 #if defined(WL_PROXDETECT) && defined(WL_FTM)
-	wlc_rrm_frngreq_free(rrm_info);
+	if (PROXD_ENAB(wlc->pub)) {
+		wlc_rrm_frngreq_free(rrm_info);
+	}
 #endif /* WL_PROXDETECT && WL_FTM */
 #endif /* WL_FTM_11K */
 	/* update ps control */
@@ -6904,11 +6989,69 @@ wlc_rrm_start(wlc_info_t *wlc)
 	wlc_rrm_info_t *rrm_info = wlc->rrm_info;
 	wlc_rrm_req_state_t *rrm_state = rrm_info->rrm_state;
 	DBGONLY(char chanbuf[CHANSPEC_STR_LEN]; )
+#ifdef BCMDBG
+	wlc_rrm_req_t *req;
+	const char *name;
+	int i;
+#endif /* BCMDBG */
 
 	rrm_state->cur_req = 0;
 	wlc_rrm_state_upd(rrm_info, WLC_RRM_IDLE);
 	WL_INFORM(("%s: state upd to %d\n", __FUNCTION__, rrm_state->step));
 
+#ifdef BCMDBG
+	WL_INFORM(("wl%d: wlc_rrm_start(): %d RM Requests, token 0x%x (%d)\n",
+		rrm_info->wlc->pub->unit, rrm_state->req_count,
+		rrm_state->token, rrm_state->token));
+
+	for (i = 0; i < rrm_state->req_count; i++) {
+		req = &rrm_state->req[i];
+		switch (req->type) {
+
+		case DOT11_RMREQ_BCN_ACTIVE:
+			name = "Active Scan";
+			break;
+		case DOT11_RMREQ_BCN_PASSIVE:
+			name = "Passive Scan";
+			break;
+		case DOT11_RMREQ_BCN_TABLE:
+			name = "Beacon Table";
+			break;
+		case DOT11_MEASURE_TYPE_FRAME:
+			name = "Frame";
+			break;
+		case DOT11_MEASURE_TYPE_STAT:
+			name = "STA statistics";
+			break;
+		case DOT11_MEASURE_TYPE_LCI:
+			name = "Location";
+			break;
+		case DOT11_MEASURE_TYPE_TXSTREAM:
+			name = "TX stream";
+			break;
+		case DOT11_MEASURE_TYPE_PAUSE:
+			name = "Pause";
+			break;
+		case DOT11_MEASURE_TYPE_FTMRANGE:
+			name = "FTM Range";
+			break;
+		case DOT11_MEASURE_TYPE_CIVICLOC:
+			name = "Civic location";
+			break;
+		default:
+			name = "";
+			WL_ERROR(("wl%d: %s: Unsupported RRM Req/Measure type:%d\n", WLCWLUNIT(wlc),
+				__FUNCTION__, req->type));
+			break;
+		}
+
+		WL_ERROR(("RM REQ token 0x%02x (%2d), type %2d: %s, chanspec %s, "
+			"tsf 0x%x:%08x dur %4d TUs\n",
+			req->token, req->token, req->type, name,
+			wf_chspec_ntoa_ex(req->chanspec, chanbuf), req->tsf_h, req->tsf_l,
+			req->dur));
+	}
+#endif /* BCMDBG */
 	wlc_rrm_validate(rrm_info);
 
 	wlc_rrm_next_set(rrm_info);
@@ -7329,6 +7472,7 @@ wlc_rrm_bsscfg_init(void *context, wlc_bsscfg_t *bsscfg)
 #ifdef WL11K_AP
 	setbit(rrm_cfg->rrm_cap, DOT11_RRM_CAP_NEIGHBOR_REPORT);
 #endif /* WL11K_AP */
+	setbit(rrm_cfg->rrm_cap, DOT11_RRM_CAP_LINK);
 	setbit(rrm_cfg->rrm_cap, DOT11_RRM_CAP_AP_CHANREP);
 	setbit(rrm_cfg->rrm_cap, DOT11_RRM_CAP_BCN_PASSIVE);
 	setbit(rrm_cfg->rrm_cap, DOT11_RRM_CAP_BCN_ACTIVE);
@@ -7375,6 +7519,15 @@ wlc_rrm_update_cap(wlc_rrm_info_t *rrm_info, wlc_bsscfg_t *bsscfg)
 }
 #endif /* WLSCANCACHE */
 
+#ifdef BCMDBG
+static void
+wlc_rrm_bsscfg_dump(void *context, wlc_bsscfg_t *bsscfg, struct bcmstrbuf *b)
+{
+	wlc_rrm_info_t *rrm_info = (wlc_rrm_info_t *)context;
+
+	bcm_bprintf(b, "cfgh: %d\n", rrm_info->cfgh);
+}
+#endif
 
 bool wlc_rrm_in_progress(wlc_info_t *wlc)
 {
@@ -7446,6 +7599,37 @@ static void wlc_rrm_scb_deinit(void *ctx, struct scb *scb)
 	scb_cubby->scb_info = NULL;
 }
 
+#ifdef BCMDBG
+/* scb cubby_dump fucntion */
+static void wlc_rrm_scb_dump(void *ctx, struct scb *scb, struct bcmstrbuf *b)
+{
+	wlc_rrm_info_t *rrm_info = (wlc_rrm_info_t *)ctx;
+	rrm_scb_info_t *scb_info = RRM_SCB_INFO(rrm_info, scb);
+	rrm_nbr_rep_t *nbr_rep;
+	int count = 0;
+	char eabuf[ETHER_ADDR_STR_LEN];
+
+	bcm_bprintf(b, "     SCB: len:%d timestamp:%u\n",
+		scb_info->len, scb_info->timestamp);
+
+	bcm_bprintf(b, "RRM capability = %02x %02x %02x %02x %02x \n",
+		scb_info->rrm_capabilities[0], scb_info->rrm_capabilities[1],
+		scb_info->rrm_capabilities[2], scb_info->rrm_capabilities[3],
+		scb_info->rrm_capabilities[4]);
+	bcm_bprintf(b, "RRM Neighbor Report (from beacons):\n");
+	nbr_rep = scb_info->nbr_rep_head;
+	while (nbr_rep) {
+		count++;
+		bcm_bprintf(b, "AP %2d: ", count);
+		bcm_bprintf(b, "bssid %s ", bcm_ether_ntoa(&nbr_rep->nbr_elt.bssid, eabuf));
+		bcm_bprintf(b, "bssid_info %08x ", load32_ua(&nbr_rep->nbr_elt.bssid_info));
+		bcm_bprintf(b, "reg %2d channel %3d phytype %d pref %3d\n", nbr_rep->nbr_elt.reg,
+			nbr_rep->nbr_elt.channel, nbr_rep->nbr_elt.phytype,
+			nbr_rep->nbr_elt.bss_trans_preference);
+		nbr_rep = nbr_rep->next;
+	}
+}
+#endif /* BCMDBG */
 
 void
 wlc_rrm_upd_data_activity_ts(wlc_rrm_info_t *ri)

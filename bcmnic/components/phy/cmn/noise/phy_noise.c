@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_noise.c 635450 2016-05-03 23:49:04Z junseok $
+ * $Id: phy_noise.c 669193 2016-11-08 10:21:30Z $
  */
 
 #include <phy_cfg.h>
@@ -23,9 +23,13 @@
 #include <phy_dbg.h>
 #include <phy_mem.h>
 #include <phy_init.h>
+#include <phy_ac_info.h>
 #include "phy_type_noise.h"
 #include <phy_noise.h>
 #include <phy_noise_api.h>
+#include <phy_ac_noise.h>
+#include <wlc_phyreg_n.h>
+#include <wlc_phyreg_ht.h>
 
 /* module private states */
 struct phy_noise_info {
@@ -47,9 +51,9 @@ static int phy_noise_init(phy_init_ctx_t *ctx);
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
 static int phy_noise_dump(void *ctx, struct bcmstrbuf *b);
 #endif
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
 static int phy_aci_dump(void *ctx, struct bcmstrbuf *b);
-#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST) */
+#endif 
 static bool phy_noise_start_wd(phy_wd_ctx_t *ctx);
 static bool phy_noise_stop_wd(phy_wd_ctx_t *ctx);
 static bool phy_noise_reset_wd(phy_wd_ctx_t *ctx);
@@ -127,9 +131,9 @@ BCMATTACHFN(phy_noise_attach)(phy_info_t *pi, int bandtype)
 	phy_dbg_add_dump_fn(pi, "phynoise", phy_noise_dump, info);
 #endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) */
 
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
 	phy_dbg_add_dump_fn(pi, "phyaci", phy_aci_dump, info);
-#endif /* defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST) */
+#endif 
 
 	return info;
 
@@ -162,12 +166,16 @@ phy_noise_start_wd(phy_wd_ctx_t *ctx)
 {
 	phy_noise_info_t *nxi = (phy_noise_info_t *)ctx;
 	phy_info_t *pi = nxi->pi;
+	phy_noise_info_t *noisei = pi->noisei;
+	phy_type_noise_fns_t *fns = noisei->fns;
+	phy_type_noise_ctx_t *ctx_noise = (phy_type_noise_ctx_t *) fns->ctx;
 
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	/* update phy noise moving average only if no scan or rm in progress */
-	wlc_phy_noise_sample_request(pi, PHY_NOISE_SAMPLE_MON,
-	                             CHSPEC_CHANNEL(pi->radio_chanspec));
+	ASSERT(fns->request_noise_sample);
+	fns->request_noise_sample(ctx_noise, PHY_NOISE_SAMPLE_MON,
+		CHSPEC_CHANNEL(pi->radio_chanspec));
 
 	return TRUE;
 }
@@ -247,6 +255,34 @@ phy_noise_reset_wd(phy_wd_ctx_t *ctx)
 	}
 
 	return TRUE;
+}
+
+int
+phy_noise_bss_init(phy_noise_info_t *noisei, int noise)
+{
+	phy_info_t *pi = noisei->pi;
+	uint i,	core;
+
+	/* watchdog idle phy noise */
+	for (i = 0; i < MA_WINDOW_SZ; i++) {
+		pi->sh->phy_noise_window[i] = (int8)(noise & 0xff);
+	}
+	pi->sh->phy_noise_index = 0;
+
+	if ((pi->sh->interference_mode == WLAN_AUTO) &&
+	     (pi->aci_state & ACI_ACTIVE)) {
+		/* Reset the clock to check again after the moving average buffer has filled
+		 */
+		pi->aci_start_time = pi->sh->now + MA_WINDOW_SZ;
+	}
+
+	for (i = 0; i < PHY_NOISE_WINDOW_SZ; i++) {
+		FOREACH_CORE(pi, core)
+			pi->phy_noise_win[core][i] = PHY_NOISE_FIXED_VAL_NPHY;
+	}
+	pi->phy_noise_index = 0;
+
+	return BCME_OK;
 }
 
 /* noise calculation */
@@ -361,7 +397,7 @@ WLBANDINITFN(phy_noise_init)(phy_init_ctx_t *ctx)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	    /* do not reinitialize interference mode, could be scanning */
-	if ((ISNPHY(pi) || ISHTPHY(pi) || ISACPHY(pi)) && SCAN_INPROG_PHY(pi))
+	if (SCAN_INPROG_PHY(pi))
 		return BCME_OK;
 
 	/* initialize interference algorithms */
@@ -400,9 +436,11 @@ WLBANDINITFN(phy_noise_reset)(phy_init_ctx_t *ctx)
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
 	/* Reset aci on band-change */
-	if (fns->reset != NULL)
-		(fns->reset)(fns->ctx);
-	return BCME_OK;
+	if (fns->reset != NULL) {
+		 return (fns->reset)(fns->ctx);
+	} else {
+		return BCME_OK;
+	}
 }
 
 #ifndef WLC_DISABLE_ACI
@@ -419,6 +457,63 @@ wlc_phy_interf_rssi_update(wlc_phy_t *pih, chanspec_t chanspec, int8 leastRSSI)
 		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
 	}
 }
+
+void
+wlc_phy_aci_upd(phy_noise_info_t *ii)
+{
+	phy_type_noise_fns_t *fns = ii->fns;
+	phy_type_noise_ctx_t *ctx = fns->ctx;
+
+#ifdef WLSRVSDB
+	uint8 offset = 0;
+	uint8 vsdb_switch_failed = 0;
+	phy_info_t *pi = ii->pi;
+
+	if (pi->srvsdb_state->srvsdb_active) {
+		/* Assume vsdb switch failure, if no chan switches were recorded in last 1 sec */
+		vsdb_switch_failed = !(pi->srvsdb_state->num_chan_switch[0] &
+			pi->srvsdb_state->num_chan_switch[1]);
+		if (CHSPEC_CHANNEL(pi->radio_chanspec) ==
+			pi->srvsdb_state->sr_vsdb_channels[0]) {
+			offset = 0;
+		} else if (CHSPEC_CHANNEL(pi->radio_chanspec) ==
+			pi->srvsdb_state->sr_vsdb_channels[1]) {
+			offset = 1;
+		}
+
+		/* return if vsdb switching was active and time spent in current channel */
+		/* is less than 1 sec */
+		/* If vsdb switching had failed, it could be in a  deadlock */
+		/* situation because of noise/aci */
+		/* So continue with aci mitigation even though delta timers show less than 1 sec */
+
+		if ((pi->srvsdb_state->sum_delta_timer[offset] < (1000 * 1000)) &&
+			!vsdb_switch_failed) {
+
+			bzero(pi->srvsdb_state->num_chan_switch, 2 * sizeof(uint8));
+			return;
+		}
+		PHY_INFORM(("Enter ACI mitigation for chan %x  since %d ms of time has expired\n",
+			pi->srvsdb_state->sr_vsdb_channels[offset],
+			pi->srvsdb_state->sum_delta_timer[offset]/1000));
+
+		/* reset the timers after an effective 1 sec duration in the channel */
+		bzero(pi->srvsdb_state->sum_delta_timer, 2 * sizeof(uint32));
+
+		/* If enetering aci mitigation scheme, we need a save of */
+		/* previous pi structure while doing switch */
+		pi->srvsdb_state->swbkp_snapshot_valid[offset] = 0;
+	}
+#endif /* WLSRVSDB */
+
+	ASSERT(fns->ma_upd != NULL);
+	fns->ma_upd(ctx);
+
+	/* Phy specific call */
+	ASSERT(fns->aci_upd != NULL);
+	fns->aci_upd(ctx);
+}
+
 #endif /* Compiling out ACI code for 4324 */
 
 /* Implements core functionality of WLC_SET_INTERFERENCE_OVERRIDE_MODE */
@@ -550,7 +645,7 @@ phy_noise_dump(void *ctx, struct bcmstrbuf *b)
 }
 #endif /* BCMDBG || BCMDBG_DUMP */
 
-#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLTEST)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
 /* Dump desense values */
 static int
 phy_aci_dump(void *ctx, struct bcmstrbuf *b)
@@ -565,4 +660,310 @@ phy_aci_dump(void *ctx, struct bcmstrbuf *b)
 
 	return BCME_OK;
 }
-#endif /* BCMDBG || BCMDBG_DUMP || WLTEST */
+#endif 
+
+void
+wlc_phy_noise_save(phy_info_t *pi, int8 *noise_dbm_ant, int8 *max_noise_dbm)
+{
+	uint8 i;
+
+	FOREACH_CORE(pi, i) {
+		/* save noise per core */
+		pi->phy_noise_win[i][pi->phy_noise_index] = noise_dbm_ant[i];
+
+		/* save the MAX for all cores */
+		if (noise_dbm_ant[i] > *max_noise_dbm)
+			*max_noise_dbm = noise_dbm_ant[i];
+	}
+	pi->phy_noise_index = MODINC_POW2(pi->phy_noise_index, PHY_NOISE_WINDOW_SZ);
+
+	pi->sh->phy_noise_window[pi->sh->phy_noise_index] = *max_noise_dbm;
+	pi->sh->phy_noise_index = MODINC_POW2(pi->sh->phy_noise_index, MA_WINDOW_SZ);
+}
+
+#ifdef RADIO_HEALTH_CHECK
+phy_crash_reason_t
+phy_noise_healthcheck_desense(phy_noise_info_t *noisei)
+{
+	phy_type_noise_fns_t *fns = noisei->fns;
+	if (fns->health_check_desense)
+		return (fns->health_check_desense)(noisei);
+	else
+		return PHY_RC_NONE;
+}
+#endif /* RADIO_HEALTH_CHECK */
+
+int
+phy_noise_sample_request_external(wlc_phy_t *pih)
+{
+	uint8  channel;
+	phy_info_t *pi = (phy_info_t *) pih;
+	phy_noise_info_t *noise_info = pi->noisei;
+	phy_type_noise_fns_t *fns = noise_info->fns;
+	phy_type_noise_ctx_t *ctx = (phy_type_noise_ctx_t *) fns->ctx;
+
+	channel = CHSPEC_CHANNEL(pi->radio_chanspec);
+
+	/* wlc_phy_noise_sample_request(pi, PHY_NOISE_SAMPLE_EXTERNAL, channel); */
+	ASSERT(fns->request_noise_sample);
+	fns->request_noise_sample(ctx, PHY_NOISE_SAMPLE_EXTERNAL, channel);
+
+	return BCME_OK;
+}
+
+int
+phy_noise_sample_request_crsmincal(wlc_phy_t *pih)
+{
+	uint8  channel;
+	phy_info_t *pi = (phy_info_t *) pih;
+	phy_noise_info_t *noise_info = pi->noisei;
+	phy_type_noise_fns_t *fns = noise_info->fns;
+	phy_type_noise_ctx_t *ctx = (phy_type_noise_ctx_t *) fns->ctx;
+
+	channel = CHSPEC_CHANNEL(pi->radio_chanspec);
+
+	/* wlc_phy_noise_sample_request(pi, PHY_NOISE_SAMPLE_CRSMINCAL, channel); */
+	ASSERT(fns->request_noise_sample);
+	fns->request_noise_sample(ctx, PHY_NOISE_SAMPLE_CRSMINCAL, channel);
+
+	return BCME_OK;
+}
+
+int8
+phy_noise_avg(wlc_phy_t *pih)
+{
+	phy_info_t *pi = (phy_info_t *)pih;
+	phy_noise_info_t *noisei = pi->noisei;
+	phy_type_noise_fns_t *fns = noisei->fns;
+	phy_type_noise_ctx_t *ctx = fns->ctx;
+	int tot = 0;
+
+	ASSERT(fns->avg);
+	tot = fns->avg(ctx);
+
+	return (int8)tot;
+}
+
+/* ucode finished phy noise measurement and raised interrupt */
+int
+phy_noise_sample_intr(wlc_phy_t *pih)
+{
+	phy_info_t *pi = (phy_info_t *) pih;
+	phy_noise_info_t *noisei = pi->noisei;
+	phy_type_noise_fns_t *fns = noisei->fns;
+	phy_type_noise_ctx_t *ctx = (phy_type_noise_ctx_t *) fns->ctx;
+
+	ASSERT(fns->sample_intr);
+	fns->sample_intr(ctx);
+
+	return BCME_OK;
+}
+
+void
+phy_noise_invoke_callbacks(phy_noise_info_t *noisei, uint8 channel, int8 noise_dbm)
+{
+	phy_info_t *pi = noisei->pi;
+	phy_type_noise_fns_t *fns = noisei->fns;
+	phy_type_noise_ctx_t *ctx = fns->ctx;
+
+	if (!pi->phynoise_state) {
+		return;
+	}
+
+	PHY_NONE(("phy_noise_invoke_callbacks: state %d noise %d channel %d\n",
+		pi->phynoise_state, noise_dbm, channel));
+
+	if (pi->phynoise_state & PHY_NOISE_STATE_MON) {
+		if (pi->phynoise_chan_watchdog == channel) {
+			pi->sh->phy_noise_window[pi->sh->phy_noise_index] = noise_dbm;
+			pi->sh->phy_noise_index = MODINC(pi->sh->phy_noise_index, MA_WINDOW_SZ);
+		}
+		pi->phynoise_state &= ~PHY_NOISE_STATE_MON;
+	}
+
+	if (pi->phynoise_state & PHY_NOISE_STATE_EXTERNAL) {
+		pi->phynoise_state &= ~PHY_NOISE_STATE_EXTERNAL;
+		wlapi_noise_cb(pi->sh->physhim, channel, noise_dbm);
+	}
+
+	if (fns->cb) {
+		/* use phy specific callback if defined. */
+		fns->cb(ctx);
+	}
+}
+
+int8
+phy_noise_lte_avg(wlc_phy_t *pih)
+{
+	phy_info_t *pi = (phy_info_t *)pih;
+	phy_noise_info_t *noisei = pi->noisei;
+	phy_type_noise_fns_t *fns = noisei->fns;
+	phy_type_noise_ctx_t *ctx = fns->ctx;
+
+	int tot = 0;
+
+	ASSERT(fns->lte_avg);
+	tot = fns->lte_avg(ctx);
+
+	return (int8)tot;
+}
+
+/* Returns noise level (read from srom) for current channel */
+int
+phy_noise_get_srom_level(phy_info_t *pi, int32 *ret_int_ptr)
+{
+	phy_type_noise_fns_t *fns = pi->noisei->fns;
+
+	if (fns->get_srom_level != NULL) {
+		if (!pi->sh->up) {
+			return BCME_NOTUP;
+		}
+		return (fns->get_srom_level)(fns->ctx, ret_int_ptr);
+	} else {
+		PHY_INFORM(("%s: No phy specific function\n", __FUNCTION__));
+		return BCME_UNSUPPORTED;
+	}
+}
+
+int8
+phy_noise_read_shmem(phy_noise_info_t *noisei, uint8 *lte_on, uint8 *crs_high)
+{
+	phy_type_noise_fns_t *fns = noisei->fns;
+	phy_type_noise_ctx_t *ctx = fns->ctx;
+	phy_info_t *pi = noisei->pi;
+	int8 noise_dbm = 0;
+
+	BCM_REFERENCE(pi);
+
+	if (fns->read_shm) {
+		ASSERT(PHYCORENUM(pi->pubpi->phy_corenum) <= PHY_CORE_MAX);
+		noise_dbm = fns->read_shm(ctx, lte_on, crs_high);
+	}
+	return noise_dbm;
+}
+
+/* Retrun true if noise measurement has been interrupted */
+int8
+phy_noise_abort_shmem_read(phy_noise_info_t *noisei)
+{
+	phy_info_t *pi = noisei->pi;
+	uint16 map1 = 0;
+	map1 = wlapi_bmac_read_shm(pi->sh->physhim, M_PWRIND_MAP1(pi));
+
+	/* If PHYCRS was seen during noise measurement, skip this measurement */
+	/* Do not skip if noise measurement is done during LTE_TX */
+	if (!(map1 & 0x4000)) {
+		if ((map1 & 0x8000)) {
+			pi->phynoise_state = 0;
+			PHY_INFORM(("%s: PHY CRS seen during noise measurement\n", __FUNCTION__));
+			return 1;
+		}
+	}
+
+	/* If IQ_Est time out was seen */
+	if ((map1 & 0x2000)) {
+		PHY_INFORM(("%s: IQ Est timeout during noise measurement\n", __FUNCTION__));
+		return 1;
+	}
+
+	/* Abort not requiered */
+	return 0;
+}
+
+#ifndef WLC_DISABLE_ACI
+#endif /* Compiling out ACI code for 4324 */
+
+#ifndef WLC_DISABLE_ACI
+/* %%%%%% interference */
+/* update aci rx carrier sense glitch moving average */
+
+int
+phy_noise_interf_chan_stats_update(wlc_phy_t *ppi, chanspec_t chanspec, uint32 crsglitch,
+        uint32 bphy_crsglitch, uint32 badplcp, uint32 bphy_badplcp, uint32 mbsstime)
+{
+	phy_info_t *pi = (phy_info_t*)ppi;
+	/* Doing interference update of chan stats here  */
+
+	if (pi->interf->curr_home_channel == (CHSPEC_CHANNEL(chanspec))) {
+		pi->interf->cca_stats_func_called = TRUE;
+		pi->interf->cca_stats_total_glitch = crsglitch;
+		pi->interf->cca_stats_bphy_glitch = bphy_crsglitch;
+		pi->interf->cca_stats_total_badplcp = badplcp;
+		pi->interf->cca_stats_bphy_badplcp = bphy_badplcp;
+		pi->interf->cca_stats_mbsstime = mbsstime;
+	}
+
+	return BCME_OK;
+}
+
+#endif /* Compiling out ACI code for 4324 */
+
+int
+phy_noise_sched_set(wlc_phy_t *pih, phy_bgnoise_schd_mode_t reason, bool upd)
+{
+	phy_info_t *pi = (phy_info_t*)pih;
+
+	BCM_REFERENCE(reason);
+	PHY_NONE(("%s: reason %d, upd %d\n", __FUNCTION__, reason, upd));
+
+	pi->phynoise_disable = upd;
+
+	return BCME_OK;
+}
+
+bool
+phy_noise_sched_get(wlc_phy_t *pih)
+{
+	phy_info_t *pi = (phy_info_t*)pih;
+
+	return (pi->phynoise_disable);
+}
+
+int
+phy_noise_pmstate_set(wlc_phy_t *pih, bool pmstate)
+{
+	phy_info_t *pi = (phy_info_t*)pih;
+	pi->phynoise_pmstate = pmstate;
+
+	return BCME_OK;
+}
+
+bool
+phy_noise_pmstate_get(phy_info_t *pi)
+{
+	return pi->phynoise_pmstate;
+}
+
+int8
+phy_noise_avg_per_antenna(wlc_phy_t *pih, int coreidx)
+{
+	phy_info_t *pi = (phy_info_t *)pih;
+	uint8 i, idx;
+	int32 tot = 0;
+	int8 result = 0;
+	phy_stf_data_t *stf_shdata = phy_stf_get_data(pi->stfi);
+
+	BCM_REFERENCE(stf_shdata);
+
+	if (!pi->sh->up)
+		return 0;
+
+	/* checking coreidx to prevent overrunning
+	 * phy_noise_win array
+	 */
+	if (((uint)coreidx) >= PHY_CORE_MAX)
+		return 0;
+
+	IF_ACTV_CORE(pi, stf_shdata->phyrxchain, coreidx) {
+		tot = 0;
+		idx = pi->phy_noise_index;
+		for (i = 0; i < PHY_NOISE_WINDOW_SZ; i++) {
+			tot += pi->phy_noise_win[coreidx][idx];
+			idx = MODINC_POW2(idx, PHY_NOISE_WINDOW_SZ);
+		}
+
+		result = (int8)(tot/PHY_NOISE_WINDOW_SZ);
+	}
+
+	return result;
+}

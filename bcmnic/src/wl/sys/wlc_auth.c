@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_auth.c 626490 2016-03-22 00:18:23Z $
+ * $Id: wlc_auth.c 660248 2016-09-19 21:45:03Z $
  */
 
 #include <wlc_cfg.h>
@@ -135,10 +135,23 @@ typedef struct scb_auth {
 
 /* iovar table */
 enum {
+#ifdef BCMDBG
+	IOV_AUTH_PTK_M1,		/* send PTK M1 pkt */
+	IOV_AUTH_REKEY_INIT,	/* enable grp rekey. must be done before any connection */
+	IOV_AUTH_GTK_M1,		/* send GTK M1 pkt */
+	IOV_AUTH_GTK_BAD_M1,	/* send bad GTK M1 pkt */
+#endif /* BCMDBG */
 	_IOV_AUTHENTICATOR_DUMMY	/* avoid empty enum */
 };
 
 static const bcm_iovar_t auth_iovars[] = {
+#ifdef BCMDBG
+	{"auth_ptk_m1", IOV_AUTH_PTK_M1, IOVF_BSSCFG_AP_ONLY, 0, IOVT_BUFFER, ETHER_ADDR_LEN},
+	{"auth_rekey_init", IOV_AUTH_REKEY_INIT, IOVF_BSSCFG_AP_ONLY, 0, IOVT_BOOL, 0},
+	{"auth_gtk_m1", IOV_AUTH_GTK_M1, IOVF_BSSCFG_AP_ONLY, 0, IOVT_BUFFER, ETHER_ADDR_LEN},
+	{"auth_gtk_bad_m1", IOV_AUTH_GTK_BAD_M1, IOVF_BSSCFG_AP_ONLY, 0,
+	IOVT_BUFFER, ETHER_ADDR_LEN},
+#endif /* BCMDBG */
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -167,6 +180,9 @@ static void wlc_auth_cleanup_scb(wlc_info_t *wlc, struct scb *scb);
 static int wlc_auth_down(void *handle);
 static int wlc_auth_doiovar(void *handle, uint32 actionid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif);
+#ifdef BCMDBG
+static int wlc_auth_dump(authenticator_t *auth, struct bcmstrbuf *b);
+#endif /* BCMDBG */
 
 static void wlc_auth_endassoc(authenticator_t *auth);
 
@@ -179,6 +195,16 @@ static void wlc_auth_bss_updn(void *ctx, bsscfg_up_down_event_data_t *notif);
 static void wlc_auth_scb_state_upd(void *ctx, scb_state_upd_data_t *data);
 
 static void wlc_auth_join_complete(authenticator_t *auth, struct ether_addr *ea, bool initialize);
+
+static void wlc_auth_new_gtk(authenticator_t *auth);
+static int wlc_auth_plumb_gtk(authenticator_t *auth, uint32 cipher);
+
+
+/* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
+ * enabled). It must be included after the prototypes and declarations above (since the generated
+ * source file may reference private constants, types, variables, and functions).
+ */
+#include <wlc_patch.h>
 
 /* Break a lengthy passhash algorithm into smaller pieces. It is necessary
  * for dongles with under-powered CPUs.
@@ -612,6 +638,9 @@ BCMATTACHFN(wlc_auth_attach)(wlc_info_t *wlc)
 
 	auth_info->wlc = wlc;
 
+#ifdef BCMDBG
+	wlc_dump_register(wlc->pub, "auth", (dump_fn_t)wlc_auth_dump, (void *)auth_info);
+#endif
 	return auth_info;
 
 err:
@@ -772,7 +801,121 @@ static int
 wlc_auth_doiovar(void *handle, uint32 actionid,
 	void *p, uint plen, void *a, uint alen, uint vsize, struct wlc_if *wlcif)
 {
-	return 0;
+	wlc_auth_info_t *auth_info = (wlc_auth_info_t*)handle;
+	wlc_info_t *wlc = auth_info->wlc;
+	authenticator_t *auth;
+	wlc_bsscfg_t *bsscfg;
+	struct scb *scb;
+	int32 int_val = 0;
+	int err = BCME_OK;
+
+	/* convenience int and bool vals for first 8 bytes of buffer */
+	if (plen >= (int)sizeof(int_val))
+		bcopy(p, &int_val, sizeof(int_val));
+
+	bsscfg = wlc_bsscfg_find_by_wlcif(wlc, wlcif);
+	ASSERT(bsscfg != NULL);
+
+	auth = BSS_AUTH(auth_info, bsscfg);
+	if (auth == NULL) {
+		return BCME_UNSUPPORTED;
+	}
+
+	BCM_REFERENCE(scb);
+	BCM_REFERENCE(err);
+
+	switch (actionid) {
+#ifdef BCMDBG
+	case IOV_SVAL(IOV_AUTH_PTK_M1):
+		scb = wlc_scbfind(wlc, bsscfg, (struct ether_addr*)a);
+		if (!(scb && SCB_AUTHORIZED(scb) && !AUTH_IN_PROGRESS(auth))) {
+			err = BCME_ERROR;
+			break;
+		}
+		/* restart 4-way handshake */
+		wlc_auth_cleanup_scb(wlc, scb);
+		auth->flags &= ~AUTH_FLAG_GTK_PLUMBED;
+		wlc_auth_join_complete(auth, &scb->ea, TRUE);
+		break;
+	case IOV_SVAL(IOV_AUTH_REKEY_INIT): {
+		if (int_val) {
+			if (auth->flags & AUTH_FLAG_REKEY_ENAB)
+				/* already enabled */
+				break;
+			if (wlc_bss_assocscb_getcnt(wlc, bsscfg)) {
+				/* must be enabled before association */
+				err = BCME_ASSOCIATED;
+				break;
+			}
+			/* enable tx M1 */
+			auth->flags |= AUTH_FLAG_REKEY_ENAB;
+		} else {	/* disable tx M1 */
+			struct scb_iter scbiter;
+			if (!(auth->flags & AUTH_FLAG_REKEY_ENAB))
+				/* already disabled */
+				break;
+			if (AUTH_IN_PROGRESS(auth)) {
+				err = BCME_BUSY;
+				break;
+			}
+			/* clean up scb */
+			FOREACH_BSS_SCB(wlc->scbstate, &scbiter, bsscfg, scb) {
+				wlc_auth_cleanup_scb(wlc, scb);
+			}
+			auth->flags &= ~AUTH_FLAG_REKEY_ENAB;
+		}
+		break;
+	}
+	case IOV_SVAL(IOV_AUTH_GTK_M1):
+	case IOV_SVAL(IOV_AUTH_GTK_BAD_M1): {
+		uint16 flags;
+		wpapsk_t *wpa;
+		scb_auth_t *scb_auth;
+		if (!(auth->flags & AUTH_FLAG_REKEY_ENAB)) {
+			err = BCME_EPERM;
+			break;
+		}
+		scb = wlc_scbfind(wlc, bsscfg, (struct ether_addr*)a);
+		if (!(scb && SCB_ASSOCIATED(scb) && !AUTH_IN_PROGRESS(auth))) {
+			err = BCME_ERROR;
+			break;
+		}
+
+		if (!bcmwpa_is_wpa2_auth(bsscfg->WPA_auth) ||
+			wlc_bss_assocscb_getcnt(wlc, bsscfg) != 1) {
+			err = BCME_UNSUPPORTED;
+			break;
+		}
+		/* rekey */
+		flags = KEY_DESC(auth, scb);
+		if (actionid == IOV_SVAL(IOV_AUTH_GTK_BAD_M1))
+			/* set for negtive test */
+			flags |= WPA_KEY_ERROR;
+		scb_auth = SCB_AUTH(auth->auth_info, scb);
+		wpa = scb_auth->wpa;
+		wpa_incr_array(wpa->replay, EAPOL_KEY_REPLAY_LEN);
+		/* If test is positive generate a new key */
+		if (!(flags & WPA_KEY_ERROR)) {
+			wlc_auth_new_gtk(auth);
+			if (wlc_auth_plumb_gtk(auth, wpa->mcipher) == -1) {
+				err = BCME_ERROR;
+				break;
+			}
+		}
+		err = wlc_wpa_auth_sendeapol(auth, flags, GMSG_REKEY, scb);
+		break;
+	}
+#endif	/* BCMDBG */
+	default:
+#ifdef BCMDBG
+		err = BCME_UNSUPPORTED;
+#else
+		err = BCME_OK;
+#endif	/* BCMDBG */
+		break;
+	}
+
+	return err;
 }
 
 int
@@ -863,6 +1006,15 @@ wlc_wpa_auth_recveapol(authenticator_t *auth, eapol_header_t *eapol, bool encryp
 	/* check for replay */
 	if (wpa_array_cmp(MAX_ARRAY, body->replay, wpa->replay, EAPOL_KEY_REPLAY_LEN) ==
 	    wpa->replay) {
+#ifdef BCMDBG
+		uchar *g = body->replay, *s = wpa->replay;
+		WL_WSEC(("wl%d: wlc_wpa_auth_recveapol: ignoring replay "
+			"(got %02x%02x%02x%02x%02x%02x%02x%02x"
+			" last saw %02x%02x%02x%02x%02x%02x%02x%02x)\n",
+			wlc->pub->unit,
+			g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7],
+			s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]));
+#endif /* BCMDBG */
 		return TRUE;
 	}
 
@@ -1300,6 +1452,12 @@ wlc_wpa_auth_sendeapol(authenticator_t *auth, uint16 flags, wpa_msg_t msg, struc
 	}
 
 	case GMSG_REKEY: {	/* sending gtk rekeying request */
+#ifdef BCMDBG
+		bool neg_test;
+
+		neg_test = (flags & WPA_KEY_ERROR) ? TRUE : FALSE;
+		flags &= ~WPA_KEY_ERROR;
+#endif /* BCMDBG */
 
 		if (wpa->WPA_auth != WPA2_AUTH_PSK)
 			return FALSE;
@@ -1340,9 +1498,15 @@ wlc_wpa_auth_sendeapol(authenticator_t *auth, uint16 flags, wpa_msg_t msg, struc
 		bcopy((char *)wpa->auth_wpaie, (char *)wpa_key->data, wpa->auth_wpaie_len);
 		wpa_key->data_len = hton16(data_len);
 
+#ifdef BCMDBG
+		if (!neg_test) {
+#endif /* BCMDBG */
 			/* for negtive test not include gtk encapsulation */
 			wlc_auth_insert_gtk(auth, eapol_hdr, &data_len);
 			wpa_key->data_len = hton16(data_len);
+#ifdef BCMDBG
+		}
+#endif /* BCMDBG */
 
 #ifdef MFP
 		if (WLC_MFP_ENAB(auth->wlc->pub)) {
@@ -1362,6 +1526,9 @@ wlc_wpa_auth_sendeapol(authenticator_t *auth, uint16 flags, wpa_msg_t msg, struc
 		eapol_hdr->length += ntoh16_ua((uint8 *)&wpa_key->data_len);
 		eapol_hdr->length = hton16(eapol_hdr->length);
 		add_mic = TRUE;
+#ifdef BCMDBG
+		if (!neg_test)
+#endif /* BCMDBG */
 			wpa->state = WPA_AUTH_REKEYNEGOTIATING;
 		WL_WSEC(("wl%d: %s: sending group rekeying message\n",
 		         wlc->pub->unit, __FUNCTION__));
@@ -1393,7 +1560,6 @@ wlc_wpa_auth_sendeapol(authenticator_t *auth, uint16 flags, wpa_msg_t msg, struc
 			}
 			bcopy(mic, wpa_key->mic, EAPOL_WPA_KEY_MIC_LEN);
 		}
-
 
 
 
@@ -1545,6 +1711,11 @@ wlc_auth_join_complete(authenticator_t *auth, struct ether_addr *ea, bool initia
 	scb = wlc_scbfindband(wlc, bsscfg, ea,
 	                      CHSPEC_WLCBANDUNIT(bsscfg->current_bss->chanspec));
 	if (!scb) {
+#ifdef BCMDBG_ERR
+		char eabuf[ETHER_ADDR_STR_LEN];
+		WL_ERROR(("wl%d: %s: scb not found for ea %s\n",
+		          wlc->pub->unit, __FUNCTION__, bcm_ether_ntoa(ea, eabuf)));
+#endif
 		return;
 	}
 
@@ -1698,6 +1869,13 @@ wlc_auth_initialize_gmk(authenticator_t *auth)
 	wlc_getrand(wlc, &gmk[16], 16);
 }
 
+#ifdef BCMDBG
+static int
+wlc_auth_dump(authenticator_t *auth, struct bcmstrbuf *b)
+{
+	return 0;
+}
+#endif /* BCMDBG */
 
 static int
 wlc_auth_prep_scb(authenticator_t *auth, struct scb *scb)

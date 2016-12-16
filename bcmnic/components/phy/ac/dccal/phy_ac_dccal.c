@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ac_dccal.c 649038 2016-07-14 17:03:35Z ernst $
+ * $Id: phy_ac_dccal.c 668048 2016-11-01 09:31:14Z $
  */
 
 #include <phy_cfg.h>
@@ -30,6 +30,8 @@
 #include <phy_ac_info.h>
 #include <phy_utils_reg.h>
 #include <phy_utils_var.h>
+#include <phy_stf.h>
+#include <phy_misc_api.h>
 
 #ifndef NEW_PHY_CAL_ARCH
 #include "wlc_radioreg_20691.h"
@@ -149,9 +151,7 @@ acphy_analog_dc_cal_war(phy_info_t *pi)
 
 	/* return BCME_OK; */
 
-	if (ACMAJORREV_32(pi->pubpi->phy_rev) ||
-	    ACMAJORREV_33(pi->pubpi->phy_rev) ||
-	    ACMAJORREV_37(pi->pubpi->phy_rev)) {
+	if (ACMAJORREV_37(pi->pubpi->phy_rev)) {
 		DAC_MIN = -120;
 		DAC_MAX = 120;
 	} else {
@@ -309,11 +309,8 @@ wlc_phy_tiny_static_dc_offset_cal(phy_info_t *pi)
 	uint8 force_rshift;
 	uint8 rx_farrow_rshift;
 
-#ifdef ATE_BUILD
-		printf("===> Running static dc offset cal\n");
-#endif /* ATE_BUILD */
 
-	wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	FOREACH_CORE(pi, core) {
 		/* set LNA off */
@@ -569,11 +566,8 @@ wlc_phy_tiny_static_dc_offset_cal(phy_info_t *pi)
 	MOD_PHYREG(pi, RxSdFeConfig6, rx_farrow_rshift_0, rx_farrow_rshift);
 
 	wlc_dcc_fsm_reset(pi);	/* Redo Coarse cal */
-	wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
-#ifdef ATE_BUILD
-	printf("===> Finished static dc offset cal\n");
-#endif /* ATE_BUILD */
 
 	return BCME_OK;
 }
@@ -717,7 +711,7 @@ phy_ac_dccal(phy_info_t *pi)
 	save_fifo_rst = READ_PHYREGFLD(pi, RxFeCtrl1,
 			soft_sdfeFifoReset);
 	MOD_PHYREG(pi, RxFeCtrl1, soft_sdfeFifoReset, 0);
-	wlc_phy_stay_in_carriersearch_acphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
 		MOD_PHYREG(pi, dccal_common, dcc_method_select, 1);
@@ -765,12 +759,16 @@ phy_ac_dccal(phy_info_t *pi)
 		wlc_btcx_override_enable(pi);
 	}
 	if (ACMAJORREV_40(pi->pubpi->phy_rev)) {
+		uint8 phyrxchain;
 		MOD_PHYREG(pi, RxControl, dbgpktprocReset, 0x1);
 		OSL_DELAY(10);
 		MOD_PHYREG(pi, RxControl, dbgpktprocReset, 0x0);
 		OSL_DELAY(100);
 
-		FOREACH_ACTV_CORE(pi, pi->sh->phyrxchain, core) {
+		BCM_REFERENCE(phyrxchain);
+
+		phyrxchain = phy_stf_get_data(pi->stfi)->phyrxchain;
+		FOREACH_ACTV_CORE(pi, phyrxchain, core) {
 			num_retry = 3;
 			idac_cal_status = FALSE;
 			while (!idac_cal_status) {
@@ -787,7 +785,7 @@ phy_ac_dccal(phy_info_t *pi)
 						num_retry--;
 					}
 				} else {
-					PHY_ERROR(("dccal: dcoe timeout for core %d!!!\n", core));
+					PHY_CAL(("dccal: dcoe timeout for core %d!!!\n", core));
 					idac_cal_status = TRUE;
 				}
 			}
@@ -808,7 +806,7 @@ phy_ac_dccal(phy_info_t *pi)
 						num_retry--;
 					}
 				} else {
-					PHY_ERROR(("dccal: idacc timeout for core %d!!!\n", core));
+					PHY_CAL(("dccal: idacc timeout for core %d!!!\n", core));
 					idac_cal_status = TRUE;
 				}
 			}
@@ -868,7 +866,7 @@ phy_ac_dccal(phy_info_t *pi)
 		}
 	}
 
-	wlc_phy_stay_in_carriersearch_acphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 	MOD_PHYREG(pi, RxFeCtrl1, soft_sdfeFifoReset, save_fifo_rst);
 
 	/* Resume MAC */
@@ -992,11 +990,19 @@ phy_ac_load_gmap_tbl(phy_info_t *pi)
 		uint16 gmap_tbl_r40_2g[] = {0x10f3, 0x1133, 0x1177, 0x116b, 0x115f, 0x1143, 0x1000};
 		uint16 gmap_tbl_r40_5g[] = {0x10e7, 0x1127, 0x11a7, 0x11eb, 0x11df, 0x11c3, 0x1000};
 		if (CHSPEC_IS2G(pi->radio_chanspec)) {
+			if (ACMINORREV_1(pi)) {
+				gmap_tbl_r40_2g[0] = 0x10f7;
+				gmap_tbl_r40_2g[1] = 0x1137;
+			}
 			wlc_phy_table_write_acphy(pi, AC2PHY_TBL_ID_IDAC_GMAP_TABLE0, 7, 0, 16,
 				&gmap_tbl_r40_2g);
 			wlc_phy_table_write_acphy(pi, AC2PHY_TBL_ID_IDAC_GMAP_TABLE1, 7, 0, 16,
 				&gmap_tbl_r40_2g);
 		} else {
+			if (ACMINORREV_1(pi)) {
+				gmap_tbl_r40_5g[0] = 0x10f3;
+				gmap_tbl_r40_5g[2] = 0x11ab;
+			}
 			wlc_phy_table_write_acphy(pi, AC2PHY_TBL_ID_IDAC_GMAP_TABLE0, 7, 0, 16,
 				&gmap_tbl_r40_5g);
 			wlc_phy_table_write_acphy(pi, AC2PHY_TBL_ID_IDAC_GMAP_TABLE1, 7, 0, 16,

@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_iw.c 625864 2016-03-18 00:12:54Z $
+ * $Id: wl_iw.c 663790 2016-10-07 00:29:50Z $
  */
 
 #if defined(USE_IW)
@@ -702,17 +702,10 @@ wl_iw_get_range(
 	static int channels[MAXCHANNEL+1];
 	wl_uint32_list_t *list = (wl_uint32_list_t *) channels;
 	wl_rateset_t rateset;
-	int error, i, k;
+	int error, i;
 	uint sf, ch;
 
 	int phytype;
-	int bw_cap = 0, sgi_tx = 0, nmode = 0;
-	channel_info_t ci;
-	uint8 nrate_list2copy = 0;
-	uint16 nrate_list[4][8] = { {13, 26, 39, 52, 78, 104, 117, 130},
-		{14, 29, 43, 58, 87, 116, 130, 144},
-		{27, 54, 81, 108, 162, 216, 243, 270},
-		{30, 60, 90, 120, 180, 240, 270, 300}};
 	int fbt_cap = 0;
 
 	WL_TRACE(("%s: SIOCGIWRANGE\n", dev->name));
@@ -769,41 +762,8 @@ wl_iw_get_range(
 	range->num_bitrates = rateset.count;
 	for (i = 0; i < rateset.count && i < IW_MAX_BITRATES; i++)
 		range->bitrate[i] = (rateset.rates[i] & 0x7f) * 500000; /* convert to bps */
-	if ((error = dev_wlc_intvar_get(dev, "nmode", &nmode)))
-		return error;
 	if ((error = dev_wlc_ioctl(dev, WLC_GET_PHYTYPE, &phytype, sizeof(phytype))))
 		return error;
-	if (nmode == 1 && (((phytype == WLC_PHY_TYPE_LCN) ||
-	                    (phytype == WLC_PHY_TYPE_LCN40)))) {
-		if ((error = dev_wlc_intvar_get(dev, "mimo_bw_cap", &bw_cap)))
-			return error;
-		if ((error = dev_wlc_intvar_get(dev, "sgi_tx", &sgi_tx)))
-			return error;
-		if ((error = dev_wlc_ioctl(dev, WLC_GET_CHANNEL, &ci, sizeof(channel_info_t))))
-			return error;
-		ci.hw_channel = dtoh32(ci.hw_channel);
-
-		if (bw_cap == 0 ||
-			(bw_cap == 2 && ci.hw_channel <= 14)) {
-			if (sgi_tx == 0)
-				nrate_list2copy = 0;
-			else
-				nrate_list2copy = 1;
-		}
-		if (bw_cap == 1 ||
-			(bw_cap == 2 && ci.hw_channel >= 36)) {
-			if (sgi_tx == 0)
-				nrate_list2copy = 2;
-			else
-				nrate_list2copy = 3;
-		}
-		range->num_bitrates += 8;
-		ASSERT(range->num_bitrates < IW_MAX_BITRATES);
-		for (k = 0; i < range->num_bitrates; k++, i++) {
-			/* convert to bps */
-			range->bitrate[i] = (nrate_list[nrate_list2copy][k]) * 500000;
-		}
-	}
 
 	/* Set an indication of the max TCP throughput
 	 * in bit/s that we can expect using this interface.
@@ -983,6 +943,9 @@ wl_iw_set_wap(
 )
 {
 	int error = -EINVAL;
+#ifdef BCMDBG
+	/* char eabuf[ETHER_ADDR_STR_LEN]; */
+#endif
 
 	WL_TRACE(("%s: SIOCSIWAP\n", dev->name));
 

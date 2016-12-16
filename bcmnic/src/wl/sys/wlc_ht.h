@@ -33,6 +33,9 @@
 #define HT_MCS_BIT6_SHIFT			6
 
 #ifdef WL11N
+#if defined(BCMDBG)
+#define WL_HT_TXBW_OVERRIDE_ENAB 1
+#endif
 
 /* READ ONLY: Used in txpath, so performance sensitive... */
 /* Therefore, use the following macros */
@@ -148,11 +151,39 @@ extern void
 wlc_ht_prep_rate_info(wlc_ht_info_t *hti, wlc_d11rxhdr_t *wrxh,
 	ratespec_t rspec, struct wl_rxsts *sts);
 
+#if defined(BCMDBG)
+/* #define WL_HT_TXBW_OVERRIDE_ENAB 1 */
+#define WL_HT_TXBW_OVERRIDE_IDX(hti, rspec, txbw_override_idx) \
+	(txbw_override_idx) = -1; \
+	if ((hti)->txbw_override) { \
+		/* Take care of TXBW overrides */ \
+		if (RSPEC_ISHT((rspec)) || RSPEC_ISVHT((rspec))) { \
+			if ((hti)->mimo_40txbw != AUTO) { \
+				(txbw_override_idx) = (hti)->mimo_40txbw; \
+			} \
+		} else if (RSPEC_ISOFDM(rspec)) { \
+			if ((hti)->ofdm_40txbw != AUTO) { \
+				(txbw_override_idx) = (hti)->ofdm_40txbw; \
+			} \
+		} else { \
+			ASSERT(RSPEC_ISCCK(rspec)); \
+			if ((hti)->cck_40txbw != AUTO) { \
+				(txbw_override_idx) = (hti)->cck_40txbw; \
+			} \
+		} \
+	}
+
+#define WLC_HT_GET_MIMO_40TXBW(hti) ((hti)->mimo_40txbw)
+#define WLC_HT_GET_OFDM_40TXBW(hti) ((hti)->ofdm_40txbw)
+#define WLC_HT_GET_CCK_40TXBW(hti) ((hti)->cck_40txbw)
+
+#else
 #define WL_HT_TXBW_OVERRIDE_ENAB 0
 #define WLC_HT_GET_MIMO_40TXBW(hti) (AUTO)
 #define WLC_HT_GET_OFDM_40TXBW(hti) (AUTO)
 #define WLC_HT_GET_CCK_40TXBW(hti) (AUTO)
 #define WL_HT_TXBW_OVERRIDE_IDX (-1)
+#endif 
 
 /* READ ONLY: Used in txpath, so performance sensitive... */
 /* Therefore, use the following macros */

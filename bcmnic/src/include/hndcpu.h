@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hndcpu.h 630504 2016-04-10 06:48:27Z $
+ * $Id: hndcpu.h 653202 2016-08-05 12:33:14Z $
  */
 
 #ifndef _hndcpu_h_
@@ -44,8 +44,8 @@ extern void hnd_cpu_deadman_timer(si_t *sih, uint32 val);
 #endif
 #ifdef __ARM_ARCH_7A__
 extern void hnd_hw_coherent_enable(si_t *sih);
-extern void hnd_cpu_enable_gtimer(void);
-extern uint32 hnd_cpu_gtimer_clock(void);
+extern void hnd_cpu_enable_gtimer(si_t *sih);
+extern uint32 hnd_cpu_gtimer_clock(si_t *sih);
 #endif	/* __ARM_ARCH_7A__ */
 extern void si_router_coma(si_t *sih, int reset, int delay);
 extern void si_dmc_phyctl(si_t *sih, uint32 phyctl_val);

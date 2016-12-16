@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_dbg.h 589186 2015-09-28 14:24:26Z jqliu $
+ * $Id: phy_ht_dbg.h 589186 2015-09-28 14:24:26Z $
  */
 
 #ifndef _phy_ht_dbg_h_

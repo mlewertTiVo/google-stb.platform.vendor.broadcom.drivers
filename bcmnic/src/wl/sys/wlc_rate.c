@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_rate.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_rate.c 663980 2016-10-07 19:14:26Z $
  */
 
 /**
@@ -36,7 +36,7 @@
 #include <wlioctl.h>
 
 #include <proto/802.11.h>
-#include <d11.h>
+#include <hndd11.h>
 #include <wlc_rate.h>
 #include <wl_dbg.h>
 #include <wlc_pub.h>
@@ -135,11 +135,11 @@ wlc_ratespec_nsts(ratespec_t rspec)
 	int Nss;
 	int Nsts;
 
-	if (RSPEC_ISVHT(rspec)) {
-		/* VHT ratespec specifies Nss directly */
+	if (RSPEC_ISVHT(rspec) || RSPEC_ISHE(rspec)) {
+		/* HE & VHT ratespec specify Nss directly */
 		Nss = (rspec & WL_RSPEC_VHT_NSS_MASK) >> WL_RSPEC_VHT_NSS_SHIFT;
 
-		/* VHT STBC expansion always is Nsts = Nss*2, so STBC expansion == Nss */
+		/* HE & VHT STBC expansion always is Nsts = Nss*2 */
 		if (RSPEC_ISSTBC(rspec)) {
 			Nsts = 2*Nss;
 		} else {
@@ -195,22 +195,97 @@ struct ieee_80211_mcs_rate_info {
 	uint8 constellation_bits;
 	uint8 coding_q;
 	uint8 coding_d;
+	uint8 dcm_capable;	/* 1 if dcm capable */
 };
 
 static const struct ieee_80211_mcs_rate_info wlc_mcs_info[] = {
-	{ 1, 1, 2 }, /* MCS  0: MOD: BPSK,   CR 1/2 */
-	{ 2, 1, 2 }, /* MCS  1: MOD: QPSK,   CR 1/2 */
-	{ 2, 3, 4 }, /* MCS  2: MOD: QPSK,   CR 3/4 */
-	{ 4, 1, 2 }, /* MCS  3: MOD: 16QAM,  CR 1/2 */
-	{ 4, 3, 4 }, /* MCS  4: MOD: 16QAM,  CR 3/4 */
-	{ 6, 2, 3 }, /* MCS  5: MOD: 64QAM,  CR 2/3 */
-	{ 6, 3, 4 }, /* MCS  6: MOD: 64QAM,  CR 3/4 */
-	{ 6, 5, 6 }, /* MCS  7: MOD: 64QAM,  CR 5/6 */
-	{ 8, 3, 4 }, /* MCS  8: MOD: 256QAM, CR 3/4 */
-	{ 8, 5, 6 }, /* MCS  9: MOD: 256QAM, CR 5/6 */
-	{ 10, 3, 4 }, /* MCS 10: MOD: 1024QAM, CR 3/4 */
-	{ 10, 5, 6 }  /* MCS 11: MOD: 1024QAM, CR 5/6 */
+	{ 1, 1, 2, 1 }, /* MCS  0: MOD: BPSK,   CR 1/2, dcm capable */
+	{ 2, 1, 2, 1 }, /* MCS  1: MOD: QPSK,   CR 1/2, dcm capable */
+	{ 2, 3, 4, 0 }, /* MCS  2: MOD: QPSK,   CR 3/4, NOT dcm capable */
+	{ 4, 1, 2, 1 }, /* MCS  3: MOD: 16QAM,  CR 1/2, dcm capable */
+	{ 4, 3, 4, 1 }, /* MCS  4: MOD: 16QAM,  CR 3/4, dcm capable */
+	{ 6, 2, 3, 0 }, /* MCS  5: MOD: 64QAM,  CR 2/3, NOT dcm capable */
+	{ 6, 3, 4, 0 }, /* MCS  6: MOD: 64QAM,  CR 3/4, NOT dcm capable */
+	{ 6, 5, 6, 0 }, /* MCS  7: MOD: 64QAM,  CR 5/6, NOT dcm capable */
+	{ 8, 3, 4, 0 }, /* MCS  8: MOD: 256QAM, CR 3/4, NOT dcm capable */
+	{ 8, 5, 6, 0 }, /* MCS  9: MOD: 256QAM, CR 5/6, NOT dcm capable */
+	{ 10, 3, 4, 0 }, /* MCS 10: MOD: 1024QAM, CR 3/4, NOT dcm capable */
+	{ 10, 5, 6, 0 }  /* MCS 11: MOD: 1024QAM, CR 5/6, NOT dcm capable */
 };
+
+/* Nsd values Draft0.4 Table 26.63 onwards */
+static const uint wlc_he_nsd[] = {
+	234,	/* BW20 */
+	468,	/* BW40 */
+	980,	/* BW80 */
+	1960	/* BW160 */
+};
+
+/* sym_len = 12.8 us. For calculation purpose, *10 */
+#define HE_SYM_LEN_FACTOR		(128)
+
+/* GI values = 0.8 , 1.6 or 3.2 us. For calculation purpose, *10 */
+#define HE_GI_800us_FACTOR		(8)
+#define HE_GI_1600us_FACTOR		(16)
+#define HE_GI_3200us_FACTOR		(32)
+
+#define HE_BW_TO_NSD(bwi)	(((bwi) > 0) && ((bwi) <= BW_160MHZ)) ?	\
+					wlc_he_nsd[(bwi)-1] : 0;
+uint
+wlc_rate_he_rspec2rate(ratespec_t rspec)
+{
+	uint rate = 0;
+	uint rate_deno = 0;
+
+	uint mcs = (rspec & RSPEC_HE_MCS_MASK);
+	uint nss = (rspec & RSPEC_HE_NSS_MASK) >> RSPEC_VHT_NSS_SHIFT;
+	uint dcm = (rspec & RSPEC_HE_DCM_MASK) >> RSPEC_HE_DCM_SHIFT;
+	uint bw = RSPEC_BW(rspec);
+	int gi = RSPEC_HE_GI(rspec);
+
+	ASSERT(mcs <= WLC_MAX_HE_MCS);
+	ASSERT(nss <= 8);
+
+	if (mcs > WLC_MAX_HE_MCS)
+		goto done;
+
+	rate = HE_BW_TO_NSD(bw >> RSPEC_BW_SHIFT);
+
+	/* Nbpscs: multiply by bits per number from the constellation in use */
+	rate = rate * wlc_mcs_info[mcs].constellation_bits;
+
+	/* Nss: adjust for the number of spatial streams */
+	rate = rate * nss;
+
+	/* R: adjust for the coding rate given as a quotient and divisor */
+	rate = (rate * wlc_mcs_info[mcs].coding_q) / wlc_mcs_info[mcs].coding_d;
+
+	/* take care of dcm: dcm divides R by 2. If not dcm mcs, ignore */
+	if (dcm) {
+		if (wlc_mcs_info[mcs].dcm_capable)
+			rate >>= 1;
+	}
+
+	/* add sym len factor */
+	rate_deno = HE_SYM_LEN_FACTOR;
+
+	/* get GI for denominator */
+	if (HE_IS_GI_3_2us(gi)) {
+		rate_deno += HE_GI_3200us_FACTOR;
+	} else if (HE_IS_GI_1_6us(gi)) {
+		rate_deno += HE_GI_1600us_FACTOR;
+	} else {
+		/* assuming HE_GI_0_8us */
+		rate_deno += HE_GI_800us_FACTOR;
+	}
+
+	/* as per above formula */
+	rate *= 1000;	/* factor of 10. *100 to accommodate 2 places */
+	rate /= rate_deno;
+	rate *= 10; /* *100 was already done above. Splitting is done to avoid overflow. */
+done:
+	return rate;
+} /* wlc_rate_he_rspec2rate */
 
 /**
  * Returns the rate in [Kbps] units for a caller supplied MCS/bandwidth/Nss/Sgi combination.
@@ -322,6 +397,8 @@ wlc_rate_rspec2rate(ratespec_t rspec)
 		ASSERT(nss <= 8);
 
 		rate = wlc_rate_mcs2rate(mcs, nss, RSPEC_BW(rspec), RSPEC_ISSGI(rspec));
+	} else if (RSPEC_ISHE(rspec)) {
+		rate = wlc_rate_he_rspec2rate(rspec);
 	} else {
 		ASSERT(0);
 	}
@@ -684,6 +761,40 @@ wlc_vht_get_rate_from_plcp(uint8 *plcp)
 }
 
 ratespec_t
+wlc_he_get_rspec_from_plcp(uint8 *plcp)
+{
+	uint8 rate;
+	uint8 nss;
+	uint8 bw;
+	uint8 gi;
+	ratespec_t rspec;
+	ASSERT(plcp);
+
+	rate = (plcp[3] & HE_PLCP_B3_MCS_MASK) >> HE_PLCP_B3_MCS_SHIFT;
+	nss = (plcp[4] & HE_PLCP_B4_NSTS_MASK) >> HE_PLCP_B4_NSTS_SHIFT;
+	rspec = HE_RSPEC(rate, nss);
+
+	/* GI info comes from CP/LTF */
+	gi = (plcp[3] & HE_PLCP_B3_CPLTF_MASK) >> HE_PLCP_B3_CPLTF_SHIFT;
+	rspec |= (gi == HE_LTF_2_GI_1_6us) ? RSPEC_HE_GI_EXTN :
+		((gi == HE_LTF_4_GI_3_2us) ? (RSPEC_SHORT_GI | RSPEC_HE_GI_EXTN) : 0);
+
+	bw = (plcp[0] & HE_PLCP_B0_BW_MASK) >> HE_PLCP_B0_BW_SHIFT;
+	rspec |= (bw << RSPEC_BW_SHIFT);
+
+	if (plcp[2] & HE_PLCP_B2_TXBF_MASK)
+		rspec |= RSPEC_TXBF;
+	if (plcp[2] & HE_PLCP_B2_CODING_MASK)
+		rspec |= RSPEC_LDPC_CODING;
+	if (plcp[3] & HE_PLCP_B3_STBC_MASK)
+		rspec |= RSPEC_STBC;
+	if (plcp[4] & HE_PLCP_B4_DCM_MASK)
+		rspec |= RSPEC_HE_DCM_MASK;
+
+	return rspec;
+}
+
+ratespec_t
 wlc_vht_get_rspec_from_plcp(uint8 *plcp)
 {
 	uint8 rate;
@@ -718,13 +829,14 @@ wlc_vht_get_rspec_from_plcp(uint8 *plcp)
 
 /** Calculate the rate of a received frame and return it as a ratespec */
 ratespec_t BCMFASTPATH
-wlc_recv_compute_rspec(wlc_d11rxhdr_t *wrxh, uint8 *plcp)
+wlc_recv_compute_rspec(d11_info_t *d11_info, wlc_d11rxhdr_t *wrxh, uint8 *plcp)
 {
 	d11rxhdr_t *rxh = &wrxh->rxhdr;
-	ratespec_t rspec;
+	ratespec_t rspec = 0;
 	uint16 phy_ft;
 
-	phy_ft = rxh->lt80.PhyRxStatus_0 & PRXS0_FT_MASK;
+	phy_ft = D11RXHDR_ACCESS_VAL(rxh, d11_info->revid, PhyRxStatus_0) &
+		PRXS_FT_MASK(d11_info->revid);
 
 	switch (phy_ft) {
 	case PRXS0_CCK:
@@ -765,6 +877,14 @@ wlc_recv_compute_rspec(wlc_d11rxhdr_t *wrxh, uint8 *plcp)
 		rspec = wlc_vht_get_rspec_from_plcp(plcp);
 		break;
 #endif /* WL11N */
+#ifdef WL11AX
+	case PRXS0_AH:
+		break;
+
+	case PRXS0_HE:
+		rspec = wlc_he_get_rspec_from_plcp(plcp);
+		break;
+#endif /* WL11AX */
 	default:
 		ASSERT(0);
 		/* return a valid rspec if not a debug/assert build */
@@ -838,6 +958,9 @@ wlc_rateset_filter(wlc_rateset_t *src, wlc_rateset_t *dst, bool basic_only, uint
 			/* needed as VHT_CAP_MCS_MAP_NONE_ALL is not 0 */
 			dst->vht_mcsmap = VHT_CAP_MCS_MAP_NONE_ALL;
 		}
+		if (mcsallow & WLC_MCS_ALLOW_HE) {
+			/* TBD */
+		}
 		if (mcsallow & WLC_MCS_ALLOW_1024QAM) {
 			dst->vht_mcsmap_prop = src->vht_mcsmap_prop;
 		} else {
@@ -893,8 +1016,6 @@ wlc_rateset_default(wlc_rateset_t *rs_tgt, const wlc_rateset_t *rs_hw,
 
 	if ((PHYTYPE_IS(phy_type, PHY_TYPE_HT)) ||
 	    (PHYTYPE_IS(phy_type, PHY_TYPE_N)) ||
-	    (PHYTYPE_IS(phy_type, PHY_TYPE_LCN)) ||
-	    (PHYTYPE_IS(phy_type, PHY_TYPE_LCN40)) ||
 	    (PHYTYPE_IS(phy_type, PHY_TYPE_LCN20)) ||
 	    (PHYTYPE_IS(phy_type, PHY_TYPE_AC))) {
 		if (BAND_5G(bandtype)) {
@@ -983,6 +1104,70 @@ wlc_dump_rspec(void *context, ratespec_t rspec, struct bcmstrbuf *b)
 
 	BCM_REFERENCE(context);
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	bcm_bprintf(b, "\n\trspec 0x%x: ", rspec);
+	/* vht, ht, legacy */
+	if (RSPEC_ISHT(rspec)) {
+		bcm_bprintf(b, " ht ");
+	} else if (RSPEC_ISLEGACY(rspec)) {
+		/* ofdm, cck */
+		if (RSPEC_ISOFDM(rspec)) {
+			bcm_bprintf(b, " ofdm ");
+		} else if (RSPEC_ISCCK(rspec)) {
+			bcm_bprintf(b, " cck ");
+		}
+	} else if (RSPEC_ISVHT(rspec)) {
+		bcm_bprintf(b, " vht ");
+	}
+
+	/* ldpc, stbc, sgi */
+	if (rspec & RSPEC_LDPC_CODING) {
+		bcm_bprintf(b, " ldpc ");
+	}
+	if (rspec & RSPEC_STBC) {
+		bcm_bprintf(b, " stbc ");
+	}
+	if (rspec & RSPEC_SHORT_GI) {
+		bcm_bprintf(b, " sgi ");
+	}
+	/* rate */
+	bcm_bprintf(b, "\n\tRate = %dkbps", wlc_rate_rspec2rate(rspec));
+	if (RSPEC_ISVHT(rspec)) {
+		bcm_bprintf(b, " mcs = %0x ", (rspec & RSPEC_VHT_MCS_MASK));
+		bcm_bprintf(b, " nss = %d ", (rspec & RSPEC_VHT_NSS_MASK) >> RSPEC_VHT_NSS_SHIFT);
+	} else if (RSPEC_ISHT(rspec)) {
+#if defined(WLPROPRIETARY_11N_RATES)
+		bcm_bprintf(b, " mcs = %0x ",
+			wlc_rate_get_single_stream_mcs(rspec & RSPEC_HT_PROP_MCS_MASK));
+#else
+		bcm_bprintf(b, " mcs = %0x ", (rspec & RSPEC_HT_MCS_MASK));
+#endif
+	}
+
+	/* bandwidth */
+	bcm_bprintf(b, " Bandwidth = ");
+	switch (RSPEC_BW(rspec)) {
+		case RSPEC_BW_UNSPECIFIED:
+			bcm_bprintf(b, "unspecified");
+			break;
+		case RSPEC_BW_20MHZ:
+			bcm_bprintf(b, "20MHz");
+			break;
+		case RSPEC_BW_40MHZ:
+			bcm_bprintf(b, "40MHz");
+			break;
+		case RSPEC_BW_80MHZ:
+			bcm_bprintf(b, "80MHz");
+			break;
+		case RSPEC_BW_160MHZ:
+			bcm_bprintf(b, "160MHz");
+			break;
+		default:
+			bcm_bprintf(b, "invalid");
+			break;
+	}
+	bcm_bprintf(b, "\n");
+#endif /* BCMDBG || BCMDBG_DUMP */
 }
 
 int

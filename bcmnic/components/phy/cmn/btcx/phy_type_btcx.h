@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_type_btcx.h 642720 2016-06-09 18:56:12Z vyass $
+ * $Id: phy_type_btcx.h 657044 2016-08-30 21:37:55Z $
  */
 
 #ifndef _phy_type_btcx_h_
@@ -51,6 +51,7 @@ typedef int8 (*phy_type_btcx_get_femctrl_fn_t)(phy_type_btcx_ctx_t *ctx);
 typedef int (*phy_type_btcx_dump_fn_t)(phy_type_btcx_ctx_t *ctx, struct bcmstrbuf *b);
 typedef int (*phy_type_btcx_get_fn_t)(phy_type_btcx_ctx_t *ctx, int32 *ret_ptr);
 typedef int (*phy_type_btcx_set_fn_t)(phy_type_btcx_ctx_t *ctx, int32 int_val);
+typedef int (*phy_type_btcx_mode_set_fn_t)(phy_type_btcx_ctx_t *ctx, int btc_mode);
 
 typedef struct {
 	phy_type_btcx_init_fn_t init_btcx;
@@ -65,6 +66,7 @@ typedef struct {
 	phy_type_btcx_set_fn_t desense_btc;
 	phy_type_btcx_set_fn_t set_restage_rxgain;
 	phy_type_btcx_get_fn_t get_restage_rxgain;
+	phy_type_btcx_mode_set_fn_t mode_set;
 	phy_type_btcx_ctx_t *ctx;
 } phy_type_btcx_fns_t;
 

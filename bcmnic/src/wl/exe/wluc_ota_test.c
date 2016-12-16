@@ -176,7 +176,8 @@ wl_ota_display_test_option(wl_ota_test_args_t *test_arg, int16 cnt)
 	for (i = 0; i < test_arg->rt_info.rate_cnt; i++)
 		wl_ota_display_rt_info(test_arg->rt_info.rate_val_mbps[i]);
 	printf("\nStf mode :  %d \n", test_arg->stf_mode);
-	printf("Txant: %d   rxant: %d \n", test_arg->txant, test_arg->rxant);
+	printf("Txant: %d(0x%2x)   rxant: %d(0x%2x) \n",
+		test_arg->txant, test_arg->txant, test_arg->rxant, test_arg->rxant);
 	printf("Pkt eng Options :  ifs %d  len: %d num: %d \n", test_arg->pkteng.delay,
 		test_arg->pkteng.length, test_arg->pkteng.nframes);
 	printf("Tx power sweep options :\nPower control %d \nstart pwr: %d  "
@@ -190,10 +191,14 @@ static int
 wl_ota_validate_string(uint8 arg, void* value)
 {
 	int ret = 0;
+	uint8	cores;
+
 	switch (arg) {
 		case WL_OTA_TXANTVALID:
 		case WL_OTA_RXANTVALID:
-			if (*(uint8*)value > 7)
+			/* check if the 'txCore bitmask' of txant/rxant parameter is valid or not */
+			cores = WL_OTA_TEST_GET_CORE(*(uint8*) value);
+			if (cores > 7)
 				ret = -1;
 			break;
 		case WL_OTA_CTRLBANDVALID:
@@ -365,7 +370,7 @@ wl_ota_test_parse_test_option(wl_ota_test_args_t *test_arg, char * tok, uint16 c
 #endif
 			break;
 		case WL_OTA_TXANT:
-			test_arg->txant =  (uint8)strtol(tok, &endptr, 10);
+			test_arg->txant = (uint8) strtol(tok, &endptr, 0);
 			if (*endptr != '\0') {
 				ret = -1;
 				goto fail;
@@ -373,7 +378,7 @@ wl_ota_test_parse_test_option(wl_ota_test_args_t *test_arg, char * tok, uint16 c
 			ret = wl_ota_validate_string(WL_OTA_TXANTVALID, &test_arg->txant);
 			break;
 		case WL_OTA_RXANT:
-			test_arg->rxant = (uint8)strtol(tok, &endptr, 10);
+			test_arg->rxant = (uint8)strtol(tok, &endptr, 0);
 			if (*endptr != '\0') {
 				ret = -1;
 				goto fail;

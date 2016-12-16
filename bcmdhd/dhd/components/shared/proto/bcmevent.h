@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmevent.h 638222 2016-05-17 03:41:36Z $
+ * $Id: bcmevent.h 650917 2016-07-23 01:48:16Z $
  *
  */
 
@@ -38,11 +38,12 @@
 #ifndef _BCMEVENT_H_
 #define _BCMEVENT_H_
 
-#ifndef _TYPEDEFS_H_
 #include <typedefs.h>
-#endif
 /* #include <ethernet.h> -- TODO: req., excluded to overwhelming coupling (break up ethernet.h) */
 #include <proto/bcmeth.h>
+#if defined(HEALTH_CHECK) || defined(DNGL_EVENT_SUPPORT)
+#include <proto/dnglevent.h>
+#endif /* HEALTH_CHECK || DNGL_EVENT_SUPPORT */
 
 /* This marks the start of a packed structure section. */
 #include <packed_section_start.h>
@@ -96,6 +97,19 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 	wl_event_msg_t		event;
 	/* data portion follows */
 } BWL_POST_PACKED_STRUCT bcm_event_t;
+
+/*
+ * used by host event
+ * note: if additional event types are added, it should go with is_wlc_event_frame() as well.
+ */
+typedef union bcm_event_msg_u {
+	wl_event_msg_t		event;
+#if defined(HEALTH_CHECK) || defined(DNGL_EVENT_SUPPORT)
+	bcm_dngl_event_msg_t	dngl_event;
+#endif /* HEALTH_CHECK || DNGL_EVENT_SUPPORT */
+
+	/* add new event here */
+} bcm_event_msg_u_t;
 
 #define BCM_MSG_LEN	(sizeof(bcm_event_t) - sizeof(bcmeth_hdr_t) - sizeof(struct ether_header))
 
@@ -258,9 +272,14 @@ typedef BWL_PRE_PACKED_STRUCT struct bcm_event {
 #define WLC_E_RADAR_DETECTED		160	/* Radar Detected event */
 #define WLC_E_RANGING_EVENT		161	/* Ranging event */
 #define WLC_E_INVALID_IE		162	/* Received invalid IE */
-#define WLC_E_LAST			163	/* highest val + 1 for range checking */
-#if (WLC_E_LAST > 163)
-#error "WLC_E_LAST: Invalid value for last event; must be <= 163."
+#define WLC_E_MODE_SWITCH		163	/* Mode switch event */
+#define WLC_E_PKT_FILTER		164	/* Packet filter event */
+#define WLC_E_DMA_TXFLUSH_COMPLETE		165	/* TxFlush done before changing
+											* tx/rxchain
+											*/
+#define WLC_E_LAST			166	/* highest val + 1 for range checking */
+#if (WLC_E_LAST > 166)
+#error "WLC_E_LAST: Invalid value for last event; must be <= 165."
 #endif /* WLC_E_LAST */
 
 /* define an API for getting the string name of an event */
@@ -269,8 +288,8 @@ extern void wl_event_to_host_order(wl_event_msg_t * evt);
 extern void wl_event_to_network_order(wl_event_msg_t * evt);
 
 /* validate if the event is proper and if valid copy event header to event */
-extern int is_wlc_event_frame(void *pktdata, wl_event_msg_t *event,
-	uint pktlen);
+extern int is_wlc_event_frame(void *pktdata, uint pktlen, uint16 exp_usr_subtype,
+	bcm_event_msg_u_t *out_event);
 
 /* conversion between host and network order for events */
 void wl_event_to_host_order(wl_event_msg_t * evt);
@@ -521,6 +540,9 @@ typedef BWL_PRE_PACKED_STRUCT struct wl_event_sd {
 	wl_sd_tlv_t	tlv[1];		/* service discovery TLV */
 } BWL_POST_PACKED_STRUCT wl_event_sd_t;
 
+/* WLC_E_PKT_FILTER event sub-classification codes */
+#define WLC_E_PKT_FILTER_TIMEOUT	1 /* Matching packet not received in last timeout seconds */
+
 /* Note: proxd has a new API (ver 3.0) deprecates the following */
 
 /* Reason codes for WLC_E_PROXD */
@@ -654,6 +676,7 @@ typedef enum nan_app_events {
 	WL_NAN_EVENT_DATA_CONF = 21, /* Data Response to Host */
 	WL_NAN_EVENT_SDF_RX = 22,	/* entire service discovery frame */
 	WL_NAN_EVENT_DATA_END = 23,
+	WL_NAN_EVENT_BCN_RX = 24,	/* received beacon payload */
 	WL_NAN_EVENT_INVALID	/* delimiter for max value */
 } nan_app_events_e;
 
@@ -691,6 +714,73 @@ typedef struct wl_event_radar_detect_data {
 	uint16 target_chanspec; /*  Target chanspec after detection of radar on current_chanspec */
 	radar_detected_event_info_t radar_info[2];
 } wl_event_radar_detect_data_t;
+
+
+#define WL_EVENT_MODESW_VER_1			1
+#define WL_EVENT_MODESW_VER_CURRENT		WL_EVENT_MODESW_VER_1
+
+#define WL_E_MODESW_FLAG_MASK_DEVICE		0x01u /* mask of device: belongs to local or peer */
+#define WL_E_MODESW_FLAG_MASK_FROM		0x02u /* mask of origin: firmware or user */
+#define WL_E_MODESW_FLAG_MASK_STATE		0x0Cu /* mask of state: modesw progress state */
+
+#define WL_E_MODESW_FLAG_DEVICE_LOCAL		0x00u /* flag - device: info is about self/local */
+#define WL_E_MODESW_FLAG_DEVICE_PEER		0x01u /* flag - device: info is about peer */
+
+#define WL_E_MODESW_FLAG_FROM_FIRMWARE		0x00u /* flag - from: request is from firmware */
+#define WL_E_MODESW_FLAG_FROM_USER		0x02u /* flag - from: request is from user/iov */
+
+#define WL_E_MODESW_FLAG_STATE_REQUESTED	0x00u /* flag - state: mode switch request */
+#define WL_E_MODESW_FLAG_STATE_INITIATED	0x04u /* flag - state: switch initiated */
+#define WL_E_MODESW_FLAG_STATE_COMPLETE		0x08u /* flag - state: switch completed/success */
+#define WL_E_MODESW_FLAG_STATE_FAILURE		0x0Cu /* flag - state: failed to switch */
+
+/* Get sizeof *X including variable data's length where X is pointer to wl_event_mode_switch_t */
+#define WL_E_MODESW_SIZE(X) (sizeof(*(X)) + (X)->length)
+
+/* Get variable data's length where X is pointer to wl_event_mode_switch_t */
+#define WL_E_MODESW_DATA_SIZE(X) (((X)->length > sizeof(*(X))) ? ((X)->length - sizeof(*(X))) : 0)
+
+#define WL_E_MODESW_REASON_UNKNOWN		0u /* reason: UNKNOWN */
+#define WL_E_MODESW_REASON_ACSD			1u /* reason: ACSD (based on events from FW */
+#define WL_E_MODESW_REASON_OBSS_DBS		2u /* reason: OBSS DBS (eg. on interference) */
+#define WL_E_MODESW_REASON_DFS			3u /* reason: DFS (eg. on subband radar) */
+#define WL_E_MODESW_REASON_DYN160		4u /* reason: DYN160 (160/2x2 - 80/4x4) */
+
+/* event structure for WLC_E_MODE_SWITCH */
+typedef struct {
+	uint16 version;
+	uint16 length;	/* size including 'data' field */
+	uint16 opmode_from;
+	uint16 opmode_to;
+	uint32 flags;	/* bit 0: peer(/local==0);
+			 * bit 1: user(/firmware==0);
+			 * bits 3,2: 00==requested, 01==initiated,
+			 *           10==complete, 11==failure;
+			 * rest: reserved
+			 */
+	uint16 reason;	/* value 0: unknown, 1: ACSD, 2: OBSS_DBS,
+			 *       3: DFS, 4: DYN160, rest: reserved
+			 */
+	uint16 data_offset;	/* offset to 'data' from beginning of this struct.
+				 * fields may be added between data_offset and data
+				 */
+	/* ADD NEW FIELDS HERE */
+	uint8 data[];	/* reason specific data; could be empty */
+} wl_event_mode_switch_t;
+
+/* when reason in WLC_E_MODE_SWITCH is DYN160, data will carry the following structure */
+typedef struct {
+	uint16 trigger;		/* value 0: MU to SU, 1: SU to MU, 2: metric_dyn160, 3:re-/assoc,
+				 *       4: disassoc, 5: rssi, 6: traffic, 7: interference,
+				 *       8: chanim_stats
+				 */
+	struct ether_addr sta_addr;	/* causal STA's MAC address when known */
+	uint16 metric_160_80;		/* latest dyn160 metric */
+	uint8 nss;		/* NSS of the STA */
+	uint8 bw;		/* BW of the STA */
+	int8 rssi;		/* RSSI of the STA */
+	uint8 traffic;		/* internal metric of traffic */
+} wl_event_mode_switch_dyn160;
 
 /* TWT Setup Completion is designed to notify the user of TWT Setup process
  * status. When 'status' field is value of BCME_OK, the user must check the

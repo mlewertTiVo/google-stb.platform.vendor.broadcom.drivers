@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsrom_tbl.h 635813 2016-05-05 12:24:53Z $
+ * $Id: bcmsrom_tbl.h 650789 2016-07-22 12:29:31Z $
  */
 
 #ifndef	_bcmsrom_tbl_h_
@@ -64,6 +64,7 @@ typedef struct {
  * - The last entry's name field must be NULL to indicate the end of the table. Other
  *   entries must have non-NULL name.
  */
+#if !defined(SROM15_MEMOPT)
 static const sromvar_t BCMATTACHDATA(pci_sromvars)[] = {
 /*	name		revmask		flags		off			mask */
 #if defined(CABLECPE)
@@ -875,6 +876,13 @@ static const sromvar_t BCMATTACHDATA(pci_sromvars)[] = {
 	{"swctrlmap4_RX5g_fem7to4", 0xffffe000, 0,      SROM13_SWCTRLMAP4_RX5G_FEM7TO4, 0xffff},
 	{"swctrlmap4_RXByp5g_fem7to4", 0xffffe000, 0, SROM13_SWCTRLMAP4_RXBYP5G_FEM7TO4, 0xffff},
 	{"swctrlmap4_misc5g_fem7to4", 0xffffe000, 0,  SROM13_SWCTRLMAP4_MISC5G_FEM7TO4, 0xffff},
+	{NULL,		0,		0,		0,			0}
+};
+#endif /* !defined(SROM15_MEMOPT) */
+
+static const sromvar_t BCMATTACHDATA(pci_srom15vars)[] = {
+	{"macaddr",	0x00008000,	SRFL_ETHADDR,		SROM15_MACHI,	0xffff},
+	{"caldata_offset", 0x00008000, 0, SROM15_CAL_OFFSET_LOC, 0xffff},
 	{NULL,		0,		0,		0,			0}
 };
 

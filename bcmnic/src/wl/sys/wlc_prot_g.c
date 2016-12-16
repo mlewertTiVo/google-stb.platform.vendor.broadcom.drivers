@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_prot_g.c 619400 2016-02-16 13:52:43Z $
+ * $Id: wlc_prot_g.c 659395 2016-09-14 03:09:14Z $
  */
 
 
@@ -47,6 +47,9 @@ enum {
 };
 
 static const bcm_iovar_t prot_g_iovars[] = {
+#ifdef BCMDBG
+	{"nonerp_present", IOV_NONERP_ASSOC, (0), 0, IOVT_BOOL, 0},
+#endif
 	{NULL, 0, 0, 0, 0, 0}
 };
 
@@ -145,12 +148,19 @@ typedef struct {
 static int wlc_prot_g_doiovar(void *ctx, uint32 actionid,
 	void *params, uint p_len, void *arg, uint len, uint val_size, struct wlc_if *wlcif);
 static void wlc_prot_g_watchdog(void *ctx);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int wlc_prot_g_dump(void *ctx, struct bcmstrbuf *b);
+#endif
 static int wlc_prot_g_doioctl(void *ctx, uint cmd, void *arg, uint len, struct wlc_if *wlcif);
 
 /* bsscfg cubby */
 static int wlc_prot_g_bss_init(void *ctx, wlc_bsscfg_t *cfg);
 static void wlc_prot_g_bss_deinit(void *ctx, wlc_bsscfg_t *cfg);
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void wlc_prot_g_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b);
+#else
 #define wlc_prot_g_bss_dump NULL
+#endif
 
 /* update configuration */
 static void wlc_prot_g_cfg_upd(wlc_prot_g_info_t *prot, wlc_bsscfg_t *cfg, uint idx, int val);
@@ -253,13 +263,16 @@ BCMATTACHFN(wlc_prot_g_attach)(wlc_info_t *wlc)
 	}
 #endif
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+	wlc_dump_register(wlc->pub, "prot_g", wlc_prot_g_dump, (void *)prot);
+#endif
 
 	/* default configurations */
 	for (j = 0; j < NBANDS(wlc); j++) {
 		wlcband_t *band;
 
 		/* Use band 1 for single band 11a */
-		if (IS_SINGLEBAND_5G(wlc->deviceid))
+		if (IS_SINGLEBAND_5G(wlc->deviceid, wlc->phy_cap))
 			j = BAND_5G_INDEX;
 
 		band = wlc->bandstate[j];
@@ -327,6 +340,11 @@ wlc_prot_g_doiovar(void *ctx, uint32 actionid,
 	BCM_REFERENCE(ret_int_ptr);
 
 	switch (actionid) {
+#ifdef BCMDBG
+	case IOV_GVAL(IOV_NONERP_ASSOC):
+		*ret_int_ptr = pgd->nonerp_assoc ? 1 : 0;
+		break;
+#endif
 
 	default:
 		err = BCME_UNSUPPORTED;
@@ -400,6 +418,27 @@ wlc_prot_g_watchdog(void *ctx)
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static int
+wlc_prot_g_dump(void *ctx, struct bcmstrbuf *b)
+{
+	wlc_prot_g_info_t *prot = (wlc_prot_g_info_t *)ctx;
+	wlc_prot_g_info_priv_t *priv = WLC_PROT_G_INFO_PRIV(prot);
+	wlc_info_t *wlc = priv->wlc;
+	int idx;
+	wlc_bsscfg_t *cfg;
+
+	bcm_bprintf(b, "prot_g: priv_offset %d cfgh %d gmode_user %d\n",
+	            wlc_prot_g_info_priv_offset, prot->cfgh, priv->gmode_user);
+
+	FOREACH_AS_BSS(wlc, idx, cfg) {
+		bcm_bprintf(b, "bsscfg %d >\n", WLC_BSSCFG_IDX(cfg));
+	        wlc_prot_g_bss_dump(prot, cfg, b);
+	}
+
+	return BCME_OK;
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* bsscfg cubby */
 static int
@@ -455,6 +494,53 @@ wlc_prot_g_bss_deinit(void *ctx, wlc_bsscfg_t *cfg)
 	*ppg = NULL;
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+static void
+wlc_prot_g_bss_dump(void *ctx, wlc_bsscfg_t *cfg, struct bcmstrbuf *b)
+{
+	wlc_prot_g_info_t *prot = (wlc_prot_g_info_t *)ctx;
+	wlc_prot_g_info_priv_t *priv = WLC_PROT_G_INFO_PRIV(prot);
+	wlc_prot_g_cfg_t *wpgc;
+	bss_prot_g_cfg_t *pgc;
+	bss_prot_g_cond_t *pgd;
+	bss_prot_g_to_t *pgt;
+
+	ASSERT(cfg != NULL);
+
+	wpgc = WLC_PROT_G_CFG(prot, cfg);
+	ASSERT(wpgc != NULL);
+
+	pgc = BSS_PROT_G_CFG(prot, cfg);
+	ASSERT(pgc != NULL);
+
+	pgd = BSS_PROT_G_COND(prot, cfg);
+	ASSERT(pgd != NULL);
+
+	pgt = BSS_PROT_G_TO(prot, cfg);
+	ASSERT(pgt != NULL);
+
+	bcm_bprintf(b, "\tcfg_offset %d cond_offset %d to_offset %d\n",
+	            priv->cfg_offset, priv->cond_offset, priv->to_offset);
+	bcm_bprintf(b, "\tnonerp %d use_prot %d barker_preamble %d\n",
+	            pgc->erp_ie_nonerp, pgc->erp_ie_use_protection,
+	            pgc->barker_preamble);
+	bcm_bprintf(b, "\tg_prot %d g_prot_ovrrd %d\n",
+	            wpgc->_g, pgc->g_override);
+	bcm_bprintf(b, "\tinclude_legacy_erp %d barker_overlap_control %d\n",
+	            pgc->include_legacy_erp, pgc->barker_overlap_control);
+
+	bcm_bprintf(b, "\tlongpre_assoc %d nonerp_assoc %d longslot_assoc %d\n",
+	            pgd->longpre_assoc, pgd->nonerp_assoc,
+	            pgd->longslot_assoc);
+
+	bcm_bprintf(b, "\tlongpre_detect_timeout %d barker_detect_timeout %d "
+	            "nonerp_ovlp_timeout %d nonerp_ibss_timeout %d "
+	            "g_prot_ibss_detect_timeout %d\n",
+	            pgt->longpre_detect_timeout, pgt->barker_detect_timeout,
+	            pgt->nonerp_ovlp_timeout, pgt->nonerp_ibss_timeout,
+	            pgt->g_ibss_timeout);
+}
+#endif /* BCMDBG || BCMDBG_DUMP */
 
 /* centralized protection config change function to simplify debugging, no consistency checking
  * this should be called only on changes to avoid overhead in periodic function

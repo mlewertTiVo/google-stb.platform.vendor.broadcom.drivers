@@ -19,7 +19,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hnddma_rx.c 650258 2016-07-20 22:39:09Z $
+ * $Id: hnddma_rx.c 656249 2016-08-25 19:58:19Z $
  */
 
 /**
@@ -50,25 +50,21 @@
 static bool dma_splitrxfill(dma_info_t *di);
 #endif
 
-#ifdef WLCXO_DATA
-#include <d11_cfg.h>
-/* default dma message level (if input msg_level pointer is null in dma_attach()) */
-static uint dma_msg_level =
-	0;
-
-const di_fcn_t dma64proc_cxo = {
-	.txreclaim	= (di_txreclaim_t)cxo_data_dma64_txreclaim,
-	.rx		= (di_rx_t)cxo_data_dma_rx,
-	.rxfill		= (di_rxfill_t)cxo_data_dma_rxfill,
-	.rxreclaim	= (di_rxreclaim_t)cxo_data_dma_rxreclaim,
-	.getnextrxp	= (di_getnextrxp_t)_dma_getnextrxp,
-	.rxenabled	= (di_rxenabled_t)dma64_rxenabled,
-	.rxidle		= (di_rxidle_t)dma64_rxidle,
-	.txfast		= (di_txfast_t)cxo_data_dma64_txfast,
-	.getnexttxp	= (di_getnexttxp_t)dma64_getnexttxp,
-	.d_getvar	= (di_getvar_t)_dma_getvar
-};
-#endif /* WLCXO_DATA */
+static void
+_dma_update_num_dd(dma_info_t *di, int *num_dd)
+{
+#if defined(D11_SPLIT_RX_FD)
+	/* Descriptors will be jumped by 2 in
+	 * case of sep_rxhdr and 1 otherwise.
+	 */
+	if (di->sep_rxhdr) {
+		*num_dd -= 2;
+	} else
+#endif /* D11_SPLIT_RX_FD */
+	{
+		*num_dd -= 1;
+	}
+}
 
 /**
  * !! rx entry routine
@@ -81,11 +77,7 @@ const di_fcn_t dma64proc_cxo = {
  *   buffer WITHOUT DMA header
  */
 void * BCMFASTPATH
-#ifdef WLCXO_DATA
-cxo_data_dma_rx(dma_info_t *di)
-#else
 _dma_rx(dma_info_t *di)
-#endif /* WLCXO_DATA */
 {
 	void *p, *head, *tail;
 	uint len;
@@ -177,21 +169,70 @@ next_frame:
 		goto next_frame;
 	} else {
 		/* multi-buffer rx */
+#ifdef BCMDBG
+		/* get rid of compiler warning */
+		p = NULL;
+#endif /* BCMDBG */
 		tail = head;
-		while ((resid > 0) && (p = _dma_getnextrxp(di, FALSE))) {
-			PKTSETNEXT(di->osh, tail, p);
-			pkt_len = MIN(resid, (int)di->rxbufsize);
+		if (di->hnddma.dmactrlflags & DMA_CTRL_SDIO_RXGLOM) {
+			while ((resid > 0) && (p = _dma_getnextrxp(di, FALSE))) {
+				PKTSETNEXT(di->osh, tail, p);
+				pkt_len = MIN(resid, (int)di->rxbufsize);
 #if defined(D11_SPLIT_RX_FD)
-			if (di->sep_rxhdr)
-				PKTSETLEN(di->osh, p, MIN(pkt_len, tcm_maxsize));
-			else
+				if (di->sep_rxhdr)
+					PKTSETLEN(di->osh, p, MIN(pkt_len, tcm_maxsize));
+				else
 #endif /* D11_SPLIT_RX_FD */
-			PKTSETLEN(di->osh, p, pkt_len);
+					PKTSETLEN(di->osh, p, pkt_len);
 
-			tail = p;
-			resid -= di->rxbufsize;
+				tail = p;
+				resid -= di->rxbufsize;
+			}
+		} else {
+			int num_dd = 0; /* Number of DMA descriptors used for this packet. */
+			num_dd = ((ltoh32(*(uint32 *)(PKTDATA(di->osh, head))) &
+					D64_RX_FRM_STS_DSCRCNT) >> D64_RX_FRM_STS_DSCRCNT_SHIFT);
+
+			/* Receive Frame Status Header DscrCntr (27:24) Contains one less
+			 * than the number of DMA descriptors used to transfer this frame
+			 * into memory. So incrementing it by 1 will give the actual number
+			 * of DMA descriptors used for this transfer.
+			 */
+			num_dd++;
+			_dma_update_num_dd(di, &num_dd);
+			while (num_dd > 0 && (p = _dma_getnextrxp(di, FALSE))) {
+				PKTSETNEXT(di->osh, tail, p);
+				pkt_len = MIN(resid, (int)di->rxbufsize);
+#if defined(D11_SPLIT_RX_FD)
+				if (di->sep_rxhdr)
+					PKTSETLEN(di->osh, p, MIN(pkt_len, tcm_maxsize));
+				else
+#endif /* D11_SPLIT_RX_FD */
+					PKTSETLEN(di->osh, p, pkt_len);
+
+				tail = p;
+				resid -= di->rxbufsize;
+				/* Descriptors will be jumped by 2 in
+				 * case of sep_rxhdr and 1 otherwise.
+				 */
+				_dma_update_num_dd(di, &num_dd);
+			}
+
 		}
 
+#ifdef BCMDBG
+		if (resid > 0) {
+			uint16 cur;
+			ASSERT(p == NULL);
+			cur = (DMA64_ENAB(di) && DMA64_MODE(di)) ?
+				B2I(((R_REG(di->osh, &di->d64rxregs->status0) & D64_RS0_CD_MASK) -
+				di->rcvptrbase) & D64_RS0_CD_MASK, dma64dd_t) :
+				B2I(R_REG(di->osh, &di->d32rxregs->status) & RS_CD_MASK,
+				dma32dd_t);
+			DMA_ERROR(("_dma_rx, rxin %d rxout %d, hw_curr %d\n",
+				di->rxin, di->rxout, cur));
+		}
+#endif /* BCMDBG */
 
 		if ((di->hnddma.dmactrlflags & DMA_CTRL_RXMULTI) == 0) {
 			DMA_ERROR(("%s: dma_rx: bad frame length (%d)\n", di->name, len));
@@ -202,8 +243,7 @@ next_frame:
 	}
 
 ret:
-#if defined(BCM47XX_CA9) || defined(STB) || defined(BCM7271)
-	/* JIRA: SWWLAN-23796 */
+#if defined(BCM47XX_CA9) || defined(STB) || defined(STB_SOC_WIFI)
 	DMA_MAP(di->osh, PKTDATA(di->osh, head), PKTLEN(di->osh, head), DMA_RX, head, NULL);
 #endif /* defined(BCM47XX_CA9) */
 
@@ -221,11 +261,7 @@ ret:
  *  This unlikely happens on memory-rich NIC, but often on memory-constrained dongle
  */
 bool BCMFASTPATH
-#ifdef WLCXO_DATA
-cxo_data_dma_rxfill(dma_info_t *di)
-#else
 _dma_rxfill(dma_info_t *di)
-#endif /* WLCXO_DATA */
 {
 	void *p;
 	uint16 rxin, rxout;
@@ -321,18 +357,8 @@ _dma_rxfill(dma_info_t *di)
 		} else
 #endif /* BCMPKTPOOL */
 		{
-#ifdef WLCXO_DATA
-			if (BCMSPLITRX_ENAB() && !di->sep_rxhdr) {
-				p = PKTGET(di->osh, (di->rxbufsize + extra_offset +
-					alignment_req - 1), CXO_PKTPOOL_RX1);
-			} else {
-				p = PKTGET(di->osh, (di->rxbufsize + extra_offset +
-					alignment_req - 1), CXO_PKTPOOL_RX);
-			}
-#else /* WLCXO_DATA */
 			p = PKTGET(di->osh, (di->rxbufsize + extra_offset +
 				alignment_req - 1), FALSE);
-#endif /* WLCXO_DATA */
 		}
 		if (p == NULL) {
 			DMA_TRACE(("%s: dma_rxfill: out of rxbufs\n", di->name));
@@ -369,7 +395,6 @@ _dma_rxfill(dma_info_t *di)
 		/* Do a cached write instead of uncached write since DMA_MAP
 		 * will flush the cache.
 		*/
-		/* Keep it 32 bit-wide to prevent asserts: RB:17293 JIRA:SWWLAN-36682 */
 		*(uint32 *)(PKTDATA(di->osh, p)) = 0;
 
 
@@ -527,11 +552,7 @@ _dma_rxfill(dma_info_t *di)
 } /* _dma_rxfill */
 
 void  BCMFASTPATH
-#ifdef WLCXO_DATA
-cxo_data_dma_rxreclaim(dma_info_t *di)
-#else
 _dma_rxreclaim(dma_info_t *di)
-#endif
 {
 	void *p;
 #ifdef BCMPKTPOOL
@@ -573,8 +594,6 @@ _dma_rxreclaim(dma_info_t *di)
 		pktpool_emptycb_disable(di->pktpool, FALSE);
 #endif /* BCMPKTPOOL */
 }
-
-#ifndef WLCXO_DATA
 
 /**
  * Initializes one tx or rx descriptor with the caller provided arguments, notably a buffer.
@@ -679,9 +698,6 @@ dma32_getnextrxp(dma_info_t *di, bool forceall)
 
 	return (rxp);
 }
-#endif /* WLCXO_DATA */
-
-#if !defined(WLCXO_DATA) || !defined(WLCXO_FULL)
 
 /**
  * Initializes one tx or rx descriptor with the caller provided arguments, notably a buffer.
@@ -693,7 +709,7 @@ dma32_getnextrxp(dma_info_t *di, bool forceall)
  *    @param[in] flags    Value that is written into the descriptors 'ctrl1' field
  *    @param[in] bufcount Buffer count value, written into the descriptors 'ctrl2' field
  */
-void BCMFASTPATH_CXO
+void BCMFASTPATH
 dma64_dd_upd(dma_info_t *di, dma64dd_t *ddring, dmaaddr_t pa, uint outidx, uint32 *flags,
 	uint32 bufcount)
 {
@@ -739,20 +755,16 @@ dma64_dd_upd(dma_info_t *di, dma64dd_t *ddring, dmaaddr_t pa, uint outidx, uint3
 
 #if (defined(BCM47XX_CA9) || defined(STB)) && !defined(BULK_DESCR_FLUSH)
 #ifdef BCM_SECURE_DMA
-	SECURE_DMA_DD_MAP(di->osh, (void *)(((uint)(&ddring[outidx])) & ~0x1f),
-		32, DMA_TX, NULL, NULL);
+	SECURE_DMA_DD_MAP(di->osh, (void *)(((uint)(&ddring[outidx])) & ~0x1f), 32,
+		DMA_TX, NULL, NULL);
 #else
-#if (__LINUX_ARM_ARCH__ == 8)
-	DMA_MAP(di->osh, (void *)(((uint64)(&ddring[outidx])) & ~0x1f), 32, DMA_TX, NULL, NULL);
-#else
-	DMA_MAP(di->osh, (void *)(((uint)(&ddring[outidx])) & ~0x1f), 32, DMA_TX, NULL, NULL);
-#endif /* (__LINUX_ARM_ARCH__ == 8) */
+	DMA_MAP(di->osh, (void *)(((uint)(&ddring[outidx])) & ~0x1f), 32,
+		DMA_TX, NULL, NULL);
 #endif /* BCM_SECURE_DMA */
 #endif 
 
 	/* memory barrier before posting the descriptor */
 	DMB();
-
 } /* dma64_dd_upd */
 
 /** returns entries on the ring, in the order in which they were placed on the ring */
@@ -901,7 +913,6 @@ dma64_dd_upd_64_from_params(dma_info_t *di, dma64dd_t *ddring, dma64addr_t pa, u
 	/* memory barrier before posting the descriptor */
 	DMB();
 }
-#endif /* !WLCXO_DATA || !WLCXO_FULL */
 
 #if defined(D11_SPLIT_RX_FD)
 static bool BCMFASTPATH
@@ -1057,68 +1068,3 @@ dma_splitrxfill(dma_info_t *di)
 	return !ring_empty;
 }
 #endif /* D11_SPLIT_RX_FD */
-
-#ifdef WLCXO_CTRL
-/* used by WLCXO_CTRL to retrieve WLCXO_DATA's DMA HW configuration */
-void
-cxo_ctrl_dma_hw_params_get(dma_hw_params_t *dmahwp, hnddma_t *hnddma, int i)
-{
-	dma_info_t *di = DI_INFO(hnddma);
-	dmaaddr_t pa; /* phys addr */
-
-	if (!di)
-		return;
-
-	UNUSED_PARAMETER(pa);
-
-	if (di->rxp) {
-#ifndef WLCXO_SIM
-		pa = DMA_MAP(di->osh, (void *)di->rxp, (di->nrxd * sizeof(void *)),
-		             DMA_TX, NULL, NULL);
-		dmahwp->chnl[i].rxp = (void **)pa;
-#else
-		dmahwp->chnl[i].rxp = di->rxp;
-#endif
-	} else {
-		dmahwp->chnl[i].rxp = NULL;
-	}
-	if (di->rxd64) {
-#ifndef WLCXO_SIM
-		pa = DMA_MAP(di->osh, (void *)(uintptr)di->rxd64, (di->nrxd * sizeof(dma64dd_t)),
-		             DMA_TX, NULL, NULL);
-		dmahwp->chnl[i].rxd_64 = (dma64dd_t *)pa;
-#else
-		dmahwp->chnl[i].rxd_64 = di->rxd64;
-#endif
-	} else {
-		dmahwp->chnl[i].rxd_64 = NULL;
-	}
-	if (di->txp) {
-#ifndef WLCXO_SIM
-		pa = DMA_MAP(di->osh, (void *)di->txp, (di->ntxd * sizeof(void *)),
-		             DMA_TX, NULL, NULL);
-		dmahwp->chnl[i].txp = (void **)pa;
-#else
-		dmahwp->chnl[i].txp = di->txp;
-#endif
-	} else {
-		dmahwp->chnl[i].txp = NULL;
-	}
-	if (di->txd64) {
-#ifndef WLCXO_SIM
-		pa = DMA_MAP(di->osh, (void *)(uintptr)di->txd64, (di->ntxd * sizeof(dma64dd_t)),
-		             DMA_TX, NULL, NULL);
-		dmahwp->chnl[i].txd_64 = (dma64dd_t *)pa;
-#else
-		dmahwp->chnl[i].txd_64 = di->txd64;
-#endif
-	} else {
-		dmahwp->chnl[i].txd_64 = NULL;
-	}
-	dmahwp->chnl[i].txregs_64 = di->d64txregs;
-	dmahwp->chnl[i].rxregs_64 = di->d64rxregs;
-#ifndef WLCXO_SIM
-	DMA_MAP(di->osh, (void *)di, sizeof(dma_info_t), DMA_TX, NULL, NULL);
-#endif
-}
-#endif /* WLCXO_CTRL */

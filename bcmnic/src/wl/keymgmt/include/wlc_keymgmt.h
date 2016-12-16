@@ -249,7 +249,7 @@ wlc_keymgmt_hw_algo_to_algo(wlc_keymgmt_t *km, wlc_key_hw_algo_t algo);
 /* utility -  rx frame support */
 int wlc_keymgmt_recvdata(wlc_keymgmt_t *km, wlc_frminfo_t *f);
 
-#if defined(WLMSG_WSEC)
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(WLMSG_WSEC)
 /* Get event name */
 const char* wlc_keymgmt_event_name(wlc_keymgmt_event_t event);
 
@@ -260,7 +260,7 @@ const char* wlc_keymgmt_notif_name(wlc_keymgmt_notif_t notif);
 const char *wlc_keymgmt_get_algo_name(wlc_keymgmt_t *km, wlc_key_algo_t algo);
 const char *wlc_keymgmt_get_hw_algo_name(wlc_keymgmt_t *km, wlc_key_hw_algo_t algo, int mode);
 
-#endif 
+#endif /* BCMDBG || BCMDBG_DUMP || WLMSG_WSEC */
 
 #ifdef BRCMAPIVTW
 /* ivtw support */

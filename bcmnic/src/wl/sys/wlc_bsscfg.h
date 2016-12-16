@@ -13,13 +13,17 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_bsscfg.h 638403 2016-05-17 19:01:20Z $
+ * $Id: wlc_bsscfg.h 665171 2016-10-15 15:40:29Z $
  */
 #ifndef _WLC_BSSCFG_H_
 #define _WLC_BSSCFG_H_
 
 #include <typedefs.h>
 #include <wlc_types.h>
+#if defined(AP) && defined(TXQ_MUX)
+#include <wlc_mux.h>
+#include <wlc_mux_utils.h>
+#endif /* AP && TXQ_MUX */
 #include <bcmwifi_channels.h>
 #include <wlc_pub.h>
 #include <wlc_rate.h>
@@ -66,9 +70,22 @@
 
 #define BSSCFG_AWDL(wlc, cfg)    (0)
 
+#ifdef WLSLOTTED_BSS
+#define BSSCFG_SLOTTED_BSS(cfg)    ((cfg) && ((cfg)->type == BSSCFG_TYPE_SLOTTED_BSS))
+#else
+#define BSSCFG_SLOTTED_BSS(cfg) 0
+#endif
+
 #ifdef WL_NAN
-#define BSSCFG_NAN_MGMT(cfg) ((cfg) && ((cfg)->type == BSSCFG_TYPE_NAN))
-#define BSSCFG_NAN_DATA(cfg) ((cfg) && ((cfg)->type == BSSCFG_TYPE_NAN_DATA))
+#define BSSCFG_NAN_MGMT(cfg) ((cfg) &&\
+	(((cfg)->type == BSSCFG_TYPE_SLOTTED_BSS) && \
+	(((cfg)->subtype == BSSCFG_SUBTYPE_NAN_MGMT) ||\
+		((cfg)->subtype == BSSCFG_SUBTYPE_NAN_MGMT_DATA))))
+
+#define BSSCFG_NAN_DATA(cfg) ((cfg) &&\
+	(((cfg)->type == BSSCFG_TYPE_SLOTTED_BSS) && \
+	(((cfg)->subtype == BSSCFG_SUBTYPE_NAN_DATA) ||\
+		((cfg)->subtype == BSSCFG_SUBTYPE_NAN_MGMT_DATA))))
 #else
 #define BSSCFG_NAN_MGMT(cfg)	FALSE
 #define BSSCFG_NAN_DATA(cfg) FALSE
@@ -192,15 +209,6 @@ struct bssload_bss;
 		if (((cfg = (wlc)->bsscfg[idx]) != NULL) && \
 			(wlc)->bsscfg[idx]->up)
 
-#ifdef WL11ULB
-/* Iterator for all ULB Enabled bsscfgs:  (wlc_info_t *wlc, int idx, wlc_bsscfg_t *cfg) */
-#define FOREACH_ULB_ENAB_BSS(wlc, idx, cfg) \
-		for (idx = 0; (int) idx < WLC_MAXBSSCFG; idx++) \
-			if (((cfg = (wlc)->bsscfg[idx]) != NULL) && \
-				BSS_MATCH_WLC((wlc), cfg) && \
-				BSSCFG_ULB_ENAB(wlc, cfg))
-#endif /* WL11ULB */
-
 #ifdef WLP2P
 #define FOREACH_P2P_BSS(wlc, idx, cfg) \
 	for (idx = 0; (int) idx < WLC_MAXBSSCFG; idx++) \
@@ -209,6 +217,11 @@ struct bssload_bss;
 			BSS_P2P_ENAB((wlc), cfg))
 #endif /* WLP2P */
 
+/* Iterator for all bsscfgs across wlc:  (wlc_info_t *wlc, int idx, wlc_bsscfg_t *cfg) */
+#define FOR_ALL_UP_AP_BSS(wlc, idx, cfg) \
+	for (idx = 0; (int) idx < WLC_MAXBSSCFG; idx++) \
+		if (((cfg = (wlc)->bsscfg[idx]) != NULL) && \
+			(wlc)->bsscfg[idx]->up && cfg->_ap)
 
 #define AP_BSS_UP_COUNT(wlc) wlc_ap_bss_up_count(wlc)
 
@@ -241,11 +254,10 @@ struct wlc_bsscfg {
 	bool		closednet_nobcnssid;	/**< hide ssid info in beacon */
 	bool		closednet_nobcprbresp;	/**< Don't respond to broadcast probe requests */
 	uint8		ap_isolate;	/**< ap isolate bitmap 0: disabled, 1: all 2: mulicast */
-	struct scb *bcmc_scb[MAXBANDS]; /* one bcmc_scb per band */
+	struct scb      *bcmc_scb;      /**< common bcmc_scb to transmit broadcast frames */
 
-	int8		_idx;		/**< the index of this bsscfg,
-					 * assigned at wlc_bsscfg_alloc()
-					 */
+	int8		_idx;           /**< index of this bsscfg assigned in wlc_bsscfg_alloc() */
+
 	/* Multicast filter list */
 	bool		allmulti;		/**< enable all multicasts */
 	uint		nmulticast;		/**< # enabled multicast addresses */
@@ -272,6 +284,7 @@ struct wlc_bsscfg {
 
 	uint32		flags;		/**< WLC_BSSCFG flags; see below */
 	bsscfg_type_t	type;		/**< bsscfg type */
+	bsscfg_subtype_t subtype;
 
 	/* STA */
 	/* Association parameters. Used to limit the scan in join process. Saved before
@@ -384,8 +397,19 @@ struct wlc_bsscfg {
 #endif /* ACKSUPR_MAC_FILTER */
 	uint8 ibss_up_pending;	/* TRUE, if ibss bringup is pending in case of modesw */
 
+	bcmc_cubby_t *bcmc_cubby; /* Broadcast/Multicast cubby pointer */
+	wl_interface_type_t iface_type;	/* stores bsscfg interface type */
 	/* ====== !!! ADD NEW FIELDS ABOVE HERE !!! ====== */
 
+#ifdef BCMDBG
+	/* ====== LEAVE THESE AT THE END ====== */
+	/* Rapid PM transition */
+	wlc_hrt_to_t *rpmt_timer;
+	uint32	rpmt_1_prd;
+	uint32	rpmt_0_prd;
+	uint8	rpmt_n_st;
+	void *last;	/* last field marker */
+#endif
 };
 
 /* wlc_bsscfg_t flags */
@@ -425,16 +449,27 @@ struct wlc_bsscfg {
 #define WLC_BSSCFG_ALLOW_FTOVERDS	0x80000000	/**< Use of FBT Over-the-DS is allowed */
 
 #define WLC_BSSCFG_FL2_AIBSS_PS		0x4	/**< The BSS supports AIBSS PS */
-#define WLC_BSSCFG_FL2_MCHAN_DISABLE	0x8	/**< Do not create mchan chan_context */
+#define WLC_BSSCFG_FL2_RSDB_LINKED	0x8	/* Other core's BSSCFG is linked to it */
 #define WLC_BSSCFG_FL2_MODESW_BWSW	0x10	/**< The BSS is for ModeSW bandwidth flag */
 #define WLC_BSSCFG_FL2_MFP_CAPABLE	0x20	/**< The BSS is for MFP capable flag */
 #define WLC_BSSCFG_FL2_MFP_REQUIRED	0x40	/**< The BSS is for MFP required flag */
 #define WLC_BSSCFG_FL2_FBT_1X		0x80	/**< The BSS is for FBT 802.1X */
 #define WLC_BSSCFG_FL2_FBT_PSK		0x100	/**< The BSS is for FBT PSK */
-#define WLC_BSSCFG_FL2_ULB_ENABLED	0x200	/* The flag is for ULB Enabled BSS */
+#define WLC_BSSCFG_FL2_MU           0x200  /* MU BSS */
 #define WLC_BSSCFG_FL2_RSDB_NOT_ACTIVE	0x400	/* To indicate an inactive primary cfg */
 #define WLC_BSSCFG_FL2_TBOW_ACTIVE  0x800  /* The flag is for TBOW Active on the BSS */
 #define WLC_BSSCFG_FL2_CSA_IN_PROGRESS 0x1000   /* The BSS is doing CSA */
+#define WLC_BSSCFG_FL2_BYPASS_DATA_ENC_DEC 0x4000 /* bypass encryption/decryption on awdl link */
+
+#define BSSCFG_IS_MU(cfg)     (((cfg)->flags2 & WLC_BSSCFG_FL2_MU) != 0)
+#define BSSCFG_CLR_MU(cfg)    ((cfg)->flags2 &= ~WLC_BSSCFG_FL2_MU)
+#define BSSCFG_SET_MU(cfg)    ((cfg)->flags2 |= WLC_BSSCFG_FL2_MU)
+
+#ifdef WL_PROXDETECT
+#define BYPASS_ENC_DATA(cfg)   ((cfg)->flags2  & WLC_BSSCFG_FL2_BYPASS_DATA_ENC_DEC)
+#else
+#define BYPASS_ENC_DATA(cfg)	FALSE
+#endif
 
 #define BSSCFG_HAS_PSINFO(cfg)	(((cfg)->flags & WLC_BSSCFG_PSINFO) != 0)
 #define BSSCFG_SET_PSINFO(cfg)	((cfg)->flags |= WLC_BSSCFG_PSINFO)
@@ -487,17 +522,6 @@ struct wlc_bsscfg {
 #define BSSCFG_IS_FBT_PSK(cfg) FALSE
 #endif
 
-#ifdef WL11ULB
-#define BSSCFG_ULB_ENAB(wlc, cfg)	(WLC_ULB_MODE_ENABLED(wlc) && \
-					 ((cfg)->flags2 & WLC_BSSCFG_FL2_ULB_ENABLED) != 0)
-#define BSSCFG_SET_ULB_ENAB(cfg)	((cfg)->flags2 |= WLC_BSSCFG_FL2_ULB_ENABLED)
-#define BSSCFG_RESET_ULB_ENAB(cfg)	((cfg)->flags2 &= ~WLC_BSSCFG_FL2_ULB_ENABLED)
-#else /* WL11ULB */
-#define BSSCFG_ULB_ENAB(cfg)		FALSE
-#define BSSCFG_SET_ULB_ENAB(cfg)	(void)
-#define BSSCFG_RESET_ULB_ENAB(cfg)	(void)
-#endif /* WL11ULB */
-
 #ifdef WLAIBSS
 #define BSSCFG_IS_AIBSS_PS_ENAB(cfg)	(((cfg)->flags2 & WLC_BSSCFG_FL2_AIBSS_PS) != 0)
 #else
@@ -533,6 +557,8 @@ struct wlc_bsscfg {
 #define BSSCFG_SET_TBOW_ACTIVE(cfg)	((cfg)->flags2 |= WLC_BSSCFG_FL2_TBOW_ACTIVE)
 #define BSSCFG_RESET_TBOW_ACTIVE(cfg)	((cfg)->flags2 &= ~WLC_BSSCFG_FL2_TBOW_ACTIVE)
 #endif /* WL_TBOW */
+
+#define BSSCFG_HAS_BCMC_SCB(cfg)	((cfg)->bcmc_scb != NULL)
 
 #define BSSCFG_IS_CSA_IN_PROGRESS(cfg)	(((cfg)->flags2 & WLC_BSSCFG_FL2_CSA_IN_PROGRESS) != 0)
 #define BSSCFG_SET_CSA_IN_PROGRESS(cfg)	((cfg)->flags2 |= WLC_BSSCFG_FL2_CSA_IN_PROGRESS)
@@ -579,11 +605,29 @@ typedef struct bsscfg_cubby_params {
  * It returns a handle that can be used in macro BSSCFG_CUBBY to retrieve the cubby.
  * Function returns a negative number on failure
  */
+#ifdef BCMDBG
+
+int wlc_bsscfg_cubby_reserve(wlc_info_t *wlc, uint size,
+	bsscfg_cubby_init_t fn_init, bsscfg_cubby_deinit_t fn_deinit,
+	bsscfg_cubby_dump_t fn_dump, void *ctx,
+	const char *func);
+int wlc_bsscfg_cubby_reserve_ext(wlc_info_t *wlc, uint size, bsscfg_cubby_params_t *params,
+	const char *func);
+
+/* Macro defines to automatically supply the function name parameter */
+#define wlc_bsscfg_cubby_reserve(wlc, size, fn_init, fn_deinit, fn_dump, ctx) \
+	wlc_bsscfg_cubby_reserve(wlc, size, fn_init, fn_deinit, fn_dump, ctx, __FUNCTION__)
+#define wlc_bsscfg_cubby_reserve_ext(wlc, size, params) \
+	wlc_bsscfg_cubby_reserve_ext(wlc, size, params, __FUNCTION__)
+
+#else /* BCMDBG */
 
 int wlc_bsscfg_cubby_reserve(wlc_info_t *wlc, uint size,
 	bsscfg_cubby_init_t fn_init, bsscfg_cubby_deinit_t fn_deinit,
 	bsscfg_cubby_dump_t fn_dump, void *ctx);
 int wlc_bsscfg_cubby_reserve_ext(wlc_info_t *wlc, uint size, bsscfg_cubby_params_t *params);
+
+#endif /* BCMDBG */
 
 /* macro to retrieve the pointer to module specific opaque data in bsscfg container */
 #define BSSCFG_CUBBY(bsscfg, handle) \
@@ -694,6 +738,38 @@ extern int wlc_bsscfg_updown_register(wlc_info_t *wlc, bsscfg_up_down_fn_t fn, v
  */
 extern int wlc_bsscfg_updown_unregister(wlc_info_t *wlc, bsscfg_up_down_fn_t fn, void *arg);
 
+/**
+ * wlc_bsscfg_iface_register()
+ *
+ * This function registers a callback that will be invoked while creating an interface.
+ *
+ * Parameters
+ *    wlc       Common driver context.
+ *    if_type	Type of interface to be created.
+ *    callback  Invoke respective interface creation callback function.
+ *    ctx       Context of the respective callback function.
+ * Returns:
+ *    BCME_OK on success, else BCME_xxx error code.
+ */
+typedef wlc_bsscfg_t *(*iface_create_hdlr_fn)(void *module_ctx, wl_interface_create_t *in,
+		wl_interface_info_t *out, int *err);
+typedef int32 (*iface_remove_hdlr_fn)(wlc_info_t *wlc, wlc_bsscfg_t *cfg);
+extern int32 wlc_bsscfg_iface_register(wlc_info_t *wlc, wl_interface_type_t iftype,
+		iface_create_hdlr_fn create_cb, iface_remove_hdlr_fn remove_cb, void *ctx);
+/**
+ * wlc_bsscfg_iface_unregister()
+ *
+ * This function unregisters a callback that will be invoked while creating an interface.
+ *
+ * Parameters
+ *    wlc       Common driver context.
+ *    if_type	Type of interface to be created.
+ * Returns:
+ *    BCME_OK on success, else BCME_xxx error code.
+ */
+extern int32 wlc_bsscfg_iface_unregister(wlc_info_t *wlc, wl_interface_type_t iftype);
+int32 wlc_if_remove_ap_sta(wlc_info_t *wlc, wlc_bsscfg_t *bsscfg);
+
 /** bcn/prbresp template update notification */
 typedef struct {
 	wlc_bsscfg_t *cfg;
@@ -793,11 +869,12 @@ int wlc_bsscfg_type_bi2cfg(wlc_info_t *wlc, wlc_bsscfg_t *cfg, wlc_bss_info_t *b
 int wlc_bsscfg_type_fixup(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
 	wlc_bsscfg_type_t *type, bool min_reinit);
 
-#define WLC_BCMCSCB_GET(wlc, bsscfg) \
-	(((bsscfg)->flags & WLC_BSSCFG_NOBCMC) ? \
-	 NULL : \
-	 (bsscfg)->bcmc_scb[CHSPEC_WLCBANDUNIT((bsscfg)->current_bss->chanspec)])
-#define WLC_BSSCFG_IDX(bsscfg) ((bsscfg)->_idx)
+#define WLC_BCMCSCB_GET(wlc, bsscfg) (((bsscfg)->flags & WLC_BSSCFG_NOBCMC) ? \
+	NULL : ((bsscfg)->bcmc_scb))
+
+#define WLC_BSSCFG_INVALID_IFIDX	-1
+#define WLC_BSSCFG_INVALID_IDX		-1
+#define WLC_BSSCFG_IDX(bsscfg)		((bsscfg)? (bsscfg)->_idx : WLC_BSSCFG_INVALID_IDX)
 
 extern int wlc_bsscfg_set_ext_cap(wlc_bsscfg_t *bsscfg, uint32 bit, bool val);
 extern bool wlc_bsscfg_test_ext_cap(wlc_bsscfg_t *bsscfg, uint32 bit);
@@ -809,7 +886,6 @@ extern bool wlc_bsscfg_test_ext_cap(wlc_bsscfg_t *bsscfg, uint32 bit);
 	(WME_ENAB((wlc)->pub) && !((cfg)->flags & WLC_BSSCFG_WME_DISABLE))
 #define BSS_WME_AS(wlc, cfg) \
 	(BSS_WME_ENAB(wlc, cfg) && ((cfg)->flags & WLC_BSSCFG_WME_ASSOC) != 0)
-
 
 /* Extend N_ENAB to per-BSS */
 #define BSS_N_ENAB(wlc, cfg) \
@@ -965,10 +1041,14 @@ void wlc_bss_rx_bcn_signal(wlc_info_t *wlc, wlc_bsscfg_t *cfg, struct scb *scb,
 
 extern bool wlc_bss_get_mimo_cap(wlc_bss_info_t *bi);
 extern bool wlc_bss_get_80p80_cap(wlc_bss_info_t *bi);
-
+extern void wlc_bsscfg_type_get(wlc_info_t *wlc, wlc_bsscfg_t *cfg,
+	wlc_bsscfg_type_t *type);
 void wlc_bsscfg_datapath_log_dump(wlc_bsscfg_t *bsscfg, int tag);
 
 wlc_info_t *wlc_bsscfg_get_wlc_from_wlcif(wlc_info_t *wlc, wlc_if_t *wlcif);
 struct ether_addr *wlc_bsscfg_get_ether_addr(wlc_info_t *wlc, wlc_if_t *wlcif);
-
+extern bool wlc_bsscfg_is_associated(wlc_bsscfg_t* bsscfg);
+extern bool wlc_bsscfg_mfp_supported(wlc_bsscfg_t *bsscfg);
+wlc_bsscfg_t* wlc_iface_create_generic_bsscfg(wlc_info_t *wlc, wl_interface_create_t *if_buf,
+	wlc_bsscfg_type_t *type, int32 *err);
 #endif	/* _WLC_BSSCFG_H_ */

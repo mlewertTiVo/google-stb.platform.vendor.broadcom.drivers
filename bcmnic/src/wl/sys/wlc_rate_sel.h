@@ -14,7 +14,7 @@
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
  *
- * $Id: wlc_rate_sel.h 636000 2016-05-06 04:05:27Z $
+ * $Id: wlc_rate_sel.h 660124 2016-09-19 03:33:35Z $
  */
 
 
@@ -132,6 +132,9 @@ extern void wlc_ratesel_rssi_attach(ratesel_info_t *rsi, enable_rssi_t en_fn,
 	disable_rssi_t dis_fn, get_rssi_t get_fn);
 #endif /* WL11N */
 
+#ifdef BCMDBG
+extern void wlc_ratesel_dump_rcb(rcb_t *rcb, int32 ac, struct bcmstrbuf *b);
+#endif
 
 #define RATESEL_MSG_INFO_VAL	0x01 /* concise rate change msg in addition to WL_RATE */
 #define RATESEL_MSG_MORE_VAL	0x02 /* verbose rate change msg */
@@ -145,6 +148,7 @@ extern void wlc_ratesel_rssi_attach(ratesel_info_t *rsi, enable_rssi_t en_fn,
 #define RATESEL_MSG_CHG_VAL	0x200 /* verbose rate_chg msg */
 
 #ifdef WL_LPC
+extern void	wlc_ratesel_lpc_update(ratesel_info_t *rsi, rcb_t *state);
 extern void wlc_ratesel_lpc_init(rcb_t *state);
 extern void wlc_ratesel_get_info(rcb_t *state, uint8 rate_stab_thresh, uint32 *new_rate_kbps,
 	bool *rate_stable, rate_lcb_info_t *lcb_info);
@@ -169,5 +173,6 @@ extern uint8 wlc_ratesel_get_link_bw(rcb_t *rcb);
 /* Get raw unprocessed current ratespec, used by ATF */
 ratespec_t wlc_ratesel_rawcurspec(rcb_t *state);
 #endif /* WLATF */
+extern void wlc_ratesel_get_ratecap(rcb_t * state, uint8 *sgi, uint16 mcs_bitmap[]);
 
 #endif	/* _WLC_RATE_H_ */

@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_rxiqcal.c 639978 2016-05-25 16:03:11Z vyass $
+ * $Id: phy_rxiqcal.c 666526 2016-10-21 18:13:48Z $
  */
 
 #include <phy_cfg.h>
@@ -28,6 +28,10 @@
 
 /* forward declaration */
 typedef struct phy_rxiqcal_mem phy_rxiqcal_mem_t;
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
+static int phy_rxiq_mismatch_dump(void *ctx, struct bcmstrbuf *b);
+#endif 
 
 /* module private states */
 struct phy_rxiqcal_priv_info {
@@ -71,6 +75,11 @@ BCMATTACHFN(phy_rxiqcal_attach)(phy_info_t *pi)
 	cmn_info->data->phy_rx_diglpf_default_coeffs_valid = FALSE;
 
 	/* Register callbacks */
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
+	/* register dump callback */
+	phy_dbg_add_dump_fn(pi, "rxiq_mismatch", phy_rxiq_mismatch_dump, pi);
+#endif 
 
 	return cmn_info;
 
@@ -123,3 +132,24 @@ void phy_rxiqcal_scanroam_cache(phy_info_t *pi, bool set)
 	if (fns->scanroam_cache != NULL)
 		(fns->scanroam_cache)(fns->ctx, set);
 }
+
+#if defined(BCMDBG) || defined(BCMDBG_DUMP) || defined(BCMDBG_PHYDUMP)
+static int
+phy_rxiq_mismatch_dump(void *ctx, struct bcmstrbuf *b)
+{
+	phy_info_t *pi = ctx;
+	phy_rxiqcal_info_t *rxiqcali = pi->rxiqcali;
+	phy_type_rxiqcal_fns_t *fns = rxiqcali->priv->fns;
+	int ret = BCME_UNSUPPORTED;
+
+	if (!pi->sh->clk) {
+		return BCME_NOCLK;
+	}
+
+	if (fns->rxiq_mismatch_dump) {
+		ret = (fns->rxiq_mismatch_dump)(fns->ctx, b);
+	}
+
+	return ret;
+}
+#endif /* BCMDBG || BCMDBG_DUMP ||  BCMDBG_PHYDUMP || WLTEST */

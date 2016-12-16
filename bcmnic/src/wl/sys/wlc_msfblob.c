@@ -176,6 +176,7 @@ wlc_blob_download(wlc_blob_info_t *wbi, uint16 flag, uint8 *data, uint32 data_le
 					wbi->segment_info->segments[i].length;
 
 				wbi->segments[i].type = wbi->segment_info->segments[i].type;
+				wbi->segments[i].flags = wbi->segment_info->segments[i].flags;
 				wbi->segments[i].length = wbi->segment_info->segments[i].length;
 				if ((wbi->segments[i].data = MALLOC(wlc->pub->osh,
 					wbi->segments[i].length)) == NULL) {

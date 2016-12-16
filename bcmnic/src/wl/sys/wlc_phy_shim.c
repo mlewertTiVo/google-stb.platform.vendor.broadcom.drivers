@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_phy_shim.c 630709 2016-04-11 19:03:01Z $
+ * $Id: wlc_phy_shim.c 664238 2016-10-11 18:43:00Z $
  */
 
 /**
@@ -59,6 +59,7 @@
 #include <wlc_bmac.h>
 #include <wlc_phy_shim.h>
 #include <wlc_phy_hal.h>
+#include <wlc_iocv.h>
 #include <wl_export.h>
 #ifdef BCMLTECOEX
 #include <wlc_ltecx.h>
@@ -74,6 +75,11 @@
 #include <wlc_lq.h>
 #include <wlc_assoc.h>
 #include <wlc_test.h>
+#include <wlc_btcx.h>
+
+#ifdef WL_MUPKTENG
+#include <wlc_mutx.h>
+#endif
 
 /* PHY SHIM module specific state */
 struct wlc_phy_shim_info {
@@ -165,9 +171,35 @@ wlapi_bmac_read_shm(wlc_phy_shim_info_t *physhim, uint offset)
 }
 
 void
+wlapi_btc_hflg(wlc_phy_shim_info_t *physhim, bool set, uint16 val)
+{
+	wlc_btc_hflg(physhim->wlc, set, val);
+}
+
+#if defined(WL_PSMX)
+void
+wlapi_bmac_write_shmx(wlc_phy_shim_info_t *physhim, uint offset, uint16 v)
+{
+	wlc_bmac_write_shmx(physhim->wlc_hw, offset, v);
+}
+
+uint16
+wlapi_bmac_read_shmx(wlc_phy_shim_info_t *physhim, uint offset)
+{
+	return wlc_bmac_read_shmx(physhim->wlc_hw, offset);
+}
+#endif /* WL_PSMX */
+
+void
 wlapi_bmac_mhf(wlc_phy_shim_info_t *physhim, uint8 idx, uint16 mask, uint16 val, int bands)
 {
 	wlc_bmac_mhf(physhim->wlc_hw, idx, mask, val, bands);
+}
+
+uint16
+wlapi_bmac_mhf_get(wlc_phy_shim_info_t *physhim, uint8 idx, int bands)
+{
+	return wlc_bmac_mhf_get(physhim->wlc_hw, idx, bands);
 }
 
 void
@@ -181,7 +213,13 @@ wlapi_suspend_mac_and_wait(wlc_phy_shim_info_t *physhim)
 {
 	wlc_bmac_suspend_mac_and_wait(physhim->wlc_hw);
 }
-
+#ifdef STA
+void
+wlapi_mimops_pmbcnrx(wlc_phy_shim_info_t *physhim)
+{
+	wlc_mimops_pmbcnrx(physhim->wlc);
+}
+#endif /* STA */
 #ifdef WLSRVSDB
 void
 wlapi_tsf_adjust(wlc_phy_shim_info_t *physhim, uint32 delta)
@@ -381,6 +419,14 @@ wlapi_high_update_txppr_offset(wlc_phy_shim_info_t *physhim, ppr_t *txpwr)
 	wlc_update_txppr_offset(physhim->wlc, txpwr);
 }
 
+#ifdef WL_MUPKTENG
+uint8
+wlapi_is_mutx_pkteng_on(wlc_phy_shim_info_t *physhim)
+{
+	wlc_info_t *wlc = (wlc_info_t *)physhim->wlc;
+	return wlc_mutx_pkteng_on(wlc->mutx);
+}
+#endif
 
 void
 wlapi_update_bt_chanspec(wlc_phy_shim_info_t *physhim, chanspec_t chanspec,
@@ -571,9 +617,14 @@ wlapi_fft(wlc_phy_shim_info_t *physhim, int n, void *inBuf, void *outBuf, int ov
 
 int
 wlapi_tof_pdp_ts(int log2n, void* pIn, int FsMHz, int rx, void* pparams,
-	int32* p_ts_thresh, int32* p_thresh_adj) {
+	int32* p_ts_thresh, int32* p_thresh_adj, wl_proxd_phy_error_t* tof_phy_error) {
 
-	return tof_pdp_ts(log2n, pIn, FsMHz, rx, pparams, p_ts_thresh, p_thresh_adj);
+	return tof_pdp_ts(log2n, pIn, FsMHz, rx, pparams, p_ts_thresh, p_thresh_adj, tof_phy_error);
+}
+void
+wlapi_tof_retrieve_thresh(void* pparams, uint16* bitflip_thresh, uint16* snr_thresh)
+{
+	tof_retrieve_thresh(pparams, bitflip_thresh, snr_thresh);
 }
 #endif /* WL_PROXDETECT */
 void
@@ -651,6 +702,12 @@ wlapi_phy_awdl_is_on(wlc_phy_shim_info_t *physhim)
 	BCM_REFERENCE(wlc);
 
 	return AWDL_ENAB(wlc->pub);
+}
+
+int
+wlapi_wlc_ioctl(wlc_phy_shim_info_t *physhim, int cmd, void *arg, int size, struct wlc_if *wlcif)
+{
+	return wlc_ioctl(physhim->wlc, cmd, arg, size, wlcif);
 }
 
 #ifdef WL_NAP

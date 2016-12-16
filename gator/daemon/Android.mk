@@ -1,4 +1,4 @@
-ifneq ($(filter avko banff cypress dawson elfin,$(TARGET_DEVICE)),)
+ifneq ($(filter $(BCM_RBOARDS) $(BCM_DBOARDS) $(BCM_CBOARDS),$(TARGET_DEVICE)),)
 
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)

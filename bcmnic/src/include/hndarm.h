@@ -18,7 +18,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: hndarm.h 619618 2016-02-17 16:16:17Z $
+ * $Id: hndarm.h 659712 2016-09-15 18:14:32Z $
  */
 
 #ifndef _hndarm_h_
@@ -90,23 +90,49 @@ extern void arm_jumpto(void *addr);
 extern void traptest(void);
 
 #if defined(__ARM_ARCH_7R__)
-#define HOST_MEMMORY_MPU_WINDOW_2	2
-#define REGION_SIZE_INDEX			15
-#define MPU_BLOCK_SIZE				(1U << (REGION_SIZE_INDEX + 1))
-extern uint32 next_mpu_region;
-
 #if defined(MPU_RAM_PROTECT_ENABLED)
+#ifndef MAX_MPU_REGION
+#define MAX_MPU_REGION						8
+#endif /* MAX_MPU_REGION */
+
+#define UPPER_RW_RAM_CODE_MPU_REGION		1
+#define LOWER_RO_ROM_CODE_MPU_REGION		2
+
+#define LOWER_RO_RAM_CODE_MPU_REGION		4
+
+#define UPPEREND_RW_RAM_CODE_MPU_REGION	(MAX_MPU_REGION - 1)
+#define UPPEREND_RO_ROM_CODE_MPU_REGION	(UPPEREND_RW_RAM_CODE_MPU_REGION - 1)
+
+#define	ROM_CODE_MPU_END_ASSEMBLY	0x140000
+#define	RAM_CODE_MPU_END_ASSEMBLY	0x300000
+
+#if defined(RAMBASE)
+#if MEMBASE < ROM_CODE_MPU_END_ASSEMBLY
+#error "RAMBASE is lower than 0x140000. Not allowed"
+#endif
+#if (MEMBASE + RAMSIZE)  > RAM_CODE_MPU_END_ASSEMBLY
+#error "MEMBASE + RAMSIZE is greater than 0x300000. Not allowed"
+#endif
+#endif /* RAMBASE */
+
 extern int cr4_mpu_set_region(uint32 region, uint32 base_address, uint32 size_index,
-	uint32 control);
+	uint32 control, uint32 subregion);
 extern int cr4_calculate_mpu_region(uint32 start, uint32 end, uint32 *p_align_start,
 	uint32 *pindex);
-extern void disable_mpu_protection(void);
+extern void disable_mpu_protection(bool disable);
 extern void disable_rodata_mpu_protection(void);
+void mpu_protect_code_area(void);
+void mpu_protect_best_fit(uint32 mpu_region_start, uint32 mpu_region_end,
+	uint32 start_addess, uint32 end_address);
+extern void
+cr4_mpu_get_assembly_region_addresses(uint32 *rom_mpu_end, uint32 *ram_mpu_end);
+extern void dump_mpu_regions(void);
 #endif  /* MPU_RAM_PROTECT_ENABLED */
 #endif	/* __ARM_ARCH_7R__ */
 
 extern uint32 si_arm_sflags(si_t *sih);
 extern uint32 si_arm_disable_deepsleep(si_t *sih, bool disable);
+extern bool si_arm_deepsleep_disabled(si_t *sih);
 
 #ifdef BCMOVLHW
 #define	BCMOVLHW_ENAB(sih)		TRUE

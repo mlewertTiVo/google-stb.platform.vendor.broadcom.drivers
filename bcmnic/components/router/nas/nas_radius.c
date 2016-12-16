@@ -44,6 +44,9 @@ radius_dispatch(nas_t *nas, radius_header_t *response)
 	unsigned char *mppe_send = NULL, *mppe_recv = NULL, *mppe_key;
 	struct iovec frags[RADIUS_MAX_ATTRIBUTES];
 	int nfrags = 0;
+#ifdef BCMDBG
+	char eabuf[ETHER_ADDR_STR_LEN];
+#endif
 
 	memset(&nas->m_deauth_params, 0, sizeof(deauth_params_t));
 	memset(&nas->m_subrem_params, 0, sizeof(subrem_params_t));

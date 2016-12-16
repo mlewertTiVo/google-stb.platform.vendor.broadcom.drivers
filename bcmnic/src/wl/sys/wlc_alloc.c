@@ -14,7 +14,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_alloc.c 645630 2016-06-24 23:27:55Z $
+ * $Id: wlc_alloc.c 663980 2016-10-07 19:14:26Z $
  */
 
 #include <wlc_cfg.h>
@@ -33,13 +33,14 @@
 #endif 
 #include <bcmwpa.h>
 #include <bcmdevs.h>
-#include <d11.h>
+#include <hndd11.h>
 #include <wlc_rate.h>
 #include <wlc_pub.h>
 #include <wlc.h>
 #include <wlc_alloc.h>
 #include <wlc_keymgmt.h>
 #include <wlc_objregistry.h>
+#include <wlc_bsscfg.h>
 #if defined(WLRSDB)
 #include <wlc_rsdb.h>
 #endif
@@ -221,6 +222,10 @@ BCMATTACHFN(wlc_tunables_init)(wlc_tunables_t *tunables, uint devid, uint unit)
 	tunables->evpool_maxdata = EVPOOL_MAXDATA;
 	tunables->evpool_size = EVPOOL_SIZE;
 #endif /* BCMPKTPOOL */
+	tunables->max_assoc_scan_results = WLC_MAX_ASSOC_SCAN_RESULTS;
+#ifdef WLSCANCACHE
+	tunables->max_scancache_results = WLC_MAX_SCANCACHE_RESULTS;
+#endif /* WLSCANCACHE */
 }
 
 static wlc_pub_t *
@@ -264,9 +269,8 @@ BCMATTACHFN(wlc_pub_malloc)(wlc_info_t * wlc, osl_t *osh, uint unit, uint devid)
 	}
 
 #if defined(WL_PSMX)
-	if (PSMX_HWCAP(pub)) {
-		if ((pub->_mcxst_cnt = MALLOCZ(osh, WL_CNT_MCXST_STRUCT_SZ)) == NULL)
-			goto fail;
+	if ((pub->_mcxst_cnt = MALLOCZ(osh, WL_CNT_MCXST_STRUCT_SZ)) == NULL) {
+		goto fail;
 	}
 #endif /* WL_PSMX */
 #endif /* WLCNT */
@@ -471,20 +475,20 @@ BCMATTACHFN(wlc_attach_malloc_high)(wlc_info_t *wlc, osl_t *osh, uint unit, uint
 	}
 
 #if defined(WL_PSMX)
-	if (PSMX_HWCAP(wlc->pub) &&
-		(wlc->corestate->macxstat_snapshot = (uint16*)
+	if ((wlc->corestate->macxstat_snapshot = (uint16*)
 	     MALLOCZ(osh, sizeof(uint16) * MACXSTAT_OFFSET_SZ)) == NULL) {
 		*err = 1034;
 		goto fail;
 	}
 #endif /* WL_PSMX */
 
-#if defined(DELTASTATS)
+#if defined(DELTASTATS) && !defined(DELTASTATS_DISABLED)
 	if ((wlc->delta_stats = (delta_stats_info_t*)
 	     MALLOCZ(osh, sizeof(delta_stats_info_t))) == NULL) {
 		*err = 1023;
 		goto fail;
 	}
+	wlc->pub->_deltastats = TRUE;
 #endif /* DELTASTATS */
 
 #ifdef WLROAMPROF
@@ -574,6 +578,12 @@ BCMATTACHFN(wlc_attach_malloc)(osl_t *osh, uint unit, uint *err, uint devid, voi
 		goto fail;
 	}
 
+	if ((wlc->d11_info = (d11_info_t*)
+	     MALLOCZ(osh, sizeof(d11_info_t))) == NULL) {
+		*err = 1051;
+		goto fail;
+	}
+
 	if (!wlc_attach_malloc_high(wlc, osh, unit, err, devid))
 		goto fail;
 
@@ -623,12 +633,12 @@ BCMATTACHFN(wlc_detach_mfree_high)(wlc_info_t *wlc, osl_t *osh)
 		wlc->stf = NULL;
 	}
 
-#if defined(DELTASTATS)
+#if defined(DELTASTATS) && !defined(DELTASTATS_DISABLED)
 	if (wlc->delta_stats) {
 		MFREE(osh, wlc->delta_stats, sizeof(delta_stats_info_t));
 		wlc->delta_stats = NULL;
 	}
-#endif /* DELTASTATS */
+#endif /* DELTASTATS && !defined(DELTASTATS_DISABLED) */
 
 	if (wlc->cmn != NULL) {
 		if (wlc->cmn->lifetime_mg && obj_registry_islast(wlc->objr)) {
@@ -708,6 +718,10 @@ BCMATTACHFN(wlc_detach_mfree)(wlc_info_t *wlc, osl_t *osh)
 
 		MFREE(osh, wlc->corestate, sizeof(wlccore_t));
 		wlc->corestate = NULL;
+	}
+
+	if (wlc->d11_info) {
+		MFREE(osh, wlc->d11_info, sizeof(d11_info_t));
 	}
 
 	/* free pub struct */

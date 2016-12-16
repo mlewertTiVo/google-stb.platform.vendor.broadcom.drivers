@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu.c 639774 2016-05-24 22:52:54Z $
+ * $Id: wlu.c 650567 2016-07-21 23:12:58Z $
  */
 
 
@@ -8476,7 +8476,7 @@ static int wl_dyn_bw(void *wl, cmd_t *cmd, char **argv)
         struct {
                 uint32 band;
                 uint32 flag;
-        } param = { 0, 0 };
+        } param = { 0, -1 };
         char *s = NULL;
 	void *ptr = NULL;
 
@@ -8521,6 +8521,11 @@ static int wl_dyn_bw(void *wl, cmd_t *cmd, char **argv)
 
         } else {
 		err = wlu_var_getbuf(wl, cmd->name, &param, sizeof(param), &ptr);
+		if (err) {
+			fprintf(stderr, "%s: %d \n", cmd->name,err);
+		} else {
+			fprintf(stderr, "%d \n", *((uint32 *)ptr));
+		}
                 return err;
         }
 
@@ -16200,10 +16205,6 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 			(sta->vht_flags & WL_STA_HTC_VHT_CAP) ? " VHT-HTC" : "");
 	}
 
-	/* Driver didn't return extended station info */
-	if (sta->len < sizeof(sta_info_t))
-		return 0;
-
 	if (sta->flags & WL_STA_SCBSTATS)
 	{
 		printf("\t tx total pkts: %d\n", dtoh32(sta->tx_tot_pkts));
@@ -16257,6 +16258,17 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 			dtoh32(sta->tx_pkts_fw_retry_exhausted));
 		printf("\t rx total pkts retried: %d\n", dtoh32(sta->rx_pkts_retried));
 	}
+
+	/* Driver didn't return extended station info */
+	if (sta->len < sizeof(sta_info_t)) {
+		return 0;
+	}
+
+	if (sta->ver >= 5) {
+		wl_print_mcsset((char *)sta->rateset_adv.mcs);
+		wl_print_vhtmcsset((uint16 *)sta->rateset_adv.vht_mcs);
+	}
+	printf("\n");
 
 	return (0);
 }

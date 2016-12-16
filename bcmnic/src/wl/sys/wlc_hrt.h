@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_hrt.h 523117 2014-12-26 18:32:49Z $
+ * $Id: wlc_hrt.h 654442 2016-08-12 18:30:09Z $
  */
 
 #ifndef _wlc_hrt_h_
@@ -61,5 +61,7 @@ extern void wlc_hrt_gptimer_cb(wlc_info_t *wlc);
 /* gptimer set/get */
 extern void wlc_hrt_gptimer_set(wlc_info_t *wlc, uint us);
 extern uint32 wlc_hrt_gptimer_get(wlc_info_t *wlc);
+
+extern bool wlc_hrt_timer_empty(wlc_hrt_info_t *hrti);
 
 #endif /* !_wlc_hrt_h_ */

@@ -13,7 +13,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlc_event.c 644653 2016-06-21 07:23:43Z $
+ * $Id: wlc_event.c 662635 2016-09-30 05:08:05Z $
  */
 
 /**
@@ -83,6 +83,9 @@ static uint8 *wlc_event_get_evpool_events(void);
 static int wlc_eventq_test_evpool_mask(wlc_eventq_t *eq, int et);
 #endif
 
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+static void wlc_event_print(wlc_eventq_t *eq, wlc_event_t *e);
+#endif
 
 enum {
 	IOV_EVENT_MSGS = 1,
@@ -91,10 +94,10 @@ enum {
 
 static const bcm_iovar_t eventq_iovars[] = {
 	{"event_msgs", IOV_EVENT_MSGS,
-	(IOVF_OPEN_ALLOW|IOVF_RSDB_SET), 0, IOVT_BUFFER, WL_EVENTING_MASK_LEN
+	(IOVF_OPEN_ALLOW), 0, IOVT_BUFFER, WL_EVENTING_MASK_LEN
 	},
 	{"event_msgs_ext", IOV_EVENT_MSGS_EXT,
-	(IOVF_OPEN_ALLOW|IOVF_RSDB_SET), 0, IOVT_BUFFER, EVENTMSGS_EXT_STRUCT_SIZE
+	(IOVF_OPEN_ALLOW), 0, IOVT_BUFFER, EVENTMSGS_EXT_STRUCT_SIZE
 	},
 	{NULL, 0, 0, 0, 0, 0}
 };
@@ -115,19 +118,9 @@ static uint8 evpool_events[WL_EVENTING_MASK_EXT_LEN] = {
 #define SUPEREVD 0x02
 #endif /* BCMPKTPOOL */
 
-/* Private data structures */
-struct wlc_eventq
+typedef struct wlc_eventq_cmn
 {
-	wlc_event_t		*head;
-	wlc_event_t		*tail;
-	wlc_info_t		*wlc;
-	void			*wl;
-	bool			tpending;
-	bool			workpending;
-	struct wl_timer		*timer;
 	wlc_eventq_cb_t		cb;
-	void			*cb_ctx;
-	bcm_mp_pool_h		mpool_h;
 	uint8			event_inds_mask_len;
 	uint8			*event_inds_mask;
 	uint8			edata_no_alloc;
@@ -147,7 +140,23 @@ struct wlc_eventq
 	void			*superevd;
 	uint8			supermsk; /* Bit 0/1 superev/superevd available */
 #endif
+} wlc_eventq_cmn_t;
+
+/* Private data structures */
+struct wlc_eventq
+{
+	wlc_event_t		*head;
+	wlc_event_t		*tail;
+	wlc_info_t		*wlc;
+	void			*wl;
+	bool			tpending;
+	bool			workpending;
+	struct wl_timer		*timer;
+	void			*cb_ctx;
+	bcm_mp_pool_h		mpool_h;
+	wlc_eventq_cmn_t *cmn;
 };
+
 
 /* This includes the auto generated ROM IOCTL/IOVAR patch handler C source file (if auto patching is
  * enabled). It must be included after the prototypes and declarations above (since the generated
@@ -158,7 +167,7 @@ struct wlc_eventq
 static void
 wlc_event_eventfail_upd(wlc_eventq_t *eq, uint32 event_id)
 {
-	uint8 *event_fail_cnt = eq->event_fail_cnt;
+	uint8 *event_fail_cnt = eq->cmn->event_fail_cnt;
 	ASSERT(event_fail_cnt);
 	ASSERT(event_id < WLC_E_LAST);
 
@@ -168,7 +177,7 @@ wlc_event_eventfail_upd(wlc_eventq_t *eq, uint32 event_id)
 static void
 wlc_event_edatanoalloc_upd(wlc_eventq_t *eq)
 {
-	eq->edata_no_alloc++;
+	eq->cmn->edata_no_alloc++;
 }
 
 #if defined(BCMPKTPOOL)
@@ -186,154 +195,192 @@ wlc_eventq_t*
 BCMATTACHFN(wlc_eventq_attach)(wlc_info_t *wlc)
 {
 	wlc_eventq_t *eq;
-	uint eventqsize;
+	uint eventqcmnsize;
+	wlc_eventq_cmn_t *cmn = NULL;
 #if defined(BCMPKTPOOL)
 	int n = wlc->pub->tunables->evpool_size;
-	ASSERT(n <= (sizeof(eq->evpre_msk) * NBBY));
-#endif
+	ASSERT(n <= (sizeof(cmn->evpre_msk) * NBBY));
+#endif /* BCMPKTPOOL */
 
-	/*
-	 * Size of the eventq structure with the space for event mask field (event_inds_mask)
-	 * and space for event fail counters (event_fail_cnt)
-	 */
-	eventqsize = sizeof(wlc_eventq_t) + WL_EVENTING_MASK_EXT_LEN +
-		(WLC_E_LAST * sizeof(*eq->event_fail_cnt));
-
-	eq = (wlc_eventq_t*)MALLOCZ(wlc->osh, eventqsize);
+	eq = (wlc_eventq_t*)MALLOCZ(wlc->osh, sizeof(wlc_eventq_t));
 	if (eq == NULL) {
 		WL_ERROR(("wl%d: %s: out of mem, malloced %d bytes\n",
-		          wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
 		goto exit;
 	}
-
-	eq->event_inds_mask_len = WL_EVENTING_MASK_EXT_LEN;
-
-	eq->event_inds_mask = (uint8*)((uintptr)eq + sizeof(wlc_eventq_t));
-
-	eq->event_fail_cnt = (uint8*)(eq->event_inds_mask + eq->event_inds_mask_len);
-
 	/* make a reference to get rid of non-debug build error */
 	(void)wlc_eventq_avail(eq);
 
 	/* Create memory pool for 'wlc_event_t' data structs. */
 	if (bcm_mpm_create_heap_pool(wlc->mem_pool_mgr, sizeof(wlc_event_t),
-	                             "event", &eq->mpool_h) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: bcm_mpm_create_heap_pool failed\n",
-			wlc->pub->unit, __FUNCTION__));
-		goto exit;
+		   "event", &eq->mpool_h) != BCME_OK) {
+			WL_ERROR(("wl%d: %s: bcm_mpm_create_heap_pool failed\n",
+				wlc->pub->unit, __FUNCTION__));
+			goto exit;
 	}
-	eq->cb = wlc_eventq_process;
 	eq->cb_ctx = eq;
 	eq->wlc = wlc;
 	eq->wl = wlc->wl;
 
-	/* utilize the bsscfg cubby machanism to register deinit callback */
-	if (wlc_bsscfg_cubby_reserve(wlc, 0, NULL, wlc_eventq_bss_deinit, NULL, eq) < 0) {
-		WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve() failed\n",
-		          wlc->pub->unit, __FUNCTION__));
-		goto exit;
-	}
+	/* Check from obj registry if common info is allocated */
+	cmn = (wlc_eventq_cmn_t *) obj_registry_get(wlc->objr, OBJR_EVENT_CMN_INFO);
 
-	if (wlc_bsscfg_updown_register(wlc, wlc_eventq_bss_updown, eq) != BCME_OK) {
-		WL_ERROR(("wl%d: %s: wlc_bsscfg_updown_register failed\n",
-		          wlc->pub->unit, __FUNCTION__));
-		goto exit;
-	}
+	if (cmn == NULL) {
+		/*
+		* Size of the eventq cmn structure with the space for
+		* event mask field (event_inds_mask)
+		* and space for event fail counters (event_fail_cnt)
+		*/
+		eventqcmnsize = sizeof(wlc_eventq_cmn_t)+ WL_EVENTING_MASK_EXT_LEN +
+			(WLC_E_LAST * sizeof(*cmn->event_fail_cnt));
 
-	/* register event module */
-	if (wlc_module_register(wlc->pub, eventq_iovars, "eventq", eq, wlc_eventq_doiovar,
-	                        NULL, NULL, wlc_eventq_down)) {
-		WL_ERROR(("wl%d: %s: event wlc_module_register() failed",
-			wlc->pub->unit, __FUNCTION__));
-		goto exit;
-	}
-	if (!(eq->timer = wl_init_timer(eq->wl, wlc_eventq_timer_cb, eq, "eventq"))) {
-		WL_ERROR(("wl%d: %s: timer failed\n", wlc->pub->unit, __FUNCTION__));
-		goto exit;
-	}
+		/* Object not found ! so alloc new object here and set the object */
+		if (!(cmn = (wlc_eventq_cmn_t *)MALLOCZ_PERSIST(wlc->osh,
+			eventqcmnsize))) {
+			WL_ERROR(("wl%d: %s: out of memory, malloced %d bytes\n",
+				wlc->pub->unit, __FUNCTION__, MALLOCED(wlc->osh)));
+			goto exit;
+		}
 
+		cmn->cb = wlc_eventq_process;
+		cmn->event_inds_mask_len = WL_EVENTING_MASK_EXT_LEN;
+		cmn->event_inds_mask = (uint8*)((uintptr)cmn + sizeof(wlc_eventq_cmn_t));
+		cmn->event_fail_cnt = (uint8*)(cmn->event_inds_mask +
+		cmn->event_inds_mask_len);
 #if defined(BCMPKTPOOL)
-	if (wlc->pub->tunables->evpool_size) {
-	/* Make a separate preallocated pool for both event structures and data, also packets.
-	 * (May be able to convert this into some sort of mem_pool later.)
-	 */
-	eq->evpool_pktsize = (sizeof(bcm_event_t) + wlc->pub->tunables->evpool_maxdata + 2);
+		if (wlc->pub->tunables->evpool_size) {
+			/* Make a separate preallocated pool for both event structures and data,
+			 * also packets.
+			 * (May be able to convert this into some sort of mem_pool later.)
+			 */
+			cmn->evpool_pktsize = (sizeof(bcm_event_t) +
+				wlc->pub->tunables->evpool_maxdata + 2);
 
-	eq->evpool_mask_len = WL_EVENTING_MASK_EXT_LEN;
-	eq->evpool_mask = wlc_event_get_evpool_events();
+			cmn->evpool_mask_len = WL_EVENTING_MASK_EXT_LEN;
+			cmn->evpool_mask = wlc_event_get_evpool_events();
 
-	eq->evpre = (wlc_event_t **)MALLOC(wlc->osh,
-		(wlc->pub->tunables->evpool_size * sizeof(*eq->evpre)));
-	eq->evpred = (void **)MALLOC(wlc->osh,
-		(wlc->pub->tunables->evpool_size * sizeof(*eq->evpred)));
+			cmn->evpre = (wlc_event_t **)MALLOC(wlc->osh,
+				(wlc->pub->tunables->evpool_size * sizeof(*cmn->evpre)));
+			cmn->evpred = (void **)MALLOC(wlc->osh,
+				(wlc->pub->tunables->evpool_size * sizeof(*cmn->evpred)));
 
-	if ((eq->evpre == NULL) || (eq->evpred == NULL)) {
-		WL_ERROR(("Could not prealloc event struct/data pointers\n"));
-		goto exit;
-	}
+			if ((cmn->evpre == NULL) || (cmn->evpred == NULL)) {
+				WL_ERROR(("Could not prealloc event struct/data pointers\n"));
+				goto exit;
+			}
 
-	if (pktpool_init(wlc->osh, &eq->evpool, &n, eq->evpool_pktsize, FALSE, lbuf_basic) ||
-	    (n < wlc->pub->tunables->evpool_size)) {
-		WL_ERROR(("Could not allocate event pool (want %d, got %d)\n",
-			wlc->pub->tunables->evpool_size, n));
-		goto exit;
-	}
+			if (pktpool_init(wlc->osh, &cmn->evpool, &n,
+				cmn->evpool_pktsize, FALSE,
+					lbuf_basic) || (n < wlc->pub->tunables->evpool_size)) {
+				WL_ERROR(("Could not allocate event pool (want %d, got %d)\n",
+					wlc->pub->tunables->evpool_size, n));
+				goto exit;
+			}
 
-	for (n = 0; n < wlc->pub->tunables->evpool_size; n++) {
-		eq->evpre[n] = (wlc_event_t *)MALLOCZ(wlc->osh, sizeof(wlc_event_t));
-		if (eq->evpre[n])
-			eq->evpre_msk |= (1 << n);
-		else
-			break;
+			for (n = 0; n < wlc->pub->tunables->evpool_size; n++) {
+				cmn->evpre[n] = (wlc_event_t *)MALLOCZ(wlc->osh,
+					sizeof(wlc_event_t));
+				if (cmn->evpre[n])
+					cmn->evpre_msk |= (1 << n);
+				else
+					break;
 
-		eq->evpred[n] = (void *)MALLOCZ(wlc->osh,
-			wlc->pub->tunables->evpool_maxdata);
-		if (eq->evpred[n])
-			eq->evpred_msk |= (1 << n);
-		else
-			break;
-	}
-	if (n < wlc->pub->tunables->evpool_size) {
-		WL_ERROR(("Could not prealloc event struct/data\n"));
-		goto exit;
-	}
+				cmn->evpred[n] = (void *)MALLOCZ(wlc->osh,
+						wlc->pub->tunables->evpool_maxdata);
+				if (cmn->evpred[n])
+					cmn->evpred_msk |= (1 << n);
+				else
+					break;
+			}
+			if (n < wlc->pub->tunables->evpool_size) {
+				WL_ERROR(("Could not prealloc event struct/data\n"));
+				goto exit;
+			}
+			/* Now the super-critical event reservation */
+			n = 1;
+			if (pktpool_init(wlc->osh, &cmn->superpool,
+				&n, cmn->evpool_pktsize, FALSE, lbuf_basic) || (n < 1)) {
+					WL_ERROR(("Event superpool failed\n"));
+					goto exit;
+			}
 
-	/* Now the super-critical event reservation */
-	n = 1;
-	if (pktpool_init(wlc->osh, &eq->superpool,
-		&n, eq->evpool_pktsize, FALSE, lbuf_basic) || (n < 1)) {
-		WL_ERROR(("Event superpool failed\n"));
-		goto exit;
-	}
-
-	eq->superev = (wlc_event_t *)MALLOCZ(wlc->osh, sizeof(wlc_event_t));
-	eq->superevd = (void *)MALLOCZ(wlc->osh, wlc->pub->tunables->evpool_maxdata);
-	if ((eq->superev == NULL) || (eq->superevd == NULL)) {
-		WL_ERROR(("Event superev/d failed\n"));
-		goto exit;
-	}
-
-	eq->supermsk = (SUPEREV | SUPEREVD);
-	}
+			cmn->superev = (wlc_event_t *)MALLOCZ(wlc->osh, sizeof(wlc_event_t));
+			cmn->superevd = (void *)MALLOCZ(wlc->osh,
+				wlc->pub->tunables->evpool_maxdata);
+			if ((cmn->superev == NULL) || (cmn->superevd == NULL)) {
+				WL_ERROR(("Event superev/d failed\n"));
+				goto exit;
+			}
+			cmn->supermsk = (SUPEREV | SUPEREVD);
+		}
 #endif /* BCMPKTPOOL */
+			/* Update registry after all allocations */
+			obj_registry_set(wlc->objr, OBJR_EVENT_CMN_INFO, cmn);
+		}
 
-	return eq;
+		(void)obj_registry_ref(wlc->objr, OBJR_EVENT_CMN_INFO);
 
-exit:
-	MODULE_DETACH(eq, wlc_eventq_detach);
-	return NULL;
+		eq->cmn = cmn;
+
+		/* utilize the bsscfg cubby machanism to register deinit callback */
+		if (wlc_bsscfg_cubby_reserve(wlc, 0, NULL, wlc_eventq_bss_deinit, NULL, eq) < 0) {
+			WL_ERROR(("wl%d: %s: wlc_bsscfg_cubby_reserve() failed\n",
+				wlc->pub->unit, __FUNCTION__));
+			goto exit;
+		}
+
+		if (wlc_bsscfg_updown_register(wlc, wlc_eventq_bss_updown, eq) != BCME_OK) {
+			WL_ERROR(("wl%d: %s: wlc_bsscfg_updown_register failed\n",
+				wlc->pub->unit, __FUNCTION__));
+			goto exit;
+		}
+
+		/* register event module */
+		if (wlc_module_register(wlc->pub, eventq_iovars, "eventq", eq, wlc_eventq_doiovar,
+			NULL, NULL, wlc_eventq_down)) {
+			WL_ERROR(("wl%d: %s: event wlc_module_register() failed",
+				wlc->pub->unit, __FUNCTION__));
+			goto exit;
+		}
+		if (!(eq->timer = wl_init_timer(eq->wl, wlc_eventq_timer_cb, eq, "eventq"))) {
+			WL_ERROR(("wl%d: %s: timer failed\n", wlc->pub->unit, __FUNCTION__));
+			goto exit;
+		}
+		return eq;
+
+	exit:
+		MODULE_DETACH(eq, wlc_eventq_detach);
+		return NULL;
 }
 
+
+#ifdef BCMDBG
+static void
+wlc_eventq_print(wlc_eventq_t *eq)
+{
+	uint32 msglevel = wl_msg_level;
+	wlc_event_t *e = eq->head;
+	wl_msg_level |= WL_INFORM_VAL;
+	while (e != NULL) {
+		wlc_event_print(eq, e);
+		e = e->next;
+	}
+	wl_msg_level = msglevel;
+}
+#endif
 
 void
 BCMATTACHFN(wlc_eventq_detach)(wlc_eventq_t *eq)
 {
-	uint eventqsize;
+	uint eventqcmnsize;
 	wlc_info_t *wlc;
+	wlc_eventq_cmn_t *cmn = eq->cmn;
 
 	if (eq == NULL)
 		return;
-
+#ifdef BCMDBG
+	wlc_eventq_print(eq);
+#endif
 	wlc = eq->wlc;
 
 	if (eq->timer) {
@@ -344,42 +391,52 @@ BCMATTACHFN(wlc_eventq_detach)(wlc_eventq_t *eq)
 		wl_free_timer(eq->wl, eq->timer);
 		eq->timer = NULL;
 	}
-
+	if (obj_registry_unref(eq->wlc->objr, OBJR_EVENT_CMN_INFO) == 0) {
+		obj_registry_set(eq->wlc->objr, OBJR_EVENT_CMN_INFO, NULL);
+		if (cmn != NULL) {
 #if defined(BCMPKTPOOL)
-	ASSERT(pktpool_tot_pkts(&eq->evpool) == pktpool_avail(&eq->evpool));
-	{
-		int n;
+			ASSERT(pktpool_tot_pkts(&cmn->evpool) == pktpool_avail(&cmn->evpool));
+			{
+				int n;
 
-		if (eq->superevd) {
-			MFREE(eq->wlc->osh, eq->superevd, wlc->pub->tunables->evpool_maxdata);
-		}
-		if (eq->superev) {
-			MFREE(eq->wlc->osh, eq->superev, sizeof(wlc_event_t));
-		}
+				if (cmn->superevd) {
+					MFREE(eq->wlc->osh, cmn->superevd,
+						wlc->pub->tunables->evpool_maxdata);
+				}
+				if (cmn->superev) {
+					MFREE(eq->wlc->osh, cmn->superev, sizeof(wlc_event_t));
+				}
+				pktpool_deinit(eq->wlc->osh, &cmn->superpool);
 
-		pktpool_deinit(eq->wlc->osh, &eq->superpool);
+				for (n = 0; n < wlc->pub->tunables->evpool_size; n++) {
+					if (cmn->evpred && cmn->evpred[n]) {
+						MFREE(eq->wlc->osh, cmn->evpred[n],
+							wlc->pub->tunables->evpool_maxdata);
+					}
+					if (cmn->evpre && cmn->evpre[n]) {
+						MFREE(eq->wlc->osh, cmn->evpre[n],
+							sizeof(wlc_event_t));
+					}
+				}
+				pktpool_deinit(eq->wlc->osh, &cmn->evpool);
 
-		for (n = 0; n < wlc->pub->tunables->evpool_size; n++) {
-			if (eq->evpred && eq->evpred[n]) {
-				MFREE(eq->wlc->osh, eq->evpred[n],
-					wlc->pub->tunables->evpool_maxdata);
+				if (cmn->evpred) {
+					MFREE(eq->wlc->osh, cmn->evpred,
+						(wlc->pub->tunables->evpool_size *
+							sizeof(*cmn->evpred)));
+				}
+				if (cmn->evpre) {
+					MFREE(eq->wlc->osh, cmn->evpre,
+						(wlc->pub->tunables->evpool_size *
+							sizeof(*cmn->evpre)));
+				}
 			}
-			if (eq->evpre && eq->evpre[n]) {
-				MFREE(eq->wlc->osh, eq->evpre[n], sizeof(wlc_event_t));
-			}
-		}
-		pktpool_deinit(eq->wlc->osh, &eq->evpool);
-
-		if (eq->evpred) {
-			MFREE(eq->wlc->osh, eq->evpred,
-				(wlc->pub->tunables->evpool_size * sizeof(*eq->evpred)));
-		}
-		if (eq->evpre) {
-			MFREE(eq->wlc->osh, eq->evpre,
-				(wlc->pub->tunables->evpool_size * sizeof(*eq->evpre)));
+#endif /*  BCMPKTPOOL */
+			eventqcmnsize = sizeof(wlc_eventq_cmn_t) + WL_EVENTING_MASK_EXT_LEN +
+				(WLC_E_LAST * sizeof(*cmn->event_fail_cnt));
+			MFREE_PERSIST(eq->wlc->osh, cmn, eventqcmnsize);
 		}
 	}
-#endif /*  BCMPKTPOOL */
 
 	wlc_module_unregister(wlc->pub, "eventq", eq);
 
@@ -389,11 +446,9 @@ BCMATTACHFN(wlc_eventq_detach)(wlc_eventq_t *eq)
 
 	bcm_mpm_delete_heap_pool(wlc->mem_pool_mgr, &eq->mpool_h);
 
-	eventqsize = sizeof(wlc_eventq_t) + WL_EVENTING_MASK_EXT_LEN +
-		(WLC_E_LAST * sizeof(*eq->event_fail_cnt));
-
-	MFREE(wlc->osh, eq, eventqsize);
+	MFREE(wlc->osh, eq, sizeof(wlc_eventq_t));
 }
+
 
 static int
 wlc_eventq_doiovar(void *hdl, uint32 actionid,
@@ -464,12 +519,13 @@ wlc_eventq_doiovar(void *hdl, uint32 actionid,
 static void
 _wlc_eventq_process(wlc_eventq_t *eq)
 {
+	wlc_eventq_cmn_t *cmn = eq->cmn;
 	ASSERT(wlc_eventq_avail(eq) == TRUE);
 	ASSERT(eq->workpending == FALSE);
 	eq->workpending = TRUE;
 
-	if (eq->cb)
-		eq->cb(eq->cb_ctx);
+	if (cmn->cb)
+		cmn->cb(eq->cb_ctx);
 
 	ASSERT(wlc_eventq_avail(eq) == FALSE);
 	ASSERT(eq->workpending == TRUE);
@@ -506,29 +562,30 @@ wlc_event_t*
 wlc_event_alloc(wlc_eventq_t *eq, uint eventid)
 {
 	wlc_event_t *e;
-
+	wlc_eventq_cmn_t *cmn = eq->cmn;
+	BCM_REFERENCE(cmn);
 	e = (wlc_event_t *) bcm_mp_alloc(eq->mpool_h);
 #if defined(BCMPKTPOOL)
 	/* If the heap-pool alloc failed, selected events may use backup event pool(s) */
 	if (e == NULL) {
 		/* Check for supercritical events first */
-		if (SUPERCRITICAL(eventid) && (eq->supermsk & SUPEREV)) {
-			eq->supermsk &= ~SUPEREV;
-			e = eq->superev;
+		if (SUPERCRITICAL(eventid) && (cmn->supermsk & SUPEREV)) {
+			cmn->supermsk &= ~SUPEREV;
+			e = cmn->superev;
 			goto exit;
 		}
 
-		if (eq->evpre_msk && wlc_eventq_test_evpool_mask(eq, eventid)) {
+		if (cmn->evpre_msk && wlc_eventq_test_evpool_mask(eq, eventid)) {
 			uint num, msk;
 
-			for (num = 0, msk = eq->evpre_msk; msk; num++, msk >>= 1) {
+			for (num = 0, msk = cmn->evpre_msk; msk; num++, msk >>= 1) {
 				if (msk & 1)
 					break;
 			}
 
 			if (msk) {
-				eq->evpre_msk &= ~(1 << num);
-				e = eq->evpre[num];
+				cmn->evpre_msk &= ~(1 << num);
+				e = cmn->evpre[num];
 			}
 		}
 	}
@@ -553,31 +610,31 @@ void*
 wlc_event_data_alloc(wlc_eventq_t *eq, uint32 datalen, uint32 event_id)
 {
 	void *dblock = NULL;
-
+	wlc_eventq_cmn_t *cmn = eq->cmn;
 	BCM_REFERENCE(event_id);
-
+	BCM_REFERENCE(cmn);
 	dblock = MALLOCZ(eq->wlc->osh, datalen);
 
 #if defined(BCMPKTPOOL)
 	/* If the heap alloc failed, selected events may backup data pool(s) */
 	if ((dblock == NULL) && (datalen <= eq->wlc->pub->tunables->evpool_maxdata)) {
 		/* Check for supercritical first */
-		if (SUPERCRITICAL(event_id) && (eq->supermsk & SUPEREVD)) {
-			eq->supermsk &= ~SUPEREVD;
-			return eq->superevd;
+		if (SUPERCRITICAL(event_id) && (cmn->supermsk & SUPEREVD)) {
+			cmn->supermsk &= ~SUPEREVD;
+			return cmn->superevd;
 		}
 
-		if (eq->evpred_msk && wlc_eventq_test_evpool_mask(eq, event_id)) {
+		if (cmn->evpred_msk && wlc_eventq_test_evpool_mask(eq, event_id)) {
 			uint num, msk;
 
-			for (num = 0, msk = eq->evpred_msk; msk; num++, msk >>= 1) {
+			for (num = 0, msk = cmn->evpred_msk; msk; num++, msk >>= 1) {
 				if (msk & 1)
 					break;
 			}
 
 			if (msk) {
-				eq->evpred_msk &= ~(1 << num);
-				dblock = eq->evpred[num];
+				cmn->evpred_msk &= ~(1 << num);
+				dblock = cmn->evpred[num];
 				memset(dblock, 0, datalen);
 			}
 		}
@@ -594,20 +651,22 @@ wlc_event_data_alloc(wlc_eventq_t *eq, uint32 datalen, uint32 event_id)
 int
 wlc_event_data_free(wlc_eventq_t *eq, void *data, uint32 datalen)
 {
+	wlc_eventq_cmn_t *cmn = eq->cmn;
+	BCM_REFERENCE(cmn);
 #if defined(BCMPKTPOOL)
 	/* Check backup data pool first */
 	ASSERT(eq);
 	if (data && (datalen <= eq->wlc->pub->tunables->evpool_maxdata)) {
 		uint num;
 
-		if (data == eq->superevd) {
-			eq->supermsk |= SUPEREVD;
+		if (data == cmn->superevd) {
+			cmn->supermsk |= SUPEREVD;
 			return 0;
 		}
 
 		for (num = 0; num < eq->wlc->pub->tunables->evpool_size; num++) {
-			if (data == eq->evpred[num]) {
-				eq->evpred_msk |= (1 << num);
+			if (data == cmn->evpred[num]) {
+				cmn->evpred_msk |= (1 << num);
 				return 0;
 			}
 		}
@@ -626,51 +685,50 @@ static void*
 wlc_event_pktget(wlc_eventq_t *eq, uint pktlen, uint32 event_id)
 {
 	void *p = NULL;
+	wlc_eventq_cmn_t *cmn = eq->cmn;
 	ASSERT(event_id < WLC_E_LAST);
-
+	BCM_REFERENCE(cmn);
 	p = PKTGET(eq->wlc->osh, pktlen, FALSE);
-
 #if defined(BCMPKTPOOL)
 	/* If not allocated, try the backup event packet pool if applicable */
-	if ((p == NULL) && (pktlen <= eq->evpool_pktsize)) {
+	if ((p == NULL) && (pktlen <= cmn->evpool_pktsize)) {
 		if (wlc_eventq_test_evpool_mask(eq, event_id) || SUPERCRITICAL(event_id)) {
 			if (SUPERCRITICAL(event_id))
-				p = pktpool_get(&eq->superpool);
+				p = pktpool_get(&cmn->superpool);
 			if ((p == NULL) && wlc_eventq_test_evpool_mask(eq, event_id))
-				p = pktpool_get(&eq->evpool);
+				p = pktpool_get(&cmn->evpool);
 		}
 	}
 #endif /* BCMPKTPOOL */
 	if (p == NULL) {
 		wlc_event_eventfail_upd(eq, event_id);
 	}
-
 	return p;
 }
 
 void
 wlc_event_free(wlc_eventq_t *eq, wlc_event_t *e)
 {
+	wlc_eventq_cmn_t *cmn = eq->cmn;
+	BCM_REFERENCE(cmn);
 	if (e->data != NULL) {
 		wlc_event_data_free(eq, e->data, e->event.datalen);
 	}
-
 	ASSERT(e->next == NULL);
-
 #if defined(BCMPKTPOOL)
 	/* Check the preallocated event backup pool first */
 	{
 		uint num;
 		ASSERT(eq);
 
-		if (e == eq->superev) {
-			eq->supermsk |= SUPEREV;
+		if (e == cmn->superev) {
+			cmn->supermsk |= SUPEREV;
 			return;
 		}
 
 		for (num = 0; num < eq->wlc->pub->tunables->evpool_size; num++) {
-			if (e == eq->evpre[num]) {
-				eq->evpre_msk |= (1 << num);
+			if (e == cmn->evpre[num]) {
+				cmn->evpre_msk |= (1 << num);
 				return;
 			}
 		}
@@ -733,6 +791,386 @@ wlc_eventq_avail(wlc_eventq_t *eq)
 	return (eq->head != NULL);
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+static void
+wlc_event_print(wlc_eventq_t *eq, wlc_event_t *e)
+{
+	wlc_info_t *wlc = eq->wlc;
+	uint msg = e->event.event_type;
+	struct ether_addr *addr = e->addr;
+	uint result = e->event.status;
+	char eabuf[ETHER_ADDR_STR_LEN];
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
+	uint auth_type = e->event.auth_type;
+	const char *auth_str;
+	const char *event_name;
+	uint status = e->event.reason;
+	char ssidbuf[SSID_FMT_BUF_LEN];
+#endif /* BCMDBG || WLMSG_INFORM */
+
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
+	event_name = bcmevent_get_name(msg);
+#endif /* BCMDBG || WLMSG_INFORM */
+
+	BCM_REFERENCE(wlc);
+
+	if (addr != NULL)
+		bcm_ether_ntoa(addr, eabuf);
+	else
+		strncpy(eabuf, "<NULL>", 7);
+
+	switch (msg) {
+	case WLC_E_START:
+	case WLC_E_DEAUTH:
+	case WLC_E_ASSOC_IND:
+	case WLC_E_REASSOC_IND:
+	case WLC_E_DISASSOC:
+	case WLC_E_EAPOL_MSG:
+	case WLC_E_BCNRX_MSG:
+	case WLC_E_BCNSENT_IND:
+	case WLC_E_ROAM_PREP:
+	case WLC_E_BCNLOST_MSG:
+	case WLC_E_PROBREQ_MSG:
+#ifdef WLP2P
+	case WLC_E_PROBRESP_MSG:
+	case WLC_E_P2P_PROBREQ_MSG:
+#endif
+#if 0 && (0>= 0x0620)
+	case WLC_E_ASSOC_IND_NDIS:
+	case WLC_E_REASSOC_IND_NDIS:
+	case WLC_E_IBSS_COALESCE:
+#endif 
+	case WLC_E_AUTHORIZED:
+	case WLC_E_PROBREQ_MSG_RX:
+		WL_INFORM(("wl%d: MACEVENT: %s, MAC %s\n",
+		           WLCWLUNIT(wlc), event_name, eabuf));
+		break;
+
+	case WLC_E_ASSOC:
+	case WLC_E_REASSOC:
+		if (result == WLC_E_STATUS_SUCCESS) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, SUCCESS\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_TIMEOUT) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, TIMEOUT\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_ABORT) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, ABORT\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_NO_ACK) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, NO_ACK\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_UNSOLICITED) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, UNSOLICITED\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_FAIL) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, FAILURE, status %d\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, (int)status));
+		} else {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, unexpected status %d\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, (int)result));
+		}
+		break;
+
+	case WLC_E_DEAUTH_IND:
+	case WLC_E_DISASSOC_IND:
+		WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, reason %d\n",
+		           WLCWLUNIT(wlc), event_name, eabuf, (int)status));
+		break;
+
+#if defined(BCMDBG) || defined(WLMSG_INFORM)
+	case WLC_E_AUTH:
+	case WLC_E_AUTH_IND: {
+		char err_msg[32];
+
+		if (auth_type == DOT11_OPEN_SYSTEM) {
+			auth_str = "Open System";
+		} else if (auth_type == DOT11_SHARED_KEY) {
+			auth_str = "Shared Key";
+		} else if (auth_type == DOT11_FAST_BSS) {
+			auth_str = "Fast BSS Transition";
+		} else {
+			(void)snprintf(err_msg, sizeof(err_msg), "AUTH unknown: %d",
+				(int)auth_type);
+			auth_str = err_msg;
+		}
+
+		if (msg == WLC_E_AUTH_IND) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, %s\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, auth_str));
+		} else if (result == WLC_E_STATUS_SUCCESS) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, %s, SUCCESS\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, auth_str));
+		} else if (result == WLC_E_STATUS_TIMEOUT) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, %s, TIMEOUT\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, auth_str));
+		} else if (result == WLC_E_STATUS_FAIL) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, %s, FAILURE, status %d\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, auth_str, (int)status));
+		}
+		break;
+	}
+#endif /* BCMDBG || WLMSG_INFORM */
+	case WLC_E_JOIN:
+	case WLC_E_ROAM:
+	case WLC_E_BSSID:
+	case WLC_E_SET_SSID:
+		if (result == WLC_E_STATUS_SUCCESS) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_FAIL) {
+			WL_INFORM(("wl%d: MACEVENT: %s, failed\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else if (result == WLC_E_STATUS_NO_NETWORKS) {
+			WL_INFORM(("wl%d: MACEVENT: %s, no networks found\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else if (result == WLC_E_STATUS_ABORT) {
+			WL_INFORM(("wl%d: MACEVENT: %s, ABORT\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else {
+			WL_INFORM(("wl%d: MACEVENT: %s, unexpected status %d\n",
+			           WLCWLUNIT(wlc), event_name, (int)result));
+		}
+		break;
+
+	case WLC_E_BEACON_RX:
+		if (result == WLC_E_STATUS_SUCCESS) {
+			WL_INFORM(("wl%d: MACEVENT: %s, SUCCESS\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else if (result == WLC_E_STATUS_FAIL) {
+			WL_INFORM(("wl%d: MACEVENT: %s, FAIL\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else {
+			WL_INFORM(("wl%d: MACEVENT: %s, result %d\n",
+			           WLCWLUNIT(wlc), event_name, result));
+		}
+		break;
+
+
+	case WLC_E_LINK:
+		WL_INFORM(("wl%d: MACEVENT: %s %s\n",
+		           WLCWLUNIT(wlc), event_name,
+		           (e->event.flags&WLC_EVENT_MSG_LINK)?"UP":"DOWN"));
+		break;
+
+	case WLC_E_MIC_ERROR:
+		WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, Group: %s, Flush Q: %s\n",
+		           WLCWLUNIT(wlc), event_name, eabuf,
+		           (e->event.flags&WLC_EVENT_MSG_GROUP)?"Yes":"No",
+		           (e->event.flags&WLC_EVENT_MSG_FLUSHTXQ)?"Yes":"No"));
+		break;
+
+	case WLC_E_ICV_ERROR:
+	case WLC_E_UNICAST_DECODE_ERROR:
+	case WLC_E_MULTICAST_DECODE_ERROR:
+		WL_INFORM(("wl%d: MACEVENT: %s, MAC %s\n",
+		           WLCWLUNIT(wlc), event_name, eabuf));
+		break;
+
+	case WLC_E_TXFAIL:
+		/* TXFAIL messages are too numerous for WL_INFORM() */
+		break;
+
+	case WLC_E_COUNTRY_CODE_CHANGED: {
+		char cstr[16];
+		memset(cstr, 0, sizeof(cstr));
+		memcpy(cstr, e->data, MIN(e->event.datalen, sizeof(cstr) - 1));
+		WL_INFORM(("wl%d: MACEVENT: %s New Country: %s\n", WLCWLUNIT(wlc),
+		           event_name, cstr));
+		break;
+	}
+
+	case WLC_E_RETROGRADE_TSF:
+		WL_INFORM(("wl%d: MACEVENT: %s, MAC %s\n",
+		           WLCWLUNIT(wlc), event_name, eabuf));
+		break;
+
+#ifdef WIFI_ACT_FRAME
+	case WLC_E_ACTION_FRAME_OFF_CHAN_COMPLETE:
+#endif
+	case WLC_E_SCAN_COMPLETE:
+		if (result == WLC_E_STATUS_SUCCESS) {
+			WL_INFORM(("wl%d: MACEVENT: %s, SUCCESS\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else if (result == WLC_E_STATUS_ABORT) {
+			WL_INFORM(("wl%d: MACEVENT: %s, ABORTED\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else {
+			WL_INFORM(("wl%d: MACEVENT: %s, result %d\n",
+			           WLCWLUNIT(wlc), event_name, result));
+		}
+		break;
+
+	case WLC_E_AUTOAUTH:
+		WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, result %d\n",
+		           WLCWLUNIT(wlc), event_name, eabuf, (int)result));
+		break;
+
+	case WLC_E_ADDTS_IND:
+		if (result == WLC_E_STATUS_SUCCESS) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, SUCCESS\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_TIMEOUT) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, TIMEOUT\n",
+			           WLCWLUNIT(wlc), event_name, eabuf));
+		} else if (result == WLC_E_STATUS_FAIL) {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, FAILURE, status %d\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, (int)status));
+		} else {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, unexpected status %d\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, (int)result));
+		}
+		break;
+
+	case WLC_E_DELTS_IND:
+		if (result == WLC_E_STATUS_SUCCESS) {
+			WL_INFORM(("wl%d: MACEVENT: %s success ...\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else if (result == WLC_E_STATUS_UNSOLICITED) {
+			WL_INFORM(("wl%d: MACEVENT: DELTS unsolicited %s\n",
+			           WLCWLUNIT(wlc), event_name));
+		} else {
+			WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, unexpected status %d\n",
+			           WLCWLUNIT(wlc), event_name, eabuf, (int)result));
+		}
+		break;
+
+	case WLC_E_PFN_NET_FOUND:
+	case WLC_E_PFN_NET_LOST:
+		WL_INFORM(("wl%d: PFNEVENT: %s, SSID %s, SSID len %d\n",
+		           WLCWLUNIT(wlc), event_name,
+		           (wlc_format_ssid(ssidbuf, e->data, e->event.datalen), ssidbuf),
+		           e->event.datalen));
+		break;
+
+	case WLC_E_PSK_SUP:
+		WL_INFORM(("wl%d: MACEVENT: %s, state %d, reason %d\n", WLCWLUNIT(wlc),
+		           event_name, result, status));
+		break;
+
+#if defined(IBSS_PEER_DISCOVERY_EVENT)
+	case WLC_E_IBSS_ASSOC:
+		WL_INFORM(("wl%d: MACEVENT: %s, PEER %s\n", WLCWLUNIT(wlc), event_name, eabuf));
+		break;
+#endif /* defined(IBSS_PEER_DISCOVERY_EVENT) */
+
+
+	case WLC_E_PSM_WATCHDOG:
+		WL_INFORM(("wl%d: MACEVENT: %s, psmdebug 0x%x, phydebug 0x%x, psm_brc 0x%x\n",
+		           WLCWLUNIT(wlc), event_name, result, status, auth_type));
+		break;
+
+	case WLC_E_TRACE:
+		/* We don't want to trace the trace event */
+		break;
+
+#ifdef WIFI_ACT_FRAME
+	case WLC_E_ACTION_FRAME_COMPLETE:
+		WL_INFORM(("wl%d: MACEVENT: %s status: %s\n", WLCWLUNIT(wlc), event_name,
+		           (result == WLC_E_STATUS_NO_ACK?"NO ACK":"ACK")));
+		break;
+#endif /* WIFI_ACT_FRAME */
+
+	/*
+	 * Events that don't require special decoding
+	 */
+	case WLC_E_ASSOC_REQ_IE:
+	case WLC_E_ASSOC_RESP_IE:
+	case WLC_E_PMKID_CACHE:
+	case WLC_E_PRUNE:
+	case WLC_E_RADIO:
+	case WLC_E_IF:
+	case WLC_E_EXTLOG_MSG:
+	case WLC_E_RSSI:
+	case WLC_E_ESCAN_RESULT:
+	case WLC_E_DCS_REQUEST:
+	case WLC_E_CSA_COMPLETE_IND:
+#ifdef WIFI_ACT_FRAME
+	case WLC_E_ACTION_FRAME:
+	case WLC_E_ACTION_FRAME_RX:
+#endif
+#ifdef WLP2P
+	case WLC_E_P2P_DISC_LISTEN_COMPLETE:
+#endif
+#if 0 && (0>= 0x0620)
+	case WLC_E_PRE_ASSOC_IND:
+	case WLC_E_PRE_REASSOC_IND:
+	case WLC_E_AP_STARTED:
+	case WLC_E_DFS_AP_STOP:
+	case WLC_E_DFS_AP_RESUME:
+#endif
+#if 0 && (0>= 0x0630)
+	case WLC_E_ACTION_FRAME_RX_NDIS:
+	case WLC_E_AUTH_REQ:
+	case WLC_E_SPEEDY_RECREATE_FAIL:
+	case WLC_E_ASSOC_RECREATED:
+#endif 
+#ifdef PROP_TXSTATUS
+	case WLC_E_FIFO_CREDIT_MAP:
+	case WLC_E_BCMC_CREDIT_SUPPORT:
+#endif
+#ifdef P2PO
+	case WLC_E_SERVICE_FOUND:
+	case WLC_E_P2PO_ADD_DEVICE:
+	case WLC_E_P2PO_DEL_DEVICE:
+#endif
+#if defined(P2PO) || defined(ANQPO)
+	case WLC_E_GAS_FRAGMENT_RX:
+	case WLC_E_GAS_COMPLETE:
+#endif
+	case WLC_E_WAKE_EVENT:
+	case WLC_E_NATIVE:
+		WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#ifdef WLTDLS
+	case WLC_E_TDLS_PEER_EVENT:
+		WL_INFORM(("wl%d: MACEVENT: %s, MAC %s, reason %d\n",
+			WLCWLUNIT(wlc), event_name, eabuf, (int)status));
+		break;
+#endif /* WLTDLS */
+#if defined(WLPKTDLYSTAT) && defined(WLPKTDLYSTAT_IND)
+	case WLC_E_PKTDELAY_IND:
+		WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#endif /* defined(WLPKTDLYSTAT) && defined(WLPKTDLYSTAT_IND) */
+#if defined(WL_PROXDETECT)
+	case WLC_E_PROXD:
+		WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#endif /* defined(WL_PROXDETECT) */
+
+	case WLC_E_CCA_CHAN_QUAL:
+		WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+	case WLC_E_PSTA_PRIMARY_INTF_IND:
+		WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#ifdef WLINTFERSTAT
+	case WLC_E_TXFAIL_THRESH:
+	WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#endif  /* WLINTFERSTAT */
+	case WLC_E_RMC_EVENT:
+		WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#ifdef DPSTA
+	case WLC_E_DPSTA_INTF_IND:
+		WL_INFORM(("wl%d: DPSTAEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#endif /* DPSTA */
+#ifdef WLFBT
+	case WLC_E_FBT_AUTH_REQ_IND:
+		WL_INFORM(("wl%d: MACEVENT: %s\n", WLCWLUNIT(wlc), event_name));
+		break;
+#endif /* WLFBT */
+	default:
+		WL_INFORM(("wl%d: MACEVENT: UNSUPPORTED %d, MAC %s, result %d, status %d,"
+			" auth %d\n", WLCWLUNIT(wlc), msg, eabuf, (int)result, (int)status,
+			(int)auth_type));
+		break;
+	}
+}
+#endif /* BCMDBG || BCMDBG_ERR */
 
 /* Immediate event processing.
  * Process the event and any events generated during the processing,
@@ -741,6 +1179,9 @@ wlc_eventq_avail(wlc_eventq_t *eq)
 void
 wlc_event_process(wlc_eventq_t *eq, wlc_event_t *e)
 {
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+	wlc_event_print(eq, e);
+#endif /* BCMDBG || BCMDBG_ERR */
 
 	/* deliver event to the port OS right now */
 	wl_event_sync(eq->wl, e->event.ifname, e);
@@ -771,25 +1212,25 @@ wlc_eventq_register_ind_ext(wlc_eventq_t *eq, eventmsgs_ext_t* iovar_msg, uint8 
 {
 	int i;
 	int current_event_mask_size;
-
+	wlc_eventq_cmn_t *cmn = eq->cmn;
 
 	/*  re-using the event_msgs_ext iovar struct for convenience, */
 	/*	but only using some fields -- */
 	/*	if changed remember to check callers */
 
-	current_event_mask_size = MIN(eq->event_inds_mask_len, iovar_msg->len);
+	current_event_mask_size = MIN(cmn->event_inds_mask_len, iovar_msg->len);
 
 	switch (iovar_msg->command) {
 		case EVENTMSGS_SET_BIT:
 			for (i = 0; i < current_event_mask_size; i++)
-				eq->event_inds_mask[i] |= mask[i];
+				cmn->event_inds_mask[i] |= mask[i];
 			break;
 		case EVENTMSGS_RESET_BIT:
 			for (i = 0; i < current_event_mask_size; i++)
-				eq->event_inds_mask[i] &= mask[i];
+				cmn->event_inds_mask[i] &= mask[i];
 			break;
 		case EVENTMSGS_SET_MASK:
-			bcopy(mask, eq->event_inds_mask, current_event_mask_size);
+			bcopy(mask, cmn->event_inds_mask, current_event_mask_size);
 			break;
 		default:
 			return BCME_BADARG;
@@ -807,16 +1248,16 @@ static int
 wlc_eventq_query_ind_ext(wlc_eventq_t *eq, eventmsgs_ext_t* in_iovar_msg,
 	eventmsgs_ext_t* out_iovar_msg, uint8 *mask)
 {
-	out_iovar_msg->len = MIN(eq->event_inds_mask_len, in_iovar_msg->len);
-	out_iovar_msg->maxgetsize = eq->event_inds_mask_len;
-	bcopy(eq->event_inds_mask, mask, out_iovar_msg->len);
+	out_iovar_msg->len = MIN(eq->cmn->event_inds_mask_len, in_iovar_msg->len);
+	out_iovar_msg->maxgetsize = eq->cmn->event_inds_mask_len;
+	bcopy(eq->cmn->event_inds_mask, mask, out_iovar_msg->len);
 	return 0;
 }
 
 int
 wlc_eventq_test_ind(wlc_eventq_t *eq, int et)
 {
-	return isset(eq->event_inds_mask, et);
+	return isset(eq->cmn->event_inds_mask, et);
 }
 
 static int
@@ -840,8 +1281,8 @@ wlc_eventq_handle_ind(wlc_eventq_t *eq, wlc_event_t *e)
 void
 wlc_eventq_flush(wlc_eventq_t *eq)
 {
-	if (eq->cb)
-		eq->cb(eq->cb_ctx);
+	if (eq->cmn->cb)
+		eq->cmn->cb(eq->cb_ctx);
 	if (eq->tpending) {
 		wl_del_timer(eq->wl, eq->timer);
 		eq->tpending = FALSE;
@@ -853,7 +1294,7 @@ wlc_eventq_flush(wlc_eventq_t *eq)
 static int
 wlc_eventq_test_evpool_mask(wlc_eventq_t *eq, int et)
 {
-	return isset(eq->evpool_mask, et);
+	return isset(eq->cmn->evpool_mask, et);
 }
 
 int
@@ -862,9 +1303,9 @@ wlc_eventq_set_evpool_mask(wlc_eventq_t* eq, uint et, bool enab)
 	if (et >= WLC_E_LAST)
 		return -1;
 	if (enab)
-		setbit(eq->evpool_mask, et);
+		setbit(eq->cmn->evpool_mask, et);
 	else
-		clrbit(eq->evpool_mask, et);
+		clrbit(eq->cmn->evpool_mask, et);
 
 	return 0;
 }
@@ -1067,9 +1508,9 @@ wlc_eventq_set_ind(wlc_eventq_t* eq, uint et, bool enab)
 	if (et >= WLC_E_LAST)
 		return -1;
 	if (enab)
-		setbit(eq->event_inds_mask, et);
+		setbit(eq->cmn->event_inds_mask, et);
 	else
-		clrbit(eq->event_inds_mask, et);
+		clrbit(eq->cmn->event_inds_mask, et);
 
 	if (et == WLC_E_PROBREQ_MSG)
 		wlc_enable_probe_req(eq->wlc, PROBE_REQ_EVT_MASK, enab? PROBE_REQ_EVT_MASK:0);

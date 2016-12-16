@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: bcmwpa.h 633551 2016-04-22 22:51:06Z $
+ * $Id: bcmwpa.h 660147 2016-09-19 07:27:05Z $
  */
 
 #ifndef _BCMWPA_H_
@@ -203,6 +203,22 @@ extern bool wpa_check_mic(eapol_header_t *eapol, uint key_desc, uint8 *mic_key);
 extern void wpa_calc_pmkid(struct ether_addr *auth_ea, struct ether_addr *sta_ea,
 	uint8 *pmk, uint pmk_len, uint8 *pmkid, uint8 *data, uint8 *digest);
 
+/* Encrypt key data for a WPA key message */
+extern bool wpa_encr_key_data(eapol_wpa_key_header_t *body, uint16 key_info,
+	uint8 *ekey, uint8 *gtk, uint8 *data, uint8 *encrkey, rc4_ks_t *rc4key);
+
+/* Decrypt key data from a WPA key message */
+extern bool wpa_decr_key_data(eapol_wpa_key_header_t *body, uint16 key_info,
+	uint8 *ekey, uint8 *gtk, uint8 *data, uint8 *encrkey, rc4_ks_t *rc4key);
+
+/* Decrypt a group transient key from a WPA key message */
+extern bool wpa_decr_gtk(eapol_wpa_key_header_t *body, uint16 key_info,
+	uint8 *ekey, uint8 *gtk, uint8 *data, uint8 *encrkey, rc4_ks_t *rc4key);
+#endif	/* BCMSUP_PSK || WLFBT || BCMAUTH_PSK || defined(GTKOE) */
+
+#if defined(BCMSUP_PSK) || defined(WLFBT) || defined(BCMAUTH_PSK)|| defined(WL_OKC) || \
+	defined(GTKOE) || defined(WLHOSTFBT)
+
 /* Calculate PMKR0 for FT association */
 extern void wpa_calc_pmkR0(uchar *ssid, int ssid_len, uint16 mdid, uint8 *r0kh,
 	uint r0kh_len, struct ether_addr *sta_ea,
@@ -217,18 +233,11 @@ extern void wpa_calc_ft_ptk(struct ether_addr *bssid, struct ether_addr *sta_ea,
 	uint8 *anonce, uint8* snonce, uint8 *pmk, uint pmk_len,
 	uint8 *ptk, uint ptk_len);
 
-/* Encrypt key data for a WPA key message */
-extern bool wpa_encr_key_data(eapol_wpa_key_header_t *body, uint16 key_info,
-	uint8 *ekey, uint8 *gtk, uint8 *data, uint8 *encrkey, rc4_ks_t *rc4key);
-
-/* Decrypt key data from a WPA key message */
-extern bool wpa_decr_key_data(eapol_wpa_key_header_t *body, uint16 key_info,
-	uint8 *ekey, uint8 *gtk, uint8 *data, uint8 *encrkey, rc4_ks_t *rc4key);
-
-/* Decrypt a group transient key from a WPA key message */
-extern bool wpa_decr_gtk(eapol_wpa_key_header_t *body, uint16 key_info,
-	uint8 *ekey, uint8 *gtk, uint8 *data, uint8 *encrkey, rc4_ks_t *rc4key);
-#endif	/* BCMSUP_PSK || WLFBT || BCMAUTH_PSK || defined(GTKOE) */
+extern void wpa_derive_pmkR1_name(struct ether_addr *r1kh, struct ether_addr *sta_ea,
+		uint8 *pmkr0name, uint8 *pmkr1name);
+#endif /* defined(BCMSUP_PSK) || defined(WLFBT) || defined(BCMAUTH_PSK) ||
+	* defined(WL_OKC) || defined(WLTDLS) || defined(GTKOE) || defined(WLHOSTFBT)
+	*/
 
 extern bool bcmwpa_akm2WPAauth(uint8 *akm, uint32 *auth, bool sta_iswpa);
 

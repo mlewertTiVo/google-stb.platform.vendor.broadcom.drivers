@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_ht_tbl.c 605704 2015-12-11 06:23:44Z xuanz $
+ * $Id: phy_ht_tbl.c 657351 2016-08-31 23:00:22Z $
  */
 
 #include <phy_cfg.h>
@@ -49,8 +49,7 @@ static int phy_ht_tbl_down(phy_type_tbl_ctx_t *ctx);
 #else
 #define phy_ht_tbl_down NULL
 #endif
-#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && (defined(BCMINTERNAL) || \
-	defined(DBG_PHY_IOV))
+#if (defined(BCMDBG) || defined(BCMDBG_DUMP)) && defined(DBG_PHY_IOV)
 static bool phy_ht_tbl_dump_addrfltr(phy_type_tbl_ctx_t *ctx,
 	phy_table_info_t *ti, uint addr);
 static void phy_ht_tbl_read_table(phy_type_tbl_ctx_t *ctx,
@@ -125,105 +124,19 @@ WLBANDINITFN(phy_ht_tbl_init)(phy_type_tbl_ctx_t *ctx)
 }
 
 #ifndef BCMNODOWN
-#ifdef BCMINTERNAL
-static void
-wlc_phy_tbl_check_htphy(phy_info_t *pi)
-{
-	/* to make sure these non-volatile tables are indeed reliable */
-	uint32 tab_maxlen = 0, i, idx;
-	uint32 *tbl_ptr = NULL;
-	uint32 width;
-	bool match = TRUE;
-
-	if (ISSIM_ENAB(pi->sh->sih))
-		return; /* avoid slow table check on QT */
-
-	PHY_TRACE(("wl%d: %s\n", pi->sh->unit, __FUNCTION__));
-
-	/* find max length table and allocate mem */
-	for (idx = 0; idx < htphytbl_info_sz_rev0; idx++) {
-		if (tab_maxlen < htphytbl_info_rev0[idx].tbl_len)
-			tab_maxlen = htphytbl_info_rev0[idx].tbl_len;
-	}
-	if ((tbl_ptr = MALLOC(pi->sh->osh, sizeof(uint32) * tab_maxlen)) == NULL)
-		return;
-
-	wlapi_suspend_mac_and_wait(pi->sh->physhim);
-
-	for (idx = 0; idx < htphytbl_info_sz_rev0; idx++) {
-		width = htphytbl_info_rev0[idx].tbl_width;
-
-		ASSERT((width == 8) || (width == 16) ||	(width == 32));
-
-		if ((htphytbl_info_rev0[idx].tbl_id == HTPHY_TBL_ID_TXPWRCTL(0)) ||
-		    (htphytbl_info_rev0[idx].tbl_id == HTPHY_TBL_ID_TXPWRCTL(1)) ||
-		    (htphytbl_info_rev0[idx].tbl_id == HTPHY_TBL_ID_TXPWRCTL(2)) ||
-		    (htphytbl_info_rev0[idx].tbl_id == HTPHY_TBL_ID_NVNOISESHAPINGTBL)) {
-			/* Ignore
-			 * a) tx gain table
-			 * b) Noise Var Shaping table
-			 */
-			continue;
-		}
-
-		wlc_phy_table_read_htphy(pi, htphytbl_info_rev0[idx].tbl_id,
-		                         htphytbl_info_rev0[idx].tbl_len,
-		                         htphytbl_info_rev0[idx].tbl_offset,
-		                         width,
-		                         tbl_ptr);
-		for (i = 0; i < htphytbl_info_rev0[idx].tbl_len; i++) {
-			if (width == 8) {
-				match = (((uint8 *)(uintptr)tbl_ptr)[i] ==
-				         ((uint8 *)(uintptr)
-				          htphytbl_info_rev0[idx].tbl_ptr)[i]);
-			} else if (width == 16) {
-				match = (((uint16 *)(uintptr)tbl_ptr)[i] ==
-				         ((uint16 *)(uintptr)
-				          htphytbl_info_rev0[idx].tbl_ptr)[i]);
-			} else if (width == 32) {
-				match = (((uint32 *)(uintptr)tbl_ptr)[i] ==
-				         ((uint32 *)(uintptr)
-				          htphytbl_info_rev0[idx].tbl_ptr)[i]);
-			}
-
-			if (!match) {
-				PHY_ERROR(("htphy table %d corrupted at %d width %d\n",
-				           htphytbl_info_rev0[idx].tbl_id, i, width));
-				break;
-			}
-		}
-	}
-	wlapi_enable_mac(pi->sh->physhim);
-
-	if (tbl_ptr != NULL)
-		MFREE(pi->sh->osh, tbl_ptr, sizeof(uint32) * tab_maxlen);
-
-	ASSERT(match);
-}
-#endif	/* BCMINTERNAL */
 
 /* down h/w */
 static int
 BCMUNINITFN(phy_ht_tbl_down)(phy_type_tbl_ctx_t *ctx)
 {
-#ifdef BCMINTERNAL
-	phy_ht_tbl_info_t *ti = (phy_ht_tbl_info_t *)ctx;
-	phy_info_t *pi = ti->pi;
-
-#endif
 	PHY_TRACE(("%s\n", __FUNCTION__));
 
-#ifdef BCMINTERNAL
-	/* avoid slow table check on QT */
-	if (!ISSIM_ENAB(pi->sh->sih))
-		wlc_phy_tbl_check_htphy(pi);
-#endif
 	return 0;
 }
 #endif /* BCMNODOWN */
 
 #if defined(BCMDBG) || defined(BCMDBG_DUMP)
-#if defined(BCMINTERNAL) || defined(DBG_PHY_IOV)
+#if defined(DBG_PHY_IOV)
 static phy_table_info_t htphy_tables[] = {
 	{ 0x00, 0,	99 },
 	{ 0x01, 0,	99 },
@@ -288,11 +201,11 @@ phy_ht_tbl_dump(phy_type_tbl_ctx_t *ctx, struct bcmstrbuf *b)
 	phy_info_t *pi = hti->pi;
 	phy_table_info_t *ti = htphy_tables;
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, TRUE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, TRUE);
 
 	phy_tbl_do_dumptbl(hti->ti, ti, b);
 
-	wlc_phy_stay_in_carriersearch_htphy(pi, FALSE);
+	phy_rxgcrs_stay_in_carriersearch(pi->rxgcrsi, FALSE);
 
 	return BCME_OK;
 }
@@ -313,5 +226,5 @@ phy_ht_tbl_dump_addrfltr(phy_type_tbl_ctx_t *ctx,
 
 	return TRUE;
 }
-#endif /* BCMINTERNAL || DBG_PHY_IOV */
+#endif 
 #endif /* BCMDBG || BCMDBG_DUMP */

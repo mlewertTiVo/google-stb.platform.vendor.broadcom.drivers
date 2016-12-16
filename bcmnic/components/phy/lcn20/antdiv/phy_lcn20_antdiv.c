@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: phy_lcn20_antdiv.c 629393 2016-04-05 06:55:25Z gpasrija $
+ * $Id: phy_lcn20_antdiv.c 629393 2016-04-05 06:55:25Z $
  */
 
 #include <typedefs.h>

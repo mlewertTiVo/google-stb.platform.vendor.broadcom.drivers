@@ -38,7 +38,11 @@
 #include <bcm_objregistry.h>
 #include <wlc_objregistry.h>
 
+#if defined(BCMDBG) || defined(BCMDBG_ERR)
+#define WLC_OBJR_ERROR(args)	printf args
+#else
 #define WLC_OBJR_ERROR(args)
+#endif
 
 /* WLC OBj reg to include Chip/feature specific enable/disable support for data sharing */
 struct wlc_obj_registry {
@@ -138,5 +142,25 @@ BCMATTACHFN(obj_registry_disable)(wlc_obj_registry_t *wlc_objr, obj_registry_key
 	}
 }
 
+#if defined(BCMDBG) || defined(BCMDBG_DUMP)
+int
+BCMATTACHFN(wlc_dump_objr)(wlc_obj_registry_t *wlc_objr, struct bcmstrbuf *b)
+{
+	int i = 0;
+	if (wlc_objr) {
+		bcm_bprintf(b, "\nDumping WLC Object Registry Key Enable/Disable value\n");
+		bcm_bprintf(b, "Key\tEnabled?\n");
+		for (i = 0; i < OBJR_MAX_KEYS; i++) {
+			bcm_bprintf(b, "%d\t%d\n",
+				i, isset(wlc_objr->key_enab, i));
+		}
+		bcm_dump_objr(wlc_objr->objr, b);
+	}
+	else {
+		bcm_bprintf(b, "\nWLC Object Registry is not present\n");
+	}
+	return 0;
+}
+#endif /* BCMDBG */
 
 #endif /* WL_OBJ_REGISTRY */

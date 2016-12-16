@@ -69,6 +69,7 @@ static cmd_func_t wl_nan_ranging_start;
 static cmd_func_t wl_nan_ranging_results_host;
 #endif /* WL_NAN */
 #define WL_PROXD_PAYLOAD_LEN	1026
+#define TOF_DEFAULT_FTMCNT_SEQ		3
 
 #define PROXD_PARAMS_USAGE	\
 "\tUsage: wl proxd_params method [-c channel] [-i interval] [-d duration] [-s rssi_thresh]"	\
@@ -185,7 +186,6 @@ static cmd_t wl_proxd_cmds[] = {
 	{"proxd_nanpeer", wl_nan_ranging_results_host, WLC_GET_VAR, -1,
 	"Return peer initiated ranging results.\n"},
 #endif /* WL_NAN */
-
 	{ "proxd_event_check", wl_proxd_event_check, -1, -1,
 	"Listen and print Location Based Service events\n"
 	"\tproxd_event_check syntax is: proxd_event_check ifname"},
@@ -206,6 +206,7 @@ static void ftm_display_config_options_help();
 static void ftm_display_config_avail_help();
 static void ftm_unpack_and_display_session_flags(const uint8 *p_data, uint16 tlvid);
 static void ftm_unpack_and_display_config_flags(const uint8 *p_data, uint16 tlvid);
+static int proxd_tune_display(wl_proxd_params_tof_tune_t *tof_tune, uint16 len);
 
 /*
 *for debug: define the flag WL_FTM_DEBUG to enable debug log for FTM
@@ -384,7 +385,7 @@ wlc_proxd_collec_header_dump(wl_proxd_collect_header_t *pHdr)
 	printf("chipnum %lu\n", (unsigned long)ltoh16(pHdr->chipnum));
 	printf("chiprev %lu\n", (unsigned long)pHdr->chiprev);
 	printf("phyver %lu\n", (unsigned long)pHdr->phyver);
-	printf("loaclMacAddr %s\n", wl_ether_etoa(&(pHdr->loaclMacAddr)));
+	printf("localMacAddr %s\n", wl_ether_etoa(&(pHdr->localMacAddr)));
 	printf("remoteMacAddr %s\n", wl_ether_etoa(&(pHdr->remoteMacAddr)));
 	printf("params_Ki %lu\n", (unsigned long)ltoh32(pHdr->params.Ki));
 	printf("params_Kt %lu\n", (unsigned long)ltoh32(pHdr->params.Kt));
@@ -423,49 +424,199 @@ wlc_proxd_collec_header_dump(wl_proxd_collect_header_t *pHdr)
 	printf("params_rsv_media %lu\n", (unsigned long)ltoh16(pHdr->params.rsv_media));
 }
 
-static void wlc_proxd_collec_data_dump(wl_proxd_collect_data_t *replay)
+static int wlc_proxd_collect_data_check_ver_len(uint16 expected_ver,
+	uint16 ver, uint16 len)
 {
-	int i, n;
+	int ret = BCME_OK;
 
-	printf("info_type %lu\n", (unsigned long)ltoh16(replay->info.type));
-	printf("info_index %lu\n", (unsigned long)ltoh16(replay->info.index));
-	printf("info_tof_cmd %lu\n", (unsigned long)ltoh16(replay->info.tof_cmd));
-	printf("info_tof_rsp %lu\n", (unsigned long)ltoh16(replay->info.tof_rsp));
-	printf("info_tof_avb_rxl %lu\n", (unsigned long)ltoh16(replay->info.tof_avb_rxl));
-	printf("info_tof_avb_rxh %lu\n", (unsigned long)ltoh16(replay->info.tof_avb_rxh));
-	printf("info_tof_avb_txl %lu\n", (unsigned long)ltoh16(replay->info.tof_avb_txl));
-	printf("info_tof_avb_txh %lu\n", (unsigned long)ltoh16(replay->info.tof_avb_txh));
-	printf("info_tof_id %lu\n", (unsigned long)ltoh16(replay->info.tof_id));
-	printf("info_tof_frame_type %lu\n", (unsigned long)replay->info.tof_frame_type);
-	printf("info_tof_frame_bw %lu\n", (unsigned long)replay->info.tof_frame_bw);
-	printf("info_tof_rssi %li\n", (long)replay->info.tof_rssi);
-	printf("info_tof_cfo %li\n", (long)ltoh32(replay->info.tof_cfo));
-	printf("info_gd_adj_ns %li\n", (long)ltoh32(replay->info.gd_adj_ns));
-	printf("info_gd_h_adj_ns %li\n", (long)ltoh32(replay->info.gd_h_adj_ns));
-	printf("info_nfft %li\n", (long)ltoh16(replay->info.nfft));
-	n = (int)ltoh16(replay->info.nfft);
-	printf("H %d\n", n);
-	for (i = 0; i < n; i++) {
-		printf("%lu\n", (unsigned long)ltoh32(replay->H[i]));
-	};
+	switch (expected_ver) {
+	case WL_PROXD_COLLECT_DATA_VERSION_1:
+		/* v1 does not haver version and length fields */
+		ret = BCME_OK;
+		break;
+	case WL_PROXD_COLLECT_DATA_VERSION_2:
+		if ((ver != expected_ver) ||
+			(len != sizeof(wl_proxd_collect_data_t_v2) -
+				OFFSETOF(wl_proxd_collect_data_t_v2, len))) {
+			ret = BCME_VERSION;
+		}
+		break;
+	default:
+		ret = BCME_UNSUPPORTED;
+	}
+
+	return ret;
+}
+static int wlc_proxd_collec_data_dump(void *replay, FILE *fp,
+	wl_proxd_rssi_bias_avg_t *rssi_bias_avg, uint16 version)
+{
+	int i, n, nbytes;
+	int ret = BCME_OK;
+	wl_proxd_collect_data_t_v1 *replay_v1 = NULL;
+	wl_proxd_collect_data_t_v2 *replay_v2 = NULL;
+	wl_proxd_collect_info_t *info = NULL;
+	uint32 *H = NULL;
+	uint32 *chan = NULL;
+	uint8 *ri_rr = NULL;
+	int nfft = 0;
+#ifdef RSSI_REFINE
+	int rssi_dec = 0;
+#else
+	/* rssi_bias_avg is unused under !RSSI_REFINE. */
+	/* Macro to prevent compiler warning under some platforms */
+	UNUSED_PARAMETER(rssi_bias_avg);
+#endif
+
+	BCM_REFERENCE(H);
+	BCM_REFERENCE(chan);
+	BCM_REFERENCE(ri_rr);
+
+	/* Depending on version add the corresponding case and pointers to point
+	 * to the correct member for use in the function
+	 */
+	switch (version) {
+	case WL_PROXD_COLLECT_DATA_VERSION_1:
+		replay_v1 = (wl_proxd_collect_data_t_v1 *)replay;
+		info = &replay_v1->info;
+		H = replay_v1->H;
+		ri_rr = replay_v1->ri_rr;
+		nbytes = sizeof(wl_proxd_collect_data_t_v1)
+			- (K_TOF_COLLECT_H_SIZE_20MHZ - nfft) * sizeof(uint32);
+		break;
+	case WL_PROXD_COLLECT_DATA_VERSION_2:
+		replay_v2 = (wl_proxd_collect_data_t_v2 *)replay;
+		ret = wlc_proxd_collect_data_check_ver_len(version, replay_v2->version,
+			replay_v2->len);
+		if (ret != BCME_OK) {
+			break;
+		}
+		info = &replay_v2->info;
+		H = replay_v2->H;
+		ri_rr = replay_v2->ri_rr;
+		chan = replay_v2->chan;
+		nbytes = sizeof(wl_proxd_collect_data_t_v2)
+			- (K_TOF_COLLECT_H_SIZE_20MHZ - nfft) * sizeof(uint32);
+		break;
+	default:
+		ret = BCME_VERSION;
+		break;
+	}
+	if (ret != BCME_OK) {
+		goto done;
+	}
+
+	if (info) {
+		nfft = (int)ltoh16(info->nfft);
+#ifdef RSSI_REFINE
+		if (nfft > 0) {
+			printf("}\nImpulse Response = {\n");
+			for (i = 0; i < nfft; i++) {
+			printf("%010d ", ltoh32(info->rssi_bias.imp_resp[i]));
+				if ((i & 7) == 7)
+					printf("\n");
+			}
+			printf("RSSI_VERSION = %d\n", ltoh32(info->rssi_bias.version));
+			printf("PEAK_OFFSET = %d\n", ltoh32(info->rssi_bias.peak_offset));
+			rssi_bias_avg->avg_peak_offset += ltoh32(info->rssi_bias.peak_offset);
+			printf("PEAK_TO_AVG = %d", ltoh32(info->rssi_bias.bias));
+			rssi_bias_avg->avg_bias += ltoh32(info->rssi_bias.bias);
+			printf("\n");
+			for (i = 0; i < 10; i++) {
+				printf("THRESHOLD_%d = %u", i,
+					ltoh32(info->rssi_bias.threshold[i]));
+				if ((i+1) % 5)
+					printf(", ");
+				else
+					printf("\n");
+				rssi_bias_avg->avg_threshold[i] +=
+					ltoh32(info->rssi_bias.threshold[i]);
+			}
+			printf("SCALAR = %d", info->rssi_bias.threshold[10]);
+		}
+
+		/* convert tof_status2 from hex to dec */
+		rssi_dec = info->tof_rssi;
+		printf("\nRSSI10 = %d", rssi_dec);
+		rssi_bias_avg->avg_rssi += rssi_dec;
+		printf("\n\n");
+#endif /* RSSI_REFINE */
+
+		/* printing the info portion */
+		printf("info_type %lu\n", (unsigned long)ltoh16(info->type));
+		printf("info_index %lu\n", (unsigned long)ltoh16(info->index));
+		printf("info_tof_cmd %lu\n", (unsigned long)ltoh16(info->tof_cmd));
+		printf("info_tof_rsp %lu\n", (unsigned long)ltoh16(info->tof_rsp));
+		printf("info_tof_avb_rxl %lu\n", (unsigned long)ltoh16(info->tof_avb_rxl));
+		printf("info_tof_avb_rxh %lu\n", (unsigned long)ltoh16(info->tof_avb_rxh));
+		printf("info_tof_avb_txl %lu\n", (unsigned long)ltoh16(info->tof_avb_txl));
+		printf("info_tof_avb_txh %lu\n", (unsigned long)ltoh16(info->tof_avb_txh));
+		printf("info_tof_id %lu\n", (unsigned long)ltoh16(info->tof_id));
+		printf("info_tof_frame_type %lu\n", (unsigned long)info->tof_frame_type);
+		printf("info_tof_frame_bw %lu\n", (unsigned long)info->tof_frame_bw);
+		printf("info_tof_rssi %li\n", (long)info->tof_rssi);
+		printf("info_tof_cfo %li\n", (long)ltoh32(info->tof_cfo));
+		printf("info_gd_adj_ns %li\n", (long)ltoh32(info->gd_adj_ns));
+		printf("info_gd_h_adj_ns %li\n", (long)ltoh32(info->gd_h_adj_ns));
+		printf("info_nfft %li\n", (long)ltoh16(info->nfft));
+
+		if (H) {
+			/* printing the H portion */
+			printf("H %d\n", nfft);
+			for (i = 0; i < nfft; i++) {
+				printf("%lu\n", (unsigned long)ltoh32(H[i]));
+			}
+		}
+
+		/* printing the chan and ri_rr */
+		if (info->index == 1) {
+			if (chan && version >= WL_PROXD_COLLECT_DATA_VERSION_2) {
+				n = (int)ltoh16((info->num_max_cores + 1)*
+					(K_TOF_COLLECT_CHAN_SIZE >> (2 - info->tof_frame_bw)));
+				printf("chan_est %d\n", n);
+				for (i = 0; i < n; i++) {
+					printf("%u\n", chan[i]);
+				}
+			}
+			if (ri_rr) {
+				printf("ri_rr %d\n", FTM_TPK_RI_RR_LEN);
+				for (i = 0; i < FTM_TPK_RI_RR_LEN; i++) {
+					printf("%u\n", ri_rr[i]);
+				}
+			}
+		}
+
+		ret = fwrite(replay, 1, nbytes, fp);
+		if (ret != nbytes) {
+			fprintf(stderr, "Error writing %d bytes to file, rc %d!\n",
+				nbytes, ret);
+			return BCME_ERROR;
+		}
+	}
+
+done:
+	return ret;
 }
 
 static int
 wl_proxd_get_collect_data(void *wl, cmd_t *cmd, FILE *fp, int index,
 	wl_proxd_rssi_bias_avg_t *rssi_bias_avg)
 {
-	int ret, nbytes;
+	int ret;
 	void *buff;
 	wl_proxd_collect_query_t query;
-	wl_proxd_collect_data_t *replay;
-	int nfft;
-#ifdef RSSI_REFINE
-	int rssi_dec;
-#else
-	/* rssi_bias_avg is unused under !RSSI_REFINE. */
-	/* Macro to prevent compiler warning under some platforms */
-	UNUSED_PARAMETER(rssi_bias_avg);
-#endif
+	uint16 expected_collect_data_ver = 0;
+
+	/* check firmware version */
+	/* Select collect data structure version based on FW version.
+	 * Extend here for future versions
+	 */
+	if (wlc_ver_major(wl) <= 5) {
+		/* use v1 */
+		expected_collect_data_ver = WL_PROXD_COLLECT_DATA_VERSION_1;
+	} else {
+		/* use v2 */
+		expected_collect_data_ver = WL_PROXD_COLLECT_DATA_VERSION_2;
+	}
 
 	bzero(&query, sizeof(query));
 	query.method = htol32(PROXD_TOF_METHOD);
@@ -476,51 +627,10 @@ wl_proxd_get_collect_data(void *wl, cmd_t *cmd, FILE *fp, int index,
 	if (ret != BCME_OK)
 		return ret;
 
-	replay = (wl_proxd_collect_data_t *)buff;
-
-	wlc_proxd_collec_data_dump(replay);
-
-	nfft = (int)ltoh16(replay->info.nfft);
-
-#ifdef RSSI_REFINE
-
-	if (nfft > 0)
-	{
-		printf("}\nImpulse Response = {\n");
-		for (i = 0; i < nfft; i++) {
-		printf("%010d ", ltoh32(replay->info.rssi_bias.imp_resp[i]));
-			if ((i & 7) == 7)
-				printf("\n");
-		}
-		printf("RSSI_VERSION = %d\n", ltoh32(replay->info.rssi_bias.version));
-		printf("PEAK_OFFSET = %d\n", ltoh32(replay->info.rssi_bias.peak_offset));
-		rssi_bias_avg->avg_peak_offset += ltoh32(replay->info.rssi_bias.peak_offset);
-		printf("PEAK_TO_AVG = %d", ltoh32(replay->info.rssi_bias.bias));
-		rssi_bias_avg->avg_bias += ltoh32(replay->info.rssi_bias.bias);
-		printf("\n");
-		for (i = 0; i < 10; i++) {
-			printf("THRESHOLD_%d = %u", i, ltoh32(replay->info.rssi_bias.threshold[i]));
-			if ((i+1) % 5)
-				printf(", ");
-			else
-				printf("\n");
-		rssi_bias_avg->avg_threshold[i] += ltoh32(replay->info.rssi_bias.threshold[i]);
-		}
-		printf("SCALAR = %d", replay->info.rssi_bias.threshold[10]);
-	}
-
-	/* convert tof_status2 from hex to dec */
-	rssi_dec = replay->info.tof_rssi;
-	printf("\nRSSI10 = %d", rssi_dec);
-	rssi_bias_avg->avg_rssi += rssi_dec;
-	printf("\n\n");
-#endif /* RSSI_REFINE */
-	nbytes = sizeof(wl_proxd_collect_data_t) - (k_tof_collect_H_size - nfft) * sizeof(uint32);
-	ret = fwrite(buff, 1, nbytes, fp);
-	if (ret != nbytes) {
-		fprintf(stderr, "Error writing %d bytes to file, rc %d!\n",
-			nbytes, ret);
-		return -1;
+	ret = wlc_proxd_collec_data_dump(buff, fp, rssi_bias_avg,
+		expected_collect_data_ver);
+	if (ret != BCME_OK) {
+		return ret;
 	}
 
 	return BCME_OK;
@@ -535,7 +645,7 @@ wl_proxd_collect(void *wl, cmd_t *cmd, char **argv)
 	wl_proxd_collect_header_t *pHdr;
 	const char *fname = "proxd_collect.dat";
 	FILE *fp = NULL;
-	int   i, total_frames, load_request = 0, remote_request = 0;
+	int   i, collect_method, total_frames, load_request = 0, remote_request = 0;
 	char chspec_str[CHANSPEC_STR_LEN];
 	chanspec_t chanspec;
 	float d_ref = -1;
@@ -555,14 +665,16 @@ wl_proxd_collect(void *wl, cmd_t *cmd, char **argv)
 			query.status = 0;
 			return wlu_var_getbuf(wl, cmd->name, &query, sizeof(query), &buff);
 		}
-		if (strcmp(argv[0], "enable") == 0 || *argv[0] == '1') {
+		collect_method = (uint16)atoi(argv[0]);
+		if (strcmp(argv[0], "enable") == 0) {
 			query.request = PROXD_COLLECT_SET_STATUS;
 			query.status = 1;
 			return wlu_var_getbuf(wl, cmd->name, &query, sizeof(query), &buff);
-		}
-		if (strcmp(argv[0], "debug") == 0 || *argv[0] == '2') {
+		} else if (isdigit((int)*argv[0]) &&
+				((collect_method >= WL_PROXD_COLLECT_METHOD_TYPE_DISABLE) &&
+				(collect_method <= WL_PROXD_COLLECT_METHOD_TYPE_EVENT_LOG))) {
 			query.request = PROXD_COLLECT_SET_STATUS;
-			query.status = 2;
+			query.status = collect_method;
 			return wlu_var_getbuf(wl, cmd->name, &query, sizeof(query), &buff);
 		}
 		if (!strcmp(argv[0], "-l")) {
@@ -1178,7 +1290,7 @@ proxd_method_tof_parse_mixed_param(char* str, const char** p_name, int* p_val, i
 
 /*  proxd  TOF tune ops  */
 static int
-proxd_tune_set_param_from_opt(cmd_t *cmd,
+proxd_tune_set_param_from_opt(const char* cmd_name,
 	miniopt_t *mopt, wl_proxd_params_tof_tune_t *proxd_tune)
 {
 	if (mopt->opt == 'k') {
@@ -1191,7 +1303,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 			else {
 			fprintf(stderr,
 					"%s: could not parse \"%s\" as K\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 			}
 		}
@@ -1204,7 +1316,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 		if (!mopt->good_int) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as vhtack\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 		}
 		proxd_tune->vhtack = htod16(mopt->val);
@@ -1212,7 +1324,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 		if (!mopt->good_int) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as core\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 		}
 		proxd_tune->core = htod16(mopt->val);
@@ -1238,14 +1350,14 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 		if ((m[TOF_ADJ_SOFTWARE] | m[TOF_ADJ_HARDWARE] | m[TOF_ADJ_SEQ]) == 0) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as hw/sw adjustment enable params\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 		}
 	} else if (mopt->opt == 'n') {
 		if (!mopt->good_int) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as min time difference limitation\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 		}
 		proxd_tune->minDT = htod32(mopt->val);
@@ -1253,7 +1365,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 		if (!mopt->good_int) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as max time difference limitation\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 		}
 		proxd_tune->maxDT = htod32(mopt->val);
@@ -1283,6 +1395,18 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 			}
 			if (p) {
 				proxd_tune->seq_5g20.N_rx_log2 = htod16(atoi(p));
+				p = strstr(p, ",");
+				if (p)
+					p++;
+			}
+			if (p) {
+				proxd_tune->seq_2g20.N_tx_log2 = htod16(atoi(p));
+				p = strstr(p, ",");
+				if (p)
+					p++;
+			}
+			if (p) {
+				proxd_tune->seq_2g20.N_rx_log2 = htod16(atoi(p));
 			}
 
 		} else {
@@ -1292,6 +1416,8 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 			proxd_tune->N_log2_2g = htod16(mopt->val);
 			proxd_tune->seq_5g20.N_tx_log2 = htod16(mopt->val);
 			proxd_tune->seq_5g20.N_rx_log2 = htod16(mopt->val);
+			proxd_tune->seq_2g20.N_tx_log2 = htod16(mopt->val);
+			proxd_tune->seq_2g20.N_rx_log2 = htod16(mopt->val);
 		}
 		proxd_tune->setflags |= WL_PROXD_SETFLAG_N;
 	} else if (mopt->opt == 'S') {
@@ -1320,6 +1446,18 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 			}
 			if (p) {
 				proxd_tune->seq_5g20.N_rx_scale = htod16(atoi(p));
+				p = strstr(p, ",");
+				if (p)
+					p++;
+			}
+			if (p) {
+				proxd_tune->seq_2g20.N_tx_scale = htod16(atoi(p));
+				p = strstr(p, ",");
+				if (p)
+					p++;
+			}
+			if (p) {
+				proxd_tune->seq_2g20.N_rx_scale = htod16(atoi(p));
 			}
 		} else {
 			for (; i < TOF_BW_SEQ_NUM; i++) {
@@ -1328,6 +1466,8 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 			proxd_tune->N_scale_2g = htod16(mopt->val);
 			proxd_tune->seq_5g20.N_tx_scale = htod16(mopt->val);
 			proxd_tune->seq_5g20.N_rx_scale = htod16(mopt->val);
+			proxd_tune->seq_2g20.N_rx_scale = htod16(mopt->val);
+			proxd_tune->seq_2g20.N_rx_scale = htod16(mopt->val);
 		}
 		proxd_tune->setflags |= WL_PROXD_SETFLAG_S;
 	} else if (mopt->opt == 'F') {
@@ -1351,7 +1491,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 		if (!mopt->good_int) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as total frmcnt\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 		}
 		proxd_tune->totalfrmcnt = (mopt->val);
@@ -1359,7 +1499,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 		if (!mopt->good_int) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as media reserve value\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 				return BCME_USAGE_ERROR;
 			}
 			proxd_tune->rsv_media = (mopt->val);
@@ -1367,7 +1507,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 		if (!mopt->good_int) {
 			fprintf(stderr,
 				"%s: could not parse \"%s\" as flags\n",
-				cmd->name, mopt->valstr);
+				cmd_name, mopt->valstr);
 			return BCME_USAGE_ERROR;
 		}
 		proxd_tune->flags = htod16(mopt->val);
@@ -1394,7 +1534,7 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 			else {
 				fprintf(stderr,
 					"%s: could not parse \"%s\" as window params\n",
-					cmd->name, mopt->valstr);
+					cmd_name, mopt->valstr);
 					return BCME_USAGE_ERROR;
 			}
 			if (p == n) {
@@ -1412,13 +1552,88 @@ proxd_tune_set_param_from_opt(cmd_t *cmd,
 				if (m[1] && i == TOF_BW_20MHZ_INDEX) {
 					/* Got length */
 					proxd_tune->seq_5g20.w_len = (int16)v[1];
+					proxd_tune->seq_2g20.w_len = (int16)v[1];
 				}
 				if (m[2]&& i == TOF_BW_20MHZ_INDEX) {
 					/* Got offset */
 					proxd_tune->seq_5g20.w_offset = (int16)v[2];
+					proxd_tune->seq_2g20.w_offset = (int16)v[2];
 				}
 			}
 		}
+	} else if (mopt->opt == 'B') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as bitflip_threshold\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		proxd_tune->bitflip_thresh = htod16(mopt->val);
+	} else if (mopt->opt == 'R') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as snr_threshold\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		proxd_tune->snr_thresh = htod16(mopt->val);
+	} else if (mopt->opt == 'T') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as recv_2g_threshold\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		if (mopt->val >= 0)
+			return BCME_RANGE;
+		proxd_tune->recv_2g_thresh = mopt->val;
+	} else if (mopt->opt == 'V') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as Auto Core Select "
+				"Group Delay Variance threshold\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		proxd_tune->acs_gdv_thresh = htod32(mopt->val);
+	} else if (mopt->opt == 'I') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as Auto Core Select "
+				"RSSI threshold\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		if (mopt->val >= 0)
+			return BCME_RANGE;
+		proxd_tune->acs_rssi_thresh = mopt->val;
+	} else if (mopt->opt == 's') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as smoothing window "
+				"enable\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		proxd_tune->smooth_win_en = mopt->val;
+	} else if (mopt->opt == 'M') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as auto core select "
+				"group delay max - min threshold\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		proxd_tune->acs_gdmm_thresh = htod32(mopt->val);
+	} else if (mopt->opt == 'd') {
+		if (!mopt->good_int) {
+			fprintf(stderr,
+				"proxd ftm tune: could not parse \"%s\" as Auto Core Select "
+				"RSSI delta threshold\n",
+				mopt->valstr);
+			return BCME_USAGE_ERROR;
+		}
+		proxd_tune->acs_delta_rssi_thresh = mopt->val;
 	} else
 		return BCME_USAGE_ERROR;
 
@@ -1433,7 +1648,6 @@ wl_proxd_tune(void *wl, cmd_t *cmd, char **argv)
 	void *ptr = NULL;
 	int ret, opt_err;
 	miniopt_t to;
-	int i;
 
 	/* skip the command name and check if mandatory exists */
 	if (!*++argv) {
@@ -1467,53 +1681,7 @@ wl_proxd_tune(void *wl, cmd_t *cmd, char **argv)
 			break;
 
 		case PROXD_TOF_METHOD:
-			printf("Ki=%d \n", dtoh32(reply->u.tof_tune.Ki));
-			printf("Kt=%d \n", dtoh32(reply->u.tof_tune.Kt));
-			printf("vhtack=%d \n", dtoh16(reply->u.tof_tune.vhtack));
-			printf("seq_en=%d\n", dtoh16(reply->u.tof_tune.seq_en));
-			printf("core=%d\n", reply->u.tof_tune.core);
-			printf("sw_adj=%d\n", dtoh16(reply->u.tof_tune.sw_adj));
-			printf("hw_adj=%d\n", dtoh16(reply->u.tof_tune.hw_adj));
-			printf("minDT = %d\n", reply->u.tof_tune.minDT);
-			printf("maxDT = %d\n", reply->u.tof_tune.maxDT);
-			printf("threshold_log2=%d %d %d seqtx %d seqrx %d 2g %d seqtx5g20 %d"
-				" seqrx5g20 %d\n",
-				dtoh16(reply->u.tof_tune.N_log2[TOF_BW_20MHZ_INDEX]),
-				dtoh16(reply->u.tof_tune.N_log2[TOF_BW_40MHZ_INDEX]),
-				dtoh16(reply->u.tof_tune.N_log2[TOF_BW_80MHZ_INDEX]),
-				dtoh16(reply->u.tof_tune.N_log2[TOF_BW_SEQTX_INDEX]),
-				dtoh16(reply->u.tof_tune.N_log2[TOF_BW_SEQRX_INDEX]),
-				dtoh16(reply->u.tof_tune.N_log2_2g),
-				dtoh16(reply->u.tof_tune.seq_5g20.N_tx_log2),
-				dtoh16(reply->u.tof_tune.seq_5g20.N_rx_log2));
-			printf("threshold_scale=%d %d %d seqtx %d seqrx %d 2g %d seqtx5g20 %d"
-				" seqrx5g20 %d\n",
-				dtoh16(reply->u.tof_tune.N_scale[TOF_BW_20MHZ_INDEX]),
-				dtoh16(reply->u.tof_tune.N_scale[TOF_BW_40MHZ_INDEX]),
-				dtoh16(reply->u.tof_tune.N_scale[TOF_BW_80MHZ_INDEX]),
-				dtoh16(reply->u.tof_tune.N_scale[TOF_BW_SEQTX_INDEX]),
-				dtoh16(reply->u.tof_tune.N_scale[TOF_BW_SEQRX_INDEX]),
-				dtoh16(reply->u.tof_tune.N_scale_2g),
-				dtoh16(reply->u.tof_tune.seq_5g20.N_tx_scale),
-				dtoh16(reply->u.tof_tune.seq_5g20.N_rx_scale));
-			printf("total_frmcnt=%d \n", reply->u.tof_tune.totalfrmcnt);
-			printf("reserve_media=%d \n", reply->u.tof_tune.rsv_media);
-			printf("flags=0x%x \n", dtoh16(reply->u.tof_tune.flags));
-			for (i = 0; i < TOF_BW_NUM; i++) {
-				printf("window length %dMHz = %d\n",
-					(20 << i), reply->u.tof_tune.w_len[i]);
-				printf("window offset %dMHz = %d\n",
-					(20 << i), reply->u.tof_tune.w_offset[i]);
-			}
-			printf("seq window length 5G-20MHz = %d\n",
-				reply->u.tof_tune.seq_5g20.w_len);
-			printf("seq window offset 5G-20MHz = %d\n",
-				reply->u.tof_tune.seq_5g20.w_offset);
-			printf("frame count=%d %d %d seq %d\n",
-				reply->u.tof_tune.ftm_cnt[TOF_BW_20MHZ_INDEX],
-				reply->u.tof_tune.ftm_cnt[TOF_BW_40MHZ_INDEX],
-				reply->u.tof_tune.ftm_cnt[TOF_BW_80MHZ_INDEX],
-				reply->u.tof_tune.ftm_cnt[TOF_BW_SEQTX_INDEX]);
+			ret = proxd_tune_display(&reply->u.tof_tune, sizeof(reply->u.tof_tune));
 			break;
 
 		default:
@@ -1541,7 +1709,7 @@ wl_proxd_tune(void *wl, cmd_t *cmd, char **argv)
 					break;
 
 				case PROXD_TOF_METHOD:
-					meth_res = proxd_tune_set_param_from_opt(cmd,
+					meth_res = proxd_tune_set_param_from_opt(cmd->name,
 						&to, &proxd_tune.u.tof_tune);
 					break;
 
@@ -2458,6 +2626,8 @@ DECL_CMDHANDLER(clear_counters);	/* method + session */
 DECL_CMDHANDLER(start_ranging);		/* method-only */
 DECL_CMDHANDLER(stop_ranging);		/* method-only */
 
+DECL_CMDHANDLER(tune);			/* method-only both set/get */
+
 static const ftm_subcmd_info_t ftm_cmdlist[] = {
 	/* (get) wl proxd ftm ver */
 	{"ver", WL_PROXD_CMD_GET_VERSION, FTM_SUBCMD_FUNC(get_version),
@@ -2519,6 +2689,8 @@ static const ftm_subcmd_info_t ftm_cmdlist[] = {
 	FTM_SUBCMD_FLAG_METHOD, "Start ranging for sessions" },
 	{ "stop-ranging", WL_PROXD_CMD_STOP_RANGING, FTM_SUBCMD_FUNC(stop_ranging),
 	FTM_SUBCMD_FLAG_METHOD, "Stop ranging" },
+	{ "tune", WL_PROXD_CMD_TUNE, FTM_SUBCMD_FUNC(tune),
+	FTM_SUBCMD_FLAG_METHOD, "proxd_tune" },
 };
 
 /*
@@ -2769,6 +2941,7 @@ static const ftm_strmap_entry_t ftm_tlvid_loginfo[] = {
 	{ WL_PROXD_TLV_ID_DEV_ADDR,				"dev addr" },
 	{ WL_PROXD_TLV_ID_AVAIL,				"availability" },
 	{ WL_PROXD_TLV_ID_FTM_REQ_RETRIES,		"ftm request retries" },
+	{ WL_PROXD_TLV_ID_TPK,					"FTM TPK" },
 
 	/* output - 512 + x */
 	{ WL_PROXD_TLV_ID_STATUS,				"status" },
@@ -3073,6 +3246,17 @@ ftm_alloc_getset_buf(wl_proxd_method_t method, wl_proxd_session_id_t session_id,
 /*
 * unpack and display rtt_result TLV
 */
+
+#define PDFTM_BURST_STATE_NAMES \
+	{"INVALID", \
+	"FTM2/M1/RESPONSE", \
+	"FTM3/M2/LTFTRIGGER", \
+	"FTM4/M3/DONE", \
+	}
+
+#define FTM_FRAME_TYPES \
+	{"SETUP", "TRIGGER", "TIMESTAMP"}
+
 static void
 ftm_unpack_and_display_rtt_result(const uint8 *p_data, uint16 tlvid, uint16 len)
 {
@@ -3082,10 +3266,11 @@ ftm_unpack_and_display_rtt_result(const uint8 *p_data, uint16 tlvid, uint16 len)
 	wl_proxd_rtt_result_t *p_data_info;
 	wl_proxd_result_flags_t flags;
 	wl_proxd_session_state_t session_state;
-	wl_proxd_status_t proxd_status;
-	uint32 avg_dist;
+	int32 avg_dist;
 	wl_proxd_rtt_sample_t	*p_sample;
 	uint16 num_rtt;
+	char* pstatestr[] = PDFTM_BURST_STATE_NAMES;
+	char *ftm_frame_types[] =  FTM_FRAME_TYPES;
 
 	UNUSED_PARAMETER(len);
 
@@ -3113,26 +3298,16 @@ ftm_unpack_and_display_rtt_result(const uint8 *p_data, uint16 tlvid, uint16 len)
 
 	/* session state and status */
 	session_state = ltoh16_ua(&p_data_info->state);
-	proxd_status = ltoh32_ua(&p_data_info->status);
-	printf(">\tsession state=%d(%s), status=%d(%s)\n",
-		session_state,
-		ftm_session_state_value_to_logstr(session_state),
-		proxd_status,
-		ftm_status_value_to_logstr(proxd_status));
+	printf(">\tsession state=%d(%s)",
+		session_state, ftm_session_state_value_to_logstr(session_state));
 
-	if (proxd_status == WL_PROXD_E_REMOTE_FAIL) {
-		printf(">\tretry_after: %d%s\n",
-			ltoh32_ua(&p_data_info->u.retry_after.intvl),
-			ftm_tmu_value_to_logstr(ltoh16_ua(&p_data_info->u.retry_after.tmu)));
-	} else {
-		printf(">\tburst_duration: %d%s\n",
-			ltoh32_ua(&p_data_info->u.burst_duration.intvl),
-			ftm_tmu_value_to_logstr(ltoh16_ua(&p_data_info->u.burst_duration.tmu)));
-	}
+	printf(">\tburst_duration: %d%s\n",
+		ltoh32_ua(&p_data_info->u.burst_duration.intvl),
+		ftm_tmu_value_to_logstr(ltoh16_ua(&p_data_info->u.burst_duration.tmu)));
 
 	/* show avg_dist (1/256m units), burst_num */
 	avg_dist = ltoh32_ua(&p_data_info->avg_dist);
-	if (avg_dist == 0xffffffff) {	/* report 'failure' case */
+	if ((uint32)avg_dist == 0xffffffff) {	/* report 'failure' case */
 		printf(">\tavg_dist=-1m, burst_num=%d, valid_measure_cnt=%d num_ftm=%d\n",
 		ltoh16_ua(&p_data_info->burst_num),
 		p_data_info->num_valid_rtt, p_data_info->num_ftm); /* in a session */
@@ -3147,12 +3322,31 @@ ftm_unpack_and_display_rtt_result(const uint8 *p_data, uint16 tlvid, uint16 len)
 
 	/* show 'avg_rtt' sample */
 	p_sample = &p_data_info->avg_rtt;
-	printf(">\tavg_rtt sample: rssi=%d rtt=%d%s std_deviation =%d.%d ratespec=0x%08x\n",
-		(int16) ltoh16_ua(&p_sample->rssi),
+	printf(">\tavg_rtt sample: rssi=%d snr=%d bitflips=%d rtt=%d%s "
+		"std_deviation =%d.%d ratespec=0x%08x\n",
+		(wl_proxd_rssi_t) ltoh16_ua(&p_sample->rssi),
+		(wl_proxd_snr_t) ltoh16_ua(&p_sample->snr),
+		(wl_proxd_bitflips_t) ltoh16_ua(&p_sample->bitflips),
 		ltoh32_ua(&p_sample->rtt.intvl),
 		ftm_tmu_value_to_logstr(ltoh16_ua(&p_sample->rtt.tmu)),
 		ltoh16_ua(&p_data_info->sd_rtt)/10, ltoh16_ua(&p_data_info->sd_rtt)%10,
 		ltoh32_ua(&p_sample->ratespec));
+
+	printf(">\tnum_measurements: %d ", p_data_info->num_meas);
+	printf(" Flags:");
+	if (p_data_info->flags & WL_PROXD_REQUEST_SENT) {
+		if (p_data_info->flags & WL_PROXD_REQUEST_ACKED) {
+			if (p_data_info->num_meas)
+				printf("(%s)", pstatestr[p_data_info->num_meas]);
+			else
+				printf("(FTM1/REQSENT/ACKED)");
+		} else {
+			printf("(FTM1/REQSENT/NOACK)");
+		}
+	} else {
+		printf("(NO_REQ_SENT)");
+	}
+	printf("(LTFSEQ %sSTARTED)\n", (p_data_info->flags & WL_PROXD_LTFSEQ_STARTED)? "":"not ");
 
 	/* display detail if available */
 	num_rtt = ltoh16_ua(&p_data_info->num_rtt);
@@ -3162,18 +3356,31 @@ ftm_unpack_and_display_rtt_result(const uint8 *p_data, uint16 tlvid, uint16 len)
 		p_sample = &p_data_info->rtt[0];
 		for (i = 0; i < num_rtt; i++)
 		{
-			printf(">\t    sample[%d]: id=%d rssi=%d rtt=%d%s ratespec=0x%08x %s\n",
-				i,
-				p_sample->id,
-				(int16) ltoh16_ua(&p_sample->rssi),
+			uint16 snr = 0, bitflips = 0;
+			int16 rssi = 0;
+			int32 dist = 0;
+			/* FTM frames 1,4,7,11 have valid snr, rssi and bitflips */
+			if ((i%TOF_DEFAULT_FTMCNT_SEQ) == 1) {
+				rssi = (wl_proxd_rssi_t) ltoh16_ua(&p_sample->rssi);
+				snr = (wl_proxd_snr_t) ltoh16_ua(&p_sample->snr);
+				bitflips = (wl_proxd_bitflips_t) ltoh16_ua(&p_sample->bitflips);
+				dist = ltoh32_ua(&p_sample->distance);
+			} else {
+				rssi = -1;
+				snr = 0;
+				bitflips = 0;
+				dist = 0;
+			}
+			printf(">\t sample[%d]: id=%d rssi=%d snr=%d bitflips=%d "
+				"dist=%d rtt=%d%s status %s Type %s coreid=%d\n",
+				i, p_sample->id, rssi, snr, bitflips, dist,
 				ltoh32_ua(&p_sample->rtt.intvl),
 				ftm_tmu_value_to_logstr(ltoh16_ua(&p_sample->rtt.tmu)),
-				ltoh32_ua(&p_sample->ratespec),
-				(p_sample->flags & WL_PROXD_RTT_SAMPLE_DISCARD)? "Discard" : "");
-			p_sample++;
+				ftm_status_value_to_logstr(ltoh32_ua(&p_sample->status)),
+				ftm_frame_types[i % TOF_DEFAULT_FTMCNT_SEQ], p_sample->coreid);
+				p_sample++;
 		}
 	}
-
 	return;
 }
 
@@ -3255,9 +3462,10 @@ ftm_unpack_and_display_counters(const uint8 *p_data, uint16 tlvid, uint16 len)
 		ltoh32_ua(&p_data_info->tx),			/* tx frame count */
 		ltoh32_ua(&p_data_info->rx));			/* rx frame count */
 
-	printf("\tnoack=%d, txfail=%d\n",
+	printf("\tnoack=%d, txfail=%d num_meas=%d\n",
 		ltoh32_ua(&p_data_info->noack), 		/* tx w/o ack */
-		ltoh32_ua(&p_data_info->txfail));		/* tx failures */
+		ltoh32_ua(&p_data_info->txfail),		/* tx failures */
+		ltoh32_ua(&p_data_info->num_meas));		/* tx failures */
 
 	printf("\tburst=%d, sessions=%d, max_sessions=%d\n",
 		ltoh32_ua(&p_data_info->burst),			/* # of burst */
@@ -3441,6 +3649,7 @@ ftm_unpack_xtlv_cbfn(void *ctx, const uint8 *p_data, uint16 tlvid, uint16 len)
 	chanspec_t chanspec;
 	wl_proxd_intvl_t *p_data_intvl;
 	wl_proxd_ftm_info_t *p_data_info;
+	wl_proxd_tpk_t *tpk_info;
 
 
 #ifdef WL_FTM_DEBUG
@@ -3556,6 +3765,14 @@ ftm_unpack_xtlv_cbfn(void *ctx, const uint8 *p_data, uint16 tlvid, uint16 len)
 				wl_ether_etoa((struct ether_addr *)p_data));
 		break;
 
+		case WL_PROXD_TLV_ID_TPK:
+		{
+			tpk_info = (wl_proxd_tpk_t *)p_data;
+			printf("> %s: mac addr%s \n", ftm_tlvid_to_logstr(tlvid),
+				wl_ether_etoa((struct ether_addr *)&tpk_info->peer));
+		}
+		break;
+
 		case WL_PROXD_TLV_ID_INFO:			/* data=wl_proxd_ftm_info_t */
 		{
 			p_data_info = (wl_proxd_ftm_info_t *) p_data;
@@ -3615,9 +3832,11 @@ ftm_unpack_xtlv_cbfn(void *ctx, const uint8 *p_data, uint16 tlvid, uint16 len)
 			printf("> %s: data-len=%d byte(s)\n",
 				ftm_tlvid_to_logstr(tlvid), len);
 			if (len > 0)
-				prhex(NULL, (uint8 *)p_data, len);
+				prhex(NULL, (uint8*)p_data, len);
 		break;
-
+		case WL_PROXD_TLV_ID_TUNE:
+			res = proxd_tune_display((wl_proxd_params_tof_tune_t *)p_data, len);
+		break;
 		case WL_PROXD_TLV_ID_AOA_RESULT:	/* SJL_FIXME */
 		case WL_PROXD_TLV_ID_COLLECT:		/* SJL_FIXME */
 		case WL_PROXD_TLV_ID_LCI_REQ:		/* SJL_FIXME */
@@ -4132,7 +4351,8 @@ static const ftm_config_param_info_t ftm_config_param_info[] = {
 	{ "dev-addr", WL_PROXD_TLV_ID_DEV_ADDR, "deivce address(method only)",
 	FTM_SUBCMD_FLAG_METHOD },
 	{ "req-retries", WL_PROXD_TLV_ID_FTM_REQ_RETRIES, "number of FTM request retries",
-	FTM_SUBCMD_FLAG_ALL }
+	FTM_SUBCMD_FLAG_ALL },
+	{ "tpk", WL_PROXD_TLV_ID_TPK, "tpk to be configured", FTM_SUBCMD_FLAG_ALL }
 };
 
 /* map a specified text-string to a proxd time unit
@@ -4239,7 +4459,7 @@ static const ftm_config_options_info_t ftm_session_options_info[] = {
 	{ "target",		WL_PROXD_SESSION_FLAG_TARGET, "local device is a target" },
 	{ "one-way",	WL_PROXD_SESSION_FLAG_ONE_WAY, "(initiated) 1-way rtt " },
 	{ "auto-burst",	WL_PROXD_SESSION_FLAG_AUTO_BURST, "created with rx_auto_burst" },
-	{ "persist", WL_PROXD_SESSION_FLAG_PERSIST, "good until cancelled(not implemented yet)" },
+	{ "immediate", WL_PROXD_SESSION_FLAG_MBURST_NODELAY, "immediate next burst" },
 	{ "rtt-detail",	WL_PROXD_SESSION_FLAG_RTT_DETAIL, "provide rtt detail in results" },
 #ifdef SJL_FIXME
 	{ "aoa",		WL_PROXD_SESSION_FLAG_AOA, "AOA along with RTT" },
@@ -4597,6 +4817,42 @@ ftm_config_parse_intvl(char *arg_intvl, wl_proxd_intvl_t *out_intvl)
 
 	return BCME_OK;
 }
+
+/*
+* parse and pack 'intvl' param-value from a command-line argument
+* Input:
+*	arg_tpk: tpk param-value argument string
+*	out_tpk: buffer to store tpk and mac address
+*/
+static int
+ftm_config_parse_tpk_peer(char *arg_tpk, wl_proxd_tpk_t *out_tpk)
+{
+	wl_proxd_tpk_t	src_data_tpk;
+
+	/* initialize */
+	memset(out_tpk, 0, sizeof(*out_tpk));
+
+	if (arg_tpk == (char *) NULL) {
+		printf("error: tpk value is not specified\n");
+		return BCME_BADARG;
+	}
+
+	errno = 0;
+	memset(&src_data_tpk, 0, sizeof(src_data_tpk));
+	/* get link mac address */
+	if (!wl_ether_atoe(arg_tpk, &src_data_tpk.peer))
+		return BCME_USAGE_ERROR;
+	/* get TPK */
+	if (*arg_tpk) {
+		memcpy(&src_data_tpk.peer, arg_tpk, ETHER_ADDR_LEN);
+	}
+
+	/* return to caller */
+	memcpy(out_tpk, &src_data_tpk, sizeof(*out_tpk));
+
+	return BCME_OK;
+}
+
 
 /*
 * parse and pack one 'config avail slot' param-value from a command-line
@@ -5058,6 +5314,7 @@ wl_proxd_tlv_t **p_tlv, uint16 *p_buf_space_left)
 	uint32				src_data_uint32;
 	struct ether_addr	src_data_mac = ether_null;
 	wl_proxd_intvl_t	src_data_intvl;
+	wl_proxd_tpk_t		src_data_tpk;
 
 	void		*p_src_data;
 	uint16	src_data_size;	/* size of data pointed by p_src_data as 'source' */
@@ -5150,6 +5407,14 @@ wl_proxd_tlv_t **p_tlv, uint16 *p_buf_space_left)
 			if (status == BCME_OK) {
 				p_src_data = (void *) &src_data_intvl;
 				src_data_size = sizeof(src_data_intvl);
+			}
+			break;
+
+		case WL_PROXD_TLV_ID_TPK:
+			status = ftm_config_parse_tpk_peer(*argv, &src_data_tpk);
+			if (status == BCME_OK) {
+				p_src_data = (void *) &src_data_tpk;
+				src_data_size = sizeof(src_data_tpk);
 			}
 			break;
 
@@ -5851,3 +6116,236 @@ ftm_format_event_mask(wl_proxd_event_type_t event, char *p_strbuf, int bufsize)
 		snprintf(p_tmpbuf, bufsize, ")");
 }
 #endif /* WL_FTM_DEBUG */
+
+/*
+* 'wl proxd ftm tune' handler,
+*	wl proxd ftm tune
+*/
+static int
+ftm_handle_tune_options(char **argv, wl_proxd_tlv_t **p_tlv, uint16 *p_buf_space_left,
+	wl_proxd_params_tof_tune_t *tof_tune)
+{
+	miniopt_t to;
+	int opt_err;
+	int ret = BCME_USAGE_ERROR;
+
+	if (*argv == NULL)
+		return BCME_USAGE_ERROR;
+
+	miniopt_init(&to, "tune", NULL, FALSE);
+	while ((opt_err = miniopt(&to, argv)) != -1) {
+		if (opt_err == 1) {
+			return BCME_USAGE_ERROR;
+		}
+		argv += to.consumed;
+		ret = proxd_tune_set_param_from_opt("proxd ftm tune", &to, tof_tune);
+	}
+#ifdef WL_FTM_DEBUG
+	prhex("tune_opt", (uint8*)tof_tune, sizeof(wl_proxd_params_tof_tune_t));
+#endif /* WL_FTM_DEBUG */
+	ret = bcm_pack_xtlv_entry((uint8 **)p_tlv, p_buf_space_left,
+		WL_PROXD_TLV_ID_TUNE, sizeof(wl_proxd_params_tof_tune_t), (uint8*)tof_tune,
+		BCM_XTLV_OPTION_ALIGN32);
+	if (ret != BCME_OK) {
+		printf("%s: failed to pack proxd ftm tune in xtlv, err=%d\n",
+			__FUNCTION__, ret);
+		return ret;
+	}
+
+	return BCME_OK;
+}
+
+/* Used for getting the current options before setting the new ones only */
+static int
+ftm_tune_cbfn(void *ctx, const uint8 *p_data, uint16 tlvid, uint16 len)
+{
+	wl_proxd_params_tof_tune_t *tunep = (wl_proxd_params_tof_tune_t *)ctx;
+
+	if (tlvid == WL_PROXD_TLV_ID_TUNE) {
+#ifdef WL_FTM_DEBUG
+		prhex("ftm_tune_cbbn", p_data, len);
+#endif /* WL_FTM_DEBUG */
+		if (len < sizeof(wl_proxd_params_tof_tune_t)) {
+			/* FW has older version */
+			memcpy(&tunep->Ki, p_data, len);
+		} else {
+			memcpy(tunep, p_data, sizeof(wl_proxd_params_tof_tune_t));
+		}
+	}
+	return BCME_OK;
+}
+
+static int
+ftm_subcmd_tune(void *wl, const ftm_subcmd_info_t *p_subcmd_info,
+	wl_proxd_method_t method, wl_proxd_session_id_t session_id, char **argv)
+{
+	uint16 proxd_tune_method;
+	uint16 proxd_iovsize;
+	wl_proxd_iov_t *p_proxd_iov, *p_iovresp;
+	uint16 bufsize;
+	wl_proxd_tlv_t *p_tlv;
+	uint16 buf_space_left;
+	uint16 all_tlvsize = 0;
+	int ret = BCME_OK;
+	wl_proxd_params_tof_tune_t	tof_tune;	/* TOF tune parameters */
+	memset(&tof_tune, 0, sizeof(tof_tune));
+
+	/* this should apply to a method command */
+	if (session_id != WL_PROXD_SESSION_ID_GLOBAL) {
+		printf("error: no session-id is allowed for tune\n");
+		return BCME_OK;
+	}
+
+	/* skip the command name and check if mandatory exists */
+	if (!*argv) {
+		fprintf(stderr, "missing mandatory parameter \'method\'\n");
+		return BCME_USAGE_ERROR;
+	}
+
+	/* parse method */
+	proxd_tune_method = (uint16)atoi(argv[0]);
+	if (proxd_tune_method == 0) {
+		fprintf(stderr, "invalid parameter \'method\'\n");
+		return BCME_USAGE_ERROR;
+	}
+
+	/* only supports PROXD_TOF_METHOD */
+	if (proxd_tune_method == PROXD_RSSI_METHOD)
+		return BCME_OK;
+
+	if (!*++argv) {
+		/* get */
+		return ftm_common_getcmd_handler(wl, p_subcmd_info, method, session_id, argv);
+	} else {
+		/* allocate iovar getset buffer */
+		p_proxd_iov = ftm_alloc_getset_buf(method, session_id,
+			p_subcmd_info->cmdid, sizeof(wl_proxd_params_tof_tune_t),
+				&proxd_iovsize);
+		if (p_proxd_iov == (wl_proxd_iov_t *) NULL)
+			return BCME_NOMEM;
+		bufsize = proxd_iovsize - WL_PROXD_IOV_HDR_SIZE;
+		p_tlv = &p_proxd_iov->tlvs[0];
+		buf_space_left = bufsize;
+
+		/* get current tune params */
+		ret = wlu_var_getbuf(wl, "proxd", p_proxd_iov, proxd_iovsize,
+			(void *)&p_iovresp);
+		if (ret != BCME_OK) {
+#ifdef WL_FTM_DEBUG
+			printf("%s: failed to send getbuf proxd iovar, status=%d\n",
+				__FUNCTION__, ret);
+#endif /* WL_FTM_DEBUG */
+			goto done;
+		}
+		if (p_iovresp != NULL) {
+			int tlvs_len = ltoh16(p_iovresp->len) - WL_PROXD_IOV_HDR_SIZE;
+			if (tlvs_len > 0) {
+				ret = bcm_unpack_xtlv_buf(&tof_tune, (uint8 *)p_iovresp->tlvs,
+					tlvs_len, BCM_XTLV_OPTION_ALIGN32, ftm_tune_cbfn);
+			}
+		}
+
+		/* handle options */
+		ret = ftm_handle_tune_options(argv, &p_tlv, &buf_space_left, &tof_tune);
+		if (ret == BCME_OK) {
+			/* prep to transport xtlv */
+			all_tlvsize = bufsize - buf_space_left;
+			p_proxd_iov->len = htol16(all_tlvsize + WL_PROXD_IOV_HDR_SIZE);
+			ret = wlu_var_setbuf(wl, "proxd", p_proxd_iov,
+				all_tlvsize + WL_PROXD_IOV_HDR_SIZE);
+		}
+	}
+
+done:
+	/* clean up */
+	free(p_proxd_iov);
+#ifdef wL_FTM_DEBUG
+	if (ret != BCME_OK)
+		printf("error: exit %s, status = %d\n", __FUNCTION__, ret);
+#endif /* WL_FTM_DEBUG */
+
+	return ret;
+}
+
+static int
+proxd_tune_display(wl_proxd_params_tof_tune_t *tof_tune, uint16 len)
+{
+	int err = BCME_OK;
+	int i, version = 0;
+
+	if (!tof_tune)
+		return err;
+
+	printf("Ki=%d \n", dtoh32(tof_tune->Ki));
+	printf("Kt=%d \n", dtoh32(tof_tune->Kt));
+	printf("vhtack=%d \n", dtoh16(tof_tune->vhtack));
+	printf("seq_en=%d\n", dtoh16(tof_tune->seq_en));
+	printf("core=%d\n", tof_tune->core);
+	printf("sw_adj=%d\n", dtoh16(tof_tune->sw_adj));
+	printf("hw_adj=%d\n", dtoh16(tof_tune->hw_adj));
+	printf("minDT = %d\n", tof_tune->minDT);
+	printf("maxDT = %d\n", tof_tune->maxDT);
+	printf("threshold_log2=%d %d %d seqtx %d seqrx %d 2g %d seqtx5g20 %d"
+		" seqrx5g20 %d seqtx2g20 %d seqrx2g20 %d\n",
+		dtoh16(tof_tune->N_log2[TOF_BW_20MHZ_INDEX]),
+		dtoh16(tof_tune->N_log2[TOF_BW_40MHZ_INDEX]),
+		dtoh16(tof_tune->N_log2[TOF_BW_80MHZ_INDEX]),
+		dtoh16(tof_tune->N_log2[TOF_BW_SEQTX_INDEX]),
+		dtoh16(tof_tune->N_log2[TOF_BW_SEQRX_INDEX]),
+		dtoh16(tof_tune->N_log2_2g),
+		dtoh16(tof_tune->seq_5g20.N_tx_log2),
+		dtoh16(tof_tune->seq_5g20.N_rx_log2),
+		dtoh16(tof_tune->seq_2g20.N_tx_log2),
+		dtoh16(tof_tune->seq_2g20.N_rx_log2));
+	printf("threshold_scale=%d %d %d seqtx %d seqrx %d 2g %d seqtx5g20 %d"
+		" seqrx5g20 %d seqtx2g20 %d seqrx2g20 %d\n",
+		dtoh16(tof_tune->N_scale[TOF_BW_20MHZ_INDEX]),
+		dtoh16(tof_tune->N_scale[TOF_BW_40MHZ_INDEX]),
+		dtoh16(tof_tune->N_scale[TOF_BW_80MHZ_INDEX]),
+		dtoh16(tof_tune->N_scale[TOF_BW_SEQTX_INDEX]),
+		dtoh16(tof_tune->N_scale[TOF_BW_SEQRX_INDEX]),
+		dtoh16(tof_tune->N_scale_2g),
+		dtoh16(tof_tune->seq_5g20.N_tx_scale),
+		dtoh16(tof_tune->seq_5g20.N_rx_scale),
+		dtoh16(tof_tune->seq_2g20.N_tx_scale),
+		dtoh16(tof_tune->seq_2g20.N_rx_scale));
+	printf("total_frmcnt=%d \n", tof_tune->totalfrmcnt);
+	printf("reserve_media=%d \n", tof_tune->rsv_media);
+	printf("flags=0x%x \n", dtoh16(tof_tune->flags));
+	for (i = 0; i < TOF_BW_NUM; i++) {
+		printf("window length %dMHz = %d\n",
+			(20 << i), tof_tune->w_len[i]);
+		printf("window offset %dMHz = %d\n",
+			(20 << i), tof_tune->w_offset[i]);
+	}
+	printf("seq window length 5G-20MHz = %2d 2G-20MHz = %2d\n",
+		tof_tune->seq_5g20.w_len,
+		tof_tune->seq_2g20.w_len);
+	printf("seq window offset 5G-20MHz = %2d 2G-20MHz = %2d\n",
+		tof_tune->seq_5g20.w_offset,
+		tof_tune->seq_2g20.w_offset);
+	printf("frame count=%d %d %d seq %d\n",
+		tof_tune->ftm_cnt[TOF_BW_20MHZ_INDEX],
+		tof_tune->ftm_cnt[TOF_BW_40MHZ_INDEX],
+		tof_tune->ftm_cnt[TOF_BW_80MHZ_INDEX],
+		tof_tune->ftm_cnt[TOF_BW_SEQTX_INDEX]);
+
+	if (len == sizeof(wl_proxd_params_tof_tune_t)) {
+		version = dtoh32(tof_tune->version);
+		switch (version) {
+		case WL_PROXD_TUNE_VERSION_1:
+			printf("bitflip threshold=%u\n", dtoh16(tof_tune->bitflip_thresh));
+			printf("SNR threshold=%u\n", dtoh16(tof_tune->snr_thresh));
+			printf("2G receive sensitivity threshold=%d\n", tof_tune->recv_2g_thresh);
+			printf("ACS GDV threshold=%u\n", dtoh32(tof_tune->acs_gdv_thresh));
+			printf("ACS RSSI threshold=%d\n", tof_tune->acs_rssi_thresh);
+			printf("Smoothing window enable=%u\n", tof_tune->smooth_win_en);
+			printf("ACS GDMM threshold=%u\n", dtoh32(tof_tune->acs_gdmm_thresh));
+			printf("ACS RSSI delta threshold=%d\n", tof_tune->acs_delta_rssi_thresh);
+			break;
+		default:
+			break;
+		}
+	}
+	return err;
+}
