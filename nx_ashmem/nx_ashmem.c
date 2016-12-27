@@ -364,7 +364,9 @@ static int nx_ashmem_release(struct inode *ignored, struct file *file)
          kmem_cache_free(nx_ashmem_area_cachep, asma);
       }
    } else {
+      list_del(&asma->block_list);
       mutex_unlock(&(nx_ashmem_global->block_lock));
+      kmem_cache_free(nx_ashmem_area_cachep, asma);
    }
 
    if (marker)
