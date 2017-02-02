@@ -1,3 +1,5 @@
+ifneq ($(filter $(BCM_RBOARDS) $(BCM_DBOARDS) $(BCM_CBOARDS),$(TARGET_DEVICE)),)
+
 LOCAL_PATH := $(call my-dir)
 
 #########################
@@ -133,4 +135,6 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 include $(BUILD_EXECUTABLE)
 
 endif
+endif
+
 endif
