@@ -63,7 +63,7 @@ struct regulator *wifi_regulator = NULL;
 
 #define MAX_REGULATORS 3
 static const char * const regulator_names[] =
-	{"vreg-wifi-pwr", "vreg-wlan-pwr", NULL};
+	{"vreg-wifi-pwr", "vreg-wlan-pwr", "vreg-wifi_reg-pwr", NULL};
 static struct regulator *wifi_regulators[MAX_REGULATORS];
 
 bool cfg_multichip = FALSE;
