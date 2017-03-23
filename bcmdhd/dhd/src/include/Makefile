@@ -8,7 +8,7 @@
 # 2. For select components, as listed in compvers.sh
 #    it generates component version files
 #
-# Copyright (C) 2016, Broadcom Corporation
+# Copyright (C) 2017, Broadcom Corporation
 # All Rights Reserved.
 # 
 # This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

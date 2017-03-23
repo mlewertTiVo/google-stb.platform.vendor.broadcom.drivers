@@ -29,19 +29,23 @@
 #endif
 #include <linux/brcmstb/brcmstb.h>
 
+static int debug_verbose = 0;
+
 struct bcmnexusfb_par {
 	  NEXUS_DisplayHandle display;
 	  NEXUS_Graphics2DHandle gfx;
 	  NEXUS_SurfaceHandle framebuffer;
+	  NEXUS_SurfaceHandle fb0;
+	  NEXUS_SurfaceHandle fb1;
 	  NEXUS_SurfaceMemory mem;
 	  u32 pseudo_palette[16];
 	  unsigned ref_cnt;
 };
 
 static struct fb_fix_screeninfo bcmnexusfb_fix __initdata = {
-	.id =		"BCMNEXUS",
-	.type =		FB_TYPE_PACKED_PIXELS,
-	.accel =	FB_ACCEL_NONE,
+	.id = "BCMNEXUS",
+	.type = FB_TYPE_PACKED_PIXELS,
+	.accel = FB_ACCEL_NONE,
 };
 
 static struct fb_var_screeninfo bcmnexusfb_var __initdata = {
@@ -54,9 +58,9 @@ static struct fb_var_screeninfo bcmnexusfb_var __initdata = {
 	.green = {8, 8, 0},
 	.blue = {16, 8, 0},
 	.transp = {24, 0, 0},
-	.activate	= FB_ACTIVATE_NOW,
-	.height		= 1920,
-	.width		= 1080,
+	.activate = FB_ACTIVATE_NOW|FB_ACTIVATE_FORCE,
+	.height = 1920,
+	.width = 1080,
 };
 
 static int bcmnexusfb_open(struct fb_info *info, int user)
@@ -111,47 +115,78 @@ static int bcmnexusfb_open(struct fb_info *info, int user)
 	NEXUS_VideoFormat_GetInfo(displaySettings.format, &videoFormatInfo);
 	NEXUS_Surface_GetDefaultCreateSettings(&createSettings);
 	createSettings.pixelFormat = NEXUS_PixelFormat_eX8_B8_G8_R8;
-	createSettings.width = videoFormatInfo.width;
-	createSettings.height = videoFormatInfo.height;
-        createSettings.heap = NEXUS_Platform_GetFramebufferHeap(0);
-	par->framebuffer = NEXUS_Surface_Create(&createSettings);
+	createSettings.width       = videoFormatInfo.width * 2;
+	createSettings.height      = videoFormatInfo.height;
+	createSettings.pitch       = videoFormatInfo.width * 2 * 4;
+	createSettings.heap        = NEXUS_Platform_GetFramebufferHeap(0);
+	par->framebuffer           = NEXUS_Surface_Create(&createSettings);
 	if(par->framebuffer == NULL) {goto err_graphics;}
 	rc = NEXUS_Surface_GetMemory(par->framebuffer, &par->mem);
 	if(rc!=NEXUS_SUCCESS) {goto err_surface;}
 
+	NEXUS_Surface_GetDefaultCreateSettings(&createSettings);
+	createSettings.pixelFormat = NEXUS_PixelFormat_eX8_B8_G8_R8;
+	createSettings.width       = videoFormatInfo.width;
+	createSettings.height      = videoFormatInfo.height;
+	createSettings.pitch       = videoFormatInfo.width * 4;
+	createSettings.pMemory     = par->mem.buffer;
+	par->fb0                   = NEXUS_Surface_Create(&createSettings);
+	if(par->fb0 == NULL) {goto err_surface;}
+	printk("fb%d-0::%dx%d::s:%d::b:%x::o:%p::%p\n", info->node,
+		createSettings.width, createSettings.height,
+		createSettings.pitch, createSettings.pMemory,
+		createSettings.pMemory, par->fb0);
+
+	NEXUS_Surface_GetDefaultCreateSettings(&createSettings);
+	createSettings.pixelFormat = NEXUS_PixelFormat_eX8_B8_G8_R8;
+	createSettings.width       = videoFormatInfo.width;
+	createSettings.height      = videoFormatInfo.height;
+	createSettings.pitch       = videoFormatInfo.width * 4;
+	createSettings.pMemory     = par->mem.buffer + (videoFormatInfo.height * videoFormatInfo.width * 4);
+	par->fb1                   = NEXUS_Surface_Create(&createSettings);
+	if(par->fb1 == NULL) {goto err_surface;}
+	printk("fb%d-1::%dx%d::s:%d::b:%x::o:%p::%p\n", info->node,
+		createSettings.width, createSettings.height,
+		createSettings.pitch, createSettings.pMemory,
+		createSettings.pMemory, par->fb1);
+
 	NEXUS_Display_GetGraphicsSettings(par->display, &graphicsSettings);
-	graphicsSettings.enabled = true;
-	graphicsSettings.clip.width = createSettings.width;
-	graphicsSettings.clip.height = createSettings.height;
+	graphicsSettings.enabled           = true;
+	graphicsSettings.clip.width        = videoFormatInfo.width;
+	graphicsSettings.clip.height       = videoFormatInfo.height;
 	graphicsSettings.sourceBlendFactor = NEXUS_CompositorBlendFactor_eOne;
-	graphicsSettings.destBlendFactor = NEXUS_CompositorBlendFactor_eZero;
-	/* Fix alpha at 0xFF as we do RGBX here */
-	graphicsSettings.constantAlpha = 0xFF;
+	graphicsSettings.destBlendFactor   = NEXUS_CompositorBlendFactor_eZero;
+	graphicsSettings.constantAlpha     = 0xFF;
 	NEXUS_Display_SetGraphicsSettings(par->display, &graphicsSettings);
-	NEXUS_Display_SetGraphicsFramebuffer(par->display, par->framebuffer);
 
-	info->fix.smem_start = (unsigned long)NEXUS_AddrToOffset(par->mem.buffer);
-	info->fix.smem_len = createSettings.height * par->mem.pitch;
-	info->fix.visual = FB_VISUAL_TRUECOLOR;
-	info->fix.line_length = par->mem.pitch;
+	info->fix.smem_start  = (unsigned long)NEXUS_AddrToOffset(par->mem.buffer);
+	info->fix.line_length = par->mem.pitch / 2;
+	info->fix.smem_len    = createSettings.height * par->mem.pitch;
+	info->fix.visual      = FB_VISUAL_TRUECOLOR;
 
-	info->var.xres = createSettings.width;
-	info->var.yres = createSettings.height;
+	info->var.xres         = createSettings.width;
+	info->var.yres         = createSettings.height;
 	info->var.xres_virtual = createSettings.width;
 	info->var.yres_virtual = createSettings.height;
 
 	info->screen_base = (char __force __iomem *)par->mem.buffer;
-	info->screen_size = info->fix.smem_len;
+	info->screen_size = info->fix.smem_len / 2;
 
 done:
-	printk("fb%d: %dx%d - %dx%d - %x, %u\n", info->node, info->var.xres, info->var.yres,
-               info->var.xres_virtual, info->var.yres_virtual, info->screen_base, info->screen_size);
+	printk("fb%d::%dx%d::v:%dx%d::base:%x::sz:%u::%u:%u/%zu\n",
+		info->node,
+		info->var.xres, info->var.yres,
+		info->var.xres_virtual, info->var.yres_virtual,
+		info->screen_base, info->screen_size,
+		info->fix.line_length, info->fix.smem_len, par->mem.bufferSize);
 	par->ref_cnt++;
 	return 0;
 
 err_surface:
 	printk("fb%d: err_surface - FAILED\n", info->node);
-	NEXUS_Surface_Destroy(par->framebuffer);
+	if (par->fb0) NEXUS_Surface_Destroy(par->fb0);
+	if (par->fb1) NEXUS_Surface_Destroy(par->fb1);
+	if (par->framebuffer) NEXUS_Surface_Destroy(par->framebuffer);
 err_graphics:
 	printk("fb%d: err_graphics - FAILED\n", info->node);
 	NEXUS_Display_RemoveAllOutputs(par->display);
@@ -181,6 +216,8 @@ static int bcmnexusfb_release(struct fb_info *info, int user)
 	/* NEXUS_Display_RemoveAllOutputs(par->display); - not needed. */
 	NEXUS_Display_Close(par->display);
 	NEXUS_Graphics2D_Close(par->gfx);
+	NEXUS_Surface_Destroy(par->fb0);
+	NEXUS_Surface_Destroy(par->fb1);
 	NEXUS_Surface_Destroy(par->framebuffer);
 	return 0;
 }
@@ -241,7 +278,8 @@ void bcmnexusfb_fillrect(struct fb_info *p, const struct fb_fillrect *region)
 	fillSettings.rect.height = region->height;
 	fillSettings.color = region->color;
 
-	printk("fb%d: fillrect %d,%d %d,%d\n", p->node, region->dx, region->dy, region->width, region->height);
+	if (debug_verbose) printk("fb%d: fillrect %d,%d %d,%d\n",
+		p->node, region->dx, region->dy, region->width, region->height);
 
 	NEXUS_Graphics2D_Fill(par->gfx, &fillSettings);
 }
@@ -268,37 +306,67 @@ void bcmnexusfb_copyarea(struct fb_info *p, const struct fb_copyarea *area)
 	blitSettings.colorOp = NEXUS_BlitColorOp_eCopySource;
 	blitSettings.alphaOp = NEXUS_BlitAlphaOp_eCopySource;
 
-	printk("fb%d: copyarea %d,%d %d,%d\n", p->node, area->dx, area->dy, area->width, area->height);
+	if (debug_verbose) printk("fb%d: copyarea %d,%d %d,%d\n",
+		p->node, area->dx, area->dy, area->width, area->height);
 
 	NEXUS_Graphics2D_Blit(par->gfx, &blitSettings);
 }
 
-void bcmnexusfb_imageblit(struct fb_info *p, const struct fb_image *image)
+void bcmnexusfb_imageblit(struct fb_info *info, const struct fb_image *image)
 {
-	/*TODO : This is required only for frambuffer console.
-	  We do not currently support it. Add this when required*/
+	printk("fb%d: imageblit - NOT SUPPORTED \n", info->node);
 }
 
 int bcmnexusfb_sync(struct fb_info *info)
 {
 	struct bcmnexusfb_par *par = (struct bcmnexusfb_par*)info->par;
 
-	printk("fb%d: sync\n", info->node);
+	if (debug_verbose) printk("fb%d: sync\n", info->node);
 
 	NEXUS_Surface_Flush(par->framebuffer);
 	return 0;
 }
 
+int bcmnexusfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
+{
+	if (info->flags & FBINFO_MISC_USEREVENT) {
+		if (debug_verbose) printk("fb%d: check-var %d::%d::%d\n",
+			info->node, var->yres_virtual, var->yoffset,
+			var->bits_per_pixel);
+	}
+
+	return 0;
+}
+
+int bcmnexusfb_set_par(struct fb_info *info)
+{
+	struct bcmnexusfb_par *par = (struct bcmnexusfb_par*)info->par;
+
+	if (info->flags & FBINFO_MISC_USEREVENT) {
+		if (debug_verbose) printk("fb%d: set-par:%d >> set-fb:%p\n",
+			info->node, info->var.yoffset,
+			!info->var.yoffset ? par->fb0 : par->fb1);
+
+		NEXUS_Display_SetGraphicsFramebuffer(
+			par->display,
+			!info->var.yoffset ? par->fb0 : par->fb1);
+	}
+
+	return 0;
+}
+
 static struct fb_ops bcmnexusfb_ops = {
 	.owner			= THIS_MODULE,
-	.fb_open		= bcmnexusfb_open,
+	.fb_open			= bcmnexusfb_open,
 	.fb_release		= bcmnexusfb_release,
 	.fb_setcolreg	= bcmnexusfb_setcolreg,
 	.fb_blank		= bcmnexusfb_blank,
 	.fb_fillrect	= bcmnexusfb_fillrect,
 	.fb_copyarea	= bcmnexusfb_copyarea,
 	.fb_imageblit	= bcmnexusfb_imageblit,
-	.fb_sync		= bcmnexusfb_sync,
+	.fb_sync			= bcmnexusfb_sync,
+	.fb_check_var	= bcmnexusfb_check_var,
+	.fb_set_par		= bcmnexusfb_set_par,
 };
 
 static int __init bcmnexusfb_probe (struct platform_device *pdev)
@@ -407,4 +475,3 @@ module_exit(bcmnexusfb_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Broadcom Limited");
 MODULE_DESCRIPTION("framebuffer over nexus");
-

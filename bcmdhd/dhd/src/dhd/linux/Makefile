@@ -1,7 +1,7 @@
 
 # GNU Makefile for Broadcom Dongle Host Driver
 #
-# Copyright (C) 1999-2016, Broadcom Corporation
+# Copyright (C) 1999-2017, Broadcom Corporation
 # 
 #      Unless you and Broadcom execute a separate written software license
 # agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 648647 2016-07-13 06:54:27Z $
+# $Id: Makefile 671469 2016-11-22 06:29:31Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -147,6 +147,16 @@ ifneq ($(findstring armv7l,$(TARGET)),)
 	DFLAGS += -DBRCM_DRIVER_TARGET=$(TARGET)
 endif
 
+ifneq ($(findstring armv8,$(TARGET)),)
+	DHDARCH = arm64
+	DFLAGS += -D__ARM_ARCH_8A__
+	WFLAGS += -Wno-pointer-to-int-cast
+	DFLAGS += -DSTBLINUX=1
+	DFLAGS += -DSTB
+# adding the driver targets into the driver for debugging.
+	DFLAGS += -DBRCM_DRIVER_TARGET=$(TARGET)
+endif
+
 ifneq ($(findstring stb,$(TARGET)),)
 	DFLAGS += -DSTBLINUX=1
 	DFLAGS += -DSTB
@@ -169,10 +179,6 @@ ifneq ($(findstring native,$(TARGET)),)
 endif
 ifneq ($(findstring mips,$(TARGET)),)
    DHDARCH = mips
-endif
-ifneq ($(findstring arm,$(TARGET)),)
-   DHDARCH = arm
-
 endif
 
 # First include from linux kernel dirs
@@ -443,6 +449,10 @@ ifneq ($(findstring -cfg80211-,-$(TARGET)-),)
   DFLAGS += -DWL_CFG80211 -DWLP2P -DWIFI_ACT_FRAME -DESCAN_RESULT_PATCH -DMFP
   CFILES += wl_cfg80211.c wl_cfgp2p.c dhd_cfg80211.c wl_cfg_btcoex.c wl_cfgvendor.c
   CFILES += wl_linux_mon.c wldev_common.c bcmwifi_channels.c bcm_app_utils.c
+  CFILES += dhd_debug_linux.c
+  #These needs to be removed once code cleanup is done.
+  DFLAGS += -DOEM_ANDROID
+  CFILES += wl_android.c
 
   ifndef CONFIG_NL80211_TESTMODE
     $(warning kernel does not support nl80211 testmode API)
@@ -1084,6 +1094,7 @@ TARGETS := \
 	msgbuf-pciefd-reqfw-android-media-cfg80211-mfp \
 	msgbuf-pciefd-reqfw-android-media-cfg80211-mfp-secdma \
 	msgbuf-pciefd-reqfw-android-media-cfg80211-mfp-secdma-wet \
+	msgbuf-pciefd-media-cfg80211-mfp \
 	msgbuf-pciefd-android-media-cfg80211-mfp \
 	msgbuf-pciefd-android-media-cfg80211-mfp-wet \
 	msgbuf-pciefd-android-media-cfg80211-mfp-secdma \
@@ -1092,6 +1103,8 @@ TARGETS := \
 	msgbuf-pciefd-mfp-secdma-wet \
 	msgbuf-pciefd-media-mfp-secdma-wet \
 	msgbuf-pciefd-media-mfp-wet \
+	msgbuf-pciefd-media-mfp-wet-cfg80211 \
+	msgbuf-pciefd-media-mfp-secdma-wet-cfg80211 \
 	cdc-usb \
 	cdc-usb-fdaggr \
 	cdc-usb-notxthread \
@@ -1192,6 +1205,7 @@ TARGETS := \
 	cdc-usb-comp-gpl-wet \
 	cdc-usb-comp-gpl-media \
 	cdc-usb-comp-gpl-media-wet \
+	cdc-usb-comp-gpl-media-wet-cfg80211 \
 	cdc-usb-comp-gpl-arm \
 	cdc-usb-comp-mfp-gpl \
 	cdc-usb-comp-mfp-gpl-wet \
@@ -1227,6 +1241,7 @@ TARGETS := $(addprefix $(ObjPfx),$(TARGETS))
 
 MIPS_TGT=$(foreach tgt, $(TARGETS), $(tgt)-mips)
 ARMV7L_TGT=$(foreach tgt, $(TARGETS), $(tgt)-armv7l)
+ARMV8_TGT=$(foreach tgt, $(TARGETS), $(tgt)-armv8)
 STBARMV7L_TGT=$(foreach tgt, $(TARGETS), $(tgt)-stb-armv7l)
 STBMIPS_TGT=$(foreach tgt, $(TARGETS), $(tgt)-stb-mips)
 
@@ -1237,7 +1252,7 @@ HUDI_TGT=$(foreach tgt, $(TARGETS), $(tgt)-hudi)
 DHD_BUZZZ_TGT=$(foreach tgt, $(TARGETS), $(tgt)-dhd_buzzz)
 BUZZZ_TGT=$(foreach tgt, $(TARGETS), $(tgt)-buzzz)
 
-TARGETS += $(MIPS_TGT) $(ARMV7L_TGT) $(STBARMV7L_TGT) $(STBMIPS_TGT) $(CUSTOMER4_TGT) $(ULP_TGT) $(HUDI_TGT) $(DHD_BUZZZ_TGT) $(BUZZZ_TGT)
+TARGETS += $(MIPS_TGT) $(ARMV7L_TGT) $(ARMV8_TGT) $(STBARMV7L_TGT) $(STBMIPS_TGT) $(CUSTOMER4_TGT) $(ULP_TGT) $(HUDI_TGT) $(DHD_BUZZZ_TGT) $(BUZZZ_TGT)
 
 
 TARGETS += $(foreach tgt, $(TARGETS), $(tgt)-debug)
@@ -1294,7 +1309,7 @@ modules: $(OFILES)
     ifeq ($(findstring -Makefile,-$(TARGET)-),)
 		test -r ./Makefile || ln -s $(WLAN_SrcBaseR)/dhd/linux/makefile.26 ./Makefile
     endif
-	$(strip $(MAKE) -C $(LINUX_OUT) M=$(shell pwd) $(if $(VERBOSE),V=1) $(WLAN_ShellDebugSHELL) modules)
+	$(strip $(MAKE) -C $(LINUX_OUT) ARCH=$(DHDARCH) M=$(shell pwd) $(if $(VERBOSE),V=1) $(WLAN_ShellDebugSHELL) modules)
 else
 modules: $(MODULES)
 endif

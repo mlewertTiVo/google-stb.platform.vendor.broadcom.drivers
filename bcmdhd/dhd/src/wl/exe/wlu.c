@@ -1,7 +1,7 @@
 /*
  * Common code for wl command-line swiss-army-knife utility
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu.c 650567 2016-07-21 23:12:58Z $
+ * $Id: wlu.c 661718 2016-09-27 06:16:16Z $
  */
 
 
@@ -331,6 +331,7 @@ static cmd_func_t wl_read_estpwrlut;
 
 static int wl_peerrssi(void *wl, cmd_t *cmd, char **argv);
 
+static cmd_func_t wl_wds_ap_ifname;
 
 static cmd_func_t wl_wowl_wakeind;
 
@@ -1636,6 +1637,8 @@ cmd_t wl_cmds[] = {
 	"Disable/Enable dynamic bandwidth flag to associate as HT STA(20MHZ) with VHT AP(80MHZ)\n"
 	"\t0 - disable\n"
 	"\t1 - enable" },
+	{ "wds_ap_ifname", wl_wds_ap_ifname, WLC_GET_VAR, -1,
+	"Get associated AP interface name for WDS interface."},
 	{ NULL, NULL, 0, 0, NULL }
 };
 
@@ -8898,7 +8901,7 @@ wl_dfs_ap_move(void *wl, cmd_t *cmd, char **argv)
 	uint32 val = 0;
 	chanspec_t chanspec = 0;
 	int abort;
-	wl_dfs_ap_move_status_t *status;
+	struct wl_dfs_ap_move_status_v2 *status;
 	char chanbuf[CHANSPEC_STR_LEN];
 	const char *dfs_state_str[DFS_SCAN_S_MAX] = {
 		"Radar Free On Channel",
@@ -8920,7 +8923,7 @@ wl_dfs_ap_move(void *wl, cmd_t *cmd, char **argv)
 			return err;
 		}
 
-		status = (wl_dfs_ap_move_status_t*)ptr;
+		status = (struct wl_dfs_ap_move_status_v2*)ptr;
 
 		if (status->version != WL_DFS_AP_MOVE_VERSION) {
 			err = BCME_UNSUPPORTED;
@@ -23299,4 +23302,26 @@ wl_wowl_wakeind(void *wl, cmd_t *cmd, char **argv)
 		printf("No wakeup indication set\n");
 
 	return 0;
+}
+
+static int
+wl_wds_ap_ifname(void *wl, cmd_t *cmd, char **argv)
+{
+	int ret;
+
+	UNUSED_PARAMETER(argv);
+
+	memset(buf, 0, WLC_IOCTL_SMLEN);
+
+	/* query for 'wds_ap_ifname' to get ap ifname */
+	ret = wlu_iovar_get(wl, cmd->name, buf, WLC_IOCTL_SMLEN);
+	buf[WLC_IOCTL_SMLEN -1] = '\0';
+
+	/* if the query is successful, continue on and print the result. */
+	if (ret) {
+		return ret;
+	}
+
+	printf("%s\n", buf);
+	return ret;
 }

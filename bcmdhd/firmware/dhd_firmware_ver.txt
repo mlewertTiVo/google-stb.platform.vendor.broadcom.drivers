@@ -25,8 +25,8 @@ BISON05T_REL_7_35_143_139_EXT
 43570a2-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-wfds Version: 7.35.143.139 CRC: f27a0431 Date: Wed 2016-08-31 21:49:52 PDT Ucode Ver: 974.121 FWID: 01-61c208e0
 43570a2-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-wfds-bdo-wog-ak Version: 7.35.143.139 CRC: 1c8a9c01 Date: Wed 2016-08-31 21:50:01 PDT Ucode Ver: 974.121 FWID: 01-707d5202
 
-BISON05T_REL_7_35_143_145_EXT
-43570a2-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-wfds-bdo-ak Version: 7.35.143.145 Date: Wed 2016-11-29
+BISON05T_REL_7_35_143_147_EXT
+43570a2-roml/pcie-ag-pktctx-splitrx-amsdutx-txbf-p2p-mchan-idauth-idsup-tdls-mfp-sr-proptxstatus-pktfilter-wowlpf-ampduhostreorder-keepalive-wfds-bdo-ak Version: 7.35.143.147 Date: Wed 2016-12-25
 
 BISON05T_REL_7_35_143_139_MFG
 43570a2-roml/pcie-ag-splitrx-txbf-p2p-mfgtest-seqcmds-phydbg Version: 7.35.143.139 CRC: 53e8f93c Date: Wed 2016-08-31 21:23:33 PDT Ucode Ver: 974.121 FWID: 01-4edb6692

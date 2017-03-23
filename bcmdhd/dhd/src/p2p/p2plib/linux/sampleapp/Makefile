@@ -231,9 +231,11 @@ INCLUDE := -I. \
 
 INCLUDE += $(addprefix -I,$(wildcard $(SRCBASE)/shared/bcmwifi/include))
 
+vpath %.c $(SRCBASE)/shared/bcmwifi/src
+
 export CFLAGS CXXFLAGS INCLUDE USE_EXT_SECAGENT INCLUDE CFLAGS
 
-P2PAPPSRCS =  p2p_app.c p2p_app_cli.c p2papp_persist_file.c p2papp_linux.c $(WFDISP_SRCS) $(P2PUPNP_SRCS)
+P2PAPPSRCS =  p2p_app.c p2p_app_cli.c p2papp_persist_file.c p2papp_linux.c $(WFDISP_SRCS) $(P2PUPNP_SRCS) bcmwifi_channels.c
 ifneq ($(POSIX_MQUEUE),1)
    P2PAPPSRCS += p2papp_queue.c
 endif
@@ -322,7 +324,7 @@ wfdcapdie :
 	@date "+==== [%D %T] END  : Build WFD CAPDIE libraries ===="
 
 $(OBJDIR)/bcmp2papp:  $(LIBTARGETS) $(OBJDIR)/libbcmp2papp.a $(OBJDIR)/p2p_app_main.o
-	$(CC)  $(OBJDIR)/p2p_app_main.o $(OBJDIR)/libbcmp2papp.a $(P2PLDFLAGS) -o $(OBJDIR)/$(@F)
+	$(CC)  $(OBJDIR)/p2p_app_main.o $(OBJDIR)/bcmwifi_channels.o $(OBJDIR)/libbcmp2papp.a $(P2PLDFLAGS) -o $(OBJDIR)/$(@F)
 ifeq ($(BLDTYPE),release)
 	$(STRIP) $(OBJDIR)/$(@F)
 endif

@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.c 652488 2016-08-02 06:10:58Z $
+ * $Id: wl_cfg80211.c 668832 2016-11-05 18:16:06Z $
  */
 /* */
 #include <typedefs.h>
@@ -533,12 +533,13 @@ static s32 wl_notify_mic_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfg
 static s32 wl_notify_bt_wifi_handover_req(struct bcm_cfg80211 *cfg,
 	bcm_struct_cfgdev *cfgdev, const wl_event_msg_t *e, void *data);
 #endif /* BT_WIFI_HANDOVER */
+#ifdef PNO_SUPPORT
 #ifdef WL_SCHED_SCAN
 static s32
 wl_notify_sched_scan_results(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	const wl_event_msg_t *e, void *data);
 #endif /* WL_SCHED_SCAN */
-#ifdef PNO_SUPPORT
+
 static s32 wl_notify_pfn_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 	const wl_event_msg_t *e, void *data);
 #endif /* PNO_SUPPORT */
@@ -9092,20 +9093,21 @@ wl_cfg80211_sched_scan_start(struct wiphy *wiphy,
                              struct net_device *dev,
                              struct cfg80211_sched_scan_request *request)
 {
+#ifdef PNO_SUPPORT
 	ushort pno_time = PNO_TIME;
 	int pno_repeat = PNO_REPEAT;
 	int pno_freq_expo_max = PNO_FREQ_EXPO_MAX;
+	int ret = 0;
+#endif
 	wlc_ssid_ext_t ssids_local[MAX_PFN_LIST_COUNT];
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
 	struct cfg80211_ssid *ssid = NULL;
 	struct cfg80211_ssid *hidden_ssid_list = NULL;
 	int ssid_cnt = 0;
 	int i;
-	int ret = 0;
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0))
 	s32 rssi_thold = 0;
 #endif /* LINUX_KERNEL_VER >= 3.6 */
-
 	if (!request) {
 		WL_ERR(("Sched scan request was NULL\n"));
 		return -EINVAL;
@@ -9163,11 +9165,13 @@ wl_cfg80211_sched_scan_start(struct wiphy *wiphy,
 	}
 
 	if (ssid_cnt) {
+#ifdef PNO_SUPPORT
 		if ((ret = dhd_dev_pno_set_for_ssid(dev, ssids_local, ssid_cnt,
 			pno_time, pno_repeat, pno_freq_expo_max, NULL, 0)) < 0) {
 			WL_ERR(("PNO setup failed!! ret=%d \n", ret));
 			return -EINVAL;
 		}
+#endif /* PNO_SUPPORT */
 		cfg->sched_scan_req = request;
 	} else {
 		return -EINVAL;
@@ -9184,9 +9188,10 @@ wl_cfg80211_sched_scan_stop(struct wiphy *wiphy, struct net_device *dev)
 	WL_DBG(("Enter \n"));
 	WL_PNO((">>> SCHED SCAN STOP\n"));
 
+#ifdef PNO_SUPPORT
 	if (dhd_dev_pno_stop_for_ssid(dev) < 0)
 		WL_ERR(("PNO Stop for SSID failed"));
-
+#endif /* PNO_SUPPORT */
 	if (cfg->scan_request && cfg->sched_scan_running) {
 		WL_PNO((">>> Sched scan running. Aborting it..\n"));
 		wl_notify_escan_complete(cfg, dev, true, true);
@@ -11741,6 +11746,7 @@ exit:
 	return 0;
 }
 
+#ifdef PNO_SUPPORT
 #ifdef WL_SCHED_SCAN
 /* If target scan is not reliable, set the below define to "1" to do a
  * full escan
@@ -11870,6 +11876,7 @@ out_err:
 	return err;
 }
 #endif /* WL_SCHED_SCAN */
+#endif /* PNO_SUPPORT */
 
 static void wl_init_conf(struct wl_conf *conf)
 {
@@ -16787,7 +16794,7 @@ wl_cfg80211_dfs_ap_move(struct net_device *ndev, char *data, char *command, int 
 	chanspec_t chanspec = 0;
 	int abort;
 	int bytes_written = 0;
-	wl_dfs_ap_move_status_t *status;
+	struct wl_dfs_ap_move_status_v2 *status;
 	char chanbuf[CHANSPEC_STR_LEN];
 	const char *dfs_state_str[DFS_SCAN_S_MAX] = {
 		"Radar Free On Channel",
@@ -16806,7 +16813,7 @@ wl_cfg80211_dfs_ap_move(struct net_device *ndev, char *data, char *command, int 
 			WL_ERR(("setting dfs_ap_move failed with err=%d \n", err));
 			return err;
 		}
-		status = (wl_dfs_ap_move_status_t *)cfg->ioctl_buf;
+		status = (struct wl_dfs_ap_move_status_v2 *)cfg->ioctl_buf;
 
 		if (status->version != WL_DFS_AP_MOVE_VERSION) {
 			err = BCME_UNSUPPORTED;

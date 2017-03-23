@@ -4,7 +4,7 @@
  * Provides type definitions and function prototypes used to link the
  * DHD OS, bus, and protocol modules.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd.h 648647 2016-07-13 06:54:27Z $
+ * $Id: dhd.h 664834 2016-10-13 23:17:11Z $
  */
 
 /****************
@@ -363,7 +363,10 @@ typedef enum d11regtypes {
 #endif /* DHD_DEBUG */
 
 
-/* Common structure for module and instance linkage */
+/**
+ * Common structure for module and instance linkage.
+ * Instantiated once per hardware (dongle) instance that this DHD manages.
+ */
 typedef struct dhd_pub {
 	/* Linkage ponters */
 	osl_t *osh;		/* OSL handle */
@@ -379,6 +382,8 @@ typedef struct dhd_pub {
 #ifdef BCMDBUS
 	struct dbus_pub *dbus;
 #endif
+
+	uint32 dhd_console_ms; /** interval for polling the dongle for console (log) messages */
 
 	/* Internal dhd items */
 	bool up;		/* Driver up/down (to OS) */
@@ -964,8 +969,8 @@ extern void dhd_clear(dhd_pub_t *dhdp);
 
 #ifdef UPDATE_LINK_STATE
 /* Indication of link state */
-extern void dhd_link_down(struct dhd_info *dhd_info, int *ifidx);
-extern void dhd_link_up(struct dhd_info *dhd_info, int *ifidx);
+extern void dhd_link_dormant_sync(struct dhd_info *dhd_info, int *ifidx, bool on);
+extern void dhd_link_carrier_sync(struct dhd_info *dhd_info, int *ifidx, bool on);
 #endif /* UPDATE_LINK_STATE */
 
 /* Indication from bus module to change flow-control state */
@@ -1274,7 +1279,7 @@ extern int wl_iw_send_priv_event(struct net_device *dev, char *flag);
 extern uint dhd_watchdog_ms;
 
 #if defined(DHD_DEBUG)
-/* Console output poll interval */
+/** Default console output poll interval */
 extern uint dhd_console_ms;
 extern uint wl_msg_level;
 #endif /* defined(DHD_DEBUG) */

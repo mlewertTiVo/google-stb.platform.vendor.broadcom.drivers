@@ -1,7 +1,7 @@
 /*
  * P2P Library Low level OS-specific Layer - generic RTOS version
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

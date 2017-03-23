@@ -1,7 +1,7 @@
 /*
  * P2P Library OS-independent WL driver access APIs.
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -319,6 +319,18 @@ p2pwlu_scan_abort(p2papi_instance_t *hdl, BCMP2P_BOOL wait_for_abort_complete)
 		p2papi_osl_sleep_ms(P2PAPI_OSL_SLEEP_SCAN_ABORT,
 			P2PAPI_SCAN_DWELL_TIME_MS);
 	}
+	return ret;
+}
+
+int
+p2pwlu_af_abort(p2papi_instance_t *hdl, BCMP2P_BOOL af_abort)
+{
+	P2PWL_HDL wl;
+	int ret = -1;
+	int bssidx = hdl->bssidx[P2PAPI_BSSCFG_DEVICE];
+	P2PAPI_CHECK_P2PHDL(hdl);
+	wl = P2PAPI_GET_PRM_WL_HDL(hdl);
+	ret = p2pwl_actionframe_abort(wl, bssidx, af_abort);
 	return ret;
 }
 

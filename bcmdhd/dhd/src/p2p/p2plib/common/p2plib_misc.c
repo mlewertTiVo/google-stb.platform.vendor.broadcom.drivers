@@ -1,7 +1,7 @@
 /*
  * P2P Library API - Initialization/Miscellaneous functions (OS-independent)
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -635,6 +635,7 @@ p2papi_chspec_to_channel(chanspec_t chspec,	BCMP2P_CHANNEL *channel)
 	/* initialize for a failure case */
 	channel->channel_class = chclass;
 	channel->channel = ch;
+	chspec = p2p_chspec_driver_to_host(chspec);
 
 	if (CHSPEC_IS40(chspec)) {
 		is_40mhz = true;
@@ -756,6 +757,7 @@ p2papi_channel_to_chspec(BCMP2P_CHANNEL *channel, chanspec_t *chspec)
 	}
 
 	*chspec = ch | band | bw | ctl_sb;
+	*chspec = p2p_chspec_host_to_driver(*chspec);
 	return BCMP2P_TRUE;
 }
 
@@ -1350,7 +1352,7 @@ p2papi_open(char *if_name, char *primary_if_name,
 
 	/* Initialize the Action Frame Transmitter */
 	(void) p2papi_aftx_api_init(hdl);
-	hdl->af_tx_max_retries = P2PAPI_AF_TX_RETRIES;
+	hdl->af_tx_max_retries = P2PAPI_MAX_AF_TX_RETRIES;
 	hdl->af_tx_retry_ms = P2PAPI_AF_TX_RETRY_DELAY_MS;
 
 	return BCMP2P_SUCCESS;

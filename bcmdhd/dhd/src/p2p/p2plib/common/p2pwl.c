@@ -1,7 +1,7 @@
 /*
  * P2P Library OS-independent WL driver access APIs.
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -23,7 +23,9 @@
 #include <wlioctl.h>
 #include <bcmutils.h>
 #include <802.11.h>
+#include <bcmwifi_channels.h>
 
+static int ioctl_version;
 
 /* Convert an Ethernet address to a string of the form "7c:2f:33:4a:00:21" */
 char *
@@ -405,6 +407,126 @@ p2pwl_bssiovar_setint(P2PWL_HDL wl, const char *iovar, int bssidx,
 
 	return p2pwl_bssiovar_set(wl, iovar, bssidx, &val, sizeof(int));
 }
+/* Return a legacy chanspec given a new chanspec
+ *  * Returns INVCHANSPEC on error
+ *   */
+static chanspec_t
+p2p_chspec_to_legacy(chanspec_t chspec)
+{
+        chanspec_t lchspec;
+
+        if (wf_chspec_malformed(chspec)) {
+                BCMP2PLOG((BCMP2P_LOG_ERR, TRUE, "p2p_chspec_to_legacy: input chanspec (0x%04X) malformed\n",
+                        chspec));
+                return INVCHANSPEC;
+        }
+
+        /* get the channel number */
+        lchspec = CHSPEC_CHANNEL(chspec);
+
+        /* convert the band */
+        if (CHSPEC_IS2G(chspec)) {
+                lchspec |= WL_LCHANSPEC_BAND_2G;
+        } else {
+                lchspec |= WL_LCHANSPEC_BAND_5G;
+        }
+
+        /* convert the bw and sideband */
+        if (CHSPEC_IS20(chspec)) {
+                lchspec |= WL_LCHANSPEC_BW_20;
+                lchspec |= WL_LCHANSPEC_CTL_SB_NONE;
+        } else if (CHSPEC_IS40(chspec)) {
+                lchspec |= WL_LCHANSPEC_BW_40;
+                if (CHSPEC_CTL_SB(chspec) == WL_CHANSPEC_CTL_SB_L) {
+                        lchspec |= WL_LCHANSPEC_CTL_SB_LOWER;
+                } else {
+                        lchspec |= WL_LCHANSPEC_CTL_SB_UPPER;
+                }
+        } else {
+                /* cannot express the bandwidth */
+                char chanbuf[CHANSPEC_STR_LEN];
+                BCMP2PLOG((BCMP2P_LOG_ERR, TRUE,
+                        "p2p_chspec_to_legacy: unable to convert chanspec %s (0x%04X) "
+                        "to pre-11ac format\n",
+                        wf_chspec_ntoa(chspec, chanbuf), chspec));
+                return INVCHANSPEC;
+        }
+
+        return lchspec;
+}
+/* Return a new chanspec given a legacy chanspec
+ *  * Returns INVCHANSPEC on error
+ *   */
+static chanspec_t
+p2p_chspec_from_legacy(chanspec_t legacy_chspec)
+{
+        chanspec_t chspec;
+
+        /* get the channel number */
+        chspec = LCHSPEC_CHANNEL(legacy_chspec);
+
+        /* convert the band */
+        if (LCHSPEC_IS2G(legacy_chspec)) {
+                chspec |= WL_CHANSPEC_BAND_2G;
+        } else {
+                chspec |= WL_CHANSPEC_BAND_5G;
+        }
+
+        /* convert the bw and sideband */
+        if (LCHSPEC_IS20(legacy_chspec)) {
+                chspec |= WL_CHANSPEC_BW_20;
+        } else {
+                chspec |= WL_CHANSPEC_BW_40;
+                if (LCHSPEC_CTL_SB(legacy_chspec) == WL_LCHANSPEC_CTL_SB_LOWER) {
+                        chspec |= WL_CHANSPEC_CTL_SB_L;
+                } else {
+                        chspec |= WL_CHANSPEC_CTL_SB_U;
+                }
+        }
+
+        if (wf_chspec_malformed(chspec)) {
+                BCMP2PLOG((BCMP2P_LOG_ERR, TRUE,"wl_chspec_from_legacy: output chanspec (0x%04X) malformed\n",
+                        chspec));
+                return INVCHANSPEC;
+        }
+
+        return chspec;
+}
+/* given a chanspec value from the driver, do the endian and chanspec version conversion to
+ *  * a chanspec_t value
+ *   * Returns INVCHANSPEC on error
+ *    */
+
+
+chanspec_t
+p2p_chspec_host_to_driver(chanspec_t chanspec)
+{
+        if (ioctl_version == 1) {
+                chanspec = p2p_chspec_to_legacy(chanspec);
+                if (chanspec == INVCHANSPEC) {
+                        return chanspec;
+                }
+        }
+        chanspec = htodchanspec(chanspec);
+
+        return chanspec;
+}
+
+
+/* given a chanspec value from the driver, do the endian and chanspec version conversion to
+ *  * a chanspec_t value
+ *   * Returns INVCHANSPEC on error
+ *    */
+chanspec_t
+p2p_chspec_driver_to_host(chanspec_t chanspec)
+{
+        chanspec = dtohchanspec(chanspec);
+        if (ioctl_version == 1) {
+                chanspec = p2p_chspec_from_legacy(chanspec);
+        }
+
+        return chanspec;
+}
 
 
 /* Validate the wireless interface */
@@ -457,6 +579,7 @@ p2pwl_check_wl_if(P2PWL_HDL wl)
 			val, WLC_IOCTL_VERSION));
 		return -1;
 	}
+	ioctl_version = val;
 #if defined(D11AC_IOTYPES) && defined(BCM_P2P_IOTYPECOMPAT)
 	g_legacy_chanspec = (val == WLC_IOCTL_VERSION_LEGACY_IOTYPES);
 #endif
@@ -798,6 +921,14 @@ p2pwl_scan_abort(P2PWL_HDL wl)
 	err = p2papi_osl_wl_primary_ioctl(wl, WLC_SCAN, params, params_size, TRUE);
 	P2PAPI_FREE(params);
 	return err;
+}
+
+int p2pwl_actionframe_abort (P2PWL_HDL wl, int bssidx, BCMP2P_BOOL af_abort)
+{
+	int err = 0;
+	err = p2pwl_bssiovar_setint(wl, "actframe_abort", bssidx, af_abort);
+	return err;
+
 }
 
 int

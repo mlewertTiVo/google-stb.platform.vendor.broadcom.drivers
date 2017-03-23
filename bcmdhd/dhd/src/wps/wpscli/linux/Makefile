@@ -3,7 +3,7 @@
 #
 # Linux Makefile to build wpscli library
 #
-# $Id: Makefile 634536 2016-04-28 10:46:56Z $
+# $Id: Makefile 675078 2016-12-14 05:16:14Z $
 
 
 SRCBASE    := ../../..
@@ -15,6 +15,9 @@ OBJDIR     ?= obj/$(TARGETARCH)-$(BLDTYPE)
 
 ifeq ($(CC), arm-linux-gcc)
 CFLAGS += -mstructure-size-boundary=8
+endif
+
+ifeq ($(CC), aarch64-linux-gnu-gcc)
 endif
 
 ifeq ($(CC), mipsel-uclibc-gcc)

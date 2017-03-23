@@ -1,7 +1,7 @@
 /*
  * P2P Library API - Group-Owner-Negotiation-related functions (OS-independent)
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -750,9 +750,14 @@ p2papi_tx_af(p2papi_instance_t* hdl, wl_af_params_t *af_params, int bssidx)
 	 * driver's scan engine.  If a previous off-channel action frame tx is
 	 * still in progress (including the dwell time), then this new action
 	 * frame will not be sent out.
+	 * If the action frame is send through msch module, to cancel the previous
+	 * time slot, have to use iovar "actframe_abort".  scan_abort() dont have any effect
+	 * since action frame is not using scan engin for tx
 	 */
-	BCMP2PLOG((BCMP2P_LOG_MED, TRUE, "p2papi_tx_af: do scan abort\n"));
-	p2pwlu_scan_abort(hdl, FALSE);
+	BCMP2PLOG((BCMP2P_LOG_MED, TRUE, "p2papi_tx_af: do scan abort/af_abort\n"));
+	err = p2pwlu_af_abort(hdl, TRUE);
+	if (err)
+		p2pwlu_scan_abort(hdl, FALSE);
 
 
 	/* Send the action frame */

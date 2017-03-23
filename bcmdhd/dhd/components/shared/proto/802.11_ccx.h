@@ -1,7 +1,7 @@
 /*
  * Fundamental types and constants relating to 802.11 ccx
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11_ccx.h 608847 2015-12-29 14:09:09Z $
+ * $Id: 802.11_ccx.h 666880 2016-10-25 01:53:12Z $
  */
 
 #ifndef _802_11_CCX_H_
@@ -372,13 +372,11 @@ typedef struct cckm_reassoc_resp_ie_s cckm_reassoc_resp_ie_t;
 /* Radio Measurement Request Type field */
 #define CCX_RM_TYPE_LOAD	1	/*  CCX radio measurement load request */
 #define CCX_RM_TYPE_NOISE	2	/*  CCX radio measurement noise request */
-#ifndef CCX_SDK	/* CCX SDK defined the same RM types with the same names */
 #define CCX_RM_TYPE_BEACON	3	/*  CCX radio measurement beacon request */
 #define CCX_RM_TYPE_FRAME	4	/*  CCX radio measurement frame request */
-#endif /* CCX_SDK */
 #define CCXv4_RM_TYPE_PATHLOSS	6	/*  CCX radio measurement PathLoss request for CCXv4 */
 #define CCX_RM_TYPE_PATHLOSS	9	/*  CCX radio measurement PathLoss request */
-#define CCX_RM_TYPE_STATISTICS	10	/* CCX radio measurement Statistics request */
+#define CCX_RM_TYPE_STATISTICS	10	/*  CCX radio measurement Statistics request */
 
 /* Radio Measurement Request Mode field */
 #define CCX_RM_MODE_PARALLEL	(1<<0)	/*  CCX radio measurement parallel request */

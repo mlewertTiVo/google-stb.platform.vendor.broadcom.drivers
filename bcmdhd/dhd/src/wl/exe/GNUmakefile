@@ -1,7 +1,7 @@
 #
 # GNUmakefile for wl/exe
 #
-#  Copyright (C) 2016, Broadcom Corporation
+#  Copyright (C) 2017, Broadcom Corporation
 #  All Rights Reserved.
 #  
 #  This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -12,7 +12,7 @@
 #
 #  <<Broadcom-WL-IPTag/Proprietary:>>
 #
-# $Id: GNUmakefile 585140 2015-09-09 19:24:18Z $
+# $Id: GNUmakefile 675078 2016-12-14 05:16:14Z $
 
 WLAN_ComponentsInUse := bcmwifi ppr
 ifeq ($(CONFIG_WLEXE),y)
@@ -97,7 +97,7 @@ ifeq ($(OLYMPIC_RWL),1)
     CFLAGS += -DOLYMPIC_RWL
 endif
 
-ifneq ($(findstring $(TARGETENV), "linux linuxmips linuxmips_be linuxarm linuxarm_le android android_ndk_r6b freebsd freebsd_be"),)
+ifneq ($(findstring $(TARGETENV), "linux linuxmips linuxmips_be linuxarm linuxarm64 linuxarm_le android android_ndk_r6b freebsd freebsd_be"),)
 
 
 #ifdef WLP2P
