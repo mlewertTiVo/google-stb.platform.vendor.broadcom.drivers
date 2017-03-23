@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 Vendor Extension Code
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -1743,18 +1743,19 @@ static int
 wl_cfgvendor_priv_bcm_handler(struct wiphy *wiphy,
 	struct wireless_dev *wdev, const void  *data, int len)
 {
-	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
 	const struct nlattr *iter;
 	int err = 0;
 	int data_len = 0, cmd_len = 0, tmp = 0, type = 0;
 	char *cmd = NULL;
-	int bytes_written;
 	char *reply_buf = NULL;
-	struct net_device *net = NULL;
 	struct net_device *ndev = wdev->netdev;
+#ifdef OEM_ANDROID
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	int bytes_written;
+	struct net_device *net = NULL;
 	unsigned long int cmd_out = 0;
 	u32 reply_len = WL_DRIVER_PRIV_CMD_LEN;
-
+#endif /* OEM_ANDROID */
 
 	WL_DBG(("%s: Enter \n", __func__));
 
@@ -1818,8 +1819,9 @@ wl_cfgvendor_priv_bcm_handler(struct wiphy *wiphy,
 		WL_ERR(("Vendor_cmd: No reply expected. data_len:%u reply_buf %p \n",
 			data_len, reply_buf));
 	}
-
+#ifdef OEM_ANDROID
 exit:
+#endif /* OEM_ANDROID */
 	if (reply_buf)
 		kfree(reply_buf);
 	net_os_wake_unlock(ndev);

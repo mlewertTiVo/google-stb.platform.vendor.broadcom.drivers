@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD), Linux-specific network interface
  * Basically selected code segments from usb-cdc.c and usb-rndis.c
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux.c 648647 2016-07-13 06:54:27Z $
+ * $Id: dhd_linux.c 676842 2016-12-26 07:04:41Z $
  */
 
 #include <typedefs.h>
@@ -214,12 +214,12 @@ extern bool ap_cfg_running;
 extern bool ap_fw_loaded;
 #endif
 
-#ifdef SET_RANDOM_MAC_SOFTAP
+#if defined(SET_RANDOM_MAC_SOFTAP) && defined(OEM_ANDROID)
 #ifndef CONFIG_DHD_SET_RANDOM_MAC_VAL
 #define CONFIG_DHD_SET_RANDOM_MAC_VAL	0x001A11
 #endif
 static u32 vendor_oui = CONFIG_DHD_SET_RANDOM_MAC_VAL;
-#endif /* SET_RANDOM_MAC_SOFTAP */
+#endif /* SET_RANDOM_MAC_SOFTAP && OEM_ANDROID */
 #ifdef ENABLE_ADAPTIVE_SCHED
 #define DEFAULT_CPUFREQ_THRESH		1000000	/* threshold frequency : 1000000 = 1GHz */
 #ifndef CUSTOM_CPUFREQ_THRESH
@@ -1443,22 +1443,35 @@ static int dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, uint16 
                              wl_event_msg_t *event_ptr, void **data_ptr);
 
 #ifdef UPDATE_LINK_STATE
-void dhd_link_down(struct dhd_info *dhd_info, int *ifidx)
+void dhd_link_carrier_sync(struct dhd_info *dhd_info, int *ifidx, bool on)
 {
-	if (!netif_dormant(dhd_info->iflist[*ifidx]->net)) {
-		netif_dormant_on(dhd_info->iflist[*ifidx]->net);
-	}
-	return;
+        if (on) //link up
+        {
+                if (!netif_carrier_ok(dhd_info->iflist[*ifidx]->net)) {
+                        netif_carrier_on(dhd_info->iflist[*ifidx]->net);
+                }
+        }
+        else
+                if (netif_carrier_ok(dhd_info->iflist[*ifidx]->net)) {
+                        netif_carrier_off(dhd_info->iflist[*ifidx]->net);
+                }
+        return;
 }
-
-void dhd_link_up(struct dhd_info *dhd_info, int *ifidx)
+void dhd_link_dormant_sync(struct dhd_info *dhd_info, int *ifidx, bool on)
 {
-	if (netif_dormant(dhd_info->iflist[*ifidx]->net)) {
-		netif_dormant_off(dhd_info->iflist[*ifidx]->net);
-	} else {
-		netif_carrier_on(dhd_info->iflist[*ifidx]->net);
-	}
-	return;
+        if (!on) //Link up
+        {
+                if (netif_dormant(dhd_info->iflist[*ifidx]->net)) {
+                        netif_dormant_off(dhd_info->iflist[*ifidx]->net);
+                }
+        }
+        else  //Link down
+        {
+                if (!netif_dormant(dhd_info->iflist[*ifidx]->net)) {
+                        netif_dormant_on(dhd_info->iflist[*ifidx]->net);
+                }
+        }
+        return;
 }
 #endif /* UPDATE_LINK_STATE */
 
@@ -3091,6 +3104,14 @@ dhd_dbus_state_change(void *handle, int state)
 			break;
 		case DBUS_STATE_UP:
 			DHD_TRACE(("%s: DBUS is up\n", __FUNCTION__));
+#if defined(BCM_REQUEST_FW)
+#if defined(BCMDBUS)
+			DHD_TRACE(("%s: firmware request\n", __FUNCTION__));
+			up(&dhd->fw_download_lock);
+#endif /* BCMDBUS */
+#else
+			DHD_ERROR(("%s: firmware request cannot be handled\n", __FUNCTION__));
+#endif 
 			dhd->pub.busstate = DHD_BUS_DATA;
 			break;
 		default:
@@ -5686,7 +5707,7 @@ fw_download_thread_func(void *data)
 	dhd_info_t *dhd = (dhd_info_t *)data;
 	int ret;
 
-	while (1) {
+	while (!kthread_should_stop()) {
 		/* Wait for start trigger */
 		if (down_interruptible(&dhd->fw_download_lock) != 0)
 			return -ERESTARTSYS;
@@ -6531,7 +6552,10 @@ dhd_open(struct net_device *net)
 		ret = -1;
 		goto exit;
 	}
-
+#ifdef UPDATE_LINK_STATE
+    /* set to dormant state after loading driver*/
+        dhd_link_dormant_sync(dhd, &ifidx, TRUE);
+#endif
 	if (ifidx == 0) {
 		atomic_set(&dhd->pend_8021x_cnt, 0);
 #if defined(WL_CFG80211) && defined(OEM_ANDROID)
@@ -7405,7 +7429,7 @@ fail:
 
 #endif /* SHOW_LOGTRACE */
 
-
+/** Called once for each hardware (dongle) instance that this DHD manages */
 dhd_pub_t *
 dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 {
@@ -8156,7 +8180,7 @@ int dhd_tdls_update_peer_info(dhd_pub_t *dhdp, wl_event_msg_t *event)
 	dhd_pub_t *dhd_pub = dhdp;
 	tdls_peer_node_t *cur = dhd_pub->peer_tbl.node;
 	tdls_peer_node_t *new = NULL, *prev = NULL;
-	uint8 ifindex = (uint8)dhd_ifname2idx(dhd_pub->info, event->ifname);
+	int ifindex = dhd_ifname2idx(dhd_pub->info, event->ifname);
 	uint8 *da = (uint8 *)&event->addr.octet[0];
 	bool connect = FALSE;
 	uint32 reason = ntoh32(event->reason);
@@ -8195,7 +8219,7 @@ int dhd_tdls_update_peer_info(dhd_pub_t *dhdp, wl_event_msg_t *event)
 	} else {
 		while (cur != NULL) {
 			if (!memcmp(da, cur->addr, ETHER_ADDR_LEN)) {
-				dhd_flow_rings_delete_for_peer(dhd_pub, ifindex, da);
+				dhd_flow_rings_delete_for_peer(dhd_pub, (uint8)ifindex, da);
 				if (prev)
 					prev->next = cur->next;
 				else
@@ -10338,7 +10362,7 @@ void dhd_detach(dhd_pub_t *dhdp)
 #endif
 #ifdef RTT_SUPPORT
 	if (dhdp->rtt_state) {
-	dhd_rtt_deinit(dhdp);
+		dhd_rtt_deinit(dhdp);
 	}
 #endif
 #if defined(CONFIG_PM_SLEEP)

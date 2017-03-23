@@ -1,7 +1,7 @@
 #
 # GNUmakefile for dhd/exe
 #
-# Copyright (C) 2016, Broadcom Corporation
+# Copyright (C) 2017, Broadcom Corporation
 # All Rights Reserved.
 # 
 # This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -103,7 +103,7 @@ else # BUILD_TAG
 # changed to the new build structure, once everyone moved to the new structure
 # , we can remove the whole else BUILD_TAG code
 
-ifneq ($(findstring $(TARGETENV), "linux linuxmips linuxmips_be linuxarm linuxarm_le android android_ndk_r6b freebsd freebsd_be"),)
+ifneq ($(findstring $(TARGETENV), "linux linuxmips linuxmips_be linuxarm linuxarm64 linuxarm_le android android_ndk_r6b freebsd freebsd_be"),)
 # $(TARGETARCH) is set based on TARGETENV in src/Makerules.* files
 DHD_OBJS := dhdu.o dhdu_linux.o bcmutils.o bcmxtlv.o bcmwifi_channels.o wlu_client_shared.o wlu_pipe_linux.o wlu_pipe.o miniopt.o bcm_app_utils.o ucode_download.o wlu_common.o
 DHD_EXE  := dhd

@@ -2,7 +2,7 @@
  * P2P Library OS-specific Layer (OSL) - generic RTOS version
  * This implements the Linux version of the functions defined by p2plib_osl.h.
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

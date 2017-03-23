@@ -1,6 +1,6 @@
 /* P2P API internal definitions
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -118,7 +118,6 @@ extern "C" {
 #endif
 /*Number of High level retransmition of AF
  * Other than mac level retransmition */
-#define P2PAPI_AF_TX_RETRIES 5
 /*
  * Macros
  */

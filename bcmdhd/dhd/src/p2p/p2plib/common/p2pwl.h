@@ -1,6 +1,6 @@
 /* P2P Library WL driver access APIs usable by other P2P components.
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -211,6 +211,8 @@ int p2pwl_set_roam_off(P2PWL_HDL wl, unsigned int roam_off, int bssidx);
 int
 p2pwl_set_wme_apsd_sta(P2PWL_HDL wl, uint8 maxSPLen, uint8 acBE,
 	uint8 acBK, uint8 acVI, uint8 acVO, int bssidx);
+chanspec_t p2p_chspec_host_to_driver(chanspec_t chanspec);
+chanspec_t p2p_chspec_driver_to_host(chanspec_t chanspec);
 /* Implementation for compatibility with wl driver compiled with legacy iotypes */
 #if defined(D11AC_IOTYPES) && defined(BCM_P2P_IOTYPECOMPAT)
 extern bool g_legacy_chanspec;

@@ -1,7 +1,7 @@
 /*
  * Broadcom Dongle Host Driver (DHD), common DHD core.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_common.c 648647 2016-07-13 06:54:27Z $
+ * $Id: dhd_common.c 674784 2016-12-12 18:49:07Z $
  */
 #include <typedefs.h>
 #include <osl.h>
@@ -721,12 +721,12 @@ dhd_doiovar(dhd_pub_t *dhd_pub, const bcm_iovar_t *vi, uint32 actionid, const ch
 #ifndef BCMDBUS
 #ifdef DHD_DEBUG
 	case IOV_GVAL(IOV_DCONSOLE_POLL):
-		int_val = (int32)dhd_console_ms;
+		int_val = (int32)dhd_pub->dhd_console_ms;
 		bcopy(&int_val, arg, val_size);
 		break;
 
 	case IOV_SVAL(IOV_DCONSOLE_POLL):
-		dhd_console_ms = (uint)int_val;
+		dhd_pub->dhd_console_ms = (uint)int_val;
 		break;
 
 	case IOV_SVAL(IOV_CONS):
@@ -2570,12 +2570,14 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 #endif
 
 #ifdef UPDATE_LINK_STATE
-		/* Update interface state in kernel network layer. RB 95630. */
-		if (flags & WLC_EVENT_MSG_LINK) {
-				dhd_link_up(dhd_pub->info, ifidx);
-		} else {
-				dhd_link_down(dhd_pub->info, ifidx);
-		}
+                /* Update interface state in kernel network layer1. RB 95630. */
+                if (flags & WLC_EVENT_MSG_LINK) {
+                                dhd_link_dormant_sync(dhd_pub->info, ifidx, FALSE);  //link_up
+                }
+                else {
+                                dhd_link_dormant_sync(dhd_pub->info, ifidx, TRUE); //link_down
+        }
+
 #endif /* UPDATE_LINK_STATE */
 
 	case WLC_E_DEAUTH:
@@ -2611,10 +2613,12 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 		/* fall through */
 
 #ifdef UPDATE_LINK_STATE
-	/* Update link state in kernel network layer */
-	if ((type == WLC_E_DEAUTH_IND) || (type == WLC_E_DISASSOC_IND)) {
-			dhd_link_down(dhd_pub->info, ifidx);
-	}
+        /* Update link state in kernel network layer2 */
+        if ((type == WLC_E_DEAUTH_IND) || (type == WLC_E_DISASSOC_IND)
+                || (type == WLC_E_DEAUTH) || (type == WLC_E_DISASSOC)) {
+                        dhd_link_dormant_sync(dhd_pub->info, ifidx, TRUE);  //dormant on, Assoc down
+        }
+
 #endif /* UPDATE_LINK_STATE */
 
 	default:

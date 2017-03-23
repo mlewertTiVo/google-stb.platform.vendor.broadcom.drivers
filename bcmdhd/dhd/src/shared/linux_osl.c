@@ -1,7 +1,7 @@
 /*
  * Linux OS Independent Layer
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.c 641629 2016-06-03 14:39:47Z $
+ * $Id: linux_osl.c 669433 2016-11-09 13:04:01Z $
  */
 
 #define LINUX_PORT
@@ -1780,7 +1780,12 @@ osl_cache_flush(void *va, uint size)
 #endif /* BCM47XX_CA9 */
 
 	if (size > 0)
-		dma_sync_single_for_device(OSH_NULL, virt_to_dma(OSH_NULL, va), size, DMA_TX);
+#ifdef BCM_SECURE_DMA
+		dma_sync_single_for_device(OSH_NULL, page_to_phys(vmalloc_to_page(va)),
+			size, DMA_TX);
+#else
+		dma_sync_single_for_device(OSH_NULL,virt_to_dma(OSH_NULL, va), size, DMA_TX);
+#endif
 }
 
 inline void BCMFASTPATH
@@ -1791,7 +1796,12 @@ osl_cache_inv(void *va, uint size)
 		return;
 #endif /* BCM47XX_CA9 */
 
-	dma_sync_single_for_cpu(OSH_NULL, virt_to_dma(OSH_NULL, va), size, DMA_RX);
+#ifdef BCM_SECURE_DMA
+	dma_sync_single_for_cpu(OSH_NULL, page_to_phys(vmalloc_to_page(va)),size, DMA_RX);
+#else
+	dma_sync_single_for_cpu(OSH_NULL,virt_to_dma(OSH_NULL, va), size, DMA_RX);
+#endif
+
 }
 
 inline void osl_prefetch(const void *ptr)
@@ -2225,7 +2235,6 @@ osl_sec_dma_alloc_mem_elem(osl_t *osh, void *va, uint size, int direction,
 	}
 #endif /* NOT_YET */
 
-	ASSERT(osh->sec_list_4096);
 	if(osh->sec_list_4096) {
 		sec_mem_elem = osh->sec_list_4096;
 		osh->sec_list_4096 = sec_mem_elem->next;
@@ -2388,7 +2397,6 @@ osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 
 	ASSERT((direction == DMA_RX) || (direction == DMA_TX));
 	sec_mem_elem = osl_sec_dma_alloc_mem_elem(osh, va, size, direction, ptr_cma_info, offset);
-	ASSERT(sec_mem_elem);
 
 	if(sec_mem_elem) {
 		sec_mem_elem->va = va;

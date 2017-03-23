@@ -16,7 +16,7 @@
 # ./zctest 0d6.43 - WEP/Open, ssid=lhs_wep.40, 4 128-bit keys, index 3
 
 #
-# Copyright (C) 1999-2016, Broadcom Corporation
+# Copyright (C) 1999-2017, Broadcom Corporation
 # 
 #      Unless you and Broadcom execute a separate written software license
 # agreement governing use of this software, this software is licensed to you

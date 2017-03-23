@@ -2,7 +2,7 @@
  * aeskeywrap.h
  * Perform RFC3394 AES-based key wrap and unwrap functions.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you

@@ -4,7 +4,7 @@
 #if defined(DHD_BUZZZ_LOG_ENABLED)
 /*
  * Broadcom proprietory logging system. Deleted performance counters.
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -202,7 +202,7 @@ static inline void dhd_buzzz_fmt_init(void)
 #else  /* DHD_BUZZZ_LOG_ENABLED */
 /*
  * Broadcom logging system - Empty implementaiton
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
