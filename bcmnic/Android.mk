@@ -6,6 +6,7 @@ ifneq ($(HW_WIFI_SUPPORT), n)
 ifeq ($(HW_WIFI_NIC_SUPPORT), y)
 
 LOCAL_PATH := $(BROADCOM_NIC_SOURCE_PATH)
+LOCAL_PATH := $(subst ${ANDROID}/,,$(LOCAL_PATH))
 # Build WL Utility
 LOCAL_SRC_FILES := \
    src/wl/exe/wlu.c \
@@ -79,12 +80,13 @@ LOCAL_SRC_FILES := \
 
 LOCAL_MODULE := wl
 
-LOCAL_C_INCLUDES += \
+LOCAL_C_INCLUDES := \
    $(LOCAL_PATH)/src/include \
    $(LOCAL_PATH)/src/wl/sys \
    $(LOCAL_PATH)/components/shared \
    $(LOCAL_PATH)/src/shared/bcmwifi/include \
    $(LOCAL_PATH)/src/wl/ppr/include
+LOCAL_C_INCLUDES := $(subst ${ANDROID}/,,$(LOCAL_C_INCLUDES))
 
 LOCAL_CFLAGS := -g -Wall -Wextra \
    -DTARGETENV_android -DTARGETOS_unix -DTARGETARCH_armv7l \
