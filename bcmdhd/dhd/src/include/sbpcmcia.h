@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: sbpcmcia.h 620402 2016-02-23 01:33:41Z $
+ * $Id: sbpcmcia.h 687194 2017-02-28 02:17:50Z $
  */
 
 #ifndef	_SBPCMCIA_H
@@ -395,6 +395,12 @@
 #define HNBU_ACPA_BW20_4X4C3	0x9e
 #define HNBU_ACPA_BW40_4X4C3	0x9f
 #define HNBU_ACPA_BW80_4X4C3	0xa0
+
+#define HNBU_RXGAIN_ERR_5GA0	0xa1
+#define HNBU_RXGAIN_ERR_5GA1	0xa2
+#define HNBU_RXGAIN_ERR_5GA2	0xa3
+#define HNBU_RXGAIN_ERR_5GA3	0xa4
+
 
 
 #endif /* !defined(LINUX_POSTMOGRIFY_REMOVAL) */

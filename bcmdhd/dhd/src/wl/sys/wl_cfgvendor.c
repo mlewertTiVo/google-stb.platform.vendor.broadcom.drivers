@@ -660,13 +660,19 @@ wl_cfgvendor_hotlist_cfg(struct wiphy *wiphy,
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
 	gscan_hotlist_scan_params_t *hotlist_params;
 	int tmp, tmp1, tmp2, type, j = 0, dummy;
-	const struct nlattr *outer, *inner, *iter;
+	const struct nlattr *outer, *inner = NULL, *iter;
 	uint8 flush = 0;
 	struct bssid_t *pbssid;
+	if (len < sizeof(*hotlist_params) || len >= WLC_IOCTL_MAXLEN) {
+		WL_ERR(("buffer length :%d wrong - bail out.\n", len));
+		return -EINVAL;
+	}
+	hotlist_params = kzalloc(sizeof(*hotlist_params)
+			+ (sizeof(struct bssid_t) * (PFN_SWC_MAX_NUM_APS - 1)),
+			GFP_KERNEL);
 
-	hotlist_params = (gscan_hotlist_scan_params_t *)kzalloc(len, GFP_KERNEL);
 	if (!hotlist_params) {
-		WL_ERR(("Cannot Malloc mem to parse config commands size - %d bytes \n", len));
+		WL_ERR(("Cannot Malloc memory.\n"));
 		return -ENOMEM;
 	}
 
@@ -682,34 +688,70 @@ wl_cfgvendor_hotlist_cfg(struct wiphy *wiphy,
 
 						switch (type) {
 							case GSCAN_ATTRIBUTE_BSSID:
-								memcpy(&(pbssid[j].macaddr),
-								  nla_data(inner), ETHER_ADDR_LEN);
+								if (nla_len(inner) != sizeof(pbssid[j].macaddr)) {
+									WL_ERR(("type:%d length:%d not matching.\n",
+											type, nla_len(inner)));
+									err = -EINVAL;
+									goto exit;
+								}
+								memcpy(
+									&(pbssid[j].macaddr),
+									nla_data(inner),
+									sizeof(pbssid[j].macaddr));
 								break;
 							case GSCAN_ATTRIBUTE_RSSI_LOW:
+								if (nla_len(inner) != sizeof(uint8)) {
+									WL_ERR(("type:%d length:%d not matching.\n",
+											type, nla_len(inner)));
+									err = -EINVAL;
+									goto exit;
+								}
 								pbssid[j].rssi_reporting_threshold =
-								         (int8) nla_get_u8(inner);
+								         (int8)nla_get_u8(inner);
 								break;
 							case GSCAN_ATTRIBUTE_RSSI_HIGH:
-								dummy = (int8) nla_get_u8(inner);
+								if (nla_len(inner) != sizeof(uint8)) {
+									WL_ERR(("type:%d length:%d not matching.\n",
+											type, nla_len(inner)));
+									err = -EINVAL;
+									goto exit;
+								}
+								dummy = (int8)nla_get_u8(inner);
 								break;
 							default:
-								WL_ERR(("ATTR unknown %d\n",
-								            type));
-								break;
+								WL_ERR(("ATTR unknown %d\n", type));
+								err = -EINVAL;
+								goto exit;
 						}
 					}
-					j++;
+					if (++j >= PFN_SWC_MAX_NUM_APS) {
+						WL_ERR(("cap hotlist max:%d\n", j));
+						break;
+					}
 				}
 				hotlist_params->nbssid = j;
 				break;
 			case GSCAN_ATTRIBUTE_HOTLIST_FLUSH:
+				if (nla_len(iter) != sizeof(uint8)) {
+					WL_ERR(("type:%d length:%d not matching.\n",
+								type, nla_len(inner)));
+					err = -EINVAL;
+					goto exit;
+				}
 				flush = nla_get_u8(iter);
 				break;
 			case GSCAN_ATTRIBUTE_LOST_AP_SAMPLE_SIZE:
-				hotlist_params->lost_ap_window = nla_get_u32(iter);
+				if (nla_len(iter) != sizeof(uint32)) {
+					WL_ERR(("type:%d length:%d not matching.\n",
+								type, nla_len(inner)));
+					err = -EINVAL;
+					goto exit;
+				}
+				hotlist_params->lost_ap_window = (uint16)nla_get_u32(iter);
 				break;
 			default:
 				WL_ERR(("Unknown type %d\n", type));
+				err = -EINVAL;
 				break;
 			}
 
@@ -718,7 +760,7 @@ wl_cfgvendor_hotlist_cfg(struct wiphy *wiphy,
 	if (dhd_dev_pno_set_cfg_gscan(bcmcfg_to_prmry_ndev(cfg),
 	                DHD_PNO_GEOFENCE_SCAN_CFG_ID,
 	                hotlist_params, flush) < 0) {
-		WL_ERR(("Could not set GSCAN HOTLIST cfg\n"));
+		WL_ERR(("Could not set GSCAN HOTLIST cfg error: %d\n", err));
 		err = -EINVAL;
 		goto exit;
 	}
@@ -1224,12 +1266,12 @@ wl_cfgvendor_rtt_cancel_config(struct wiphy *wiphy, struct wireless_dev *wdev,
 			break;
 		case RTT_ATTRIBUTE_TARGET_MAC:
 			if (mac_addr) {
-				memcpy(mac_addr++, nla_data(iter), ETHER_ADDR_LEN);
-				target_cnt_chk++;
 				if (target_cnt_chk > target_cnt) {
 					WL_ERR(("over target count\n"));
 					goto exit;
 				}
+				memcpy(mac_addr++, nla_data(iter), ETHER_ADDR_LEN);
+				target_cnt_chk++;
 				break;
 			} else {
 				WL_ERR(("mac_list is NULL\n"));
@@ -2055,7 +2097,7 @@ static int wl_cfgvendor_dbg_get_mem_dump(struct wiphy *wiphy,
 	int buf_len = 0;
 	void __user *user_buf = NULL;
 	const struct nlattr *iter;
-	char *mem_buf;
+	char *mem_buf = NULL;
 	struct sk_buff *skb;
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
 
@@ -2063,10 +2105,24 @@ static int wl_cfgvendor_dbg_get_mem_dump(struct wiphy *wiphy,
 		type = nla_type(iter);
 		switch (type) {
 			case DEBUG_ATTRIBUTE_FW_DUMP_LEN:
-				buf_len = nla_get_u32(iter);
+				/* Check if the iter is valid and
+				* buffer length is not already initialized.
+				*/
+				if ((nla_len(iter) == sizeof(uint32)) &&
+					!buf_len) {
+					buf_len = nla_get_u32(iter);
+				} else {
+					ret = BCME_ERROR;
+					goto exit;
+				}
 				break;
 			case DEBUG_ATTRIBUTE_FW_DUMP_DATA:
-				user_buf = (void __user *) (unsigned long) nla_get_u64(iter);
+				if (nla_len(iter) != sizeof(uint64)) {
+					WL_ERR(("Invalid len\n"));
+					ret = BCME_ERROR;
+					goto exit;
+				}
+				user_buf = (void __user *)(unsigned long)nla_get_u64(iter);
 				break;
 			default:
 				WL_ERR(("Unknown type: %d\n", type));

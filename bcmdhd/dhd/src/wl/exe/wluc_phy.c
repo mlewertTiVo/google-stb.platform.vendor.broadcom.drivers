@@ -34,6 +34,7 @@
 #include <bcmendian.h>
 #include <bcmsrom_fmt.h>
 #include <bcmsrom_tbl.h>
+#include <bcmdevs.h>
 #include "wlu_common.h"
 #include "wlu.h"
 #include <miniopt.h>
@@ -2167,9 +2168,6 @@ wl_phy_rssi_gain_delta_5g(void *wl, cmd_t *cmd, char **argv)
 	return 0;
 }
 
-#ifndef BCM4365_CHIP
-#define BCM4365_CHIP(chipid) (((chipid) == 0x4365) || ((chipid) == 0x4366))
-#endif
 
 static int
 wl_phy_rxgainerr_2g(void *wl, cmd_t *cmd, char **argv)
@@ -2246,9 +2244,6 @@ wl_phy_rxgainerr_2g(void *wl, cmd_t *cmd, char **argv)
 	return 0;
 }
 
-#ifndef BCM4365_CHIP
-#define BCM4365_CHIP(chipid) (((chipid) == 0x4365) || ((chipid) == 0x4366))
-#endif
 
 static int
 wl_phy_rxgainerr_5g(void *wl, cmd_t *cmd, char **argv)
@@ -3262,9 +3257,6 @@ wl_pkteng(void *wl, cmd_t *cmd, char **argv)
 	return (wlu_var_setbuf(wl, "pkteng", &pkteng, sizeof(pkteng)));
 }
 
-#ifndef BCM4365_CHIP
-#define BCM4365_CHIP(chipid) (((chipid) == 0x4365) || ((chipid) == 0x4366))
-#endif
 
 static int
 wl_rxiq(void *wl, cmd_t *cmd, char **argv)
