@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_android.c 620523 2016-02-23 08:51:41Z $
+ * $Id: wl_android.c 703436 2017-06-07 13:52:36Z $
  */
 
 #include <linux/module.h>
@@ -1701,6 +1701,11 @@ wl_android_set_roampref(struct net_device *dev, char *command, int total_len)
 	total_len_left = total_len - strlen(CMD_SET_ROAMPREF) + 1;
 
 	num_akm_suites = simple_strtoul(pcmd, NULL, 16);
+	if (num_akm_suites > MAX_NUM_SUITES) {
+		DHD_ERROR(("too many AKM suites = %d\n", num_akm_suites));
+		return -1;
+	}
+
 	/* Increment for number of AKM suites field + space */
 	pcmd += 3;
 	total_len_left -= 3;
@@ -2487,7 +2492,8 @@ int
 wl_android_set_roam_offload_bssid_list(struct net_device *dev, const char *cmd)
 {
 	char sbuf[32];
-	int i, cnt, size, err, ioctl_buf_len;
+	int i, err;
+	unsigned int cnt, size, ioctl_buf_len;
 	roamoffl_bssid_list_t *bssid_list;
 	const char *str = cmd;
 	char *ioctl_buf;

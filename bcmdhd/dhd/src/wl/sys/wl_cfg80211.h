@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.h 630127 2016-04-07 12:08:57Z $
+ * $Id: wl_cfg80211.h 703436 2017-06-07 13:52:36Z $
  */
 
 /**
@@ -671,8 +671,6 @@ struct bcm_cfg80211 {
 #endif
 #ifdef WL11U
 	bool wl11u;
-	u8 iw_ie[IW_IES_MAX_BUF_LEN];
-	u32 iw_ie_len;
 #endif /* WL11U */
 	bool sched_scan_running;	/* scheduled scan req status */
 #ifdef WL_SCHED_SCAN

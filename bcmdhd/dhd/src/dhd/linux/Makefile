@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 671469 2016-11-22 06:29:31Z $
+# $Id: Makefile 699801 2017-05-16 11:32:42Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -665,7 +665,7 @@ endif
 
 ifneq ($(findstring -media-,-$(TARGET)-),)
 $(info : =====> media build <=====)
-  DFLAGS +=-DDISABLE_FRAMEBURST -DKEEP_ALIVE
+  DFLAGS +=-DDISABLE_FRAMEBURST -DKEEP_ALIVE -DCUSTOM_BLOCK_DEAUTH_AT_EAP_FAILURE
 
   ifneq ($(findstring -cfg80211-,-$(TARGET)-),)
   $(warning : ***** cfg80211 build *****)
@@ -1078,6 +1078,7 @@ TARGETS := \
 	msgbuf-pciefd-indxtcm \
 	msgbuf-pciefd-indxdma \
 	msgbuf-pciefd-mfp-cfg80211 \
+	msgbuf-pciefd-media-mfp-cfg80211 \
 	msgbuf-pciefd-cfg80211 \
 	msgbuf-pciefd-cfg80211-wapi \
 	msgbuf-pciefd-cfg80211-wapi-ccx-fbt \
@@ -1204,6 +1205,7 @@ TARGETS := \
 	cdc-usb-comp-gpl \
 	cdc-usb-comp-gpl-wet \
 	cdc-usb-comp-gpl-media \
+	cdc-usb-comp-gpl-media-cfg80211 \
 	cdc-usb-comp-gpl-media-wet \
 	cdc-usb-comp-gpl-media-wet-cfg80211 \
 	cdc-usb-comp-gpl-arm \

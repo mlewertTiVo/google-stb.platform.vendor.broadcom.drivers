@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11_ccx.h 666880 2016-10-25 01:53:12Z $
+ * $Id: 802.11_ccx.h 683539 2017-02-08 06:27:29Z $
  */
 
 #ifndef _802_11_CCX_H_
@@ -215,6 +215,7 @@ BWL_PRE_PACKED_STRUCT struct ccx_ext_cap_ie {
 } BWL_POST_PACKED_STRUCT;
 typedef struct ccx_ext_cap_ie ccx_ext_cap_ie_t;
 #define CCX_CAP_FBT		0x40	/* 802.11r support */
+#define CCX_CAP_EBR		0x80	/* 802.11k Enhanced beacon report support */
 
 /* CCX Adjacent AP Report IE in roam IAPP packet */
 BWL_PRE_PACKED_STRUCT struct ccx_roam_ap_ie_s {
