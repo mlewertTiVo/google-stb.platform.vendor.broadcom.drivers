@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsrom_tbl.h 620402 2016-02-23 01:33:41Z $
+ * $Id: bcmsrom_tbl.h 687194 2017-02-28 02:17:50Z $
  */
 
 #ifndef	_bcmsrom_tbl_h_
@@ -1363,7 +1363,7 @@ static const cis_tuple_t cis_hnbuvars[] = {
 	"2sb20in80p80lr5gpo 2dot11agduppo"},
 	{HNBU_NOISELVL,		0xfffff800, 16, "1noiselvl2ga0 1noiselvl2ga1 1noiselvl2ga2 "
 	"1*4noiselvl5ga0 1*4noiselvl5ga1 1*4noiselvl5ga2"},
-	{HNBU_RXGAIN_ERR,	0xfffff800, 16, "1rxgainerr2ga0 1rxgainerr2ga1 1rxgainerr2ga2 "
+	{HNBU_RXGAIN_ERR,	0x00001800, 16, "1rxgainerr2ga0 1rxgainerr2ga1 1rxgainerr2ga2 "
 	"1*4rxgainerr5ga0 1*4rxgainerr5ga1 1*4rxgainerr5ga2"},
 	{HNBU_AGBGA,		0xfffff800, 7, "1agbg0 1agbg1 1agbg2 1aga0 1aga1 1aga2"},
 	{HNBU_USBDESC_COMPOSITE, 0xffffffff, 3, "2usbdesc_composite"},
@@ -1414,6 +1414,10 @@ static const cis_tuple_t cis_hnbuvars[] = {
 	{HNBU_TXBFRPCALS,  0xfffff800, 11,
 	"2rpcal2g 2rpcal5gb0 2rpcal5gb1 2rpcal5gb2 2rpcal5gb3"}, /* txbf rpcalvars */
 	{HNBU_GPIO_PULL_DOWN,	0xffffffff, 5, "4gpdn"},
+	{HNBU_RXGAIN_ERR_5GA0,	0xffffe000, 5, "1*4rxgainerr5ga0"},
+	{HNBU_RXGAIN_ERR_5GA1,	0xffffe000, 5, "1*4rxgainerr5ga1"},
+	{HNBU_RXGAIN_ERR_5GA2,	0xffffe000, 5, "1*4rxgainerr5ga2"},
+	{HNBU_RXGAIN_ERR_5GA3,	0xffffe000, 5, "1*4rxgainerr5ga3"},
 	{0xFF,			0xffffffff, 0, ""}
 };
 

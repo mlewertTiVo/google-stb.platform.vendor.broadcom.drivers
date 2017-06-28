@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: 802.11.h 679934 2017-01-18 00:58:05Z $
+ * $Id: 802.11.h 692413 2017-03-28 01:47:24Z $
  */
 
 #ifndef _802_11_H_
@@ -4244,6 +4244,10 @@ typedef struct vht_features_ie_hdr vht_features_ie_hdr_t;
 #define WPS_OUI_TYPE		4
 
 /* ************* WFA definitions. ************* */
+#if defined(WL_LEGACY_P2P)
+#define MAC_OUI			"\x00\x17\xF2"	/* MACOSX OUI */
+#define MAC_OUI_TYPE_P2P	5
+#endif 
 
 #ifdef P2P_IE_OVRD
 #define WFA_OUI			MAC_OUI
@@ -4803,7 +4807,8 @@ enum {
 	FTM_VS_TLV_SEC_PARAMS = 3,		/* security parameters (in either) */
 	FTM_VS_TLV_SEQ_PARAMS = 4,		/* toast parameters (FTM_REQ, BRCM proprietary) */
 	FTM_VS_TLV_MF_BUF = 5,			/* multi frame buffer - may span ftm vs ie's */
-	FTM_VS_TLV_TIMING_PARAMS = 6		/* timing adjustments */
+	FTM_VS_TLV_TIMING_PARAMS = 6,		/* timing adjustments */
+	FTM_VS_TLV_MF_STATS_BUF = 7,		/* multi frame statistics buffer */
 };
 
 /* the following definitions are *DEPRECATED* and moved to implemenetion files. They

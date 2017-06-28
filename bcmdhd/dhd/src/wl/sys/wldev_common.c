@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wldev_common.c 556083 2015-05-12 14:03:00Z $
+ * $Id: wldev_common.c 687411 2017-03-01 03:59:56Z $
  */
 
 #include <osl.h>
@@ -376,6 +376,7 @@ int wldev_get_mode(
 	error = wldev_ioctl(dev, WLC_GET_BSS_INFO, (void*)buf, WL_EXTRA_BUF_MAX, false);
 	if (error) {
 		WLDEV_ERROR(("%s:failed:%d\n", __FUNCTION__, error));
+		kfree(buf);
 		return -1;
 	}
 	bss = (struct  wl_bss_info *)(buf + 4);
