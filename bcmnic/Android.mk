@@ -85,7 +85,8 @@ LOCAL_C_INCLUDES := \
    $(LOCAL_PATH)/src/wl/sys \
    $(LOCAL_PATH)/components/shared \
    $(LOCAL_PATH)/src/shared/bcmwifi/include \
-   $(LOCAL_PATH)/src/wl/ppr/include
+   $(LOCAL_PATH)/src/wl/ppr/include \
+   $(LOCAL_PATH)/router/src/include
 LOCAL_C_INCLUDES := $(subst ${ANDROID}/,,$(LOCAL_C_INCLUDES))
 
 LOCAL_CFLAGS := -g -Wall -Wextra \
