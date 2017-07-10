@@ -943,7 +943,6 @@ static const struct droid_pm_bt_proc_file droid_pm_bt_proc_files[] = {
         NULL,
         NULL,
     },
-/* Comment out temporarily to fix BT init
     {
         "btwrite",
         S_IRUGO | S_IWUGO,
@@ -951,7 +950,6 @@ static const struct droid_pm_bt_proc_file droid_pm_bt_proc_files[] = {
         &droid_pm_bt_read_action,
         &droid_pm_bt_write_action
     },
-*/
     {
         NULL,
         0,
