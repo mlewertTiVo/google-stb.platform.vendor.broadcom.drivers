@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux.c 676842 2016-12-26 07:04:41Z $
+ * $Id: dhd_linux.c 691951 2017-03-24 10:01:18Z $
  */
 
 #include <typedefs.h>
@@ -7922,10 +7922,12 @@ bool dhd_update_fw_nv_path(dhd_info_t *dhdinfo)
 		DHD_ERROR(("firmware path not found\n"));
 		return FALSE;
 	}
+#ifndef STBLINUX
 	if (dhdinfo->nv_path[0] == '\0') {
 		DHD_ERROR(("nvram path not found\n"));
 		return FALSE;
 	}
+#endif /* STBLINUX */
 #endif /* BCMEMBEDIMAGE */
 
 	return TRUE;
@@ -12319,7 +12321,12 @@ write_to_file(dhd_pub_t *dhd, uint8 *buf, int size)
 	memset(memdump_type, 0, sizeof(memdump_type));
 	do_gettimeofday(&curtime);
 	dhd_convert_memdump_type_to_str(dhd->memdump_type, memdump_type);
-#if defined(OEM_ANDROID)
+#if defined(STB)
+	sprintf(memdump_path, "%s_%s_%ld.%ld", "/data/mem_dump",
+		memdump_type, (unsigned long)curtime.tv_sec,
+		(unsigned long)curtime.tv_usec);
+	file_mode = O_CREAT | O_WRONLY | O_SYNC;
+#elif defined(OEM_ANDROID)
 	sprintf(memdump_path, "%s_%s_%ld.%ld", "/installmedia/mem_dump",
 		memdump_type, (unsigned long)curtime.tv_sec,
 		(unsigned long)curtime.tv_usec);
@@ -13545,7 +13552,11 @@ int dhd_set_ap_isolate(dhd_pub_t *dhdp, uint32 idx, int val)
  * for other platforms it will take default path "/installmedia/.memdump.info"
  * New platforms can add their ifdefs accordingly below.
  */
+#ifdef STB
+#define MEMDUMPINFO "/data/.memdump.info"
+#else /* STB */
 #define MEMDUMPINFO "/installmedia/.memdump.info"
+#endif /* STB */
 
 void dhd_get_memdump_info(dhd_pub_t *dhd)
 {
@@ -13579,7 +13590,11 @@ done:
 	 * But for Brix Android, default behavior is to collect memdump and crash the host.
 	 * Other platforms can change the behavior accordingly by adding appropriate ifdefs
 	 */
+#ifdef STB
+	dhd->memdump_enabled = (mem_val < DUMP_MEMFILE_MAX) ? mem_val : DUMP_MEMFILE;
+#else /* STB */
 	dhd->memdump_enabled = (mem_val < DUMP_MEMFILE_MAX) ? mem_val : DUMP_MEMFILE_BUGON;
+#endif /* STB */
 }
 #endif /* OEM_ANDROID */
 
@@ -13651,14 +13666,16 @@ int dhd_os_get_socram_dump(struct net_device *dev, char **buf, uint32 *size)
 
 int dhd_os_get_version(struct net_device *dev, bool dhd_ver, char **buf, uint32 size)
 {
-	int ret = BCME_OK;
+	if (size == 0)
+		return BCME_BADARG;
+
 	memset(*buf, 0, size);
 	if (dhd_ver) {
 		strncpy(*buf, dhd_version, size - 1);
 	} else {
 		strncpy(*buf, strstr(info_string, "Firmware: "), size - 1);
 	}
-	return ret;
+	return BCME_OK;
 }
 
 static void

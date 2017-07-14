@@ -40,7 +40,7 @@ module_param_string(block_mgmt, block_mgmt_mode, sizeof(block_mgmt_mode), 0);
 static char nx_devname[16]="/dev/nx_ashmem";
 module_param_string(devname, nx_devname, sizeof(nx_devname), 0);
 
-#define GFX_UHD_FB (4096*2160*4)
+#define GFX_UHD_FB (4096*4096*4)
 static char gfx_heap_grow[16] ="4k";
 static unsigned long gfx_heap_grow_size = 0;
 module_param_string(heap_grow, gfx_heap_grow, sizeof(gfx_heap_grow), 0);

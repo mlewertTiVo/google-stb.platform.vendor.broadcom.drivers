@@ -9,7 +9,7 @@ export KERNELDIR=${LINUX_OUT_1ST_ARCH}
 export LINUXDIR=${KERNELDIR}
 export ROOTDIR=${KERNELDIR}/rootfs
 
-KVER=`make --no-print-directory -C ${LINUXDIR} kernelversion`
+KVER=`KBUILD_VERBOSE=0 make --no-print-directory -C ${LINUXDIR} kernelversion`
 KCC=`grep "CONFIG_CROSS_COMPILE" ${LINUX_OUT_1ST_ARCH}/.config | cut -d"\"" -f2`
 export LINUXVER=${KVER}
 
