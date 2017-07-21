@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Broadcom Corporation
+ * Copyright (C) 2015-2017 Broadcom Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -756,35 +756,49 @@ static int droid_pm_reboot_shutdown(struct notifier_block *notifier, unsigned lo
 
     dev_dbg(dev, "%s: action %lu\n", __FUNCTION__, action);
 
-    if (action == SYS_POWER_OFF) {
-        int rc;
-        long timeout = msecs_to_jiffies(suspend_timeout_ms);
+    return ret;
+}
 
-        // Don't unlock so as to prevent further operations occuring (e.g. like poll)...
-        mutex_lock(&priv->pm_mutex);
-        priv->pm_shutdown = true;
-        reinit_completion(&priv->pm_suspend_complete);
-        droid_pm_signal_event_l(priv, DROID_PM_EVENT_SHUTDOWN);
+static int droid_pm_handle_shutdown(struct droid_pm_priv_data *priv)
+{
+    int ret = NOTIFY_DONE;
+    struct device *dev = priv->pm_miscdev.parent;
+    int rc;
+    long timeout = msecs_to_jiffies(suspend_timeout_ms);
+
+    if (priv->pm_shutdown)
+        return ret;
+
+    // Don't unlock so as to prevent further operations occurring (e.g. like poll)...
+    mutex_lock(&priv->pm_mutex);
+    priv->pm_shutdown = true;
+    reinit_completion(&priv->pm_suspend_complete);
+    droid_pm_signal_event_l(priv, DROID_PM_EVENT_SHUTDOWN);
+    mutex_unlock(&priv->pm_mutex);
+
+    dev_dbg(dev, "%s: Waiting for acknowledgement from user-space...\n", __FUNCTION__);
+    // Use uninterruptible wait to ignore SIGCHLD signals
+    rc = wait_for_completion_timeout(&priv->pm_suspend_complete, timeout);
+
+    mutex_lock(&priv->pm_mutex);
+    if (rc == 0) {
+        // If we timed out, we can't guarantee that shutdown will
+        // complete. The watchdog timer may also be stopped. All we
+        // can do is reboot.
+        dev_err(dev, "%s: shutdown timed out, rebooting!\n", __FUNCTION__);
         mutex_unlock(&priv->pm_mutex);
-
-        dev_dbg(dev, "%s: Waiting for acknowledgement from user-space...\n", __FUNCTION__);
-        rc = wait_for_completion_interruptible_timeout(&priv->pm_suspend_complete, timeout);
-
-        mutex_lock(&priv->pm_mutex);
-        if (rc == 0) {
-            // If we timed out, then just shutdown anyway...
-            dev_warn(dev, "%s: shutdown timed out!\n", __FUNCTION__);
-        }
-        else if (rc < 0) {
-            dev_err(dev, "%s: shutdown wait for completion failed [rc=%d]!\n", __FUNCTION__, rc);
-            priv->pm_shutdown = false;
-            ret = NOTIFY_BAD;
-        }
-        else {
-            dev_dbg(dev, "%s: Finished.\n", __FUNCTION__);
-        }
-        mutex_unlock(&priv->pm_mutex);
+        kernel_restart("droid_pm shutdown timeout");
+        return ret;
     }
+    else if (rc < 0) {
+        dev_err(dev, "%s: shutdown wait for completion failed [rc=%d]!\n", __FUNCTION__, rc);
+        priv->pm_shutdown = false;
+        ret = NOTIFY_BAD;
+    }
+    else {
+        dev_dbg(dev, "%s: Finished.\n", __FUNCTION__);
+    }
+    mutex_unlock(&priv->pm_mutex);
     return ret;
 }
 
@@ -1029,6 +1043,25 @@ static ssize_t map_mem_to_s2_show(struct device *dev,
 
 static DEVICE_ATTR_RO(map_mem_to_s2);
 
+static ssize_t notify_store(struct device *dev,
+                  struct device_attribute *attr, const char *buf, size_t n)
+{
+    struct droid_pm_priv_data *priv = &droid_pm_priv_data;
+    int ret;
+
+    if (strncmp(buf, "shutdown", strlen("shutdown")) == 0) {
+        droid_pm_handle_shutdown(priv);
+        ret = n;
+    }
+    else {
+        dev_err(dev, "%s: invalid data\n", __FUNCTION__);
+        ret = -EINVAL;
+    }
+    return ret;
+}
+
+static DEVICE_ATTR_WO(notify);
+
 static ssize_t full_wol_wakeup_show(struct device *dev,
                   struct device_attribute *attr, char *buf)
 {
@@ -1091,6 +1124,7 @@ static DEVICE_ATTR_RW(sw_lid);
 static struct attribute *dev_attrs[] = {
     &dev_attr_map_mem_to_s2.attr,
     &dev_attr_full_wol_wakeup.attr,
+    &dev_attr_notify.attr,
     &dev_attr_sw_lid.attr,
     NULL,
 };
