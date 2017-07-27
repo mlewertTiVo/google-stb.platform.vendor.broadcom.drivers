@@ -1,7 +1,7 @@
 /*
  * SROM format definition.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsrom_fmt.h 553280 2015-04-29 07:55:29Z $
+ * $Id: bcmsrom_fmt.h 644551 2016-06-20 23:29:37Z $
  */
 
 #ifndef	_bcmsrom_fmt_h_
@@ -32,9 +32,9 @@
 
 #define SROM_MAXREV		13	/* max revision supported by driver */
 
-/* Maximum srom: 12 Kilobits == 1536 bytes */
+/* Maximum srom: 16 Kilobits == 2048 bytes */
 
-#define	SROM_MAX		1536
+#define	SROM_MAX		2048
 #define SROM_MAXW		594
 
 #ifdef LARGE_NVRAM_MAXSZ

@@ -1,7 +1,7 @@
 /*
  * P2P Library API - Invite functions.
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -577,6 +577,8 @@ p2papi_tx_invite_rsp(p2papi_instance_t* hdl,
 	BCMP2P_CHANNEL op_channel;
 	struct ether_addr *bssid = NULL;
 
+	uint32 go_cfg_time = hdl->peer_wps_go_cfg_tmo_ms;
+	p2p_chanlist_t *chanlist = &hdl->negotiated_channel_list;
 	memcpy(&op_channel, &invite_req->operatingChannel,
 		sizeof(op_channel));
 
@@ -605,6 +607,10 @@ p2papi_tx_invite_rsp(p2papi_instance_t* hdl,
 		status = P2P_STATSE_FAIL_UNABLE_TO_ACCOM;
 		break;
 	case BCMP2P_INVITE_REJECT_UNKNOWN_GROUP:
+		/*make the go configuration timeout zero and channel list NULL
+		 *if the station is not going for connection to the peer */
+		go_cfg_time = 0;
+		chanlist = NULL;
 		status = P2P_STATSE_FAIL_UNKNOWN_GROUP;
 		break;
 	case BCMP2P_INVITE_REJECT_NO_COMMON_CHANNEL:
@@ -621,7 +627,7 @@ p2papi_tx_invite_rsp(p2papi_instance_t* hdl,
 
 	return p2plib_tx_invite_rsp_frame(hdl,
 		(struct ether_addr*)&invite_req->srcDevAddr, &invite_req->afChannel,
-		invite_req->dialogToken, status, hdl->peer_wps_go_cfg_tmo_ms, 0,
-		&op_channel, bssid, hdl->country, &hdl->negotiated_channel_list);
+		invite_req->dialogToken, status, go_cfg_time, 0,
+		&op_channel, bssid, hdl->country, chanlist);
 }
 #endif /* SOFTAP_ONLY */

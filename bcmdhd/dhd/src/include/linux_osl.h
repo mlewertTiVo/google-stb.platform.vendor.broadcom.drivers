@@ -1,7 +1,7 @@
 /*
  * Linux OS Independent Layer
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.h 589291 2015-09-29 07:09:00Z $
+ * $Id: linux_osl.h 641629 2016-06-03 14:39:47Z $
  */
 
 #ifndef _linux_osl_h_
@@ -1040,6 +1040,9 @@ extern void bzero(void *b, size_t len);
 
 #define DMA_MAP(osh, va, size, direction, p, dmah)
 
+#define	SECURE_DMA_BUFFS_IS_AVAIL(osh) \
+	osl_sec_dma_buffs_is_avail((osh))
+
 typedef struct sec_cma_info {
 	struct sec_mem_elem *sec_alloc_list;
 	struct sec_mem_elem *sec_alloc_list_tail;
@@ -1070,6 +1073,7 @@ typedef struct sec_mem_elem {
 	struct	sec_mem_elem	*next;
 } sec_mem_elem_t;
 
+extern bool osl_sec_dma_buffs_is_avail(osl_t *osh);
 extern dma_addr_t osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 	hnddma_seg_map_t *dmah, void *ptr_cma_info, uint offset);
 extern dma_addr_t osl_sec_dma_dd_map(osl_t *osh, void *va, uint size, int direction, void *p,

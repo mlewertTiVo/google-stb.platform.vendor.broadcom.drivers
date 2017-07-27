@@ -1,7 +1,7 @@
 /*
  * Linux platform device for DHD WLAN adapter
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -47,8 +47,8 @@
 #ifdef BCMDBUS
 #include <dbus.h>
 #endif
-#ifdef CONFIG_DTS
 #include<linux/regulator/consumer.h>
+#ifdef CONFIG_DTS
 #include<linux/of_gpio.h>
 #endif /* CONFIG_DTS */
 
@@ -60,6 +60,11 @@
 #ifdef CONFIG_DTS
 struct regulator *wifi_regulator = NULL;
 #endif /* CONFIG_DTS */
+
+#define MAX_REGULATORS 3
+static const char * const regulator_names[] =
+	{"vreg-wifi-pwr", "vreg-wlan-pwr", "vreg-wifi_reg-pwr", NULL};
+static struct regulator *wifi_regulators[MAX_REGULATORS];
 
 bool cfg_multichip = FALSE;
 bcmdhd_wifi_platdata_t *dhd_wifi_platdata = NULL;
@@ -78,6 +83,8 @@ struct wifi_platform_data dhd_wlan_control = {0};
 #endif /* !defind(CONFIG_DTS) */
 
 static int dhd_wifi_platform_load(void);
+static void wifi_platform_enable_regulators(void);
+static void wifi_platform_disable_regulators(void);
 
 extern void* wl_cfg80211_get_dhdp(void);
 
@@ -258,6 +265,34 @@ void *wifi_platform_get_country_code(wifi_adapter_info_t *adapter, char *ccode)
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39)) */
 
 	return NULL;
+}
+
+static void wifi_platform_enable_regulators(void)
+{
+	int reg, name, err;
+	for (reg=0, name=0; regulator_names[name] != NULL; name++) {
+		wifi_regulators[reg] = regulator_get(NULL, regulator_names[name]);
+		if (wifi_regulators[reg] == NULL) {
+			DHD_INFO(("%s regulator %s not found\n", __FUNCTION__,
+					regulator_names[name]));
+		} else {
+			err = regulator_enable(wifi_regulators[reg++]);
+			DHD_INFO(("Regulator %s: enable %d", regulator_names[name], err));
+		}
+	}
+	/* Add a null terminator */
+	wifi_regulators[reg] = NULL;
+}
+
+static void wifi_platform_disable_regulators(void)
+{
+	int reg = 0;
+
+	while (wifi_regulators[reg] != NULL) {
+		regulator_disable(wifi_regulators[reg]);
+		regulator_put(wifi_regulators[reg]);
+		wifi_regulators[reg++] = NULL;
+	}
 }
 
 static int wifi_plat_dev_drv_probe(struct platform_device *pdev)
@@ -561,6 +596,7 @@ int dhd_wifi_platform_register_drv(void)
 		}
 		err = platform_driver_register(&dhd_wifi_platform_dev_driver);
 	} else {
+		wifi_platform_enable_regulators();
 		err = wifi_ctrlfunc_register_drv();
 
 		/* no wifi ctrl func either, load bus directly and ignore this error */
@@ -667,8 +703,10 @@ void dhd_wifi_platform_unregister_drv(void)
 {
 	if (cfg_multichip)
 		platform_driver_unregister(&dhd_wifi_platform_dev_driver);
-	else
+	else {
 		wifi_ctrlfunc_unregister_drv();
+		wifi_platform_disable_regulators();
+	}
 }
 
 extern int dhd_watchdog_prio;

@@ -11,6 +11,9 @@ elif [ "$1" == 4360b ] ; then
 elif [ "$1" == 4365b1 ] ; then
 	export CHIPVER=4365b1
 	echo "using ${CHIPVER}"
+elif [ "$1" == 4366c0 ] ; then
+	export CHIPVER=4366c0
+	echo "using ${CHIPVER}"
 elif [ "$1" == 43143b0 ] ; then
 	export CHIPVER=43143b0
 	echo "using ${CHIPVER}"

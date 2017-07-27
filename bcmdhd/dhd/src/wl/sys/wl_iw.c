@@ -1,7 +1,7 @@
 /*
  * Linux Wireless Extensions support
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_iw.c 547371 2015-04-08 12:51:39Z $
+ * $Id: wl_iw.c 694505 2017-04-13 04:56:58Z $
  */
 
 #if defined(USE_IW)
@@ -1710,8 +1710,16 @@ wl_iw_get_essid(
 
 	ssid.SSID_len = dtoh32(ssid.SSID_len);
 
+	/* Max SSID length check */
+	if (ssid.SSID_len > IW_ESSID_MAX_SIZE) {
+		ssid.SSID_len = IW_ESSID_MAX_SIZE;
+	}
+
 	/* Get the current SSID */
 	memcpy(extra, ssid.SSID, ssid.SSID_len);
+
+	/* NULL terminating as length of extra buffer is IW_ESSID_MAX_SIZE ie 32 */
+	extra[IW_ESSID_MAX_SIZE] = '\0';
 
 	dwrq->length = ssid.SSID_len;
 

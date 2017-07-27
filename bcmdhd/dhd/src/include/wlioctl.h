@@ -6,7 +6,7 @@
  *
  * Definitions subject to change without notice.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -29,7 +29,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl.h 613162 2016-01-18 02:14:00Z $
+ * $Id: wlioctl.h 661080 2016-09-23 06:18:19Z $
  */
 
 #ifndef _wlioctl_h_
@@ -1196,6 +1196,7 @@ typedef struct wl_pm_mute_tx {
 } wl_pm_mute_tx_t;
 
 
+/* sta_info_t version 5 */
 typedef struct {
 	uint16			ver;		/**< version of this struct */
 	uint16			len;		/**< length in bytes of this structure */
@@ -1205,7 +1206,7 @@ typedef struct {
 	struct ether_addr	ea;		/**< Station address */
 	wl_rateset_t		rateset;	/**< rateset in use */
 	uint32			in;		/**< seconds elapsed since associated */
-	uint32			listen_interval_inms; /* Min Listen interval in ms for this STA */
+	uint32			listen_interval_inms; /**< Min Listen interval in ms for this STA */
 	uint32			tx_pkts;	/**< # of user packets transmitted (unicast) */
 	uint32			tx_failures;	/**< # of user packets failed */
 	uint32			rx_ucast_pkts;	/**< # of unicast packets received */
@@ -1223,20 +1224,20 @@ typedef struct {
 	uint64			tx_mcast_bytes;	/**< # data bytes txed (mcast) */
 	uint64			rx_ucast_bytes;	/**< data bytes recvd (ucast) */
 	uint64			rx_mcast_bytes;	/**< data bytes recvd (mcast) */
-	int8			rssi[WL_STA_ANT_MAX]; /* average rssi per antenna
-										   * of data frames
-										   */
+	int8			rssi[WL_STA_ANT_MAX]; /**< average rssi per antenna
+							* of data frames
+							*/
 	int8			nf[WL_STA_ANT_MAX];	/**< per antenna noise floor */
-	uint16			aid;		/**< association ID */
+	uint16			aid;			/**< association ID */
 	uint16			ht_capabilities;	/**< advertised ht caps */
 	uint16			vht_flags;		/**< converted vht flags */
 	uint32			tx_pkts_retried;	/**< # of frames where a retry was
 							 * necessary
 							 */
-	uint32			tx_pkts_retry_exhausted; /* # of user frames where a retry
+	uint32			tx_pkts_retry_exhausted; /**< # of user frames where a retry
 							  * was exhausted
 							  */
-	int8			rx_lastpkt_rssi[WL_STA_ANT_MAX]; /* Per antenna RSSI of last
+	int8			rx_lastpkt_rssi[WL_STA_ANT_MAX]; /**< Per antenna RSSI of last
 								  * received data frame.
 								  */
 	/* TX WLAN retry/failure statistics:
@@ -1252,11 +1253,17 @@ typedef struct {
 								 */
 	uint32			rx_pkts_retried;	/**< # rx with retry bit set */
 	uint32			tx_rate_fallback;	/**< lowest fallback TX rate */
-} sta_info_t;
+	/* Fields above this line are common to sta_info_t versions 4 and 5 */
+
+	chanspec_t		chanspec;       /** chanspec this sta is on */
+	wl_rateset_args_t	rateset_adv;	/* rateset along with mcs index bitmap */
+} sta_info_v5_t;
+
+typedef sta_info_v5_t sta_info_t;
 
 #define WL_OLD_STAINFO_SIZE	OFFSETOF(sta_info_t, tx_tot_pkts)
 
-#define WL_STA_VER		4
+#define WL_STA_VER		5
 
 
 typedef struct {
@@ -1815,13 +1822,19 @@ typedef struct {
 } wl_dfs_status_all_t;
 
 #define WL_DFS_AP_MOVE_VERSION	(1)
-typedef struct wl_dfs_ap_move_status {
+struct wl_dfs_ap_move_status_v1 {
+	int16 dfs_status;	/* DFS scan status */
+	chanspec_t chanspec;	/* New AP Chanspec */
+	wl_dfs_status_t cac_status;	/* CAC status */
+
+};
+
+struct wl_dfs_ap_move_status_v2 {
 	int8 version;            /* version field; current max version 1 */
 	int8 move_status;        /* DFS move status */
 	chanspec_t chanspec;     /* New AP Chanspec */
 	wl_dfs_status_all_t scan_status; /* status; see dfs_status_all for wl_dfs_status_all_t */
-} wl_dfs_ap_move_status_t;
-
+} ;
 
 /* data structure used in 'radar_status' wl interface, which is use to query radar det status */
 typedef struct {

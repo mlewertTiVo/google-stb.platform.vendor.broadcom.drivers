@@ -4,17 +4,19 @@
 # BCM943570pcieir Reference Design
 # Engineering Revision: p159
 # This nvram rev with updated 2G and 5G power offsets to match datasheet update
-# copied from 43569usbir Rev 525417 CCK filter to cure ACPR failure: cckdigfilttype=4
+# copied from 43569usbir Rev 525417 CCK filter to cure ACPR failure: cckdigfilttype=4 
 ########################################################
 
 ########################################################
 # Board Definitions
 
+NVRAMRev=$Rev$
 sromrev=11
 boardrev=0x1159
 boardtype=0x0743
 vendid=0x14e4
 devid=0x43d9
+boardnum=${serno}
 #pciehdr=750-127777-0000_01
 
 # Board flags:
@@ -46,7 +48,7 @@ otpimagesize=484
 nocrc=1
 manfid=0x2d0
 #prodid=0x052e
-muxenab=0xe1
+muxenab=0x1
 ########################################################
 
 
@@ -134,8 +136,8 @@ maxp2ga1=74
 
 # 2G PA Parameters
 # Order is A1,B0,B1
-pa2ga0=0xff59,0x1783,0xfd43
-pa2ga1=0xff4a,0x1762,0xfd3a
+pa2ga0=-194,6009,-732
+pa2ga1=-197,6141,-746
 
 # 2G Power Offsets
 cckbw202gpo=0x0000
@@ -174,8 +176,8 @@ maxp5ga1=74,74,74,74
 #pa5ga0=-194,5833,-713,-186,6042,-730,-181,5927,-714,-197,5562,-687
 #pa5ga1=-186,6139,-737,-196,5988,-726,-203,5852,-713,-204,5836,-713
 
-pa5ga0=0xff48,0x160d,0xfd55,0xff40,0x154a,0xfd60,0xff5c,0x1590,0xfd84,0xff44,0x15c2,0xfd5c
-pa5ga1=0xff49,0x170a,0xfd39,0xff45,0x16d1,0xfd3e,0xff3e,0x160c,0xfd51,0xff38,0x160c,0xfd3e
+pa5ga0=-181,5835,-709,-183,5842,-712,-186,5832,-710,-187,5744,-703
+pa5ga1=-198,5767,-710,-190,5915,-721,-185,6067,-732,-186,6024,-731
 
 # 5G Power Offsets
 mcsbw205glpo=0xa8666663
@@ -233,9 +235,10 @@ ed_thresh5g=-75
 eu_edthresh2g=-75
 eu_edthresh5g=-75
 
-btc_params82=0x0060
+btcx_tool_rev="$Rev$"
+btc_params82=0x0060 
 btc_params84=0x8
-btc_params73=100
+btc_params73=100 
 btc_params101=100
 btc_params51=0x48df
 btcdyn_flags=0x3
@@ -246,5 +249,3 @@ btcdyn_high_dsns_level=23
 btcdyn_default_btc_mode=5
 btcdyn_dsns_rows=1
 btcdyn_dsns_row0=5,-120,0,-53,-73
-wowl_gpiopol=1
-wowl_gpio=14

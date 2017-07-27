@@ -3,7 +3,7 @@
 #
 # Linux Makefile to build wpscli library
 #
-# $Id: Makefile 511542 2014-10-30 04:58:39Z $
+# $Id: Makefile 675078 2016-12-14 05:16:14Z $
 
 
 SRCBASE    := ../../..
@@ -15,6 +15,9 @@ OBJDIR     ?= obj/$(TARGETARCH)-$(BLDTYPE)
 
 ifeq ($(CC), arm-linux-gcc)
 CFLAGS += -mstructure-size-boundary=8
+endif
+
+ifeq ($(CC), aarch64-linux-gnu-gcc)
 endif
 
 ifeq ($(CC), mipsel-uclibc-gcc)
@@ -215,28 +218,28 @@ else #SHARED_LIB
 # WPS common files shared by both wpscli and AP
 libwpscore.so $(OBJDIR)/libwpscore.so : $(WPSCOREOBJS)
 	@[ -d "$(@D)" ] || mkdir -pv $(@D)
-	$(LD) -shared$(if $(V),v) -o $(OBJDIR)/$(@F) $^
+	$(LD) -shared -o $(OBJDIR)/$(@F) $^
 
 # shared crypto library
 libbcmcrypto.so $(OBJDIR)/libbcmcrypto.so : $(CRYPTOBJS)
 	@[ -d "$(@D)" ] || mkdir -pv $(@D)
-	$(LD) -shared$(if $(V),v) -o $(OBJDIR)/$(@F) $^
+	$(LD) -shared -o $(OBJDIR)/$(@F) $^
 
 # wpscli osl lib file
 ifneq ($(EXTERNAL_OPENSSL),1)
 libwpscliosl.so $(OBJDIR)/libwpscliosl.so : $(OSLOBJS) $(CRYPTOBJS)
 	@[ -d "$(@D)" ] || mkdir -pv $(@D)
-	$(LD) -shared$(if $(V),v) -o $(OBJDIR)/$(@F) $^
+	$(LD) -shared -o $(OBJDIR)/$(@F) $^
 else
 libwpscliosl.so $(OBJDIR)/libwpscliosl.so : $(OSLOBJS)
 	@[ -d "$(@D)" ] || mkdir -pv $(@D)
-	$(LD) -shared$(if $(V),v) -o $(OBJDIR)/$(@F) $^
+	$(LD) -shared -o $(OBJDIR)/$(@F) $^
 endif
 
 # final wpscli api lib file to be delivered
 libwpscli.so $(OBJDIR)/libwpscli.so : $(OSIOBJS) $(WPSCOREOBJS) $(OSLOBJS)
 	@[ -d "$(@D)" ] || mkdir -pv $(@D)
-	$(LD) -shared$(if $(V),v) -o $(OBJDIR)/$(@F) $^
+	$(LD) -shared -o $(OBJDIR)/$(@F) $^
 
 endif #SHARED_LIB
 

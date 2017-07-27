@@ -2,7 +2,7 @@
 # USB Remote Download Makefile - Host linux user mode driver
 #
 #
-# Copyright (C) 2016, Broadcom Corporation
+# Copyright (C) 2017, Broadcom Corporation
 # All Rights Reserved.
 # 
 # This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -10,7 +10,7 @@
 # or duplicated in any form, in whole or in part, without the prior
 # written permission of Broadcom Corporation.
 #
-# $Id: Makefile 585895 2015-09-11 18:51:31Z $
+# $Id: Makefile 675078 2016-12-14 05:16:14Z $
 
 
 SRCBASE = ../..
@@ -19,7 +19,11 @@ include $(SRCBASE)/Makerules
 vpath %.c $(SRCBASE)/shared
 
 ifeq ($(STBLINUX),1)
-CFLAGS= -Wall -Werror -Wstrict-prototypes -g -O2 -I$(SRCBASE)/include -I$(SRCBASE)/../components/shared -I$(SRCBASE)/shared/zlib -DBCMTRXV2 -fPIC
+ifeq ($(TARGETENV), linuxarm64)
+CFLAGS= -Wall -Wstrict-prototypes  -Wno-pointer-to-int-cast -g -O2 -I$(SRCBASE)/include -I$(SRCBASE)/../components/shared -I$(SRCBASE)/shared/zlib -DBCMTRXV2 -fPIC
+else
+CFLAGS= -Wall -Werror -Wstrict-prototypes  -g -O2 -I$(SRCBASE)/include -I$(SRCBASE)/../components/shared -I$(SRCBASE)/shared/zlib -DBCMTRXV2 -fPIC
+endif
 else
 CFLAGS= -Wall -Werror -Wstrict-prototypes -g -O2 -I$(SRCBASE)/include -I$(SRCBASE)/../components/shared -I$(SRCBASE)/shared/zlib -DBCMTRXV2
 endif
@@ -131,6 +135,16 @@ ifeq ($(TARGETENV), linuxarm)
 	CFLAGS += -I$(LIBUSB_PATH)/
 endif
 
+ifeq ($(TARGETENV), linuxarm64)
+	TARGET_PREFIX := aarch64-linux-gnu-
+	OBJECTS += $(OBJDIR)usb_linux.o
+	COMPILE = aarch64-linux-gnu-gcc
+	CLEAN = clean_linux
+	LDFLAGS += -L$(LIBUSB_PATH)/lib
+	LIBS := -L$(LIBUSB_PATH)/lib $(LIBUSB_PATH)/.libs/libusb.a
+	CFLAGS += -I$(LIBUSB_PATH)/
+endif
+
 ifeq ($(STBLINUX),1)
 ifeq ($(TARGETENV), linuxarm_le)
 	TARGET_PREFIX := arm-linux-
@@ -183,6 +197,28 @@ ifeq ($(TARGETARCH), arm)
 	LIBS := -L$(LIBUSB_PATH)/.libs $(LIBUSB_PATH)/.libs/libusb.a
 	CFLAGS += -I ../libusb
 	CFLAGS += -I$(LIBUSB_PATH)
+endif
+
+ifeq ($(TARGETARCH), aarch64)
+	ObjPfx := $(TARGETARCH)/
+	OBJECTS := $(SRCS:%.c=$(ObjPfx)%.o)
+	OBJECTS += $(ObjPfx)usb_linux.o
+	TARGET_PREFIX := aarch64-linux-gnu-
+	TARGET := $(ObjPfx)bcmdl
+	COMPILE := $(CC)
+	LDFLAGS += $(CROSS_LD_PATH)
+	ifeq ($(STBLINUX),1)
+        LDFLAGS += -L$(LIBUSB_PATH)/libs
+        LIBS= ../libusb/libs/libusb.a
+        LIBS := -L$(LIBUSB_PATH)/libs $(LIBUSB_PATH)/libs/libusb.a
+        else
+	LDFLAGS += -L$(LIBUSB_PATH)/.libs
+	LIBS= ../libusb/.libs/libusb.a
+	LIBS := -L$(LIBUSB_PATH)/.libs $(LIBUSB_PATH)/.libs/libusb.a
+	endif
+	CFLAGS += -I ../libusb
+	CFLAGS += -I$(LIBUSB_PATH)
+	CFLAGS += -I$(LIBUSB_PATH)/include
 endif
 
 ifeq ($(BCMQT),1)

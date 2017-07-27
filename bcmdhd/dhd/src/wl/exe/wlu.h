@@ -1,7 +1,7 @@
 /*
  * Common code for wl command line utility
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -18,7 +18,7 @@
  * duplicated in any form, in whole or in part, without the prior written
  * permission of Broadcom Corporation.
  *
- * $Id: wlu.h 600877 2015-11-20 01:19:08Z $
+ * $Id: wlu.h 628510 2016-03-31 08:14:32Z $
  */
 
 #ifndef _wlu_h_
@@ -297,11 +297,11 @@ extern void raw_puts(const char *buf, void *dll_fd_out);
  * hence keeping WL_DUMP_BUF_LEN below that
  */
 #if !defined(WL_DUMP_BUF_LEN)
-#if defined(BWL_SMALL_WLU_DUMP_BUF)
-#define WL_DUMP_BUF_LEN (4 * 1024)
+#ifdef CUSTOMER_HW_31_2
+#define WL_DUMP_BUF_LEN (WLC_IOCTL_MAXLEN)
 #else
 #define WL_DUMP_BUF_LEN (127 * 1024)
-#endif 
+#endif
 #endif /* WL_DUMP_BUF_LEN */
 
 #define CMDLINESZ		80

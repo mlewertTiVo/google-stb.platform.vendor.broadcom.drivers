@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD), Generic work queue framework
  * Generic interface to handle dhd deferred work events
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux_wq.c 514727 2014-11-12 03:02:48Z $
+ * $Id: dhd_linux_wq.c 695590 2017-04-21 05:32:43Z $
  */
 
 #include <linux/init.h>
@@ -235,11 +235,21 @@ dhd_deferred_schedule_work(void *workq, void *event_data, u8 event,
 	deferred_event.event_handler = event_handler;
 
 	if (priority == DHD_WORK_PRIORITY_HIGH) {
-		status = kfifo_in_spinlocked(deferred_wq->prio_fifo, &deferred_event,
-			DEFRD_EVT_SIZE, &deferred_wq->work_lock);
+		spin_lock(&deferred_wq->work_lock);
+		if (kfifo_avail(deferred_wq->prio_fifo) >= DEFRD_EVT_SIZE)
+			status = kfifo_in(deferred_wq->prio_fifo, &deferred_event,
+				DEFRD_EVT_SIZE);
+		else
+			status = 0;
+		spin_unlock(&deferred_wq->work_lock);
 	} else {
-		status = kfifo_in_spinlocked(deferred_wq->work_fifo, &deferred_event,
-			DEFRD_EVT_SIZE, &deferred_wq->work_lock);
+		spin_lock(&deferred_wq->work_lock);
+		if (kfifo_avail(deferred_wq->work_fifo) >= DEFRD_EVT_SIZE)
+			status = kfifo_in(deferred_wq->work_fifo, &deferred_event,
+				DEFRD_EVT_SIZE);
+		else
+			status = 0;
+		spin_unlock(&deferred_wq->work_lock);
 	}
 
 	if (!status) {

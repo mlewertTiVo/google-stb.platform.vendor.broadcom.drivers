@@ -31,7 +31,7 @@
  *		...
  *	};
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -486,11 +486,12 @@ wet_arp_proc(dhd_wet_info_t *weth, void *sdu,
 	}
 	/*
 	 * Replace dest MAC in Ethernet header as well as dest MAC in
-	 * ARP protocol header when processing frame recv'd. It only
-	 * needs to be done for ARP reply. ARP request received is
-	 * expected to be a broadcast address.
+	 * ARP protocol header when processing frame recv'd. Process ARP
+	 * replies and Unicast ARP requests.
 	 */
-	else if (*(uint16 *)(arph + ARP_OPC_OFFSET) == HTON16(ARP_OPC_REPLY)) {
+	else if ((*(uint16 *)(arph + ARP_OPC_OFFSET) == HTON16(ARP_OPC_REPLY)) ||
+		((*(uint16 *)(arph + ARP_OPC_OFFSET) == HTON16(ARP_OPC_REQUEST)) &&
+		(!ETHER_ISMULTI(eh)))) {
 		iaddr = arph + ARP_TGT_IP_OFFSET;
 		if (wet_sta_find_ip(weth, iaddr, &sta) < 0) {
 			DHD_INFO(("wet_arp_proc: unable to find STA %u.%u.%u.%u\n",

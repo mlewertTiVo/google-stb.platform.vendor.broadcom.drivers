@@ -1,7 +1,7 @@
 /*
  * Broadcom device-specific manifest constants.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmdevs.h 582049 2015-08-26 09:26:09Z $
+ * $Id: bcmdevs.h 691716 2017-03-23 18:16:54Z $
  */
 
 #ifndef	_BCMDEVS_H
@@ -437,6 +437,10 @@
 
 #define BCM4365_CHIP_ID		0x4365		/* 4365 chipcommon chipid */
 #define BCM4366_CHIP_ID		0x4366		/* 4366 chipcommon chipid */
+#define BCM43664_CHIP_ID	43664           /* 4366E chipcommon chipid */
+#define BCM4365_CHIP(chipid)	((CHIPID(chipid) == BCM4365_CHIP_ID) || \
+				(CHIPID(chipid) == BCM4366_CHIP_ID) || \
+				(CHIPID(chipid) == BCM43664_CHIP_ID))
 
 #define BCM43909_CHIP_ID	0xab85		/* 43909 chipcommon chipid */
 

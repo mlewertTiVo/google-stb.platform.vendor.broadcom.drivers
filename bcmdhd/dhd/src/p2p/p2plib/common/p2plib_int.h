@@ -1,6 +1,6 @@
 /* P2P API internal definitions
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -116,7 +116,8 @@ extern "C" {
 #ifndef P2PAPI_AF_TX_RETRY_DELAY_MS
 #define P2PAPI_AF_TX_RETRY_DELAY_MS 37
 #endif
-
+/*Number of High level retransmition of AF
+ * Other than mac level retransmition */
 /*
  * Macros
  */
@@ -176,9 +177,10 @@ extern void p2plib_assert(char *fmt, int line);
 #ifndef P2PAPI_CHANNEL_SYNC_TMO_MS
 #define P2PAPI_CHANNEL_SYNC_TMO_MS	5000
 #endif
+#define P2PAPI_AF_SCAN_DWELL_TIME_MS 100
 
 #ifndef P2PAPI_GONREQ_RETRY_TMO_MS
-#define P2PAPI_GONREQ_RETRY_TMO_MS	2000
+#define P2PAPI_GONREQ_RETRY_TMO_MS	1000
 #endif
 
 /* P2P spec social channels */

@@ -1,7 +1,7 @@
 /*
  * OTP support.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmotp.h 523133 2014-12-27 05:50:30Z $
+ * $Id: bcmotp.h 644551 2016-06-20 23:29:37Z $
  */
 
 #ifndef	_bcmotp_h_
@@ -38,7 +38,7 @@
 #define OTP_ALL_RGN	0xf	/* From h/w region to end of OTP including checksum */
 
 /* OTP Size */
-#define OTP_SZ_MAX		(12288/8)	/* maximum bytes in one CIS */
+#define OTP_SZ_MAX		(16384/8)	/* maximum bytes in one CIS */
 
 /* Fixed size subregions sizes in words */
 #define OTPGU_CI_SZ		2

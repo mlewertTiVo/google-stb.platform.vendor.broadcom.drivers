@@ -1,7 +1,10 @@
+ifneq ($(filter $(BCM_RBOARDS) $(BCM_DBOARDS) $(BCM_CBOARDS),$(TARGET_DEVICE)),)
+
 LOCAL_PATH := $(call my-dir)
 
 #########################
-ifneq ($(ANDROID_ENABLE_DHD), n)
+ifneq ($(HW_WIFI_SUPPORT), n)
+ifneq ($(HW_WIFI_NIC_SUPPORT), y)
 
 # Build DHD Utility
 include $(CLEAR_VARS)
@@ -130,5 +133,8 @@ LOCAL_MODULE_TAGS := debug eng
 LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 
 include $(BUILD_EXECUTABLE)
+
+endif
+endif
 
 endif

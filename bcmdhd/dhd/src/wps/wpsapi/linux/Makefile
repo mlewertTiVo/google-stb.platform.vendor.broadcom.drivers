@@ -1,7 +1,7 @@
 #
 # Linux Makefile by using WPS API library.
 #
-# $Id: Makefile 553400 2015-04-29 18:40:50Z $
+# $Id: Makefile 675078 2016-12-14 05:16:14Z $
 
 WLAN_ComponentsInUse := bcmwifi
 -include ../../../makefiles/WLAN_Common.mk
@@ -122,6 +122,11 @@ endif
 ifeq ($(CC), mipsel-linux-gcc)
 	STRIP = mipsel-linux-strip
 	OS    = mipsel-linux_
+endif
+
+ifeq ($(CC), aarch64-linux-gnu-gcc)
+	STRIP = aarch64-linux-gnu-strip
+	OS    = aarch64-linux-gnu_
 endif
 
 # WPS common files

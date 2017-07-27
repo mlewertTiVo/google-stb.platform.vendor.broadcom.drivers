@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD), Linux-specific network interface
  * Basically selected code segments from usb-cdc.c and usb-rndis.c
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux.c 614475 2016-01-22 10:04:11Z $
+ * $Id: dhd_linux.c 691951 2017-03-24 10:01:18Z $
  */
 
 #include <typedefs.h>
@@ -214,12 +214,12 @@ extern bool ap_cfg_running;
 extern bool ap_fw_loaded;
 #endif
 
-#ifdef SET_RANDOM_MAC_SOFTAP
+#if defined(SET_RANDOM_MAC_SOFTAP) && defined(OEM_ANDROID)
 #ifndef CONFIG_DHD_SET_RANDOM_MAC_VAL
 #define CONFIG_DHD_SET_RANDOM_MAC_VAL	0x001A11
 #endif
 static u32 vendor_oui = CONFIG_DHD_SET_RANDOM_MAC_VAL;
-#endif /* SET_RANDOM_MAC_SOFTAP */
+#endif /* SET_RANDOM_MAC_SOFTAP && OEM_ANDROID */
 #ifdef ENABLE_ADAPTIVE_SCHED
 #define DEFAULT_CPUFREQ_THRESH		1000000	/* threshold frequency : 1000000 = 1GHz */
 #ifndef CUSTOM_CPUFREQ_THRESH
@@ -1442,6 +1442,39 @@ int dhd_dbus_txdata(dhd_pub_t *dhdp, void *pktbuf);
 static int dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, uint16 pktlen,
                              wl_event_msg_t *event_ptr, void **data_ptr);
 
+#ifdef UPDATE_LINK_STATE
+void dhd_link_carrier_sync(struct dhd_info *dhd_info, int *ifidx, bool on)
+{
+        if (on) //link up
+        {
+                if (!netif_carrier_ok(dhd_info->iflist[*ifidx]->net)) {
+                        netif_carrier_on(dhd_info->iflist[*ifidx]->net);
+                }
+        }
+        else
+                if (netif_carrier_ok(dhd_info->iflist[*ifidx]->net)) {
+                        netif_carrier_off(dhd_info->iflist[*ifidx]->net);
+                }
+        return;
+}
+void dhd_link_dormant_sync(struct dhd_info *dhd_info, int *ifidx, bool on)
+{
+        if (!on) //Link up
+        {
+                if (netif_dormant(dhd_info->iflist[*ifidx]->net)) {
+                        netif_dormant_off(dhd_info->iflist[*ifidx]->net);
+                }
+        }
+        else  //Link down
+        {
+                if (!netif_dormant(dhd_info->iflist[*ifidx]->net)) {
+                        netif_dormant_on(dhd_info->iflist[*ifidx]->net);
+                }
+        }
+        return;
+}
+#endif /* UPDATE_LINK_STATE */
+
 #if defined(CONFIG_PM_SLEEP)
 static int dhd_pm_callback(struct notifier_block *nfb, unsigned long action, void *ignored)
 {
@@ -2475,7 +2508,8 @@ int dhd_process_cid_mac(dhd_pub_t *dhdp, bool prepost)
 }
 #endif /* OEM_ANDROID */
 
-#if defined(PKT_FILTER_SUPPORT) && !defined(GAN_LITE_NAT_KEEPALIVE_FILTER) && !defined(OEM_ANDROID)
+#if defined(PKT_FILTER_SUPPORT) && !defined(GAN_LITE_NAT_KEEPALIVE_FILTER) && \
+	!defined(OEM_ANDROID)
 static bool
 _turn_on_arp_filter(dhd_pub_t *dhd, int op_mode)
 {
@@ -3070,6 +3104,14 @@ dhd_dbus_state_change(void *handle, int state)
 			break;
 		case DBUS_STATE_UP:
 			DHD_TRACE(("%s: DBUS is up\n", __FUNCTION__));
+#if defined(BCM_REQUEST_FW)
+#if defined(BCMDBUS)
+			DHD_TRACE(("%s: firmware request\n", __FUNCTION__));
+			up(&dhd->fw_download_lock);
+#endif /* BCMDBUS */
+#else
+			DHD_ERROR(("%s: firmware request cannot be handled\n", __FUNCTION__));
+#endif 
 			dhd->pub.busstate = DHD_BUS_DATA;
 			break;
 		default:
@@ -4195,6 +4237,15 @@ dhd_sendpkt(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
 			pktsetprio(pktbuf, FALSE);
 #endif /* QOS_MAP_SET */
 		}
+#ifndef PKTPRIO_OVERRIDE
+		else {
+			/* Some protocols like OZMO use priority values from 256..263.
+			 * these are magic values to indicate a specific 802.1d priority.
+			 * make sure that priority field is in range of 0..7
+			 */
+			PKTSETPRIO(pktbuf, PKTPRIO(pktbuf) & 0x7);
+		}
+#endif /* !PKTPRIO_OVERRIDE */
 	}
 
 
@@ -4904,9 +4955,11 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan)
 					continue;
 				}
 			} else {
-				void *npktbuf = PKTDUP(dhdp->osh, pktbuf);
-				if (npktbuf)
+				void *npktbuf = NULL;
+				if ((ntoh16(eh->ether_type) != ETHER_TYPE_IAPP_L2_UPDATE) &&
+						(npktbuf = PKTDUP(dhdp->osh, pktbuf)) != NULL) {
 					dhd_sendpkt(dhdp, ifidx, npktbuf);
+				}
 			}
 		}
 #endif /* PCIE_FULL_DONGLE */
@@ -5654,7 +5707,7 @@ fw_download_thread_func(void *data)
 	dhd_info_t *dhd = (dhd_info_t *)data;
 	int ret;
 
-	while (1) {
+	while (!kthread_should_stop()) {
 		/* Wait for start trigger */
 		if (down_interruptible(&dhd->fw_download_lock) != 0)
 			return -ERESTARTSYS;
@@ -6499,7 +6552,10 @@ dhd_open(struct net_device *net)
 		ret = -1;
 		goto exit;
 	}
-
+#ifdef UPDATE_LINK_STATE
+    /* set to dormant state after loading driver*/
+        dhd_link_dormant_sync(dhd, &ifidx, TRUE);
+#endif
 	if (ifidx == 0) {
 		atomic_set(&dhd->pend_8021x_cnt, 0);
 #if defined(WL_CFG80211) && defined(OEM_ANDROID)
@@ -7373,7 +7429,7 @@ fail:
 
 #endif /* SHOW_LOGTRACE */
 
-
+/** Called once for each hardware (dongle) instance that this DHD manages */
 dhd_pub_t *
 dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 {
@@ -7423,13 +7479,12 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 		dhd->pub.dhd_cspec.country_abbrev, &dhd->pub.dhd_cspec,
 		dhd->pub.dhd_cflags);
 #endif /* CUSTOM_COUNTRY_CODE */
-#ifndef BCMDBUS
-	dhd->thr_dpc_ctl.thr_pid = DHD_PID_KT_TL_INVALID;
-	dhd->thr_wdt_ctl.thr_pid = DHD_PID_KT_INVALID;
-
 #ifdef DHD_WET
 	dhd->pub.wet_info = dhd_get_wet_info(&dhd->pub);
 #endif
+#ifndef BCMDBUS
+	dhd->thr_dpc_ctl.thr_pid = DHD_PID_KT_TL_INVALID;
+	dhd->thr_wdt_ctl.thr_pid = DHD_PID_KT_INVALID;
 
 	/* Initialize thread based operation and lock */
 	sema_init(&dhd->sdsem, 1);
@@ -7867,10 +7922,12 @@ bool dhd_update_fw_nv_path(dhd_info_t *dhdinfo)
 		DHD_ERROR(("firmware path not found\n"));
 		return FALSE;
 	}
+#ifndef STBLINUX
 	if (dhdinfo->nv_path[0] == '\0') {
 		DHD_ERROR(("nvram path not found\n"));
 		return FALSE;
 	}
+#endif /* STBLINUX */
 #endif /* BCMEMBEDIMAGE */
 
 	return TRUE;
@@ -8120,59 +8177,65 @@ dhd_tdls_set_mode(dhd_pub_t *dhd, bool wfd_mode)
 	return ret;
 }
 #ifdef PCIE_FULL_DONGLE
-void dhd_tdls_update_peer_info(struct net_device *dev, bool connect, uint8 *da)
+int dhd_tdls_update_peer_info(dhd_pub_t *dhdp, wl_event_msg_t *event)
 {
-	dhd_info_t *dhd = DHD_DEV_INFO(dev);
-	dhd_pub_t *dhdp =  (dhd_pub_t *)&dhd->pub;
-	tdls_peer_node_t *cur = dhdp->peer_tbl.node;
+	dhd_pub_t *dhd_pub = dhdp;
+	tdls_peer_node_t *cur = dhd_pub->peer_tbl.node;
 	tdls_peer_node_t *new = NULL, *prev = NULL;
-	dhd_if_t *dhdif;
-	uint8 sa[ETHER_ADDR_LEN];
-	int ifidx = dhd_net2idx(dhd, dev);
-
-	if (ifidx == DHD_BAD_IF)
-		return;
-
-	dhdif = dhd->iflist[ifidx];
-	memcpy(sa, dhdif->mac_addr, ETHER_ADDR_LEN);
+	int ifindex = dhd_ifname2idx(dhd_pub->info, event->ifname);
+	uint8 *da = (uint8 *)&event->addr.octet[0];
+	bool connect = FALSE;
+	uint32 reason = ntoh32(event->reason);
+	if (reason == WLC_E_TDLS_PEER_CONNECTED)
+		connect = TRUE;
+	else if (reason == WLC_E_TDLS_PEER_DISCONNECTED)
+		connect = FALSE;
+	else
+	{
+		DHD_ERROR(("%s: TDLS Event reason is unknown\n", __FUNCTION__));
+		return BCME_ERROR;
+	}
+	if (ifindex == DHD_BAD_IF)
+		return BCME_ERROR;
 
 	if (connect) {
 		while (cur != NULL) {
 			if (!memcmp(da, cur->addr, ETHER_ADDR_LEN)) {
 				DHD_ERROR(("%s: TDLS Peer exist already %d\n",
 					__FUNCTION__, __LINE__));
-				return;
+				return BCME_ERROR;
 			}
 			cur = cur->next;
 		}
 
-		new = MALLOC(dhdp->osh, sizeof(tdls_peer_node_t));
+		new = MALLOC(dhd_pub->osh, sizeof(tdls_peer_node_t));
 		if (new == NULL) {
 			DHD_ERROR(("%s: Failed to allocate memory\n", __FUNCTION__));
-			return;
+			return BCME_ERROR;
 		}
 		memcpy(new->addr, da, ETHER_ADDR_LEN);
-		new->next = dhdp->peer_tbl.node;
-		dhdp->peer_tbl.node = new;
-		dhdp->peer_tbl.tdls_peer_count++;
+		new->next = dhd_pub->peer_tbl.node;
+		dhd_pub->peer_tbl.node = new;
+		dhd_pub->peer_tbl.tdls_peer_count++;
 
 	} else {
 		while (cur != NULL) {
 			if (!memcmp(da, cur->addr, ETHER_ADDR_LEN)) {
-				dhd_flow_rings_delete_for_peer(dhdp, ifidx, da);
+				dhd_flow_rings_delete_for_peer(dhd_pub, (uint8)ifindex, da);
 				if (prev)
 					prev->next = cur->next;
 				else
-					dhdp->peer_tbl.node = cur->next;
-				MFREE(dhdp->osh, cur, sizeof(tdls_peer_node_t));
-				dhdp->peer_tbl.tdls_peer_count--;
-				return;
+					dhd_pub->peer_tbl.node = cur->next;
+				MFREE(dhd_pub->osh, cur, sizeof(tdls_peer_node_t));
+				dhd_pub->peer_tbl.tdls_peer_count--;
+				return BCME_OK;
 			}
 			prev = cur;
 			cur = cur->next;
 		}
 		DHD_ERROR(("%s: TDLS Peer Entry Not found\n", __FUNCTION__));
 	}
+	return BCME_OK;
 }
 #endif /* PCIE_FULL_DONGLE */
 #endif /* BCMDBUS */
@@ -10301,7 +10364,7 @@ void dhd_detach(dhd_pub_t *dhdp)
 #endif
 #ifdef RTT_SUPPORT
 	if (dhdp->rtt_state) {
-	dhd_rtt_deinit(dhdp);
+		dhd_rtt_deinit(dhdp);
 	}
 #endif
 #if defined(CONFIG_PM_SLEEP)
@@ -10348,6 +10411,10 @@ void dhd_detach(dhd_pub_t *dhdp)
 		dhd_flow_rings_deinit(dhdp);
 		if (dhdp->prot)
 			dhd_prot_detach(dhdp);
+#endif
+
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+		dhd_free_tdls_peer_list(dhdp);
 #endif
 
 }
@@ -11059,10 +11126,10 @@ dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, uint16 pktlen,
 
 #ifdef SHOW_LOGTRACE
 		bcmerror = wl_host_event(&dhd->pub, ifidx, pktdata, pktlen, event, data,
-		    &dhd->event_data);
+			&dhd->event_data);
 #else
 		bcmerror = wl_host_event(&dhd->pub, ifidx, pktdata, pktlen, event, data,
-		    NULL);
+			NULL);
 #endif /* SHOW_LOGTRACE */
 
 	if (bcmerror != BCME_OK)
@@ -12254,7 +12321,12 @@ write_to_file(dhd_pub_t *dhd, uint8 *buf, int size)
 	memset(memdump_type, 0, sizeof(memdump_type));
 	do_gettimeofday(&curtime);
 	dhd_convert_memdump_type_to_str(dhd->memdump_type, memdump_type);
-#if defined(OEM_ANDROID)
+#if defined(STB)
+	sprintf(memdump_path, "%s_%s_%ld.%ld", "/data/mem_dump",
+		memdump_type, (unsigned long)curtime.tv_sec,
+		(unsigned long)curtime.tv_usec);
+	file_mode = O_CREAT | O_WRONLY | O_SYNC;
+#elif defined(OEM_ANDROID)
 	sprintf(memdump_path, "%s_%s_%ld.%ld", "/installmedia/mem_dump",
 		memdump_type, (unsigned long)curtime.tv_sec,
 		(unsigned long)curtime.tv_usec);
@@ -13480,7 +13552,11 @@ int dhd_set_ap_isolate(dhd_pub_t *dhdp, uint32 idx, int val)
  * for other platforms it will take default path "/installmedia/.memdump.info"
  * New platforms can add their ifdefs accordingly below.
  */
+#ifdef STB
+#define MEMDUMPINFO "/data/.memdump.info"
+#else /* STB */
 #define MEMDUMPINFO "/installmedia/.memdump.info"
+#endif /* STB */
 
 void dhd_get_memdump_info(dhd_pub_t *dhd)
 {
@@ -13514,7 +13590,11 @@ done:
 	 * But for Brix Android, default behavior is to collect memdump and crash the host.
 	 * Other platforms can change the behavior accordingly by adding appropriate ifdefs
 	 */
+#ifdef STB
+	dhd->memdump_enabled = (mem_val < DUMP_MEMFILE_MAX) ? mem_val : DUMP_MEMFILE;
+#else /* STB */
 	dhd->memdump_enabled = (mem_val < DUMP_MEMFILE_MAX) ? mem_val : DUMP_MEMFILE_BUGON;
+#endif /* STB */
 }
 #endif /* OEM_ANDROID */
 
@@ -13586,14 +13666,16 @@ int dhd_os_get_socram_dump(struct net_device *dev, char **buf, uint32 *size)
 
 int dhd_os_get_version(struct net_device *dev, bool dhd_ver, char **buf, uint32 size)
 {
-	int ret = BCME_OK;
+	if (size == 0)
+		return BCME_BADARG;
+
 	memset(*buf, 0, size);
 	if (dhd_ver) {
 		strncpy(*buf, dhd_version, size - 1);
 	} else {
 		strncpy(*buf, strstr(info_string, "Firmware: "), size - 1);
 	}
-	return ret;
+	return BCME_OK;
 }
 
 static void

@@ -1,7 +1,7 @@
 /*
  * Linux DHD Bus Module for PCIE
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_pcie.h 585315 2015-09-10 06:02:11Z $
+ * $Id: dhd_pcie.h 664644 2016-10-13 09:37:49Z $
  */
 
 
@@ -88,8 +88,9 @@ typedef struct ring_sh_info {
 	uint32 ring_state_r;
 } ring_sh_info_t;
 
+/** Instantiated once for each hardware (dongle) instance that this DHD manages */
 typedef struct dhd_bus {
-	dhd_pub_t	*dhd;
+	dhd_pub_t	*dhd;	/**< pointer to per hardware (dongle) unique instance */
 	struct pci_dev  *dev;		/* pci device handle */
 	dll_t       const_flowring; /* constructed list of tx flowring queues */
 

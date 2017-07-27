@@ -1,7 +1,7 @@
 /*
  * Broadcom P2P Library Sample App
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -93,10 +93,14 @@ const char *P2PAPP_VERSION_STR = "R21-0";
 /* STATIC IP INTERFACE */
 #ifdef TARGETENV_android
 #define GO_IP_ADDRESS 0xc0a82B01
+#define GO_NETMASK    0xffffff00
+#elif defined(STBLINUX) && !defined(IL_BIGENDIAN)
+#define GO_IP_ADDRESS 0x0110a8c0
+#define GO_NETMASK    0x00ffffff
 #else
 #define GO_IP_ADDRESS 0xc0a81001
-#endif /* TARGETENV_android */
 #define GO_NETMASK    0xffffff00
+#endif /* TARGETENV_android */
 
 /* Forward declarations */
 BCMP2P_BOOL p2papp_process_cmd(uint8 key);
@@ -3076,6 +3080,10 @@ static BCMP2P_STATUS p2papp_update_conn_complete(BCMP2P_NOTIFICATION_CODE notifi
 				break;
 			case BCMP2P_NOTIF_GROUP_OWNER_NEGOTIATION_INFO_UNAVAIL:
 				status = BCMP2P_GON_FAILED_INFO_UNAVAIL;
+				break;
+			case BCMP2P_NOTIF_P2P_INVITE_RSP:
+				p2papp_enable_persistent = FALSE;
+				status = BCMP2P_SUCCESS;
 				break;
 			default:
 				status = BCMP2P_ERROR;

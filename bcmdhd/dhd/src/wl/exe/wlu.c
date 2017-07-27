@@ -1,7 +1,7 @@
 /*
  * Common code for wl command-line swiss-army-knife utility
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu.c 618398 2016-02-11 00:07:53Z $
+ * $Id: wlu.c 661718 2016-09-27 06:16:16Z $
  */
 
 
@@ -71,7 +71,10 @@
 #include <sys/time.h>
 #endif   
 
+#if defined(TARGETENV_android)
 #include <sys/select.h>
+#endif
+
 #include <inttypes.h>
 #include <miniopt.h>
 #include <errno.h>
@@ -173,6 +176,7 @@ static cmd_func_t wme_tx_params;
 static cmd_func_t wme_maxbw_params;
 
 static cmd_func_t wl_actframe;
+static cmd_func_t wl_dyn_bw;
 static cmd_func_t wl_antsel;
 static cmd_func_t wl_txfifo_sz;
 
@@ -327,6 +331,7 @@ static cmd_func_t wl_read_estpwrlut;
 
 static int wl_peerrssi(void *wl, cmd_t *cmd, char **argv);
 
+static cmd_func_t wl_wds_ap_ifname;
 
 static cmd_func_t wl_wowl_wakeind;
 
@@ -1628,7 +1633,12 @@ cmd_t wl_cmds[] = {
 		"Enable/Disable TSF event\n"
 		"\t0 - Disable\n"
 		"\t1 - Enable\n" },
-
+	{ "dyn_bw_mode", wl_dyn_bw, WLC_GET_VAR, WLC_SET_VAR,
+	"Disable/Enable dynamic bandwidth flag to associate as HT STA(20MHZ) with VHT AP(80MHZ)\n"
+	"\t0 - disable\n"
+	"\t1 - enable" },
+	{ "wds_ap_ifname", wl_wds_ap_ifname, WLC_GET_VAR, -1,
+	"Get associated AP interface name for WDS interface."},
 	{ NULL, NULL, 0, 0, NULL }
 };
 
@@ -8463,6 +8473,69 @@ wl_power_sel_params(void *wl, cmd_t *cmd, char **argv)
 	return err;
 }
 
+static int wl_dyn_bw(void *wl, cmd_t *cmd, char **argv)
+{
+        int err = 0;
+        struct {
+                uint32 band;
+                uint32 flag;
+        } param = { 0, -1 };
+        char *s = NULL;
+	void *ptr = NULL;
+
+        /* Skip the command name */
+        argv++;
+
+        if (*argv) {
+                if (!strcmp(*argv, "a") || !strcmp(*argv, "5") || !strcmp(*argv, "5g")) {
+                        param.band = WLC_BAND_5G;
+                } else if (!strcmp(*argv, "b") || !strcmp(*argv, "2") || !strcmp(*argv, "2g")) {
+                        param.band = WLC_BAND_2G;
+                } else {
+                        fprintf(stderr,
+                                "%s: invalid band %s\n",
+                                cmd->name, *argv);
+                        err = BCME_USAGE_ERROR;
+                        goto exit;
+                }
+
+                argv++;
+
+                if (*argv) {
+                        /* Optional 2nd arg is used to set the bandwidth cap */
+                        s = NULL;
+
+                        param.flag = (uint32) strtoul(*argv, &s, 0);
+                        if (s && *s != '\0') {
+                                fprintf(stderr, "%s: invalid bandwidth '%s'\n",
+                                        cmd->name, *argv);
+                                err = BCME_USAGE_ERROR;
+                                goto exit;
+                        }
+                }
+        } else {
+                fprintf(stderr, "%s: band unspecified\n", cmd->name);
+                err = BCME_USAGE_ERROR;
+                goto exit;
+        }
+
+        if ((param.flag == 0) || (param.flag == 1)) {
+                err = wlu_var_setbuf(wl, cmd->name, &param, sizeof(param));
+
+        } else {
+		err = wlu_var_getbuf(wl, cmd->name, &param, sizeof(param), &ptr);
+		if (err) {
+			fprintf(stderr, "%s: %d \n", cmd->name,err);
+		} else {
+			fprintf(stderr, "%d \n", *((uint32 *)ptr));
+		}
+                return err;
+        }
+
+exit:
+        return err;
+
+}
 static int
 wl_channel(void *wl, cmd_t *cmd, char **argv)
 {
@@ -8828,7 +8901,7 @@ wl_dfs_ap_move(void *wl, cmd_t *cmd, char **argv)
 	uint32 val = 0;
 	chanspec_t chanspec = 0;
 	int abort;
-	wl_dfs_ap_move_status_t *status;
+	struct wl_dfs_ap_move_status_v2 *status;
 	char chanbuf[CHANSPEC_STR_LEN];
 	const char *dfs_state_str[DFS_SCAN_S_MAX] = {
 		"Radar Free On Channel",
@@ -8850,7 +8923,7 @@ wl_dfs_ap_move(void *wl, cmd_t *cmd, char **argv)
 			return err;
 		}
 
-		status = (wl_dfs_ap_move_status_t*)ptr;
+		status = (struct wl_dfs_ap_move_status_v2*)ptr;
 
 		if (status->version != WL_DFS_AP_MOVE_VERSION) {
 			err = BCME_UNSUPPORTED;
@@ -16135,10 +16208,6 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 			(sta->vht_flags & WL_STA_HTC_VHT_CAP) ? " VHT-HTC" : "");
 	}
 
-	/* Driver didn't return extended station info */
-	if (sta->len < sizeof(sta_info_t))
-		return 0;
-
 	if (sta->flags & WL_STA_SCBSTATS)
 	{
 		printf("\t tx total pkts: %d\n", dtoh32(sta->tx_tot_pkts));
@@ -16192,6 +16261,17 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 			dtoh32(sta->tx_pkts_fw_retry_exhausted));
 		printf("\t rx total pkts retried: %d\n", dtoh32(sta->rx_pkts_retried));
 	}
+
+	/* Driver didn't return extended station info */
+	if (sta->len < sizeof(sta_info_t)) {
+		return 0;
+	}
+
+	if (sta->ver >= 5) {
+		wl_print_mcsset((char *)sta->rateset_adv.mcs);
+		wl_print_vhtmcsset((uint16 *)sta->rateset_adv.vht_mcs);
+	}
+	printf("\n");
 
 	return (0);
 }
@@ -23222,4 +23302,26 @@ wl_wowl_wakeind(void *wl, cmd_t *cmd, char **argv)
 		printf("No wakeup indication set\n");
 
 	return 0;
+}
+
+static int
+wl_wds_ap_ifname(void *wl, cmd_t *cmd, char **argv)
+{
+	int ret;
+
+	UNUSED_PARAMETER(argv);
+
+	memset(buf, 0, WLC_IOCTL_SMLEN);
+
+	/* query for 'wds_ap_ifname' to get ap ifname */
+	ret = wlu_iovar_get(wl, cmd->name, buf, WLC_IOCTL_SMLEN);
+	buf[WLC_IOCTL_SMLEN -1] = '\0';
+
+	/* if the query is successful, continue on and print the result. */
+	if (ret) {
+		return ret;
+	}
+
+	printf("%s\n", buf);
+	return ret;
 }

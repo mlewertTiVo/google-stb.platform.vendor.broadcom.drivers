@@ -1,7 +1,7 @@
 /*
  * Broadcom Dongle Host Driver (DHD), common DHD core.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_common.c 614475 2016-01-22 10:04:11Z $
+ * $Id: dhd_common.c 674784 2016-12-12 18:49:07Z $
  */
 #include <typedefs.h>
 #include <osl.h>
@@ -109,11 +109,7 @@
 #ifdef WLMEDIA_HTSF
 extern void htsf_update(struct dhd_info *dhd, void *data);
 #endif
-#ifndef OEM_ANDROID
 int dhd_msg_level = DHD_ERROR_VAL;
-#else
-int dhd_msg_level = DHD_ERROR_VAL | DHD_MSGTRACE_VAL | DHD_EVENT_VAL;
-#endif /* OEM_ANDROID */
 
 
 #if defined(WL_WLC_SHIM)
@@ -152,7 +148,6 @@ extern int dhd_change_mtu(dhd_pub_t *dhd, int new_mtu, int ifidx);
 #if defined(OEM_ANDROID) && !defined(AP) && defined(WLP2P)
 extern int dhd_get_concurrent_capabilites(dhd_pub_t *dhd);
 #endif
-
 #ifdef BCMDHDUSB
 int dhd_socram_dump(struct dhd_bus *bus) { return -1; }
 #else
@@ -726,12 +721,12 @@ dhd_doiovar(dhd_pub_t *dhd_pub, const bcm_iovar_t *vi, uint32 actionid, const ch
 #ifndef BCMDBUS
 #ifdef DHD_DEBUG
 	case IOV_GVAL(IOV_DCONSOLE_POLL):
-		int_val = (int32)dhd_console_ms;
+		int_val = (int32)dhd_pub->dhd_console_ms;
 		bcopy(&int_val, arg, val_size);
 		break;
 
 	case IOV_SVAL(IOV_DCONSOLE_POLL):
-		dhd_console_ms = (uint)int_val;
+		dhd_pub->dhd_console_ms = (uint)int_val;
 		break;
 
 	case IOV_SVAL(IOV_CONS):
@@ -2440,7 +2435,13 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 	}
 #endif /* DHD_ULP */
 		break;
-
+	case WLC_E_TDLS_PEER_EVENT:
+		{
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+		dhd_tdls_event_handler(dhd_pub, event);
+		break;
+#endif
+		}
 	case WLC_E_IF:
 		{
 		struct wl_event_data_if *ifevent = (struct wl_event_data_if *)event_data;
@@ -2567,6 +2568,18 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 		}
 		/* fall through */
 #endif
+
+#ifdef UPDATE_LINK_STATE
+                /* Update interface state in kernel network layer1. RB 95630. */
+                if (flags & WLC_EVENT_MSG_LINK) {
+                                dhd_link_dormant_sync(dhd_pub->info, ifidx, FALSE);  //link_up
+                }
+                else {
+                                dhd_link_dormant_sync(dhd_pub->info, ifidx, TRUE); //link_down
+        }
+
+#endif /* UPDATE_LINK_STATE */
+
 	case WLC_E_DEAUTH:
 	case WLC_E_DEAUTH_IND:
 	case WLC_E_DISASSOC:
@@ -2598,6 +2611,15 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint16 pktlen,
 		}
 #endif /* PCIE_FULL_DONGLE */
 		/* fall through */
+
+#ifdef UPDATE_LINK_STATE
+        /* Update link state in kernel network layer2 */
+        if ((type == WLC_E_DEAUTH_IND) || (type == WLC_E_DISASSOC_IND)
+                || (type == WLC_E_DEAUTH) || (type == WLC_E_DISASSOC)) {
+                        dhd_link_dormant_sync(dhd_pub->info, ifidx, TRUE);  //dormant on, Assoc down
+        }
+
+#endif /* UPDATE_LINK_STATE */
 
 	default:
 		*ifidx = dhd_ifname2idx(dhd_pub->info, event->ifname);
@@ -3855,3 +3877,35 @@ void dhd_free_download_buffer(dhd_pub_t	*dhd, void *buffer, int length)
 #endif
 	MFREE(dhd->osh, buffer, length);
 }
+
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+
+/* To handle the TDLS event in the dhd_common.c
+ */
+int dhd_tdls_event_handler(dhd_pub_t *dhd_pub, wl_event_msg_t *event)
+{
+	int ret = BCME_OK;
+	ret = dhd_tdls_update_peer_info(dhd_pub, event);
+	return ret;
+}
+
+int dhd_free_tdls_peer_list(dhd_pub_t *dhd_pub)
+{
+	tdls_peer_node_t *cur = NULL, *prev = NULL;
+	if (!dhd_pub)
+		return BCME_ERROR;
+	cur = dhd_pub->peer_tbl.node;
+
+	if ((dhd_pub->peer_tbl.node == NULL) && !dhd_pub->peer_tbl.tdls_peer_count)
+		return BCME_ERROR;
+
+	while (cur != NULL) {
+		prev = cur;
+		cur = cur->next;
+		MFREE(dhd_pub->osh, prev, sizeof(tdls_peer_node_t));
+	}
+	dhd_pub->peer_tbl.tdls_peer_count = 0;
+	dhd_pub->peer_tbl.node = NULL;
+	return BCME_OK;
+}
+#endif	/* #if defined(WLTDLS) && defined(PCIE_FULL_DONGLE) */

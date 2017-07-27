@@ -1,7 +1,7 @@
 /*
  * EVENT_LOG system definitions
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: event_log_tag.h 620687 2016-02-23 22:15:35Z $
+ * $Id: event_log_tag.h 700675 2017-05-20 14:54:04Z $
  */
 
 #ifndef _EVENT_LOG_TAG_H_
@@ -76,7 +76,11 @@
 #define EVENT_LOG_TAG_PCI_DBG	52
 #define EVENT_LOG_TAG_PCI_DATA  53
 #define EVENT_LOG_TAG_PCI_RING	54
+/* EVENT_LOG_TAG_AWDL_TRACE_RANGING will be removed after wlc_ranging merge from IGUANA
+ * keeping it here to avoid compilation error on trunk
+ */
 #define EVENT_LOG_TAG_AWDL_TRACE_RANGING	55
+#define EVENT_LOG_TAG_RANGING_TRACE	55
 #define EVENT_LOG_TAG_WL_ERROR		56
 #define EVENT_LOG_TAG_PHY_ERROR		57
 #define EVENT_LOG_TAG_OTP_ERROR		58
@@ -147,8 +151,48 @@
 #define EVENT_LOG_TAG_PROXD_ERROR		123
 #define EVENT_LOG_TAG_PROXD_TRACE		124
 #define EVENT_LOG_TAG_PROXD_INFO		125
+#define EVENT_LOG_TAG_IE_ERROR			126
+#define EVENT_LOG_TAG_ASSOC_ERROR		127
+#define EVENT_LOG_TAG_SCAN_ERR			128
+#define EVENT_LOG_TAG_AMSDU_ERROR		129
+#define EVENT_LOG_TAG_AMPDU_ERROR		130
+#define EVENT_LOG_TAG_KM_ERROR			131
+#define EVENT_LOG_TAG_DFS			132
+#define EVENT_LOG_TAG_REGULATORY		133
+#define EVENT_LOG_TAG_CSA			134
+#define EVENT_LOG_TAG_WNM_BSSTRANS_ERR		135
+#define EVENT_LOG_TAG_SUP_INFO			136
+#define EVENT_LOG_TAG_SUP_ERROR			137
+#define EVENT_LOG_TAG_CHANCTXT_TRACE		138
+#define EVENT_LOG_TAG_CHANCTXT_INFO		139
+#define EVENT_LOG_TAG_CHANCTXT_ERROR		140
+#define EVENT_LOG_TAG_CHANCTXT_WARN		141
+#define EVENT_LOG_TAG_MSCHPROFILE		142
+#define EVENT_LOG_TAG_4WAYHANDSHAKE		143
+#define EVENT_LOG_TAG_MSCHPROFILE_TLV		144
+#define EVENT_LOG_TAG_ADPS			145
+#define EVENT_LOG_TAG_MBO_DBG			146
+#define EVENT_LOG_TAG_MBO_INFO			147
+#define EVENT_LOG_TAG_MBO_ERR			148
+#define EVENT_LOG_TAG_TXDELAY			149
+#define EVENT_LOG_TAG_BCNTRIM_INFO		150
+#define EVENT_LOG_TAG_BCNTRIM_TRACE		151
+#define EVENT_LOG_TAG_OPS_INFO			152
+#define EVENT_LOG_TAG_STATS			153
+#define EVENT_LOG_TAG_BAM			154
+#define EVENT_LOG_TAG_TXFAIL			155
+#define EVENT_LOG_TAG_AWDL_CONFIG_DBG		156
+#define EVENT_LOG_TAG_AWDL_SYNC_DBG		157
+#define EVENT_LOG_TAG_AWDL_PEER_DBG		158
+#define EVENT_LOG_TAG_RANDMAC_INFO		159
+#define EVENT_LOG_TAG_RANDMAC_DBG		160
+#define EVENT_LOG_TAG_RANDMAC_ERR		161
+#define EVENT_LOG_TAG_AWDL_DFSP_DBG		162
+#define EVENT_LOG_TAG_TPA_ERR			163
+#define EVENT_LOG_TAG_TPA_INFO			164
+
 /* EVENT_LOG_TAG_MAX	= Set to the same value of last tag, not last tag + 1 */
-#define EVENT_LOG_TAG_MAX			125
+#define EVENT_LOG_TAG_MAX			164
 /* Note: New event should be added/reserved in trunk before adding it to branches */
 
 

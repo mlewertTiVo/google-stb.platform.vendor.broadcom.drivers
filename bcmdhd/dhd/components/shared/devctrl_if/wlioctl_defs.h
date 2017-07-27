@@ -4,7 +4,7 @@
  *
  * Definitions subject to change without notice.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl_defs.h 619854 2016-02-18 14:02:49Z $
+ * $Id: wlioctl_defs.h 686191 2017-02-21 13:45:54Z $
  */
 
 
@@ -43,27 +43,32 @@
 #undef  D11AC_IOTYPES
 #define D11AC_IOTYPES
 
+#ifndef USE_NEW_RSPEC_DEFS
 /* WL_RSPEC defines for rate information */
-#define WL_RSPEC_RATE_MASK      0x000000FF      /* rate or HT MCS value */
-#define WL_RSPEC_VHT_MCS_MASK   0x0000000F      /* VHT MCS value */
-#define WL_RSPEC_VHT_NSS_MASK   0x000000F0      /* VHT Nss value */
-#define WL_RSPEC_VHT_NSS_SHIFT  4               /* VHT Nss value shift */
-#define WL_RSPEC_TXEXP_MASK     0x00000300
-#define WL_RSPEC_TXEXP_SHIFT    8
-#define WL_RSPEC_BW_MASK        0x00070000      /* bandwidth mask */
-#define WL_RSPEC_BW_SHIFT       16              /* bandwidth shift */
-#define WL_RSPEC_STBC           0x00100000      /* STBC encoding, Nsts = 2 x Nss */
-#define WL_RSPEC_TXBF           0x00200000      /* bit indicates TXBF mode */
-#define WL_RSPEC_LDPC           0x00400000      /* bit indicates adv coding in use */
-#define WL_RSPEC_SGI            0x00800000      /* Short GI mode */
-#define WL_RSPEC_ENCODING_MASK  0x03000000      /* Encoding of Rate/MCS field */
-#define WL_RSPEC_OVERRIDE_RATE  0x40000000      /* bit indicate to override mcs only */
-#define WL_RSPEC_OVERRIDE_MODE  0x80000000      /* bit indicates override both rate & mode */
+#define WL_RSPEC_RATE_MASK		0x000000FF      /* rate or HT MCS value */
+#define WL_RSPEC_HE_MCS_MASK		0x0000000F      /* HE MCS value */
+#define WL_RSPEC_HE_NSS_MASK		0x000000F0      /* HE Nss value */
+#define WL_RSPEC_HE_NSS_SHIFT		4               /* HE Nss value shift */
+#define WL_RSPEC_VHT_MCS_MASK		0x0000000F      /* VHT MCS value */
+#define WL_RSPEC_VHT_NSS_MASK		0x000000F0      /* VHT Nss value */
+#define WL_RSPEC_VHT_NSS_SHIFT		4               /* VHT Nss value shift */
+#define WL_RSPEC_TXEXP_MASK		0x00000300
+#define WL_RSPEC_TXEXP_SHIFT		8
+#define WL_RSPEC_BW_MASK		0x00070000      /* bandwidth mask */
+#define WL_RSPEC_BW_SHIFT		16              /* bandwidth shift */
+#define WL_RSPEC_STBC			0x00100000      /* STBC encoding, Nsts = 2 x Nss */
+#define WL_RSPEC_TXBF			0x00200000      /* bit indicates TXBF mode */
+#define WL_RSPEC_LDPC			0x00400000      /* bit indicates adv coding in use */
+#define WL_RSPEC_SGI			0x00800000      /* Short GI mode */
+#define WL_RSPEC_ENCODING_MASK		0x03000000      /* Encoding of Rate/MCS field */
+#define WL_RSPEC_OVERRIDE_RATE		0x40000000      /* bit indicate to override mcs only */
+#define WL_RSPEC_OVERRIDE_MODE		0x80000000      /* bit indicates override rate & mode */
 
 /* WL_RSPEC_ENCODING field defs */
-#define WL_RSPEC_ENCODE_RATE    0x00000000      /* Legacy rate is stored in RSPEC_RATE_MASK */
-#define WL_RSPEC_ENCODE_HT      0x01000000      /* HT MCS is stored in RSPEC_RATE_MASK */
-#define WL_RSPEC_ENCODE_VHT     0x02000000      /* VHT MCS and Nss is stored in RSPEC_RATE_MASK */
+#define WL_RSPEC_ENCODE_RATE	0x00000000      /* Legacy rate is stored in RSPEC_RATE_MASK */
+#define WL_RSPEC_ENCODE_HT	0x01000000      /* HT MCS is stored in RSPEC_RATE_MASK */
+#define WL_RSPEC_ENCODE_VHT	0x02000000      /* VHT MCS and Nss is stored in RSPEC_RATE_MASK */
+#define WL_RSPEC_ENCODE_HE	0x03000000      /* HE MCS and Nss is stored in RSPEC_RATE_MASK */
 
 /* WL_RSPEC_BW field defs */
 #define WL_RSPEC_BW_UNSPECIFIED 0
@@ -76,6 +81,17 @@
 #define WL_RSPEC_BW_5MHZ	0x00060000
 #define WL_RSPEC_BW_2P5MHZ      0x00070000
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
+
+#define HIGHEST_SINGLE_STREAM_MCS	7 /* MCS values greater than this enable multiple streams */
+
+#ifndef OEM_ANDROID
+/* given a proprietary MCS, get number of spatial streams */
+#define GET_PROPRIETARY_11N_MCS_NSS(mcs) (1 + ((mcs) - 85) / 8)
+
+#define GET_11N_MCS_NSS(mcs) ((mcs) < 32 ? (1 + ((mcs) / 8)) \
+				: ((mcs) == 32 ? 1 : GET_PROPRIETARY_11N_MCS_NSS(mcs)))
+#endif /* !OEM_ANDROID */
+#endif /* !USE_NEW_RSPEC_DEFS */
 
 /* Legacy defines for the nrate iovar */
 #define OLD_NRATE_MCS_INUSE         0x00000080 /* MSC in use,indicates b0-6 holds an mcs */
@@ -92,19 +108,11 @@
 #define OLD_NRATE_STF_STBC	2		/* stf mode STBC */
 #define OLD_NRATE_STF_SDM	3		/* stf mode SDM */
 
-#define HIGHEST_SINGLE_STREAM_MCS	7 /* MCS values greater than this enable multiple streams */
 #ifndef LINUX_POSTMOGRIFY_REMOVAL
 #define WLC_11N_N_PROP_MCS	6
 #define WLC_11N_FIRST_PROP_MCS	87
 #define WLC_11N_LAST_PROP_MCS	102
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
-#ifndef OEM_ANDROID
-/* given a proprietary MCS, get number of spatial streams */
-#define GET_PROPRIETARY_11N_MCS_NSS(mcs) (1 + ((mcs) - 85) / 8)
-
-#define GET_11N_MCS_NSS(mcs) ((mcs) < 32 ? (1 + ((mcs) / 8)) \
-				: ((mcs) == 32 ? 1 : GET_PROPRIETARY_11N_MCS_NSS(mcs)))
-#endif /* !OEM_ANDROID */
 
 #define MAX_CCA_CHANNELS 38	/* Max number of 20 Mhz wide channels */
 #define MAX_CCA_SECS	60	/* CCA keeps this many seconds history */
@@ -219,7 +227,7 @@
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 /* Bitmask for scan_type */
 #define WL_SCANFLAGS_PASSIVE	0x01	/* force passive scan */
-#define WL_SCANFLAGS_RESERVED	0x02	/* Reserved */
+#define WL_SCANFLAGS_LOW_PRIO	0x02	/* Low priority scan */
 #define WL_SCANFLAGS_PROHIBITED	0x04	/* allow scanning prohibited channels */
 #define WL_SCANFLAGS_OFFCHAN	0x08	/* allow scanning/reporting off-channel APs */
 #define WL_SCANFLAGS_HOTSPOT	0x10	/* automatic ANQP to hotspot APs */
@@ -409,6 +417,21 @@
 
 #define CRYPTO_ALGO_NONE        CRYPTO_ALGO_OFF
 
+/* algo bit vector */
+#define KEY_ALGO_MASK(_algo)	(1 << _algo)
+
+
+#define KEY_ALGO_MASK_WEP		(KEY_ALGO_MASK(CRYPTO_ALGO_WEP1) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_WEP128) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_NALG))
+
+#define KEY_ALGO_MASK_AES		(KEY_ALGO_MASK(CRYPTO_ALGO_AES_CCM) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_AES_CCM256) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_AES_GCM) | \
+					KEY_ALGO_MASK(CRYPTO_ALGO_AES_GCM256))
+#define KEY_ALGO_MASK_TKIP		(KEY_ALGO_MASK(CRYPTO_ALGO_TKIP))
+#define KEY_ALGO_MASK_WAPI		(KEY_ALGO_MASK(CRYPTO_ALGO_SMS4))
+
 #define WSEC_GEN_MIC_ERROR	0x0001
 #define WSEC_GEN_REPLAY		0x0002
 #define WSEC_GEN_ICV_ERROR	0x0004
@@ -429,22 +452,11 @@
 #define WSEC_SWFLAG		0x0008
 #define SES_OW_ENABLED		0x0040	/* to go into transition mode without setting wep */
 
-/* wsec macros for operating on the above definitions */
-#ifdef WLWSEC
 #define WSEC_WEP_ENABLED(wsec)	((wsec) & WEP_ENABLED)
 #define WSEC_TKIP_ENABLED(wsec)	((wsec) & TKIP_ENABLED)
 #define WSEC_AES_ENABLED(wsec)	((wsec) & AES_ENABLED)
-#else
-#define WSEC_WEP_ENABLED(wsec) NULL
-#define WSEC_TKIP_ENABLED(wsec) NULL
-#define WSEC_AES_ENABLED(wsec) NULL
-#endif /* WLWSEC */
 
-#ifdef WLWSEC
 #define WSEC_ENABLED(wsec)	((wsec) & (WEP_ENABLED | TKIP_ENABLED | AES_ENABLED))
-#else
-#define WSEC_ENABLED(wsec) 0
-#endif /* WLWSEC */
 
 #define WSEC_SES_OW_ENABLED(wsec)	((wsec) & SES_OW_ENABLED)
 
@@ -1210,6 +1222,7 @@
 #define WL_LOFT_VAL		0x00000000	/* retired in TOT on 6/10/2009 */
 #define WL_PFN_VAL		0x00040000 /* Using retired LOFT_VAL */
 #define WL_REGULATORY_VAL	0x00080000
+#define WL_CSA_VAL		0x00080000  /* Reusing REGULATORY_VAL due to lackof bits */
 #define WL_TAF_VAL		0x00100000
 #define WL_RADAR_VAL		0x00000000	/* retired in TOT on 6/10/2009 */
 #define WL_WDI_VAL		0x00200000	/* Using retired WL_RADAR_VAL VAL */
@@ -1240,7 +1253,6 @@
 #define WL_COEX_VAL		0x00000008
 #define WL_RTDC_VAL		0x00000010
 #define WL_PROTO_VAL		0x00000020
-#define WL_BTA_VAL		0x00000040
 #define WL_CHANINT_VAL		0x00000080
 #define WL_WMF_VAL		0x00000100
 #define WL_P2P_VAL		0x00000200
@@ -1263,10 +1275,10 @@
 
 /* This level is currently used in Phoenix2 only */
 #define WL_SRSCAN_VAL		0x02000000
-/* Reusing it for CXO in trunk */
-#define WL_CXO_VAL		0x02000000
 
 #define WL_WNM_VAL		0x04000000
+/* re-using WL_WNM_VAL for MBO */
+#define WL_MBO_VAL		0x04000000
 #define WL_PWRSEL_VAL		0x10000000
 #define WL_NET_DETECT_VAL	0x20000000
 #define WL_PCIE_VAL		0x40000000
@@ -1364,6 +1376,10 @@
 #define WL_CHAN_RADAR_EU_WEATHER	(1 << 7)	/* EU Radar weather channel. Implies an
 							 * EU Radar channel.
 							 */
+#define WL_CHAN_CLM_RESTRICTED		(1 << 8)	/* channel restricted in CLM
+							 * (i.e. by default)
+							 */
+
 /* following definition is for precommit; will be removed once wl, acsd switch to the new def */
 #define WL_CHAN_WEATHER_RADAR		WL_CHAN_RADAR_EU_WEATHER
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
@@ -1603,6 +1619,7 @@
 #define VNDR_IE_IWAPID_FLAG	0x40 /* vendor IE in IW advertisement protocol ID field */
 #define VNDR_IE_AUTHREQ_FLAG	0x80
 #define VNDR_IE_CUSTOM_FLAG	0x100 /* allow custom IE id */
+#define VNDR_IE_DISASSOC_FLAG	0x200
 
 #if defined(WLP2P)
 /* P2P Action Frames flags (spec ordered) */
@@ -1633,7 +1650,6 @@
 #define APCS_IOCTL		1
 #define APCS_CHANIM		2
 #define APCS_CSTIMER		3
-#define APCS_BTA		4
 #define APCS_TXDLY		5
 #define APCS_NONACSD		6
 #define APCS_DFS_REENTRY	7
@@ -1653,7 +1669,13 @@
 #define CCASTATS_TXOP	6
 #define CCASTATS_GDTXDUR        7
 #define CCASTATS_BDTXDUR        8
+
+#ifndef WLCHANIM_V2
 #define CCASTATS_MAX    9
+#else /* WLCHANIM_V2 */
+#define CCASTATS_MYRX      9
+#define CCASTATS_MAX    10
+#endif /* WLCHANIM_V2 */
 
 #define WL_CHANIM_COUNT_ALL	0xff
 #define WL_CHANIM_COUNT_ONE	0x1
@@ -1931,8 +1953,14 @@
 #define BESTN_BSSID_ONLY_MASK		0x1000
 
 #define PFN_VERSION			2
+#ifdef PFN_SCANRESULT_2
+#define PFN_SCANRESULT_VERSION		2
+#else
 #define PFN_SCANRESULT_VERSION		1
+#endif /* PFN_SCANRESULT_2 */
+#ifndef MAX_PFN_LIST_COUNT
 #define MAX_PFN_LIST_COUNT		16
+#endif /* MAX_PFN_LIST_COUNT */
 
 #define PFN_COMPLETE			1
 #define PFN_INCOMPLETE			0
@@ -1948,8 +1976,12 @@
 #define WL_PFN_SUPPRESSFOUND_MASK	0x08
 #define WL_PFN_SUPPRESSLOST_MASK	0x10
 #ifndef LINUX_POSTMOGRIFY_REMOVAL
-#define WL_PFN_SSID_A_BAND_TRIG     0x20
-#define WL_PFN_SSID_BG_BAND_TRIG    0x40
+#define WL_PFN_SSID_A_BAND_TRIG		0x20
+#define WL_PFN_SSID_BG_BAND_TRIG	0x40
+#define WL_PFN_SSID_IMPRECISE_MATCH	0x80
+#define WL_PFN_SSID_SAME_NETWORK	0x10000
+#define WL_PFN_SUPPRESS_AGING_MASK	0x20000
+#define WL_PFN_FLUSH_ALL_SSIDS		0x40000
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 #define WL_PFN_RSSI_MASK		0xff00
 #define WL_PFN_RSSI_SHIFT		8
@@ -1973,7 +2005,7 @@
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 
 #ifndef BESTN_MAX
-#define BESTN_MAX			8
+#define BESTN_MAX			10
 #endif
 
 #ifndef MSCAN_MAX

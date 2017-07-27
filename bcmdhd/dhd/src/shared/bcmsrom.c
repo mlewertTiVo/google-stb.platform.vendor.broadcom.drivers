@@ -3,7 +3,7 @@
  *
  * Despite its file name, OTP contents is also parsed in this file.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsrom.c 620402 2016-02-23 01:33:41Z $
+ * $Id: bcmsrom.c 687194 2017-02-28 02:17:50Z $
  */
 
 /*

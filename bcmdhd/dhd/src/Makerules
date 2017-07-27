@@ -4,7 +4,7 @@
 #  Top level Makerules
 #  it uses Makerules.env for build env vars and optional branding.inc
 #
-#  Copyright (C) 1999-2016, Broadcom Corporation
+#  Copyright (C) 1999-2017, Broadcom Corporation
 #  
 #       Unless you and Broadcom execute a separate written software license
 #  agreement governing use of this software, this software is licensed to you
@@ -27,7 +27,7 @@
 #
 #  <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makerules 582231 2015-08-26 19:12:18Z $
+# $Id: Makerules 675078 2016-12-14 05:16:14Z $
 
 # This is the TOP level makefile rules, which is used by many makefiles.
 # Please be cautious on changes, especially compatibilities.
@@ -163,6 +163,9 @@ ifeq ($(TARGETOS), unix)
 	ifeq ($(TARGETENV), linuxarm)
 		TARGET_PREFIX = armeb-linux-
 	else
+	ifeq ($(TARGETENV), linuxarm64)
+		TARGET_PREFIX = aarch64-linux-gnu-
+	else
 	ifeq ($(TARGETENV), linuxarm_le)
 		TARGET_PREFIX = arm-linux-
 	else
@@ -209,6 +212,7 @@ $(warning : LINUXDIR is not set!)
 	endif
 	endif
 	endif
+	endif
 
 	CC = $(TARGET_PREFIX)gcc
 	AS = $(TARGET_PREFIX)as
@@ -226,6 +230,9 @@ $(warning : LINUXDIR is not set!)
 		GLDFLAGS = -static
 	endif
 	ifeq ($(TARGETENV), linuxarm)
+		GLDFLAGS = -static
+	endif
+	ifeq ($(TARGETENV), linuxarm64)
 		GLDFLAGS = -static
 	endif
 	ifeq ($(TARGETENV), linuxarm_le)

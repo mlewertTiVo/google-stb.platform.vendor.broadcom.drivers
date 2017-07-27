@@ -1,7 +1,7 @@
 /*
  * DHD Bus Module for PCIE
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_pcie.c 599346 2015-11-13 10:24:31Z $
+ * $Id: dhd_pcie.c 664644 2016-10-13 09:37:49Z $
  */
 
 
@@ -293,6 +293,8 @@ dhdpcie_bus_reg_unmap(osl_t *osh, ulong addr, int size)
 }
 
 /**
+ * Called once for each hardware (dongle) instance that this DHD manages.
+ *
  * 'regs' is the host virtual address that maps to the start of the PCIe BAR0 window. The first 4096
  * bytes in this window are mapped to the backplane address in the PCIEBAR0Window register. The
  * precondition is that the PCIEBAR0Window register 'points' at the PCIe core.
@@ -540,7 +542,6 @@ dhdpcie_bus_isr(dhd_bus_t *bus)
 static bool
 dhdpcie_dongle_attach(dhd_bus_t *bus)
 {
-
 	osl_t *osh = bus->osh;
 	void *regsva = (void*)bus->regs;
 	uint16 devid = bus->cl_devid;
@@ -954,7 +955,10 @@ done:
 	return;
 }
 
-/** Watchdog timer function */
+/**
+ * Watchdog timer function.
+ * @param dhd   Represents a specific hardware (dongle) instance that this DHD manages
+ */
 bool dhd_bus_watchdog(dhd_pub_t *dhd)
 {
 #ifdef DHD_DEBUG
@@ -964,13 +968,13 @@ bool dhd_bus_watchdog(dhd_pub_t *dhd)
 
 
 	/* Poll for console output periodically */
-	if (dhd->busstate == DHD_BUS_DATA && dhd_console_ms != 0) {
+	if (dhd->busstate == DHD_BUS_DATA && dhd->dhd_console_ms != 0) {
 		bus->console.count += dhd_watchdog_ms;
-		if (bus->console.count >= dhd_console_ms) {
-			bus->console.count -= dhd_console_ms;
+		if (bus->console.count >= dhd->dhd_console_ms) {
+			bus->console.count -= dhd->dhd_console_ms;
 			/* Make sure backplane clock is on */
 			if (dhdpcie_bus_readconsole(bus) < 0)
-				dhd_console_ms = 0;	/* On error, stop trying */
+				dhd->dhd_console_ms = 0;	/* On error, stop trying */
 		}
 	}
 #endif /* DHD_DEBUG */
@@ -1129,8 +1133,16 @@ dhd_bus_download_firmware(struct dhd_bus *bus, osl_t *osh,
 /* Define alternate fw/nvram paths used in Android */
 #ifdef OEM_ANDROID
 #define CONFIG_ANDROID_BCMDHD_FW_PATH "/vendor/firmware/broadcom/dhd/firmware/fw.bin.trx"
+#ifdef STBLINUX
+#ifdef CUSTOM_NVRAM_PATH
+#define CONFIG_ANDROID_BCMDHD_NVRAM_PATH CUSTOM_NVRAM_PATH
+#else
 #define CONFIG_ANDROID_BCMDHD_NVRAM_PATH "/mnt/hwcfg/nvm.txt"
 #endif
+#else
+#define CONFIG_ANDROID_BCMDHD_NVRAM_PATH "/vendor/firmware/broadcom/dhd/nvrams/nvm.txt"
+#endif /* STBLINUX */
+#endif /* OEM_ANDROID */
 
 static int
 dhdpcie_download_firmware(struct dhd_bus *bus, osl_t *osh)
@@ -2325,9 +2337,7 @@ dhd_bus_txdata(struct dhd_bus *bus, void *txp, uint8 ifidx)
 
 toss:
 	DHD_INFO(("%s: Toss %d\n", __FUNCTION__, ret));
-#ifdef CUSTOMER_HW_31_2
-	dhd_txcomplete(bus->dhd->osh, txp, TRUE);
-#else
+#ifndef CUSTOMER_HW_31_2
 	PKTCFREE(bus->dhd->osh, txp, TRUE);
 #endif
 	return ret;

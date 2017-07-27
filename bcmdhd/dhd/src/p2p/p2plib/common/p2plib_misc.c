@@ -1,7 +1,7 @@
 /*
  * P2P Library API - Initialization/Miscellaneous functions (OS-independent)
  *
- * Copyright (C) 2016, Broadcom Corporation
+ * Copyright (C) 2017, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -635,6 +635,7 @@ p2papi_chspec_to_channel(chanspec_t chspec,	BCMP2P_CHANNEL *channel)
 	/* initialize for a failure case */
 	channel->channel_class = chclass;
 	channel->channel = ch;
+	chspec = p2p_chspec_driver_to_host(chspec);
 
 	if (CHSPEC_IS40(chspec)) {
 		is_40mhz = true;
@@ -756,6 +757,7 @@ p2papi_channel_to_chspec(BCMP2P_CHANNEL *channel, chanspec_t *chspec)
 	}
 
 	*chspec = ch | band | bw | ctl_sb;
+	*chspec = p2p_chspec_host_to_driver(*chspec);
 	return BCMP2P_TRUE;
 }
 
@@ -1041,7 +1043,11 @@ static void initialize_channel_list(p2papi_instance_t* hdl)
 	for (i = 0; i < num_chanspecs; i++) {
 		c = (chanspec_t)dtoh32(list->element[i]);
 		c = P2PWL_CHSPEC_IOTYPE_DTOH(c);
-		p2papi_chspec_to_channel(c,	&ch[i]);
+		/*If channel is not under any class ignore it*/
+		if (p2papi_chspec_to_channel(c,	&ch[i]) == BCMP2P_FALSE) {
+			num_chanspecs--;
+			i--;
+		}
 	}
 
 	memset(channel_list, 0, sizeof(*channel_list));

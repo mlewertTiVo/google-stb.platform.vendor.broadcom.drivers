@@ -4,7 +4,7 @@
  * Provides type definitions and function prototypes used to link the
  * DHD OS, bus, and protocol modules.
  *
- * Copyright (C) 1999-2016, Broadcom Corporation
+ * Copyright (C) 1999-2017, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd.h 614475 2016-01-22 10:04:11Z $
+ * $Id: dhd.h 694505 2017-04-13 04:56:58Z $
  */
 
 /****************
@@ -207,6 +207,22 @@ enum dhd_dongledump_type {
 	DUMP_TYPE_SCAN_TIMEOUT
 };
 
+enum dhd_hang_reason {
+	HANG_REASON_MASK = 0x8000,
+	HANG_REASON_IOCTL_RESP_TIMEOUT = 0x8001,
+	HANG_REASON_DONGLE_TRAP = 0x8002,
+	HANG_REASON_D3_ACK_TIMEOUT = 0x8003,
+	HANG_REASON_BUS_DOWN = 0x8004,
+	HANG_REASON_MSGBUF_LIVELOCK = 0x8006,
+	HANG_REASON_IFACE_OP_FAILURE = 0x8007,
+	HANG_REASON_HT_AVAIL_ERROR = 0x8008,
+	HANG_REASON_PCIE_RC_LINK_UP_FAIL = 0x8009,
+	HANG_REASON_PCIE_PKTID_ERROR = 0x800A,
+	HANG_REASON_PCIE_LINK_DOWN = 0x8805,
+	HANG_REASON_INVALID_EVENT_OR_DATA = 0x8806,
+	HANG_REASON_MAX = 0x8807
+};
+
 /* Packet alignment for most efficient SDIO (can change based on platform) */
 #ifndef DHD_SDALIGN
 #define DHD_SDALIGN	32
@@ -363,7 +379,10 @@ typedef enum d11regtypes {
 #endif /* DHD_DEBUG */
 
 
-/* Common structure for module and instance linkage */
+/**
+ * Common structure for module and instance linkage.
+ * Instantiated once per hardware (dongle) instance that this DHD manages.
+ */
 typedef struct dhd_pub {
 	/* Linkage ponters */
 	osl_t *osh;		/* OSL handle */
@@ -379,6 +398,8 @@ typedef struct dhd_pub {
 #ifdef BCMDBUS
 	struct dbus_pub *dbus;
 #endif
+
+	uint32 dhd_console_ms; /** interval for polling the dongle for console (log) messages */
 
 	/* Internal dhd items */
 	bool up;		/* Driver up/down (to OS) */
@@ -962,6 +983,12 @@ extern void dhd_detach(dhd_pub_t *dhdp);
 extern void dhd_free(dhd_pub_t *dhdp);
 extern void dhd_clear(dhd_pub_t *dhdp);
 
+#ifdef UPDATE_LINK_STATE
+/* Indication of link state */
+extern void dhd_link_dormant_sync(struct dhd_info *dhd_info, int *ifidx, bool on);
+extern void dhd_link_carrier_sync(struct dhd_info *dhd_info, int *ifidx, bool on);
+#endif /* UPDATE_LINK_STATE */
+
 /* Indication from bus module to change flow-control state */
 extern void dhd_txflowcontrol(dhd_pub_t *dhdp, int ifidx, bool on);
 
@@ -1164,7 +1191,7 @@ extern struct ifnet * dhd_idx2net(struct dhd_pub *dhd_pub, int ifidx);
 #endif /* __FreeBSD__ */
 extern bool dhd_wowl_cap(void *bus);
 extern int wl_host_event(dhd_pub_t *dhd_pub, int *idx, void *pktdata, uint16 pktlen,
-                         wl_event_msg_t *, void **data_ptr,  void *);
+	wl_event_msg_t *, void **data_ptr,  void *);
 
 extern void wl_event_to_host_order(wl_event_msg_t * evt);
 extern int wl_host_event_get_data(void *pktdata, wl_event_msg_t *event, void **data_ptr);
@@ -1268,7 +1295,7 @@ extern int wl_iw_send_priv_event(struct net_device *dev, char *flag);
 extern uint dhd_watchdog_ms;
 
 #if defined(DHD_DEBUG)
-/* Console output poll interval */
+/** Default console output poll interval */
 extern uint dhd_console_ms;
 extern uint wl_msg_level;
 #endif /* defined(DHD_DEBUG) */
@@ -1462,8 +1489,10 @@ void dhd_arp_offload_add_ip(dhd_pub_t *dhd, uint32 ipaddr, int idx);
 #ifdef WLTDLS
 int dhd_tdls_enable(struct net_device *dev, bool tdls_on, bool auto_on, struct ether_addr *mac);
 int dhd_tdls_set_mode(dhd_pub_t *dhd, bool wfd_mode);
-#ifdef PCIE_FULL_DONGLE
-void dhd_tdls_update_peer_info(struct net_device *dev, bool connect_disconnect, uint8 *addr);
+#if defined(WLTDLS) && defined(PCIE_FULL_DONGLE)
+int dhd_tdls_update_peer_info(dhd_pub_t *dhdp, wl_event_msg_t *event);
+int dhd_tdls_event_handler(dhd_pub_t *dhd_pub, wl_event_msg_t *event);
+int dhd_free_tdls_peer_list(dhd_pub_t *dhd_pub);
 #endif /* PCIE_FULL_DONGLE */
 #endif /* WLTDLS */
 /* Neighbor Discovery Offload Support */
@@ -1657,5 +1686,4 @@ extern void dhd_lb_stats_rxc_percpu_cnt_incr(dhd_pub_t *dhdp);
 #define DHD_LB_STATS_TXC_PERCPU_CNT_INCR(dhdp) DHD_LB_STATS_NOOP
 #define DHD_LB_STATS_RXC_PERCPU_CNT_INCR(dhdp) DHD_LB_STATS_NOOP
 #endif /* !DHD_LB_STATS */
-
 #endif /* _dhd_h_ */
