@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmevent.h 710333 2017-07-12 14:54:42Z $
+ * $Id: bcmevent.h 720508 2017-09-11 05:19:04Z $
  *
  */
 
@@ -284,9 +284,10 @@ typedef union bcm_event_msg_u {
 #define WLC_E_PFN_BSSID_SCAN_BACKOFF	168	/* PFN BSSID SCAN BAckoff event */
 #define WLC_E_AGGR_EVENT		169	/* Aggregated event */
 #define WLC_E_AP_CHAN_CHANGE		170	/* AP channel change event propage to User */
-#define WLC_E_LAST			171	/* highest val + 1 for range checking */
-#if (WLC_E_LAST > 171)
-#error "WLC_E_LAST: Invalid value for last event; must be <= 171."
+#define WLC_E_PSTA_CREATE_IND		171	/* Indication for PSTA creation */
+#define WLC_E_LAST			172	/* highest val + 1 for range checking */
+#if (WLC_E_LAST > 172)
+#error "WLC_E_LAST: Invalid value for last event; must be <= 172."
 #endif /* WLC_E_LAST */
 
 /* define an API for getting the string name of an event */

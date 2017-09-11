@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wldev_common.h 556083 2015-05-12 14:03:00Z $
+ * $Id: wldev_common.h 725485 2017-10-07 00:37:47Z $
  */
 #ifndef __WLDEV_COMMON_H__
 #define __WLDEV_COMMON_H__
@@ -37,6 +37,12 @@
  */
 s32 wldev_ioctl(
 	struct net_device *dev, u32 cmd, void *arg, u32 len, u32 set);
+
+s32 wldev_ioctl_set(
+	struct net_device *dev, u32 cmd, const void *arg, u32 len);
+
+s32 wldev_ioctl_get(
+	struct net_device *dev, u32 cmd, void *arg, u32 len);
 
 /** Retrieve named IOVARs, this function calls wl_dev_ioctl with
  *  WLC_GET_VAR IOCTL code
