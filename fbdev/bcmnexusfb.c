@@ -9,7 +9,6 @@
 #include <linux/delay.h>
 #include <linux/fb.h>
 #include <linux/init.h>
-#include <linux/platform_device.h>
 #include <linux/screen_info.h>
 #include <linux/fs.h>
 #include <linux/mount.h>
@@ -62,6 +61,8 @@ static struct fb_var_screeninfo bcmnexusfb_var __initdata = {
 	.height = 1920,
 	.width = 1080,
 };
+
+static struct fb_info *bcmfb;
 
 static int bcmnexusfb_open(struct fb_info *info, int user)
 {
@@ -369,20 +370,25 @@ static struct fb_ops bcmnexusfb_ops = {
 	.fb_set_par		= bcmnexusfb_set_par,
 };
 
-static int __init bcmnexusfb_probe (struct platform_device *pdev)
+static int __init bcmnexusfb_init(void)
 {
-	struct fb_info *info;
 	struct bcmnexusfb_par *par;
+	struct fb_info *info;
 
 	/*
 	 * Dynamically allocate info and par
 	*/
-	info = framebuffer_alloc(sizeof(struct bcmnexusfb_par), &pdev->dev);
+	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	if (!info)
+		return -ENOMEM;
 
-	if (!info) {
-	    /* goto error path */
+	info->par = kzalloc(sizeof(struct bcmnexusfb_par), GFP_KERNEL);
+	if (!info->par) {
+		kfree(info);
+		return -ENOMEM;
 	}
 
+	bcmfb = info;
 	par = info->par;
 	par->ref_cnt = 0;
 
@@ -392,86 +398,39 @@ static int __init bcmnexusfb_probe (struct platform_device *pdev)
 	info->var = bcmnexusfb_var;
 	info->fix = bcmnexusfb_fix;
 
-	info->pseudo_palette = par->pseudo_palette; /* The pseudopalette is an
-						 * 16-member array
-						 */
-
+	info->pseudo_palette = par->pseudo_palette;
 	info->flags = FBINFO_DEFAULT |
 	    FBINFO_HWACCEL_COPYAREA |
 	    FBINFO_HWACCEL_FILLRECT |
 	    FBINFO_HWACCEL_IMAGEBLIT;
 
-	fb_alloc_cmap(&info->cmap, 256, 0);
+	fb_alloc_cmap(&bcmfb->cmap, 256, 0);
 
-	if (register_framebuffer(info) < 0)
-	return -EINVAL;
+	if (register_framebuffer(bcmfb) < 0)
+		return -EINVAL;
 
-	printk(KERN_INFO "fb%d: %s frame buffer device\n", info->node,
-	   info->fix.id);
-
-	platform_set_drvdata(pdev, info);
+	printk(KERN_INFO "fb%d: %s frame buffer device\n",
+		bcmfb->node, bcmfb->fix.id);
 
 	return 0;
-}
-
-static int __exit bcmnexusfb_remove(struct platform_device *pdev)
-{
-	struct fb_info *info = platform_get_drvdata(pdev);
-
-	if (info) {
-		unregister_framebuffer(info);
-		fb_dealloc_cmap(&info->cmap);
-		/* ... */
-		framebuffer_release(info);
-	}
-
-	return 0;
-}
-
-static struct platform_driver bcmnexusfb_driver = {
-	.probe = bcmnexusfb_probe,
-	.remove = bcmnexusfb_remove,
-	.driver = {
-	.name = "bcmnexusfb",
-	},
-};
-
-static struct platform_device *bcmnexusfb_device;
-
-static int __init bcmnexusfb_init(void)
-{
-	int ret;
-
-	ret = platform_driver_register(&bcmnexusfb_driver);
-
-	if (!ret) {
-		bcmnexusfb_device = platform_device_alloc("bcmnexusfb", 0);
-
-		if(bcmnexusfb_device) {
-			ret = platform_device_add(bcmnexusfb_device);
-		} else {
-			ret = -ENOMEM;
-		}
-
-		if (ret) {
-			platform_device_put(bcmnexusfb_device);
-			platform_driver_unregister(&bcmnexusfb_driver);
-		}
-	}
-
-	return ret;
 }
 
 static void __exit bcmnexusfb_exit(void)
 {
-	platform_device_unregister(bcmnexusfb_device);
-	platform_driver_unregister(&bcmnexusfb_driver);
-}
+	if (bcmfb != NULL) {
+		unregister_framebuffer(bcmfb);
+		fb_dealloc_cmap(&bcmfb->cmap);
+		kfree(bcmfb->par);
+		kfree(bcmfb);
+		bcmfb = NULL;
+	}
 
+	return 0;
+}
 
 module_init(bcmnexusfb_init);
 module_exit(bcmnexusfb_exit);
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("Proprietary");
 MODULE_AUTHOR("Broadcom Limited");
 MODULE_DESCRIPTION("framebuffer over nexus");
