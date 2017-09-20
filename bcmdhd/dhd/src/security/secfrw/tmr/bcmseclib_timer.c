@@ -224,6 +224,10 @@ bcmseclib_init_timer_ex(bcmseclib_timer_mgr_t *mgr, void (*fn)(void *arg), void 
 	pnew->arg = arg;
 	pnew->mgr = mgr;
 
+#ifdef BCMDBG
+	if ((pnew->name = OS_MALLOC(strlen(name) + 1)))
+		strcpy(pnew->name, name);
+#endif
 
 	/* return pointer to timer */
 	return pnew;

@@ -43,7 +43,11 @@
 #define CBUF_LEN	(128)
 #endif /* RWL_DONGLE || UART_REFLECTOR */
 
+#if defined(BCMDBG)
+#define LOG_BUF_LEN	(16 * 1024)
+#else
 #define LOG_BUF_LEN	1024
+#endif
 
 #ifdef BOOTLOADER_CONSOLE_OUTPUT
 #undef RWL_MAX_DATA_LEN

@@ -1060,7 +1060,7 @@ sb_size(uint32 admatch)
 	return (size);
 }
 
-#if defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_PHYDUMP)
 /* print interesting sbconfig registers */
 void
 sb_dumpregs(si_t *sih, struct bcmstrbuf *b)
@@ -1095,3 +1095,49 @@ sb_dumpregs(si_t *sih, struct bcmstrbuf *b)
 	INTR_RESTORE(sii, intr_val);
 }
 #endif	
+
+#if defined(BCMDBG)
+void
+sb_view(si_t *sih, bool verbose)
+{
+	si_info_t *sii;
+	sbconfig_t *sb;
+
+	sii = SI_INFO(sih);
+	sb = REGS2SB(sii->curmap);
+
+	SI_ERROR(("\nCore ID: 0x%x\n", sb_coreid(&sii->pub)));
+
+	if (sii->pub.socirev > SONICS_2_2)
+		SI_ERROR(("sbimerrlog 0x%x sbimerrloga 0x%x\n",
+		         sb_corereg(sih, si_coreidx(&sii->pub), SBIMERRLOG, 0, 0),
+		         sb_corereg(sih, si_coreidx(&sii->pub), SBIMERRLOGA, 0, 0)));
+
+	/* Print important or helpful registers */
+	SI_ERROR(("sbtmerrloga 0x%x sbtmerrlog 0x%x\n",
+	          R_SBREG(sii, &sb->sbtmerrloga), R_SBREG(sii, &sb->sbtmerrlog)));
+	SI_ERROR(("sbimstate 0x%x sbtmstatelow 0x%x sbtmstatehigh 0x%x\n",
+	          R_SBREG(sii, &sb->sbimstate),
+	          R_SBREG(sii, &sb->sbtmstatelow), R_SBREG(sii, &sb->sbtmstatehigh)));
+	SI_ERROR(("sbimconfiglow 0x%x sbtmconfiglow 0x%x\nsbtmconfighigh 0x%x sbidhigh 0x%x\n",
+	          R_SBREG(sii, &sb->sbimconfiglow), R_SBREG(sii, &sb->sbtmconfiglow),
+	          R_SBREG(sii, &sb->sbtmconfighigh), R_SBREG(sii, &sb->sbidhigh)));
+
+	/* Print more detailed registers that are otherwise not relevant */
+	if (verbose) {
+		SI_ERROR(("sbipsflag 0x%x sbtpsflag 0x%x\n",
+		          R_SBREG(sii, &sb->sbipsflag), R_SBREG(sii, &sb->sbtpsflag)));
+		SI_ERROR(("sbadmatch3 0x%x sbadmatch2 0x%x\nsbadmatch1 0x%x sbadmatch0 0x%x\n",
+		          R_SBREG(sii, &sb->sbadmatch3), R_SBREG(sii, &sb->sbadmatch2),
+		          R_SBREG(sii, &sb->sbadmatch1), R_SBREG(sii, &sb->sbadmatch0)));
+		SI_ERROR(("sbintvec 0x%x sbbwa0 0x%x sbimconfighigh 0x%x\n",
+		          R_SBREG(sii, &sb->sbintvec), R_SBREG(sii, &sb->sbbwa0),
+		          R_SBREG(sii, &sb->sbimconfighigh)));
+		SI_ERROR(("sbbconfig 0x%x sbbstate 0x%x\n",
+		          R_SBREG(sii, &sb->sbbconfig), R_SBREG(sii, &sb->sbbstate)));
+		SI_ERROR(("sbactcnfg 0x%x sbflagst 0x%x sbidlow 0x%x \n\n",
+		          R_SBREG(sii, &sb->sbactcnfg), R_SBREG(sii, &sb->sbflagst),
+		          R_SBREG(sii, &sb->sbidlow)));
+	}
+}
+#endif	/* BCMDBG */

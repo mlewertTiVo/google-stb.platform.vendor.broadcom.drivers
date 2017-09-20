@@ -41,6 +41,10 @@ typedef void (*pktfree_cb_fn_t)(void *ctx, void *pkt, unsigned int status);
 typedef unsigned int (*osl_rreg_fn_t)(void *ctx, volatile void *reg, unsigned int size);
 typedef void  (*osl_wreg_fn_t)(void *ctx, volatile void *reg, unsigned int val, unsigned int size);
 
+#if defined(BCM_BACKPLANE_TIMEOUT) && defined(BCMDBG)
+extern void setCurMap(osl_t *osh, void *curmap);
+extern unsigned int read_bpt_reg(osl_t *osh, volatile void *r, unsigned int size);
+#endif /* #if defined(BCM_BACKPLANE_TIMEOUT) && defined(BCMDBG) */
 
 #ifdef __mips__
 #define PREF_LOAD		0

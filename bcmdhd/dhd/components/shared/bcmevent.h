@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmevent.h 693946 2017-04-05 16:21:42Z $
+ * $Id: bcmevent.h 710333 2017-07-12 14:54:42Z $
  *
  */
 
@@ -439,6 +439,21 @@ typedef struct wl_event_sdb_trans {
  * WLC_E_P2P_PROBREQ_MSG
  * WLC_E_ACTION_FRAME_RX
  */
+
+#define MAX_PHY_CORE_NUM 4
+#define BCM_RX_FRAME_DATA_VERSION_2	2
+
+typedef BWL_PRE_PACKED_STRUCT struct wl_event_rx_frame_data_v2 {
+	uint16	version;
+	uint16	len;
+	uint16	channel;	/* Matches chanspec_t format from bcmwifi_channels.h */
+	uint16  pad;
+	int32	rssi;
+	uint32	mactime;
+	uint32	rate;
+	int8    per_core_rssi[MAX_PHY_CORE_NUM];
+} BWL_POST_PACKED_STRUCT wl_event_rx_frame_data_v2_t;
+
 typedef BWL_PRE_PACKED_STRUCT struct wl_event_rx_frame_data {
 	uint16	version;
 	uint16	channel;	/* Matches chanspec_t format from bcmwifi_channels.h */

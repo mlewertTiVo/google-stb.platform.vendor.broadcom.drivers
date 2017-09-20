@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.h 703436 2017-06-07 13:52:36Z $
+ * $Id: wl_cfg80211.h 718975 2017-09-01 14:20:50Z $
  */
 
 /**
@@ -830,7 +830,7 @@ wl_alloc_netinfo(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	s32 err = 0;
 	unsigned long int flags;
 #ifdef DHD_IFDEBUG
-	WL_ERR(("alloc_netinfo enter bssidx=%d wdev=%p ndev=%p\n", bssidx, wdev, ndev));
+	WL_DBG(("alloc_netinfo enter bssidx=%d wdev=%p ndev=%p\n", bssidx, wdev, ndev));
 #endif
 	/* Check whether there is any duplicate entry for the
 	 * same bssidx.
@@ -868,7 +868,7 @@ wl_alloc_netinfo(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 		spin_unlock_irqrestore(&cfg->net_list_sync, flags);
 	}
 #ifdef DHD_IFDEBUG
-	WL_ERR(("alloc_netinfo exit iface_cnt=%d \n", cfg->iface_cnt));
+	WL_DBG(("alloc_netinfo exit iface_cnt=%d \n", cfg->iface_cnt));
 #endif
 	return err;
 }

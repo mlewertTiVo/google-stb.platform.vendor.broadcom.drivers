@@ -102,7 +102,7 @@ int wl_cfgvendor_send_async_event(struct wiphy *wiphy,
 	/* Alloc the SKB for vendor_event */
 #if (defined(CONFIG_ARCH_MSM) && defined(SUPPORT_WDEV_CFG80211_VENDOR_EVENT_ALLOC)) || \
 	LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
-	skb = cfg80211_vendor_event_alloc(wiphy, NULL, len, event_id, kflags);
+	skb = cfg80211_vendor_event_alloc(wiphy, ndev_to_wdev(dev), len, event_id, kflags);
 #else
 	skb = cfg80211_vendor_event_alloc(wiphy, len, event_id, kflags);
 #endif /* (defined(CONFIG_ARCH_MSM) && defined(SUPPORT_WDEV_CFG80211_VENDOR_EVENT_ALLOC)) || */
@@ -122,7 +122,7 @@ int wl_cfgvendor_send_async_event(struct wiphy *wiphy,
 
 static int
 wl_cfgvendor_send_cmd_reply(struct wiphy *wiphy,
-	struct net_device *dev, const void  *data, int len)
+	const void  *data, int len)
 {
 	struct sk_buff *skb;
 
@@ -149,8 +149,7 @@ wl_cfgvendor_get_feature_set(struct wiphy *wiphy,
 
 	reply = dhd_dev_get_feature_set(bcmcfg_to_prmry_ndev(cfg));
 
-	err =  wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-			&reply, sizeof(int));
+	err =  wl_cfgvendor_send_cmd_reply(wiphy, &reply, sizeof(int));
 	if (unlikely(err))
 		WL_ERR(("Vendor Command reply failed ret:%d \n", err));
 
@@ -273,7 +272,8 @@ wl_cfgvendor_send_hotlist_event(struct wiphy *wiphy,
 		/* Alloc the SKB for vendor_event */
 #if (defined(CONFIG_ARCH_MSM) && defined(SUPPORT_WDEV_CFG80211_VENDOR_EVENT_ALLOC)) || \
 	LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
-		skb = cfg80211_vendor_event_alloc(wiphy, NULL, malloc_len, event, kflags);
+		skb = cfg80211_vendor_event_alloc(wiphy, ndev_to_wdev(dev),
+				malloc_len, event, kflags);
 #else
 		skb = cfg80211_vendor_event_alloc(wiphy, malloc_len, event, kflags);
 #endif /* (defined(CONFIG_ARCH_MSM) && defined(SUPPORT_WDEV_CFG80211_VENDOR_EVENT_ALLOC)) || */
@@ -326,8 +326,7 @@ wl_cfgvendor_gscan_get_capabilities(struct wiphy *wiphy,
 		return err;
 	}
 
-	err =  wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-	               reply, reply_len);
+	err =  wl_cfgvendor_send_cmd_reply(wiphy, reply, reply_len);
 
 	if (unlikely(err)) {
 		WL_ERR(("Vendor Command reply failed ret:%d \n", err));
@@ -415,8 +414,7 @@ wl_cfgvendor_gscan_get_batch_results(struct wiphy *wiphy,
 
 	if (!results) {
 		WL_ERR(("No results to send %d\n", err));
-		err =  wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-		        results, 0);
+		err =  wl_cfgvendor_send_cmd_reply(wiphy, results, 0);
 
 		if (unlikely(err))
 			WL_ERR(("Vendor Command reply failed ret:%d \n", err));
@@ -914,11 +912,14 @@ wl_cfgvendor_significant_change_cfg(struct wiphy *wiphy,
 	const struct nlattr *outer, *inner, *iter;
 	uint8 flush = 0;
 	wl_pfn_significant_bssid_t *bssid;
+	uint16 num_bssid = 0;
+	uint16 max_buf_size = sizeof(gscan_swc_params_t) +
+		sizeof(wl_pfn_significant_bssid_t) * (PFN_SWC_MAX_NUM_APS - 1);
 
-	significant_params = (gscan_swc_params_t *) kzalloc(len, GFP_KERNEL);
+	significant_params = kzalloc(max_buf_size, GFP_KERNEL);
 	if (!significant_params) {
-		WL_ERR(("Cannot Malloc mem to parse config commands size - %d bytes \n", len));
-		return -ENOMEM;
+		WL_ERR(("Cannot Malloc mem size:%d\n", max_buf_size));
+		return BCME_NOMEM;
 	}
 
 	nla_for_each_attr(iter, data, len, tmp2) {
@@ -936,9 +937,27 @@ wl_cfgvendor_significant_change_cfg(struct wiphy *wiphy,
 			case GSCAN_ATTRIBUTE_MIN_BREACHING:
 				significant_params->swc_threshold = nla_get_u16(iter);
 				break;
+			case GSCAN_ATTRIBUTE_NUM_BSSID:
+				num_bssid = nla_get_u16(iter);
+				if (num_bssid > PFN_SWC_MAX_NUM_APS) {
+					WL_ERR(("ovar max SWC bssids:%d\n",
+						num_bssid));
+					err = BCME_BADARG;
+					goto exit;
+				}
+				break;
 			case GSCAN_ATTRIBUTE_SIGNIFICANT_CHANGE_BSSIDS:
+				if (num_bssid == 0) {
+					WL_ERR(("num_bssid : 0\n"));
+					err = BCME_BADARG;
+					goto exit;
+				}
 				bssid = significant_params->bssid_elem_list;
 				nla_for_each_nested(outer, iter, tmp) {
+					if (j >= num_bssid) {
+						j++;
+						break;
+					}
 					nla_for_each_nested(inner, outer, tmp1) {
 							switch (nla_type(inner)) {
 								case GSCAN_ATTRIBUTE_BSSID:
@@ -968,13 +987,19 @@ wl_cfgvendor_significant_change_cfg(struct wiphy *wiphy,
 				break;
 		}
 	}
+	if (j != num_bssid) {
+		WL_ERR(("swc bssids count:%d not matched to num_bssid:%d\n",
+			j, num_bssid));
+		err = BCME_BADARG;
+		goto exit;
+	}
 	significant_params->nbssid = j;
 
 	if (dhd_dev_pno_set_cfg_gscan(bcmcfg_to_prmry_ndev(cfg),
 	              DHD_PNO_SIGNIFICANT_SCAN_CFG_ID,
 	              significant_params, flush) < 0) {
 		WL_ERR(("Could not set GSCAN significant cfg\n"));
-		err = -EINVAL;
+		err = BCME_ERROR;
 		goto exit;
 	}
 exit:
@@ -1306,8 +1331,8 @@ wl_cfgvendor_rtt_get_capability(struct wiphy *wiphy, struct wireless_dev *wdev,
 		WL_ERR(("Vendor Command reply failed ret:%d \n", err));
 		goto exit;
 	}
-	err =  wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-	        &capability, sizeof(capability));
+	err =  wl_cfgvendor_send_cmd_reply(wiphy, &capability, sizeof(capability));
+
 	if (unlikely(err)) {
 		WL_ERR(("Vendor Command reply failed ret:%d \n", err));
 	}
@@ -1850,8 +1875,7 @@ wl_cfgvendor_priv_bcm_handler(struct wiphy *wiphy,
 	}
 
 	if ((data_len > 0) && reply_buf) {
-		err =  wl_cfgvendor_send_cmd_reply(wiphy, wdev->netdev,
-			reply_buf, data_len+1);
+		err =  wl_cfgvendor_send_cmd_reply(wiphy, reply_buf, data_len+1);
 		if (unlikely(err))
 			WL_ERR(("Vendor Command reply failed ret:%d \n", err));
 		else
@@ -2001,8 +2025,7 @@ static int wl_cfgvendor_lstats_get_info(struct wiphy *wiphy,
 		memcpy(output, iovar_buf+HEADER_SIZE+i*sizeof(wifi_rate_stat),
 		sizeof(wifi_rate_stat)-HEADER_SIZE);
 
-	err =  wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-		cfg->ioctl_buf,
+	err =  wl_cfgvendor_send_cmd_reply(wiphy, cfg->ioctl_buf,
 		sizeof(wifi_radio_stat)-HEADER_SIZE +
 		NUM_CHAN*sizeof(wifi_channel_stat) +
 		sizeof(wifi_iface_stat)+NUM_PEER*sizeof(wifi_peer_info) +
@@ -2224,8 +2247,7 @@ static int wl_cfgvendor_dbg_get_version(struct wiphy *wiphy,
 		WL_ERR(("failed to get the version %d\n", ret));
 		goto exit;
 	}
-	ret = wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-	        buf_ptr, strlen(buf_ptr));
+	ret = wl_cfgvendor_send_cmd_reply(wiphy, buf_ptr, strlen(buf_ptr));
 exit:
 	kfree(buf_ptr);
 	return ret;
@@ -2319,8 +2341,8 @@ static int wl_cfgvendor_dbg_get_feature(struct wiphy *wiphy,
 		WL_ERR(("dbg_get_feature failed ret:%d\n", ret));
 		goto exit;
 	}
-	ret = wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-	        &supported_features, sizeof(supported_features));
+	ret = wl_cfgvendor_send_cmd_reply(wiphy, &supported_features,
+		sizeof(supported_features));
 exit:
 	return ret;
 }

@@ -33,10 +33,18 @@
 
 #include "typedefs.h"
 
+#ifdef BCMDBG
+#define DBUSERR(args)         printf args
+#define DBUSINFO(args)
+#define DBUSTRACE(args)
+#define DBUSDBGLOCK(args)
+
+#else
 #define DBUSTRACE(args)
 #define DBUSERR(args)
 #define DBUSINFO(args)
 #define DBUSDBGLOCK(args)
+#endif
 
 enum {
 	DBUS_OK = 0,
@@ -332,6 +340,9 @@ extern int dbus_pnp_disconnect(dbus_pub_t *pub);
 
 extern int dbus_iovar_op(dbus_pub_t *pub, const char *name,
 	void *params, int plen, void *arg, int len, bool set);
+#ifdef BCMDBG
+extern void dbus_hist_dump(dbus_pub_t *pub, struct bcmstrbuf *b);
+#endif /* BCMDBG */
 
 extern void *dhd_dbus_txq(const dbus_pub_t *pub);
 extern uint dhd_dbus_hdrlen(const dbus_pub_t *pub);

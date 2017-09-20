@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_android.c 703436 2017-06-07 13:52:36Z $
+ * $Id: wl_android.c 707969 2017-06-29 11:47:34Z $
  */
 
 #include <linux/module.h>
@@ -935,13 +935,21 @@ exit_proc:
 static int wl_android_get_p2p_dev_addr(struct net_device *ndev, char *command, int total_len)
 {
 	int ret;
-	int bytes_written = 0;
+	struct ether_addr p2pdev_addr;
 
-	ret = wl_cfg80211_get_p2p_dev_addr(ndev, (struct ether_addr*)command);
-	if (ret)
-		return 0;
-	bytes_written = sizeof(struct ether_addr);
-	return bytes_written;
+#define MAC_ADDR_STR_LEN 18
+	if (total_len < MAC_ADDR_STR_LEN) {
+		DHD_ERROR(("%s: buflen %d is less than p2p dev addr\n",
+			__FUNCTION__, total_len));
+		return -1;
+	}
+
+	ret = wl_cfg80211_get_p2p_dev_addr(ndev, &p2pdev_addr);
+	if (ret) {
+		DHD_ERROR(("%s Failed to get p2p dev addr\n", __FUNCTION__));
+		return -1;
+	}
+	return (snprintf(command, total_len, MACF, ETHERP_TO_MACF(&p2pdev_addr)));
 }
 
 

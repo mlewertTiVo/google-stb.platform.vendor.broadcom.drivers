@@ -21,7 +21,7 @@
 #ifndef _wlc_rwl_h_
 #define _wlc_rwl_h_
 
-#if defined(RWL_WIFI) || defined(WIFI_REFLECTOR)
+#if defined(RWL_WIFI) || defined(WIFI_REFLECTOR) || defined(WLTEST)
 
 #include <rwl_wifi.h>
 
@@ -59,6 +59,6 @@ typedef struct rwl_info {
 #define wlc_rwl_frameaction(a)		do {} while (0)
 #define wlc_recv_wifi_mgmtact(a, b, c)	do {} while (0)
 
-#endif 
+#endif /* !defined(RWL_WIFI) && !defined(WIFI_REFLECTOR) && !defined(WLTEST) */
 
 #endif	/* _wlc_rwl_h_ */
