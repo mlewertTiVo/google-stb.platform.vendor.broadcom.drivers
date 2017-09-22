@@ -40,8 +40,13 @@
 #define BCMSDH_INFO_VAL		0x0002 /* Info */
 extern const uint bcmsdh_msglevel;
 
+#ifdef BCMDBG
+#define BCMSDH_ERROR(x)	do { if (bcmsdh_msglevel & BCMSDH_ERROR_VAL) printf x; } while (0)
+#define BCMSDH_INFO(x)	do { if (bcmsdh_msglevel & BCMSDH_INFO_VAL) printf x; } while (0)
+#else /* BCMDBG */
 #define BCMSDH_ERROR(x)
 #define BCMSDH_INFO(x)
+#endif /* BCMDBG */
 
 
 /* forward declarations */
@@ -85,7 +90,7 @@ extern int bcmsdh_intr_dereg(void *sdh);
 /* Enable/disable SD card interrupt forward */
 extern void bcmsdh_intr_forward(void *sdh, bool pass);
 
-#if defined(DHD_DEBUG)
+#if defined(DHD_DEBUG) || defined(BCMDBG)
 /* Query pending interrupt status from the host controller */
 extern bool bcmsdh_intr_pending(void *sdh);
 #endif

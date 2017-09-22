@@ -230,6 +230,9 @@ static cmd_func_t wl_interface_create_action;
 static cmd_func_t wl_interface_remove_action;
 static cmd_func_t wl_macdbg_pmac;
 static cmd_func_t wl_svmp_mem;
+#if defined(BCMDBG)
+static cmd_func_t wl_mu_rate;
+#endif 
 static cmd_func_t wl_macregx;
 cmd_func_t wl_hostip;
 
@@ -258,6 +261,9 @@ static void wl_print_txbf_mcsset(char *mcsset, char *prefix);
 static void wl_print_txbf_vhtmcsset(uint16 *mcsset, char *prefix);
 
 static cmd_func_t wl_power_sel_params;
+#if defined(BCMDBG)
+static cmd_func_t wl_dump_modesw_dyn_bwsw;
+#endif
 
 int wlu_get(void *wl, int cmd, void *buf, int len);
 int wlu_set(void *wl, int cmd, void *buf, int len);
@@ -1454,6 +1460,10 @@ cmd_t wl_cmds[] = {
 	"Get BSS peer info of all the peer's in the indivudual interface\n"
 	"\tIf a non-zero MAC address is specified, gets the peer info of the PEER alone\n"
 	"\tUsage: wl bss_peer_info [MAC address]"},
+#if defined(BCMDBG)
+	{ "dump_modesw_dyn_bwsw", wl_dump_modesw_dyn_bwsw, WLC_GET_VAR, -1,
+	"Usage : wl dump_modesw_dyn_bwsw" },
+#endif
 	{ "pwrstats", wl_pwrstats, WLC_GET_VAR, -1,
 	"Get power usage statistics\n"
 	"Usage: wl pwrstats [<type>] ..."},
@@ -1602,6 +1612,13 @@ cmd_t wl_cmds[] = {
 	"Usage: wl svmp_mem <offset> <len> [ <val> ]\n"
 	"With 2 params, read svmp memory at offset for len of 16-bit width.\n"
 	"With 3rd param, set the same range to the given value\n"},
+#if defined(BCMDBG)
+	{"mu_rate", wl_mu_rate, WLC_GET_VAR, WLC_SET_VAR,
+	"Force the tranmission rate for each user, rate0 is for user0; rate1 is for user1...\n"
+	"Usage: wl mu_rate { [auto | -1] | [[rate0] [rate1] [rate2] [rate3]]\n"
+	"no input: read current MU-MIMO rate.\n"
+	"auto or -1: turn on auto rate.\n"},
+#endif 
 	{ "peer_rssi", wl_peerrssi, WLC_GET_VAR, WLC_SET_VAR,
 	"Perform rssi statistics for peer, Usage: wl peer_rssi <sub_cmd> [MAC_ADDR] [nnn]\n"
 	"\t sub_cmd: cnt, reg, rssi; MAC_ADDR: 6 bytes MAC in format \"aa:bb:cc:dd:ee:ff\"\n"
@@ -9960,6 +9977,9 @@ wl_roamparms(void *wl, cmd_t *cmd, char **argv)
 	memset(params, 0, params_size);
 
 	if (!(argv[1])) {
+#ifdef BCMDBG
+		printf("GET roam scan params\n");
+#endif
 	/* no data to copy here for a get */
 	err = wlu_iovar_getbuf(wl, "roamscan_parms", params, 0,
 		buf, WLC_IOCTL_MEDLEN);
@@ -9968,6 +9988,9 @@ wl_roamparms(void *wl, cmd_t *cmd, char **argv)
 		goto done;
 	}
 
+#ifdef BCMDBG
+		prhex(NULL, (void *)buf, 64);
+#endif
 		memset(params, 0, params_size);
 		memcpy(params, buf, params_size);
 
@@ -22210,6 +22233,27 @@ wl_desired_bssid(void *wl, cmd_t *cmd, char **argv)
 	return error;
 }
 
+#if defined(BCMDBG)
+static int wl_dump_modesw_dyn_bwsw(void *wl, cmd_t *cmd, char **argv)
+{
+	char *ptr;
+	int err = 0;
+
+	if (*++argv != NULL) {
+		return BCME_UNSUPPORTED;
+	}
+
+	if ((err = wlu_iovar_getbuf(wl, cmd->name, NULL, 0,
+		buf, WLC_IOCTL_MAXLEN)) < 0) {
+		return err;
+	}
+
+	ptr = (char *) buf;
+	fputs(ptr, stdout);
+
+	return err;
+}
+#endif 
 
 static int
 wl_dfs_channel_forced(void *wl, cmd_t *cmd, char **argv)
@@ -23068,6 +23112,57 @@ exit:
 	return err;
 }
 
+#if defined(BCMDBG)
+static int wl_mu_rate(void *wl, cmd_t *cmd, char **argv)
+{
+	int err = 0;
+	uint32 i = 0;
+	char *endptr = NULL;
+	mu_rate_t mu;
+	BCM_REFERENCE(cmd);
+
+	memset(&mu, 0x0, sizeof(mu));
+	if (!argv[1]) {
+		if ((err = wlu_iovar_getbuf(wl, cmd->name, NULL,
+		     0, &mu, sizeof(mu))) < 0) {
+			fprintf(stderr, "Error reading svmp memory %s %d\n", argv[0], err);
+			goto exit;
+		}
+
+		for (i = 0; i < 4; i++) {
+			printf("0x%04x ", mu.rate_user[i]);
+		}
+		printf("%s\n", mu.auto_rate ? "(Auto)" : "(Fixed)");
+		return err;
+	}
+
+	/* auto rate */
+	if (!stricmp(argv[1], "auto") || (!stricmp(argv[1], "-1"))) {
+		/* turn on auto rate */
+		/* wl svmp_mem 0x20060 1 0 */
+		mu.auto_rate = 1;
+		err = wlu_var_setbuf(wl, cmd->name, &mu, sizeof(mu));
+	} else {
+		for (i = 0; i < 4; i++) {
+			mu.rate_user[i] = 0xffff;
+		}
+
+		/* set rates */
+		mu.auto_rate = 0;
+		for (i = 1; i < 5; i++) {
+			if (!argv[i])
+				break;
+
+			mu.rate_user[i-1] = strtol(argv[i], &endptr, 0);
+		}
+
+		err = wlu_var_setbuf(wl, cmd->name, &mu, sizeof(mu));
+	}
+
+exit:
+	return err;
+}
+#endif 
 
 static int wl_svmp_mem(void *wl, cmd_t *cmd, char **argv)
 {

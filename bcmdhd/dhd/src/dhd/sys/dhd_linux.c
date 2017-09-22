@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux.c 691951 2017-03-24 10:01:18Z $
+ * $Id: dhd_linux.c 718975 2017-09-01 14:20:50Z $
  */
 
 #include <typedefs.h>
@@ -638,9 +638,6 @@ typedef struct dhd_info {
 #if defined(DHD_LB)
 	/* CPU Load Balance dynamic CPU selection */
 
-	/* Variable that tracks the currect CPUs available for candidacy */
-	cpumask_var_t cpumask_curr_avail;
-
 	/* Primary and secondary CPU mask */
 	cpumask_var_t cpumask_primary, cpumask_secondary; /* configuration */
 	cpumask_var_t cpumask_primary_new, cpumask_secondary_new; /* temp */
@@ -908,7 +905,6 @@ dhd_lb_set_default_cpus(dhd_info_t *dhd)
 static void
 dhd_cpumasks_deinit(dhd_info_t *dhd)
 {
-	free_cpumask_var(dhd->cpumask_curr_avail);
 	free_cpumask_var(dhd->cpumask_primary);
 	free_cpumask_var(dhd->cpumask_primary_new);
 	free_cpumask_var(dhd->cpumask_secondary);
@@ -922,8 +918,7 @@ dhd_cpumasks_init(dhd_info_t *dhd)
 	uint32 cpus;
 	int ret = 0;
 
-	if (!alloc_cpumask_var(&dhd->cpumask_curr_avail, GFP_KERNEL) ||
-		!alloc_cpumask_var(&dhd->cpumask_primary, GFP_KERNEL) ||
+	if (!alloc_cpumask_var(&dhd->cpumask_primary, GFP_KERNEL) ||
 		!alloc_cpumask_var(&dhd->cpumask_primary_new, GFP_KERNEL) ||
 		!alloc_cpumask_var(&dhd->cpumask_secondary, GFP_KERNEL) ||
 		!alloc_cpumask_var(&dhd->cpumask_secondary_new, GFP_KERNEL)) {
@@ -932,7 +927,6 @@ dhd_cpumasks_init(dhd_info_t *dhd)
 		goto fail;
 	}
 
-	cpumask_copy(dhd->cpumask_curr_avail, cpu_online_mask);
 	cpumask_clear(dhd->cpumask_primary);
 	cpumask_clear(dhd->cpumask_secondary);
 
@@ -994,10 +988,10 @@ void dhd_select_cpu_candidacy(dhd_info_t *dhd)
 	 * to primary CPU. So no conditional checks.
 	 */
 	cpumask_and(dhd->cpumask_primary_new, dhd->cpumask_primary,
-		dhd->cpumask_curr_avail);
+		cpu_online_mask);
 
 	cpumask_and(dhd->cpumask_secondary_new, dhd->cpumask_secondary,
-		dhd->cpumask_curr_avail);
+		cpu_online_mask);
 
 	primary_available_cpus = cpumask_weight(dhd->cpumask_primary_new);
 
@@ -1062,27 +1056,9 @@ void dhd_select_cpu_candidacy(dhd_info_t *dhd)
 int
 dhd_cpu_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
 {
-	unsigned int cpu = (unsigned int)(long)hcpu;
-
 	dhd_info_t *dhd = container_of(nfb, dhd_info_t, cpu_notifier);
-
-	switch (action)
-	{
-		case CPU_ONLINE:
-			DHD_LB_STATS_INCR(dhd->cpu_online_cnt[cpu]);
-			cpumask_set_cpu(cpu, dhd->cpumask_curr_avail);
-			dhd_select_cpu_candidacy(dhd);
-			break;
-
-		case CPU_DOWN_PREPARE:
-		case CPU_DOWN_PREPARE_FROZEN:
-			DHD_LB_STATS_INCR(dhd->cpu_offline_cnt[cpu]);
-			cpumask_clear_cpu(cpu, dhd->cpumask_curr_avail);
-			dhd_select_cpu_candidacy(dhd);
-			break;
-		default:
-			break;
-	}
+	/* Select candidate CPU from every CPU callback event */
+	dhd_select_cpu_candidacy(dhd);
 
 	return NOTIFY_OK;
 }
@@ -4328,6 +4304,8 @@ dhd_sendpkt(dhd_pub_t *dhdp, int ifidx, void *pktbuf)
 
 	return ret;
 }
+#define SKB_HEADROOM(X, Y) (((X) > (Y)) ? (X) : (Y))
+#define SKB_HEADROOM_MIN 12
 
 int BCMFASTPATH
 dhd_start_xmit(struct sk_buff *skb, struct net_device *net)
@@ -4436,7 +4414,7 @@ dhd_start_xmit(struct sk_buff *skb, struct net_device *net)
 	datalen  = PKTLEN(dhd->pub.osh, skb);
 
 	/* Make sure there's enough room for any header */
-	if (skb_headroom(skb) < dhd->pub.hdrlen + htsfdlystat_sz) {
+	if (skb_headroom(skb) < SKB_HEADROOM(dhd->pub.hdrlen + htsfdlystat_sz, SKB_HEADROOM_MIN)) {
 		struct sk_buff *skb2;
 
 		DHD_INFO(("%s: insufficient headroom\n",
@@ -4444,7 +4422,8 @@ dhd_start_xmit(struct sk_buff *skb, struct net_device *net)
 		dhd->pub.tx_realloc++;
 
 		bcm_object_trace_opr(skb, BCM_OBJDBG_REMOVE, __FUNCTION__, __LINE__);
-		skb2 = skb_realloc_headroom(skb, dhd->pub.hdrlen + htsfdlystat_sz);
+		skb2 = skb_realloc_headroom(skb, SKB_HEADROOM(dhd->pub.hdrlen + htsfdlystat_sz,
+			SKB_HEADROOM_MIN));
 
 		dev_kfree_skb(skb);
 		if ((skb = skb2) == NULL) {
@@ -6674,6 +6653,7 @@ dhd_open(struct net_device *net)
 			ret = -1;
 			goto exit;
 		}
+#endif /* WL_CFG80211 */
 		if (!dhd_download_fw_on_driverload) {
 #ifdef ARP_OFFLOAD_SUPPORT
 			dhd->pend_ipaddr = 0;
@@ -6722,7 +6702,7 @@ dhd_open(struct net_device *net)
 #if defined(NUM_SCB_MAX_PROBE)
 		dhd_set_scb_probe(&dhd->pub);
 #endif /* NUM_SCB_MAX_PROBE */
-#endif /* WL_CFG80211 */
+
 	}
 
 	/* Allow transmit calls */
@@ -8781,10 +8761,6 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 #ifdef PKT_FILTER_SUPPORT
 	dhd_pkt_filter_enable = TRUE;
 #endif /* PKT_FILTER_SUPPORT */
-#ifdef WLTDLS
-	dhd->tdls_enable = FALSE;
-	dhd_tdls_set_mode(dhd, false);
-#endif /* WLTDLS */
 	dhd->suspend_bcn_li_dtim = CUSTOM_SUSPEND_BCN_LI_DTIM;
 	DHD_TRACE(("Enter %s\n", __FUNCTION__));
 	dhd->op_mode = 0;
@@ -8846,6 +8822,12 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 		dhd->fw_capabilities[cap_buf_size - 2] = ' ';
 		dhd->fw_capabilities[cap_buf_size - 1] = '\0';
 	}
+#ifdef WLTDLS
+	dhd->tdls_enable = FALSE;
+	if (FW_SUPPORTED(dhd, tdls)) {
+		dhd_tdls_set_mode(dhd, false);
+	}
+#endif /* WLTDLS */
 
 	if ((!op_mode && dhd_get_fw_mode(dhd->info) == DHD_FLAG_HOSTAP_MODE) ||
 		(op_mode == DHD_FLAG_HOSTAP_MODE)) {

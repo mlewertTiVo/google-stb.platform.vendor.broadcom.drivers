@@ -55,6 +55,10 @@ extern uint16	otp_avsbitslen(void *oh);
 extern uint16	otp_read_bit(void *oh, uint offset);
 extern void*	otp_init(si_t *sih);
 
+#if defined(WLTEST)
+extern int	otp_dump(void *oh, int arg, char *buf, uint size);
+extern int	otp_dumpstats(void *oh, int arg, char *buf, uint size);
+#endif 
 
 
 #endif /* _bcmotp_h_ */

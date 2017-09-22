@@ -125,6 +125,16 @@ typedef struct osl_descdma {
 } osl_descdma_t;
 #endif /* BCMPCIE */
 
+#ifdef BCMDBG
+#define BCM_MEM_FILENAME_LEN 	24	/* BCM_MEM_FILENAME_LEN */
+typedef struct bcm_mem_link {
+	struct bcm_mem_link *prev;
+	struct bcm_mem_link *next;
+	uint	size;
+	int	line;
+	char	file[BCM_MEM_FILENAME_LEN];
+} bcm_mem_link_t;
+#endif /* BCMDBG */
 
 
 struct osl_info {
@@ -739,6 +749,9 @@ osl_mfree(osl_t *osh, void *addr, uint size)
 {
 	osl_t *h = osh;
 
+#ifdef BCMDBG
+	deadbeef(addr, size);
+#endif
 	ASSERT(h && (h->os_magic == OS_HANDLE_MAGIC));
 	h->os_malloced -= size;
 	{
