@@ -1,4 +1,5 @@
 ifneq ($(filter $(BCM_RBOARDS) $(BCM_DBOARDS) $(BCM_CBOARDS),$(TARGET_DEVICE)),)
+ifeq ($(LOCAL_GATOR_SUPPORT), y)
 
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
@@ -81,3 +82,5 @@ LOCAL_INIT_RC := gator.rc
 include $(BUILD_EXECUTABLE)
 
 endif
+endif
+
