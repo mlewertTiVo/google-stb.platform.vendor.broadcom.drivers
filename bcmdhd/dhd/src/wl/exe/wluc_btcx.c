@@ -37,6 +37,10 @@
 static cmd_t wl_btcx_cmds[] = {
 	{ "btc_params", wlu_reg2args, WLC_GET_VAR, WLC_SET_VAR, "g/set BT Coex parameters"},
 	{ "btc_flags", wlu_reg2args, WLC_GET_VAR, WLC_SET_VAR, "g/set BT Coex flags"},
+#if defined(BCMDBG)
+	{ "btcx_clear_dump", wl_var_void, -1, WLC_SET_VAR,
+	"clear btcoex debug counters"},
+#endif
 	{ NULL, NULL, 0, 0, NULL }
 };
 

@@ -52,7 +52,13 @@
 
 #define	PMU_ERROR(args)
 
+#ifdef BCMDBG
+#if !defined(PMU_MSG)  /* over-rideable */
+#define	PMU_MSG(args)	printf args
+#endif /* PMU_MSG */
+#else
 #define	PMU_MSG(args)
+#endif	/* BCMDBG */
 
 /* To check in verbose debugging messages not intended
  * to be on except on private builds.
@@ -188,6 +194,9 @@ BCMINITFN(si_sdiod_drive_strength_init)(si_t *sih, osl_t *osh, uint32 drivestren
 	uint32 str_ovr_pmuval = 0;            /* position of bit within this register */
 	pmuregs_t *pmu;
 	uint origidx;
+#ifdef BCMDBG
+	char chn[8];
+#endif
 
 	if (!(sih->cccaps & CC_CAP_PMU)) {
 		return;

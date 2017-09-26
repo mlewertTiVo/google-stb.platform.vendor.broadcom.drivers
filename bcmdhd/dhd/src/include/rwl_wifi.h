@@ -20,7 +20,7 @@
 #ifndef _rwl_wifi_h_
 #define _rwl_wifi_h_
 
-#if defined(RWL_WIFI) || defined(WIFI_REFLECTOR) || defined(RFAWARE)
+#if defined(RWL_WIFI) || defined(WIFI_REFLECTOR) || defined(RFAWARE) || defined(WLTEST)
 
 #define RWL_ACTION_WIFI_CATEGORY	127  /* Vendor-specific category value for WiFi */
 #define RWL_WIFI_OUI_BYTE0		0x00 /* BRCM-specific public OUI */
@@ -94,5 +94,5 @@ typedef struct rwl_request {
 } rwl_request_t;
 
 
-#endif 
+#endif /* defined(RWL_WIFI) || defined(WIFI_REFLECTOR) || defined(RFAWARE) || defined(WLTEST) */
 #endif	/* _rwl_wifi_h_ */
