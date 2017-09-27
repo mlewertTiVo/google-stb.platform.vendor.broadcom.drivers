@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 699801 2017-05-16 11:32:42Z $
+# $Id: Makefile 718975 2017-09-01 14:20:50Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -311,7 +311,7 @@ endif
 
 ifneq ($(findstring -cdc-,-$(TARGET)-),)
 DFLAGS += -DBDC -DTOE
-DFLAGS += -DDHD_BCMEVENTS -DSHOW_EVENTS -DSHOW_LOGTRACE
+DFLAGS += -DDHD_BCMEVENTS -DSHOW_EVENTS
 CFILES += dhd_cdc.c dhd_wlfc.c
 endif
 
@@ -380,7 +380,7 @@ endif
 
 ifeq ($(findstring stb,$(TARGET)),)
 ifeq ($(call wlan_version_ge,$(BCM_KVERSIONSTRING),2.6.35),TRUE)
-DFLAGS += -DARP_OFFLOAD_SUPPORT
+#DFLAGS += -DARP_OFFLOAD_SUPPORT
 endif
 endif
 
@@ -390,7 +390,7 @@ ifneq ($(findstring -android-,-$(TARGET)-),)
     DFLAGS += -DCUSTOM_NVRAM_PATH=\"$(BRCM_DHD_TARGET_NVRAM_PATH)\"
   endif
   DFLAGS += -DCUSTOMER_HW2 -DEMBEDDED_PLATFORM -DKEEP_ALIVE -DWL11ULB
-  DFLAGS += -DPKT_FILTER_SUPPORT -DWL_VIRTUAL_APSTA -DWLAIBSS -DWLAIBSS_PS
+  DFLAGS += -DPKT_FILTER_SUPPORT -DWL_VIRTUAL_APSTA
   DFLAGS += -DWL_RELMCAST -DWL_NAN -DBT_WIFI_HANDOVER -DWL_SUPPORT_AUTO_CHANNEL
   ifeq ($(findstring stb,$(TARGET)),)
     DFLAGS += -DPNO_SUPPORT
@@ -666,6 +666,7 @@ endif
 ifneq ($(findstring -media-,-$(TARGET)-),)
 $(info : =====> media build <=====)
   DFLAGS +=-DDISABLE_FRAMEBURST -DKEEP_ALIVE -DCUSTOM_BLOCK_DEAUTH_AT_EAP_FAILURE
+  DFLAGS += -DDHD_DEBUG
 
   ifneq ($(findstring -cfg80211-,-$(TARGET)-),)
   $(warning : ***** cfg80211 build *****)
@@ -859,13 +860,15 @@ DFLAGS += -DPCIE_FULL_DONGLE
 DFLAGS += -DBCMPCIE
 DFLAGS += -DCUSTOM_DPC_PRIO_SETTING=-1
 DFLAGS += -DSHOW_EVENTS
-DFLAGS += -DSHOW_LOGTRACE
 CFILES += dhd_pcie.c dhd_pcie_linux.c pcie_core.c dhd_flowring.c
 ifeq ($(findstring -router-,$(TARGET)-),)
 DFLAGS += -DWLTDLS
 endif
 ifneq ($(findstring -msgbuf-,$(TARGET)-),)
 CFILES += dhd_msgbuf.c
+ifneq ($(findstring armv7l,$(TARGET)),)
+DFLAGS += -DDHD_LB -DDHD_LB_RXP
+endif
 ifneq ($(findstring -android-,-$(TARGET)-),)
 # Enable Load Balancing support by default.
 # DHD_LB_RXP - Perform RX Packet processing in parallel
@@ -906,7 +909,6 @@ endif
 ifneq ($(findstring -secdma-,$(TARGET)-),)
 # For secure dma
 DFLAGS += -DBCM_SECURE_DMA
-DFLAGS += -D__ARM_ARCH_7A__
 WFLAGS += -Wno-pointer-to-int-cast
 CFILES += stbutils.c
 endif

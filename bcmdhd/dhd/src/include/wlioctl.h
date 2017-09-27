@@ -906,6 +906,19 @@ typedef struct {
 	};
 } cca_chan_qual_event_t;
 
+#if defined(BCMDBG)
+typedef struct {
+	uint32 msrmnt_time; /* Time for Measurement (msec) */
+	uint32 msrmnt_done; /* flag set when measurement complete */
+	char buf[1];
+} cca_stats_n_flags;
+
+typedef struct {
+	uint32 msrmnt_query;    /* host to driver query for measurement done */
+	uint32 time_req;        /* time required for measurement */
+	uint8 report_opt;       /* option to print different stats in report */
+} cca_msrmnt_query;
+#endif
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 
 /* interference sources */
@@ -3356,6 +3369,13 @@ typedef struct wl_lifetime {
 } wl_lifetime_t;
 
 #ifndef LINUX_POSTMOGRIFY_REMOVAL
+#if defined(WLTEST)
+/* Management time configuration */
+typedef struct wl_lifetime_mg {
+	uint32 mgmt_bitmap;	/* Mgmt subtype */
+	uint32 lifetime;    /* Packet lifetime value in us */
+} wl_lifetime_mg_t;
+#endif
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 
 /* Channel Switch Announcement param */
@@ -4102,6 +4122,40 @@ typedef struct wl_txcal_params {
 } wl_txcal_params_t;
 
 #ifndef LINUX_POSTMOGRIFY_REMOVAL
+#if defined(WLTEST)
+typedef struct wl_sslpnphy_papd_debug_data {
+	uint8 psat_pwr;
+	uint8 psat_indx;
+	uint8 final_idx;
+	uint8 start_idx;
+	int32 min_phase;
+	int32 voltage;
+	int8 temperature;
+} wl_sslpnphy_papd_debug_data_t;
+typedef struct wl_sslpnphy_debug_data {
+	int16 papdcompRe [64];
+	int16 papdcompIm [64];
+} wl_sslpnphy_debug_data_t;
+typedef struct wl_sslpnphy_spbdump_data {
+	uint16 tbl_length;
+	int16 spbreal[256];
+	int16 spbimg[256];
+} wl_sslpnphy_spbdump_data_t;
+typedef struct wl_sslpnphy_percal_debug_data {
+	uint cur_idx;
+	uint tx_drift;
+	uint8 prev_cal_idx;
+	uint percal_ctr;
+	int nxt_cal_idx;
+	uint force_1idxcal;
+	uint onedxacl_req;
+	int32 last_cal_volt;
+	int8 last_cal_temp;
+	uint vbat_ripple;
+	uint exit_route;
+	int32 volt_winner;
+} wl_sslpnphy_percal_debug_data_t;
+#endif 
 #endif /* LINUX_POSTMOGRIFY_REMOVAL */
 
 typedef enum {

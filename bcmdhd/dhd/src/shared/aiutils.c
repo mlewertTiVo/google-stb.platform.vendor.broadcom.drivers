@@ -901,6 +901,11 @@ ai_core_disable(si_t *sih, uint32 bits)
 		SPINWAIT(((status = R_REG(sii->osh, &ai->resetstatus)) != 0), 10000);
 		/* if still pending ops, continue on and try disable anyway */
 		/* this is in big hammer path, so don't call wl_reinit in this case... */
+#ifdef BCMDBG
+		if (status != 0) {
+			printf("%s: WARN: resetstatus=%0x on core disable\n", __FUNCTION__, status);
+		}
+#endif
 	}
 
 	W_REG(sii->osh, &ai->resetctrl, AIRC_RESET);
@@ -1107,7 +1112,7 @@ ai_core_sflags(si_t *sih, uint32 mask, uint32 val)
 	return R_REG(sii->osh, &ai->iostatus);
 }
 
-#if defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_PHYDUMP)
 /* print interesting aidmp registers */
 void
 ai_dumpregs(si_t *sih, struct bcmstrbuf *b)
@@ -1175,6 +1180,147 @@ ai_dumpregs(si_t *sih, struct bcmstrbuf *b)
 }
 #endif	
 
+#ifdef BCMDBG
+static void
+_ai_view(osl_t *osh, aidmp_t *ai, uint32 cid, uint32 addr, bool verbose)
+{
+	uint32 config;
+
+	config = R_REG(osh, &ai->config);
+	SI_ERROR(("\nCore ID: 0x%x, addr 0x%x, config 0x%x\n", cid, addr, config));
+
+	if (config & AICFG_RST)
+		SI_ERROR(("resetctrl 0x%x, resetstatus 0x%x, resetreadid 0x%x, resetwriteid 0x%x\n",
+		          R_REG(osh, &ai->resetctrl), R_REG(osh, &ai->resetstatus),
+		          R_REG(osh, &ai->resetreadid), R_REG(osh, &ai->resetwriteid)));
+
+	if (config & AICFG_IOC)
+		SI_ERROR(("ioctrl 0x%x, width %d\n", R_REG(osh, &ai->ioctrl),
+		          R_REG(osh, &ai->ioctrlwidth)));
+
+	if (config & AICFG_IOS)
+		SI_ERROR(("iostatus 0x%x, width %d\n", R_REG(osh, &ai->iostatus),
+		          R_REG(osh, &ai->iostatuswidth)));
+
+	if (config & AICFG_ERRL) {
+		SI_ERROR(("errlogctrl 0x%x, errlogdone 0x%x, errlogstatus 0x%x, intstatus 0x%x\n",
+		          R_REG(osh, &ai->errlogctrl), R_REG(osh, &ai->errlogdone),
+		          R_REG(osh, &ai->errlogstatus), R_REG(osh, &ai->intstatus)));
+		SI_ERROR(("errlogid 0x%x, errloguser 0x%x, errlogflags 0x%x, errlogaddr "
+		          "0x%x/0x%x\n",
+		          R_REG(osh, &ai->errlogid), R_REG(osh, &ai->errloguser),
+		          R_REG(osh, &ai->errlogflags), R_REG(osh, &ai->errlogaddrhi),
+		          R_REG(osh, &ai->errlogaddrlo)));
+	}
+
+	if (verbose && (config & AICFG_OOB)) {
+		SI_ERROR(("oobselina30 0x%x, oobselina74 0x%x\n",
+		          R_REG(osh, &ai->oobselina30), R_REG(osh, &ai->oobselina74)));
+		SI_ERROR(("oobselinb30 0x%x, oobselinb74 0x%x\n",
+		          R_REG(osh, &ai->oobselinb30), R_REG(osh, &ai->oobselinb74)));
+		SI_ERROR(("oobselinc30 0x%x, oobselinc74 0x%x\n",
+		          R_REG(osh, &ai->oobselinc30), R_REG(osh, &ai->oobselinc74)));
+		SI_ERROR(("oobselind30 0x%x, oobselind74 0x%x\n",
+		          R_REG(osh, &ai->oobselind30), R_REG(osh, &ai->oobselind74)));
+		SI_ERROR(("oobselouta30 0x%x, oobselouta74 0x%x\n",
+		          R_REG(osh, &ai->oobselouta30), R_REG(osh, &ai->oobselouta74)));
+		SI_ERROR(("oobseloutb30 0x%x, oobseloutb74 0x%x\n",
+		          R_REG(osh, &ai->oobseloutb30), R_REG(osh, &ai->oobseloutb74)));
+		SI_ERROR(("oobseloutc30 0x%x, oobseloutc74 0x%x\n",
+		          R_REG(osh, &ai->oobseloutc30), R_REG(osh, &ai->oobseloutc74)));
+		SI_ERROR(("oobseloutd30 0x%x, oobseloutd74 0x%x\n",
+		          R_REG(osh, &ai->oobseloutd30), R_REG(osh, &ai->oobseloutd74)));
+		SI_ERROR(("oobsynca 0x%x, oobseloutaen 0x%x\n",
+		          R_REG(osh, &ai->oobsynca), R_REG(osh, &ai->oobseloutaen)));
+		SI_ERROR(("oobsyncb 0x%x, oobseloutben 0x%x\n",
+		          R_REG(osh, &ai->oobsyncb), R_REG(osh, &ai->oobseloutben)));
+		SI_ERROR(("oobsyncc 0x%x, oobseloutcen 0x%x\n",
+		          R_REG(osh, &ai->oobsyncc), R_REG(osh, &ai->oobseloutcen)));
+		SI_ERROR(("oobsyncd 0x%x, oobseloutden 0x%x\n",
+		          R_REG(osh, &ai->oobsyncd), R_REG(osh, &ai->oobseloutden)));
+		SI_ERROR(("oobaextwidth 0x%x, oobainwidth 0x%x, oobaoutwidth 0x%x\n",
+		          R_REG(osh, &ai->oobaextwidth), R_REG(osh, &ai->oobainwidth),
+		          R_REG(osh, &ai->oobaoutwidth)));
+		SI_ERROR(("oobbextwidth 0x%x, oobbinwidth 0x%x, oobboutwidth 0x%x\n",
+		          R_REG(osh, &ai->oobbextwidth), R_REG(osh, &ai->oobbinwidth),
+		          R_REG(osh, &ai->oobboutwidth)));
+		SI_ERROR(("oobcextwidth 0x%x, oobcinwidth 0x%x, oobcoutwidth 0x%x\n",
+		          R_REG(osh, &ai->oobcextwidth), R_REG(osh, &ai->oobcinwidth),
+		          R_REG(osh, &ai->oobcoutwidth)));
+		SI_ERROR(("oobdextwidth 0x%x, oobdinwidth 0x%x, oobdoutwidth 0x%x\n",
+		          R_REG(osh, &ai->oobdextwidth), R_REG(osh, &ai->oobdinwidth),
+		          R_REG(osh, &ai->oobdoutwidth)));
+	}
+}
+
+void
+ai_view(si_t *sih, bool verbose)
+{
+	si_info_t *sii = SI_INFO(sih);
+	si_cores_info_t *cores_info = (si_cores_info_t *)sii->cores_info;
+	osl_t *osh;
+	aidmp_t *ai;
+	uint32 cid, addr;
+
+	ai = sii->curwrap;
+	osh = sii->osh;
+	if (BCM47162_DMP()) {
+		SI_ERROR(("Cannot access mips74k DMP in 47162a0\n"));
+		return;
+	}
+	if (BCM5357_DMP()) {
+		SI_ERROR(("Cannot access usb20h DMP in 5357\n"));
+		return;
+	}
+	if (BCM4707_DMP()) {
+		SI_ERROR(("Cannot access chipcommonb DMP in 4707\n"));
+		return;
+	}
+	if (PMU_DMP()) {
+		SI_ERROR(("Cannot access pmu DMP\n"));
+		return;
+	}
+	cid = cores_info->coreid[sii->curidx];
+	addr = cores_info->wrapba[sii->curidx];
+	_ai_view(osh, ai, cid, addr, verbose);
+}
+
+void
+ai_viewall(si_t *sih, bool verbose)
+{
+	si_info_t *sii = SI_INFO(sih);
+	si_cores_info_t *cores_info = (si_cores_info_t *)sii->cores_info;
+	osl_t *osh;
+	aidmp_t *ai;
+	uint32 cid, addr;
+	uint i;
+
+	osh = sii->osh;
+	for (i = 0; i < sii->numcores; i++) {
+		si_setcoreidx(sih, i);
+		if (BCM47162_DMP()) {
+			SI_ERROR(("Skipping mips74k DMP in 47162a0\n"));
+			continue;
+		}
+		if (BCM5357_DMP()) {
+			SI_ERROR(("Skipping usb20h DMP in 5357\n"));
+			continue;
+		}
+		if (BCM4707_DMP()) {
+			SI_ERROR(("Skipping chipcommonb DMP in 4707\n"));
+			continue;
+		}
+		if (PMU_DMP()) {
+			SI_ERROR(("Skipping pmu DMP\n"));
+			continue;
+		}
+		ai = sii->curwrap;
+		cid = cores_info->coreid[sii->curidx];
+		addr = cores_info->wrapba[sii->curidx];
+		_ai_view(osh, ai, cid, addr, verbose);
+	}
+}
+#endif	/* BCMDBG */
 
 void
 BCMATTACHFN(ai_enable_backplane_timeouts)(si_t *sih)

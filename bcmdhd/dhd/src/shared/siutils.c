@@ -469,6 +469,9 @@ BCMATTACHFN(si_doattach)(si_info_t *sii, uint devid, osl_t *osh, void *regs,
 		if (!regs)
 			return NULL;
 		cc = (chipcregs_t *)regs;
+#if defined(BCM_BACKPLANE_TIMEOUT) && defined(BCMDBG)
+		si_setup_curmap(sii->osh, sih);
+#endif
 	} else {
 		cc = (chipcregs_t *)REG_MAP(SI_ENUM_BASE, SI_CORE_SIZE);
 	}
@@ -853,6 +856,30 @@ si_corerev(si_t *sih)
 	}
 }
 
+#if defined(BCM_BACKPLANE_TIMEOUT) && defined(BCMDBG)
+void si_setup_curmap(osl_t *osh, si_t *sih)
+{
+	si_info_t *sii;
+	sii = SI_INFO(sih);
+	OSL_PCI_WRITE_CONFIG(osh, 0x78, 4, 0x18108000);
+	setCurMap(osh, sii->curmap);
+	SI_ERROR(("in func %s, setting up curmap = %p "
+		"bustype = %x \n", __FUNCTION__, (void *)sii->curmap, BUSTYPE(sih->bustype)));
+}
+
+void si_setup_backplanetimeout(osl_t *osh, si_t *sih, uint val)
+{
+	si_info_t *sii;
+	sii = SI_INFO(sih);
+
+	W_REG(osh, (uint *)((uchar*)sii->curmap + 0x5900), val);
+	SI_ERROR(("in func %s, bpt = %x\n", __FUNCTION__,
+		R_REG(osh, (uint *)((uchar *)sii->curmap + 0x5900))));
+
+	 /* reset the error_ log_status.cause to 0 */
+	W_REG(osh, (uint *)((uchar*)sii->curmap + 0x5904), 0x1);
+}
+#endif  /* defined(BCM_BACKPLANE_TIMEOUT) && defined(BCMDBG) */
 
 /* return index of coreid or BADIDX if not found */
 uint
@@ -1617,6 +1644,44 @@ si_taclear(si_t *sih, bool details)
 }
 
 
+#ifdef BCMDBG
+void
+si_view(si_t *sih, bool verbose)
+{
+	if (CHIPTYPE(sih->socitype) == SOCI_SB)
+		sb_view(sih, verbose);
+	else if ((CHIPTYPE(sih->socitype) == SOCI_AI) || (CHIPTYPE(sih->socitype) == SOCI_NAI))
+		ai_view(sih, verbose);
+	else if (CHIPTYPE(sih->socitype) == SOCI_UBUS)
+		ub_view(sih, verbose);
+	else
+		ASSERT(0);
+}
+
+void
+si_viewall(si_t *sih, bool verbose)
+{
+	si_info_t *sii = SI_INFO(sih);
+	si_cores_info_t *cores_info = (si_cores_info_t *)sii->cores_info;
+	uint curidx, i;
+	uint intr_val = 0;
+
+	curidx = sii->curidx;
+
+	INTR_OFF(sii, intr_val);
+	if ((CHIPTYPE(sih->socitype) == SOCI_AI) || (CHIPTYPE(sih->socitype) == SOCI_NAI))
+		ai_viewall(sih, verbose);
+	else {
+		SI_ERROR(("si_viewall: num_cores %d\n", sii->numcores));
+		for (i = 0; i < sii->numcores; i++) {
+			si_setcoreidx(sih, i);
+			si_view(sih, verbose);
+		}
+	}
+	si_setcoreidx(sih, curidx);
+	INTR_RESTORE(sii, intr_val);
+}
+#endif	/* BCMDBG */
 
 /** return the slow clock source - LPO, XTAL, or PCI */
 static uint

@@ -66,10 +66,17 @@
 #define BCMUSBDEV_COMPOSITE
 #endif
 
+#if defined(WLTEST) || defined(BCMDBG)
+#include <sbsprom.h>
+#endif
 #include <proto/ethernet.h>	/* for sprom content groking */
 
 #include <sbgci.h>
+#if defined(WLTEST)
+#define	BS_ERROR(args)	printf args
+#else
 #define	BS_ERROR(args)
+#endif
 
 /** curmap: contains host start address of PCI BAR0 window */
 static uint8* srom_offset(si_t *sih, void *curmap)
@@ -85,6 +92,10 @@ static uint8* srom_offset(si_t *sih, void *curmap)
 	return (uint8 *)curmap + PCI_16KB0_CCREGS_OFFSET + CC_SROM_OTP;
 }
 
+#if defined(WLTEST) || defined(BCMDBG)
+#define WRITE_ENABLE_DELAY	500	/* 500 ms after write enable/disable toggle */
+#define WRITE_WORD_DELAY	20	/* 20 ms between each word write */
+#endif
 
 typedef struct varbuf {
 	char *base;		/* pointer to buffer base */
@@ -100,6 +111,9 @@ extern uint _varsz;
 
 static int sprom_cmd_pcmcia(osl_t *osh, uint8 cmd);
 static int sprom_read_pcmcia(osl_t *osh, uint16 addr, uint16 *data);
+#if defined(WLTEST) || defined(BCMDBG)
+static int sprom_write_pcmcia(osl_t *osh, uint16 addr, uint16 data);
+#endif 
 static int sprom_read_pci(osl_t *osh, si_t *sih, uint16 *sprom, uint wordoff, uint16 *buf,
                           uint nwords, bool check_crc);
 static uint16 srom_cc_cmd(si_t *sih, osl_t *osh, void *ccregs, uint32 cmd, uint wordoff,
@@ -204,6 +218,427 @@ srom_read(si_t *sih, uint bustype, void *curmap, osl_t *osh,
 	return 0;
 }
 
+#if defined(WLTEST) || defined(BCMDBG)
+/** support only 16-bit word write into srom */
+int
+srom_write(si_t *sih, uint bustype, void *curmap, osl_t *osh,
+           uint byteoff, uint nbytes, uint16 *buf)
+{
+	uint i, nw, crc_range;
+	uint16 *old, *new;
+	uint8 crc;
+	volatile uint32 val32;
+	int rc = 1;
+
+	ASSERT(bustype == BUSTYPE(bustype));
+
+	old = MALLOC(osh, SROM_MAXW * sizeof(uint16));
+	new = MALLOC(osh, SROM_MAXW * sizeof(uint16));
+
+	if (old == NULL || new == NULL)
+		goto done;
+
+	/* check input - 16-bit access only. use byteoff 0x55aa to indicate
+	 * srclear
+	 */
+	if ((byteoff != 0x55aa) && ((byteoff & 1) || (nbytes & 1)))
+		goto done;
+
+	if ((byteoff != 0x55aa) && ((byteoff + nbytes) > SROM_MAX))
+		goto done;
+
+	if (BUSTYPE(bustype) == PCMCIA_BUS) {
+		crc_range = SROM_MAX;
+	}
+	else {
+		crc_range = (SROM8_SIGN + 1) * 2;	/* must big enough for SROM8 */
+	}
+
+	nw = crc_range / 2;
+	/* read first small number words from srom, then adjust the length, read all */
+	if (srom_read(sih, bustype, curmap, osh, 0, crc_range, old, FALSE))
+		goto done;
+
+	BS_ERROR(("%s: old[SROM4_SIGN] 0x%x, old[SROM8_SIGN] 0x%x\n",
+	          __FUNCTION__, old[SROM4_SIGN], old[SROM8_SIGN]));
+	/* Deal with blank srom */
+	if (old[0] == 0xffff) {
+		/* see if the input buffer is valid SROM image or not */
+		if (buf[SROM11_SIGN] == SROM11_SIGNATURE) {
+			BS_ERROR(("%s: buf[SROM11_SIGN] 0x%x\n",
+				__FUNCTION__, buf[SROM11_SIGN]));
+
+			/* block invalid buffer size */
+			if (nbytes < SROM11_WORDS * 2) {
+				rc = BCME_BUFTOOSHORT;
+				goto done;
+			} else if (nbytes > SROM11_WORDS * 2) {
+				rc = BCME_BUFTOOLONG;
+				goto done;
+			}
+
+			nw = SROM11_WORDS;
+
+		} else if (buf[SROM12_SIGN] == SROM12_SIGNATURE) {
+			BS_ERROR(("%s: buf[SROM12_SIGN] 0x%x\n",
+				__FUNCTION__, buf[SROM12_SIGN]));
+
+			/* block invalid buffer size */
+			if (nbytes < SROM12_WORDS * 2) {
+				rc = BCME_BUFTOOSHORT;
+				goto done;
+			} else if (nbytes > SROM12_WORDS * 2) {
+				rc = BCME_BUFTOOLONG;
+				goto done;
+			}
+
+			nw = SROM12_WORDS;
+
+		} else if (buf[SROM13_SIGN] == SROM13_SIGNATURE) {
+			BS_ERROR(("%s: buf[SROM13_SIGN] 0x%x\n",
+				__FUNCTION__, buf[SROM13_SIGN]));
+
+			/* block invalid buffer size */
+			if (nbytes < SROM13_WORDS * 2) {
+				rc = BCME_BUFTOOSHORT;
+				goto done;
+			} else if (nbytes > SROM13_WORDS * 2) {
+				rc = BCME_BUFTOOLONG;
+				goto done;
+			}
+
+			nw = SROM13_WORDS;
+
+		} else if ((buf[SROM4_SIGN] == SROM4_SIGNATURE) ||
+			(buf[SROM8_SIGN] == SROM4_SIGNATURE)) {
+			BS_ERROR(("%s: buf[SROM4_SIGN] 0x%x, buf[SROM8_SIGN] 0x%x\n",
+				__FUNCTION__, buf[SROM4_SIGN], buf[SROM8_SIGN]));
+
+			/* block invalid buffer size */
+			if (nbytes < SROM4_WORDS * 2) {
+				rc = BCME_BUFTOOSHORT;
+				goto done;
+			} else if (nbytes > SROM4_WORDS * 2) {
+				rc = BCME_BUFTOOLONG;
+				goto done;
+			}
+
+			nw = SROM4_WORDS;
+		} else if (nbytes == SROM_WORDS * 2){ /* the other possible SROM format */
+			BS_ERROR(("%s: Not SROM4 or SROM8.\n", __FUNCTION__));
+
+			nw = SROM_WORDS;
+		} else {
+			BS_ERROR(("%s: Invalid input file signature\n", __FUNCTION__));
+			rc = BCME_BADARG;
+			goto done;
+		}
+		crc_range = nw * 2;
+		if (srom_read(sih, bustype, curmap, osh, 0, crc_range, old, FALSE))
+			goto done;
+	} else if (old[SROM13_SIGN] == SROM13_SIGNATURE) {
+		nw = SROM13_WORDS;
+		crc_range = nw * 2;
+		if (srom_read(sih, bustype, curmap, osh, 0, crc_range, old, FALSE))
+			goto done;
+	} else if (old[SROM12_SIGN] == SROM12_SIGNATURE) {
+		nw = SROM12_WORDS;
+		crc_range = nw * 2;
+		if (srom_read(sih, bustype, curmap, osh, 0, crc_range, old, FALSE))
+			goto done;
+	} else if (old[SROM11_SIGN] == SROM11_SIGNATURE) {
+		nw = SROM11_WORDS;
+		crc_range = nw * 2;
+		if (srom_read(sih, bustype, curmap, osh, 0, crc_range, old, FALSE))
+			goto done;
+	} else if ((old[SROM4_SIGN] == SROM4_SIGNATURE) ||
+	           (old[SROM8_SIGN] == SROM4_SIGNATURE)) {
+		nw = SROM4_WORDS;
+		crc_range = nw * 2;
+		if (srom_read(sih, bustype, curmap, osh, 0, crc_range, old, FALSE))
+			goto done;
+	} else {
+		/* Assert that we have already read enough for sromrev 2 */
+		ASSERT(crc_range >= SROM_WORDS * 2);
+		nw = SROM_WORDS;
+		crc_range = nw * 2;
+	}
+
+	if (byteoff == 0x55aa) {
+		/* Erase request */
+		crc_range = 0;
+		memset((void *)new, 0xff, nw * 2);
+	} else {
+		/* Copy old contents */
+		bcopy((void *)old, (void *)new, nw * 2);
+		/* make changes */
+		bcopy((void *)buf, (void *)&new[byteoff / 2], nbytes);
+	}
+
+	if (crc_range) {
+		/* calculate crc */
+		htol16_buf(new, crc_range);
+		crc = ~hndcrc8((uint8 *)new, crc_range - 1, CRC8_INIT_VALUE);
+		ltoh16_buf(new, crc_range);
+		new[nw - 1] = (crc << 8) | (new[nw - 1] & 0xff);
+	}
+
+
+#ifdef BCMPCIEDEV
+	if ((BUSTYPE(bustype) == SI_BUS) &&
+	    (BCM43602_CHIP(sih->chip) ||
+	     (CHIPID(sih->chip) == BCM4365_CHIP_ID) ||
+	     (CHIPID(sih->chip) == BCM4366_CHIP_ID) ||
+	     0)) {
+#else
+	if (BUSTYPE(bustype) == PCI_BUS) {
+#endif /* BCMPCIEDEV */
+		uint16 *srom = NULL;
+		void *ccregs = NULL;
+		uint32 ccval = 0;
+
+		if ((CHIPID(sih->chip) == BCM4331_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43431_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM4360_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43460_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43526_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM4352_CHIP_ID) ||
+		    BCM43602_CHIP(sih->chip)) {
+			/* save current control setting */
+			ccval = si_chipcontrl_read(sih);
+		}
+
+		if ((CHIPID(sih->chip) == BCM4331_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM43431_CHIP_ID)) {
+			/* Disable Ext PA lines to allow reading from SROM */
+			si_chipcontrl_epa4331(sih, FALSE);
+		} else if (BCM43602_CHIP(sih->chip) ||
+			(((CHIPID(sih->chip) == BCM4360_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM43460_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM4352_CHIP_ID)) &&
+			(CHIPREV(sih->chiprev) <= 2))) {
+			si_chipcontrl_srom4360(sih, TRUE);
+		}
+
+		if ((CHIPID(sih->chip) == BCM4365_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM4366_CHIP_ID)) {
+			si_clk_srom4365(sih);
+		}
+
+		/* enable writes to the SPROM */
+		if (sih->ccrev > 31) {
+#if !defined(DSLCPE_WOMBO)
+			if (BUSTYPE(sih->bustype) == SI_BUS)
+				ccregs = (void *)SI_ENUM_BASE;
+			else
+#endif 
+				ccregs = (void *)((uint8 *)curmap + PCI_16KB0_CCREGS_OFFSET);
+			srom = (uint16 *)((uint8 *)ccregs + CC_SROM_OTP);
+			(void)srom_cc_cmd(sih, osh, ccregs, SRC_OP_WREN, 0, 0);
+		} else {
+			srom = (uint16 *)((uint8 *)curmap + PCI_BAR0_SPROM_OFFSET);
+			val32 = OSL_PCI_READ_CONFIG(osh, PCI_SPROM_CONTROL, sizeof(uint32));
+			val32 |= SPROM_WRITEEN;
+			OSL_PCI_WRITE_CONFIG(osh, PCI_SPROM_CONTROL, sizeof(uint32), val32);
+		}
+		bcm_mdelay(WRITE_ENABLE_DELAY);
+		/* write srom */
+		for (i = 0; i < nw; i++) {
+			if (old[i] != new[i]) {
+				if (sih->ccrev > 31) {
+					if ((sih->cccaps & CC_CAP_SROM) == 0) {
+						/* No srom support in this chip */
+						BS_ERROR(("srom_write, invalid srom, skip\n"));
+					} else
+						(void)srom_cc_cmd(sih, osh, ccregs, SRC_OP_WRITE,
+							i, new[i]);
+				} else {
+					W_REG(osh, &srom[i], new[i]);
+				}
+				bcm_mdelay(WRITE_WORD_DELAY);
+			}
+		}
+		/* disable writes to the SPROM */
+		if (sih->ccrev > 31) {
+			(void)srom_cc_cmd(sih, osh, ccregs, SRC_OP_WRDIS, 0, 0);
+		} else {
+			OSL_PCI_WRITE_CONFIG(osh, PCI_SPROM_CONTROL, sizeof(uint32), val32 &
+			                     ~SPROM_WRITEEN);
+		}
+
+		if ((CHIPID(sih->chip) == BCM4331_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43431_CHIP_ID) ||
+		    BCM43602_CHIP(sih->chip) ||
+		    (CHIPID(sih->chip) == BCM4360_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43460_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM4352_CHIP_ID)) {
+			/* Restore config after reading SROM */
+			si_chipcontrl_restore(sih, ccval);
+		}
+
+	} else if (BUSTYPE(bustype) == PCMCIA_BUS) {
+		/* enable writes to the SPROM */
+		if (sprom_cmd_pcmcia(osh, SROM_WEN))
+			goto done;
+		bcm_mdelay(WRITE_ENABLE_DELAY);
+		/* write srom */
+		for (i = 0; i < nw; i++) {
+			if (old[i] != new[i]) {
+				sprom_write_pcmcia(osh, (uint16)(i), new[i]);
+				bcm_mdelay(WRITE_WORD_DELAY);
+			}
+		}
+		/* disable writes to the SPROM */
+		if (sprom_cmd_pcmcia(osh, SROM_WDS))
+			goto done;
+	} else if (BUSTYPE(bustype) == SI_BUS) {
+		goto done;
+	} else {
+		goto done;
+	}
+
+	bcm_mdelay(WRITE_ENABLE_DELAY);
+	rc = 0;
+
+done:
+	if (old != NULL)
+		MFREE(osh, old, SROM_MAXW * sizeof(uint16));
+	if (new != NULL)
+		MFREE(osh, new, SROM_MAXW * sizeof(uint16));
+
+	return rc;
+}
+
+/** support only 16-bit word write into srom */
+int
+srom_write_short(si_t *sih, uint bustype, void *curmap, osl_t *osh,
+                 uint byteoff, uint16 value)
+{
+	volatile uint32 val32;
+	int rc = 1;
+
+	ASSERT(bustype == BUSTYPE(bustype));
+
+
+	if (byteoff & 1)
+		goto done;
+
+#ifdef BCMPCIEDEV
+	if ((BUSTYPE(bustype) == SI_BUS) &&
+	    (BCM43602_CHIP(sih->chip) ||
+	     (CHIPID(sih->chip) == BCM4365_CHIP_ID) ||
+	     (CHIPID(sih->chip) == BCM4366_CHIP_ID) ||
+	     0)) {
+#else
+	if (BUSTYPE(bustype) == PCI_BUS) {
+#endif /* BCMPCIEDEV */
+		uint16 *srom = NULL;
+		void *ccregs = NULL;
+		uint32 ccval = 0;
+
+		if ((CHIPID(sih->chip) == BCM4331_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43431_CHIP_ID) ||
+		    BCM43602_CHIP(sih->chip) ||
+		    (CHIPID(sih->chip) == BCM4360_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43460_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43526_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM4352_CHIP_ID)) {
+			/* save current control setting */
+			ccval = si_chipcontrl_read(sih);
+		}
+
+		if ((CHIPID(sih->chip) == BCM4331_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM43431_CHIP_ID)) {
+			/* Disable Ext PA lines to allow reading from SROM */
+			si_chipcontrl_epa4331(sih, FALSE);
+		} else if (BCM43602_CHIP(sih->chip) ||
+			(((CHIPID(sih->chip) == BCM4360_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM43460_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM4352_CHIP_ID)) &&
+			(CHIPREV(sih->chiprev) <= 2))) {
+			si_chipcontrl_srom4360(sih, TRUE);
+		}
+
+		if ((CHIPID(sih->chip) == BCM4365_CHIP_ID) ||
+			(CHIPID(sih->chip) == BCM4366_CHIP_ID)) {
+			si_clk_srom4365(sih);
+		}
+
+		/* enable writes to the SPROM */
+		if (sih->ccrev > 31) {
+#if !defined(DSLCPE_WOMBO)
+			if (BUSTYPE(sih->bustype) == SI_BUS)
+				ccregs = (void *)SI_ENUM_BASE;
+			else
+#endif 
+				ccregs = (void *)((uint8 *)curmap + PCI_16KB0_CCREGS_OFFSET);
+			srom = (uint16 *)((uint8 *)ccregs + CC_SROM_OTP);
+			(void)srom_cc_cmd(sih, osh, ccregs, SRC_OP_WREN, 0, 0);
+		} else {
+			srom = (uint16 *)((uint8 *)curmap + PCI_BAR0_SPROM_OFFSET);
+			val32 = OSL_PCI_READ_CONFIG(osh, PCI_SPROM_CONTROL, sizeof(uint32));
+			val32 |= SPROM_WRITEEN;
+			OSL_PCI_WRITE_CONFIG(osh, PCI_SPROM_CONTROL, sizeof(uint32), val32);
+		}
+		bcm_mdelay(WRITE_ENABLE_DELAY);
+		/* write srom */
+		if (sih->ccrev > 31) {
+			if ((sih->cccaps & CC_CAP_SROM) == 0) {
+				/* No srom support in this chip */
+				BS_ERROR(("srom_write, invalid srom, skip\n"));
+			} else
+				(void)srom_cc_cmd(sih, osh, ccregs, SRC_OP_WRITE,
+				                   byteoff/2, value);
+		} else {
+			W_REG(osh, &srom[byteoff/2], value);
+		}
+		bcm_mdelay(WRITE_WORD_DELAY);
+
+		/* disable writes to the SPROM */
+		if (sih->ccrev > 31) {
+			(void)srom_cc_cmd(sih, osh, ccregs, SRC_OP_WRDIS, 0, 0);
+		} else {
+			OSL_PCI_WRITE_CONFIG(osh, PCI_SPROM_CONTROL, sizeof(uint32), val32 &
+			                     ~SPROM_WRITEEN);
+		}
+
+		if ((CHIPID(sih->chip) == BCM4331_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43431_CHIP_ID) ||
+		    BCM43602_CHIP(sih->chip) ||
+		    (CHIPID(sih->chip) == BCM4360_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43460_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM43526_CHIP_ID) ||
+		    (CHIPID(sih->chip) == BCM4352_CHIP_ID)) {
+			/* Restore config after reading SROM */
+			si_chipcontrl_restore(sih, ccval);
+		}
+
+	} else if (BUSTYPE(bustype) == PCMCIA_BUS) {
+		/* enable writes to the SPROM */
+		if (sprom_cmd_pcmcia(osh, SROM_WEN))
+			goto done;
+		bcm_mdelay(WRITE_ENABLE_DELAY);
+		/* write srom */
+		sprom_write_pcmcia(osh, (uint16)(byteoff/2), value);
+		bcm_mdelay(WRITE_WORD_DELAY);
+
+		/* disable writes to the SPROM */
+		if (sprom_cmd_pcmcia(osh, SROM_WDS))
+			goto done;
+	} else if (BUSTYPE(bustype) == SI_BUS) {
+		goto done;
+	} else {
+		goto done;
+	}
+
+	bcm_mdelay(WRITE_ENABLE_DELAY);
+	rc = 0;
+
+done:
+	return rc;
+}
+
+#endif 
 
 
 /**
@@ -257,6 +692,30 @@ sprom_read_pcmcia(osl_t *osh, uint16 addr, uint16 *data)
 	return 0;
 }
 
+#if defined(WLTEST) || defined(BCMDBG)
+/** write a word to the PCMCIA srom */
+static int
+sprom_write_pcmcia(osl_t *osh, uint16 addr, uint16 data)
+{
+	uint8 addr_l, addr_h, data_l, data_h;
+
+	addr_l = (uint8)((addr * 2) & 0xff);
+	addr_h = (uint8)(((addr * 2) >> 8) & 0xff);
+	data_l = (uint8)(data & 0xff);
+	data_h = (uint8)((data >> 8) & 0xff);
+
+	/* set address */
+	OSL_PCMCIA_WRITE_ATTR(osh, SROM_ADDRH, &addr_h, 1);
+	OSL_PCMCIA_WRITE_ATTR(osh, SROM_ADDRL, &addr_l, 1);
+
+	/* write data */
+	OSL_PCMCIA_WRITE_ATTR(osh, SROM_DATAH, &data_h, 1);
+	OSL_PCMCIA_WRITE_ATTR(osh, SROM_DATAL, &data_l, 1);
+
+	/* do write */
+	return sprom_cmd_pcmcia(osh, SROM_WRITE);
+}
+#endif 
 
 /**
  * In chips with chipcommon rev 32 and later, the srom is in chipcommon,
@@ -398,7 +857,12 @@ error:
 int
 srom_otp_write_region_crc(si_t *sih, uint nbytes, uint16* buf16, bool write)
 {
+#if defined(WLTEST) || defined(BCMDBG)
+	int err = 0, crc = 0;
+	return write ? err : crc;
+#else
 	return 0;
+#endif 
 }
 
 

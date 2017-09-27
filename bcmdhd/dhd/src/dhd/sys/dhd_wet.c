@@ -1015,8 +1015,8 @@ csum_fixup_16(uint8 *chksum, uint8 *optr, int olen, uint8 *nptr, int nlen)
 {
 	long x, old, new;
 
-	ASSERT(!((int)optr&1) && !(olen&1));
-	ASSERT(!((int)nptr&1) && !(nlen&1));
+	ASSERT(!((uintptr)optr&1) && !(olen&1));
+	ASSERT(!((uintptr)nptr&1) && !(nlen&1));
 
 	x = (chksum[0]<< 8)+chksum[1];
 	if (!x)

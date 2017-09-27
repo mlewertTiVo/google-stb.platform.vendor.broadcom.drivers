@@ -969,6 +969,9 @@ wl_iw_set_wap(
 )
 {
 	int error = -EINVAL;
+#ifdef BCMDBG
+	/* char eabuf[ETHER_ADDR_STR_LEN]; */
+#endif
 
 	WL_TRACE(("%s: SIOCSIWAP\n", dev->name));
 

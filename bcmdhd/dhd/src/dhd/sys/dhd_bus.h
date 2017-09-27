@@ -186,6 +186,10 @@ extern void dhd_bus_flow_ring_flush_response(struct dhd_bus *bus, uint16 flowid,
 extern uint32 dhd_bus_max_h2d_queues(struct dhd_bus *bus);
 extern int dhd_bus_schedule_queue(struct dhd_bus *bus, uint16 flow_id, bool txs);
 
+#ifdef BCMDBG
+extern void
+dhd_bus_flow_ring_cnt_update(struct dhd_bus *bus, uint16 flowid, uint32 txstatus);
+#endif
 
 #ifdef OEM_ANDROID
 extern int dhdpcie_bus_clock_start(struct dhd_bus *bus);

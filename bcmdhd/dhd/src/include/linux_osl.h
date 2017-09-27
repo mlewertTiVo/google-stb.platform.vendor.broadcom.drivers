@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.h 641629 2016-06-03 14:39:47Z $
+ * $Id: linux_osl.h 718060 2017-08-29 10:11:23Z $
  */
 
 #ifndef _linux_osl_h_
@@ -1048,7 +1048,6 @@ typedef struct sec_cma_info {
 	struct sec_mem_elem *sec_alloc_list_tail;
 } sec_cma_info_t;
 
-#if defined(__ARM_ARCH_7A__)
 #define CMA_BUFSIZE_4K	4096
 #define CMA_BUFSIZE_2K	2048
 #define CMA_BUFSIZE_512	512
@@ -1059,7 +1058,6 @@ typedef struct sec_cma_info {
 #define CMA_DMA_DESC_MEMBLOCK	(SEC_CMA_COHERENT_BLK * SEC_CMA_COHERENT_MAX)
 #define CMA_DMA_DATA_MEMBLOCK	(CMA_BUFSIZE_4K*CMA_BUFNUM)
 #define	CMA_MEMBLOCK		(CMA_DMA_DESC_MEMBLOCK + CMA_DMA_DATA_MEMBLOCK)
-#endif /* !defined __ARM_ARCH_7A__ */
 
 #define SEC_DMA_ALIGN	(1<<16)
 typedef struct sec_mem_elem {

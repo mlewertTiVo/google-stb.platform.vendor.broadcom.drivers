@@ -341,7 +341,7 @@ typedef struct {
 	struct semaphore dpc_sem;
 	struct completion dpc_exited;
 	int rxpending;
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	int	dpc_cnt, dpc_pktcnt, dpc_maxpktcnt;
 #endif
 
@@ -374,7 +374,7 @@ typedef struct {
 
 	struct urb *blk_urb; /* Used for downloading embedded image */
 
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	int *txposted_hist;
 	int *rxposted_hist;
 #endif
@@ -562,9 +562,9 @@ static int  dbus_usbos_intf_stop(void *bus);
 static int  dbus_usbos_readreg(void *bus, uint32 regaddr, int datalen, uint32 *value);
 extern int dbus_usbos_loopback_tx(void *usbos_info_ptr, int cnt, int size);
 int dbus_usbos_writereg(void *bus, uint32 regaddr, int datalen, uint32 data);
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 static void dbus_usbos_intf_dump(void *bus, struct bcmstrbuf *b);
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 static int  dbus_usbos_intf_set_config(void *bus, dbus_config_t *config);
 static bool dbus_usbos_intf_recv_needed(void *bus);
 static void *dbus_usbos_intf_exec_rxlock(void *bus, exec_cb_t cb, struct exec_parms *args);
@@ -594,11 +594,11 @@ static dbus_intf_t dbus_usbos_intf = {
 	.pktget = NULL,
 	.pktfree = NULL,
 	.iovar_op = NULL,
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	.dump = dbus_usbos_intf_dump,
 #else
 	.dump = NULL,
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 	.set_config = dbus_usbos_intf_set_config,
 	.get_config = NULL,
 	.device_exists = NULL,
@@ -678,6 +678,10 @@ typedef struct dbus_info {
 	dbus_irbq_t *rx_q;
 	dbus_irbq_t *tx_q;
 
+#ifdef BCMDBG
+	int *txpend_q_hist;
+	int *rxpend_q_hist;
+#endif /* BCMDBG */
 #ifdef EHCI_FASTPATH_RX
 	atomic_t rx_outstanding;
 #endif
@@ -917,11 +921,11 @@ dbus_usbos_send_complete(CALLBACK_ARGS)
 
 	dbus_usbos_req_del(req, &usbos_info->txposted_lock);
 	txposted = atomic_dec_return(&usbos_info->txposted);
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	if (usbos_info->txposted_hist) {
 		usbos_info->txposted_hist[txposted]++;
 	}
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 	if (unlikely (txposted < 0)) {
 		DBUSERR(("%s ERROR: txposted is negative (%d)!!\n", __FUNCTION__, txposted));
 	}
@@ -1028,11 +1032,11 @@ dbus_usbos_recv_urb_submit(usbos_info_t *usbos_info, dbus_irb_rx_t *rxirb, uint3
 		goto fail;
 	}
 	rxposted = atomic_inc_return(&usbos_info->rxposted);
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	if (usbos_info->rxposted_hist) {
 		usbos_info->rxposted_hist[rxposted]++;
 	}
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 
 	dbus_usbos_qenq(&usbos_info->req_rxpostedq, req, &usbos_info->rxposted_lock);
 fail:
@@ -1050,11 +1054,11 @@ dbus_usbos_recv_dpc(usbos_info_t *usbos_info)
 	int dbus_status = DBUS_OK;
 	bool killed = (g_probe_info.suspend_state == USBOS_SUSPEND_STATE_SUSPEND_PENDING) ? 1 : 0;
 
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	int cnt = 0;
 
 	usbos_info->dpc_cnt++;
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 
 	while ((req = dbus_usbos_qdeq(&usbos_info->req_rxpendingq,
 		&usbos_info->rxpending_lock)) != NULL) {
@@ -1095,9 +1099,9 @@ dbus_usbos_recv_dpc(usbos_info_t *usbos_info)
 
 fail:
 		usbos_info->rxpending--;
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 		cnt++;
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 		if (usbos_info->cbarg && usbos_info->cbs &&
 			usbos_info->cbs->recv_irb_complete) {
 			usbos_info->cbs->recv_irb_complete(usbos_info->cbarg, rxirb, dbus_status);
@@ -1105,10 +1109,10 @@ fail:
 		dbus_usbos_qenq(&usbos_info->req_rxfreeq, req, &usbos_info->rxfree_lock);
 	}
 
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	usbos_info->dpc_pktcnt += cnt;
 	usbos_info->dpc_maxpktcnt = MAX(cnt, usbos_info->dpc_maxpktcnt);
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 #ifdef DBUS_LINUX_HIST
 	{
 		static unsigned long last_dump = 0;
@@ -2457,7 +2461,7 @@ dbus_usbos_intf_stop(void *bus)
 	return DBUS_OK;
 }
 
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 static void
 dbus_usbos_intf_dump(void *bus, struct bcmstrbuf *b)
 {
@@ -2540,7 +2544,7 @@ dbus_usbos_intf_dump(void *bus, struct bcmstrbuf *b)
 
 	return;
 }
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 
 /** Called by higher layer (dbus_usb.c) */
 static int
@@ -3026,7 +3030,7 @@ dbus_usbos_intf_attach(dbus_pub_t *pub, void *cbarg, dbus_intf_callbacks_t *cbs)
 	spin_lock_init(&usbos_info->rxpending_lock);
 #endif /* DBUS_LINUX_RXDPC */
 
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	usbos_info->txposted_hist = MALLOC(pub->osh, (usbos_info->pub->ntxq+1) * sizeof(int));
 	if (usbos_info->txposted_hist) {
 		bzero(usbos_info->txposted_hist, (usbos_info->pub->ntxq+1) * sizeof(int));
@@ -3190,14 +3194,14 @@ dbus_usbos_intf_detach(dbus_pub_t *pub, void *info)
 	dbus_usbos_urbreqs_free(usbos_info, FALSE);
 	atomic_set(&usbos_info->txallocated, 0);
 
-#if defined(DBUS_LINUX_HIST)
+#if defined(BCMDBG) || defined(DBUS_LINUX_HIST)
 	if (usbos_info->txposted_hist) {
 		MFREE(osh, usbos_info->txposted_hist, (usbos_info->pub->ntxq+1) * sizeof(int));
 	}
 	if (usbos_info->rxposted_hist) {
 		MFREE(osh, usbos_info->rxposted_hist, (usbos_info->pub->nrxq+1) * sizeof(int));
 	}
-#endif 
+#endif /* BCMDBG || DBUS_LINUX_HIST */
 #ifdef USBOS_THREAD
 	dbus_usbos_thread_deinit(usbos_info);
 #endif /* USBOS_THREAD */

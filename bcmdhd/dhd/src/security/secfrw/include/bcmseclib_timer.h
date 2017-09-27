@@ -42,6 +42,9 @@ struct bcmseclib_timer {
 	uint ms;
 	bool periodic;
 	bool set;
+#ifdef BCMDBG
+	char* name; /* Description of the timer */
+#endif
 	exp_time_t expiry_time;	/* time to expiry */
 	bcmseclib_timer_mgr_t *mgr; /* timer manager */
 } bcmseclib_timer_t;

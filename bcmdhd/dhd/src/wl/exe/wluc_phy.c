@@ -55,6 +55,9 @@ static cmd_func_t wl_tssi, wl_atten, wl_evm;
 static cmd_func_t wl_interfere, wl_interfere_override;
 static cmd_func_t wl_get_instant_power;
 static cmd_func_t wl_phymsglevel;
+#if defined(BCMDBG)
+static cmd_func_t wl_phy_debug_cmd;
+#endif
 static cmd_func_t wl_rifs;
 static cmd_func_t wl_rifs_advert;
 static cmd_func_t wl_test_tssi, wl_test_tssi_offs, wl_phy_rssiant, wl_rxiq;
@@ -71,6 +74,9 @@ static cmd_func_t wl_phy_fem, wl_phy_maxpower;
 static cmd_func_t wl_phy_rpcalvars;
 static cmd_func_t wl_phy_force_vsdb_chans;
 static cmd_func_t wl_radar_args, wl_radar_thrs;
+#if defined(WLTEST)
+static cmd_func_t wl_patrim;
+#endif 
 
 typedef struct {
 	uint value;
@@ -275,6 +281,36 @@ static cmd_t wl_phy_cmds[] = {
 	{ "phy_forcesteer", wl_var_setint, -1, WLC_SET_VAR,
 	"force the beamformer to apply steering matrix when TXBF is turned on\n\n"
 	"\tusage: wl phy_forcesteer 1/0"},
+#if defined(BCMDBG)
+	{ "phy_force_gainlevel", wl_phy_debug_cmd, WLC_GET_VAR, WLC_SET_VAR,
+	"Force rxgain level \n"
+	"\t 0 : force to init gain\n"
+	"\t 1 : force to clip hi gain\n"
+	"\t 2 : force to clip md gain\n"
+	"\t 3 : force to clip lo gain\n"
+	"\t 4 : force to adc clip gain\n"
+	"\t 5 : force to nb clip gain\n"
+	"\t 6 : force to wb clip gain\n"
+	"\t -1 : disable\n"
+	"\t usage: wl phy_force_gainlevel <int32 var>"
+	},
+#endif
+#if defined(BCMDBG)
+	{ "phy_force_fdiqi", wl_phy_debug_cmd, WLC_GET_VAR, WLC_SET_VAR,
+	"Enable/disable FDIQI Cal/Comp \n"
+	"\t 0 : disable\n"
+	"\t 1 : enable\n"
+	"\t usage: wl phy_force_fdiqi <int32 var>"
+	},
+#endif
+#if defined(BCMDBG)
+	{ "phy_btcoex_desense", wl_phy_debug_cmd, WLC_GET_VAR, WLC_SET_VAR,
+	"Enable/disable btcoex desense\n"
+	"\t 0 : disable\n"
+	"\t 1 : mode 1\n"
+	"\t usage: wl phy_btcoex_desense <int32 var>"
+	},
+#endif
 	{ "lcnphy_papdepstbl", wl_phy_papdepstbl, -1, WLC_GET_VAR,
 	"print papd eps table; Usage: wl lcnphy_papdepstbl"
 	},
@@ -459,6 +495,10 @@ static cmd_t wl_phy_cmds[] = {
 	"\torder as thresh0_20_lo, thresh1_20_lo, thresh0_40_lo, thresh1_40_lo\n"
 	"\tthresh0_80_lo, thresh1_80_lo, thresh0_20_hi, thresh1_20_hi\n"
 	"\tthresh0_40_hi, thresh1_40_hi, thresh0_80_hi, thresh1_80_hi"},
+#if defined(WLTEST)
+	{ "patrim", wl_patrim, WLC_GET_VAR, -1,
+	"Get PA trim option" },
+#endif 
 	{ NULL, NULL, 0, 0, NULL }
 };
 
@@ -3547,6 +3587,28 @@ exit:
 	return err;
 }
 
+#if defined(BCMDBG)
+static int
+wl_phy_debug_cmd(void *wl, cmd_t *cmd, char **argv)
+{
+	int err;
+	int val;
+	char *val_name;
+
+	UNUSED_PARAMETER(cmd);
+
+	/* command name */
+	val_name = *argv++;
+	val = (*argv == NULL) ? 0 : atoi(*argv);
+
+
+	if ((err = wlu_iovar_setint(wl, val_name, (int)val)) < 0)
+		printf("PHY DEBUG COMMAND error %d\n", err);
+
+	return err;
+
+}
+#endif 
 
 static int
 wl_rifs(void *wl, cmd_t *cmd, char **argv)
@@ -3817,3 +3879,47 @@ wl_radar_thrs(void *wl, cmd_t *cmd, char **argv)
 	}
 	return ret;
 }
+
+#if defined(WLTEST)
+typedef struct {
+	uint16	val;
+	const char *str;
+} patrim_t;
+
+static const patrim_t patrims[] = {
+	{0x0, "NULL"},
+	{0x1, "bw40"},
+	{0x2, "bw80"},
+	{0x3, "bw4080"},
+	{0x4, "cck"},
+	{0x11, "NULL, bw40"},
+	{0x12, "NULL, bw80"},
+	{0x13, "NULL, bw4080"},
+	{0x14, "NULL, cck"},
+	{0x15, "bw40, bw80"},
+	{0x21, "NULL, bw40, bw80"},
+	{0x22, "NULL, bw40, cck"},
+};
+
+static int
+wl_patrim(void *wl, cmd_t *cmd, char **argv)
+{
+	int patrim, ret;
+	uint32 i;
+
+	UNUSED_PARAMETER(cmd);
+	UNUSED_PARAMETER(argv);
+
+	if ((ret = wlu_iovar_getint(wl, "patrim", &patrim)) < 0)
+		return ret;
+
+	for (i = 0; i < sizeof(patrims) / sizeof(patrims[0]); i ++) {
+		if (patrim == patrims[i].val) {
+			printf("%s\n", patrims[i].str);
+			return 0;
+		}
+	}
+
+	return BCME_ERROR;
+}
+#endif 
