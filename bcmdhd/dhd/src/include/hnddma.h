@@ -255,6 +255,11 @@ extern hnddma_t * dma_attach(osl_t *osh, const char *name, si_t *sih,
 #define dma_txpending(di)		((di)->di_fn->txpending(di))
 #define dma_txcommitted(di)		((di)->di_fn->txcommitted(di))
 #define dma_pktpool_set(di, pool)	((di)->di_fn->pktpool_set((di), (pool)))
+#if defined(BCMDBG)
+#define dma_dump(di, buf, dumpring)	((di)->di_fn->dump(di, buf, dumpring))
+#define dma_dumptx(di, buf, dumpring)	((di)->di_fn->dumptx(di, buf, dumpring))
+#define dma_dumprx(di, buf, dumpring)	((di)->di_fn->dumprx(di, buf, dumpring))
+#endif 
 #define dma_rxtxerror(di, istx)	((di)->di_fn->rxtxerror(di, istx))
 #define dma_burstlen_set(di, rxlen, txlen)	((di)->di_fn->burstlen_set(di, rxlen, txlen))
 #define dma_avoidance_cnt(di)		((di)->di_fn->avoidancecnt(di))
@@ -311,6 +316,11 @@ extern const di_fcn_t dma64proc;
 #define dma_txpending(di)		(dma64proc.txpending(di))
 #define dma_txcommitted(di)		(dma64proc.txcommitted(di))
 #define dma_pktpool_set(di, pool)	(dma64proc.pktpool_set((di), (pool)))
+#if defined(BCMDBG)
+#define dma_dump(di, buf, dumpring)	(dma64proc.dump(di, buf, dumpring))
+#define dma_dumptx(di, buf, dumpring)	(dma64proc.dumptx(di, buf, dumpring))
+#define dma_dumprx(di, buf, dumpring)	(dma64proc.dumprx(di, buf, dumpring))
+#endif
 #define dma_rxtxerror(di, istx)	(dma64proc.rxtxerror(di, istx))
 #define dma_burstlen_set(di, rxlen, txlen)	(dma64proc.burstlen_set(di, rxlen, txlen))
 #define dma_avoidance_cnt(di)		(dma64proc.avoidancecnt(di))

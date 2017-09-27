@@ -162,13 +162,21 @@ typedef struct flow_queue {
 
 /*  see wlfc_proto.h for tx status details */
 #define DHD_FLOWRING_MAXSTATUS_MSGS	5
+#if defined(BCMDBG)
+#define DHD_FLOWRING_TXSTATUS_CNT_UPDATE(bus, flowid, txstatus) \
+		dhd_bus_flow_ring_cnt_update(bus, flowid, txstatus)
+#else
 #define DHD_FLOWRING_TXSTATUS_CNT_UPDATE(bus, flowid, txstatus)
+#endif /* BCMDBG */
 /** each flow ring is dedicated to a tid/sa/da combination */
 typedef struct flow_info {
 	uint8		tid;
 	uint8		ifindex;
 	char		sa[ETHER_ADDR_LEN];
 	char		da[ETHER_ADDR_LEN];
+#if defined(BCMDBG)
+	uint32		tx_status[DHD_FLOWRING_MAXSTATUS_MSGS];
+#endif
 } flow_info_t;
 
 /** a flow ring is used for outbound (towards antenna) 802.3 packets */

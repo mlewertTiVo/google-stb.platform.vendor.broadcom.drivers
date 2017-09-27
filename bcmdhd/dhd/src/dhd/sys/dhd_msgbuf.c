@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_msgbuf.c 644551 2016-06-20 23:29:37Z $
+ * $Id: dhd_msgbuf.c 705748 2017-06-19 09:44:33Z $
  */
 
 
@@ -58,9 +58,11 @@
 #include <dhd_pcie.h>
 
 #if defined(DHD_LB)
+#if !defined(STBLINUX)
 #if !defined(OEM_ANDROID)
 #error "DHD Loadbalancing only supported on LINUX | OEM_ANDROID"
 #endif /* !LINUX && !OEM_ANDROID */
+#endif /* !STBLINUX */
 #include <linux/cpu.h>
 #include <bcm_ring.h>
 #define DHD_LB_WORKQ_SZ                            (8192)

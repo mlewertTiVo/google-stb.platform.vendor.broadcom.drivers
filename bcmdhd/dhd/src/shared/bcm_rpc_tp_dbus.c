@@ -52,9 +52,15 @@
 static uint8 tp_level_host = RPC_TP_MSG_HOST_ERR_VAL;
 #define	RPC_TP_ERR(args)   do {if (tp_level_host & RPC_TP_MSG_HOST_ERR_VAL) printf args;} while (0)
 
+#ifdef BCMDBG
+#define	RPC_TP_DBG(args)   do {if (tp_level_host & RPC_TP_MSG_HOST_DBG_VAL) printf args;} while (0)
+#define	RPC_TP_AGG(args)   do {if (tp_level_host & RPC_TP_MSG_HOST_AGG_VAL) printf args;} while (0)
+#define	RPC_TP_DEAGG(args) do {if (tp_level_host & RPC_TP_MSG_HOST_DEA_VAL) printf args;} while (0)
+#else
 #define RPC_TP_DBG(args)
 #define RPC_TP_AGG(args)
 #define RPC_TP_DEAGG(args)
+#endif
 
 #define RPCNUMBUF	\
 	(BCM_RPC_TP_DBUS_NTXQ_PKT + BCM_RPC_TP_DBUS_NRXQ_CTRL + BCM_RPC_TP_DBUS_NRXQ_PKT * 2)

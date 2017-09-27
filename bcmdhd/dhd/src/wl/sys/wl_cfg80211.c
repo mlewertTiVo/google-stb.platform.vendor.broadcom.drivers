@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.c 703436 2017-06-07 13:52:36Z $
+ * $Id: wl_cfg80211.c 718975 2017-09-01 14:20:50Z $
  */
 /* */
 #include <typedefs.h>
@@ -761,6 +761,17 @@ wl_sdo_proto_t wl_sdo_protos [] = {
 static int bw2cap[] = { 0, 0, WLC_BW_CAP_20MHZ, WLC_BW_CAP_40MHZ, WLC_BW_CAP_80MHZ,
 	WLC_BW_CAP_160MHZ, WLC_BW_CAP_160MHZ };
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)) || (defined(CONFIG_ARCH_MSM) && \
+	defined(CFG80211_DISCONNECTED_V2))
+#define CFG80211_GET_BSS(wiphy, channel, bssid, ssid, ssid_len) \
+	cfg80211_get_bss(wiphy, channel, bssid, ssid, ssid_len,	\
+			IEEE80211_BSS_TYPE_ESS, IEEE80211_PRIVACY_ANY);
+#else
+#define CFG80211_GET_BSS(wiphy, channel, bssid, ssid, ssid_len) \
+	cfg80211_get_bss(wiphy, channel, bssid, ssid, ssid_len,	\
+			WLAN_CAPABILITY_ESS, WLAN_CAPABILITY_ESS);
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)) */
+
 #ifdef RSSI_OFFSET
 static s32 wl_rssi_offset(s32 rssi)
 {
@@ -797,6 +808,11 @@ struct chan_info {
 };
 #endif
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0))
+#define CFG80211_PUT_BSS(wiphy, bss) cfg80211_put_bss(wiphy, bss);
+#else
+#define CFG80211_PUT_BSS(wiphy, bss) cfg80211_put_bss(bss);
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0) */
 
 #if (WL_DBG_LEVEL > 0)
 #define WL_DBG_ESTR_MAX	50
@@ -2592,6 +2608,12 @@ wl_run_escan(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 			if (!wl_get_valid_channels(ndev, chan_buf, sizeof(chan_buf))) {
 				list = (wl_uint32_list_t *) chan_buf;
 				n_valid_chan = dtoh32(list->count);
+				if (n_valid_chan > WL_NUMCHANNELS) {
+					WL_ERR(("Invaild n_valid_chan value: %d\n", n_valid_chan));
+					err = -EINVAL;
+					kfree(default_chan_list);
+					goto exit;
+				}
 				for (i = 0; i < num_chans; i++)
 				{
 #ifdef WL_HOST_BAND_MGMT
@@ -6817,6 +6839,11 @@ wl_cfg80211_mgmt_tx(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev,
 
 	WL_DBG(("Enter \n"));
 
+	if (len > ACTION_FRAME_SIZE) {
+		WL_ERR(("bad length:%zu\n", len));
+		return BCME_BADLEN;
+	}
+
 	dev = cfgdev_to_wlc_ndev(cfgdev, cfg);
 
 	if (!dev) {
@@ -9762,7 +9789,7 @@ static s32 wl_setup_wiphy(struct wireless_dev *wdev, struct device *sdiofunc_dev
 #endif
 	wiphy_apply_custom_regulatory(wdev->wiphy, &brcm_regdom);
 #if defined(WL_VENDOR_EXT_SUPPORT)
-	WL_ERR(("Registering Vendor80211\n"));
+	WL_DBG(("Registering Vendor80211\n"));
 	err = wl_cfgvendor_attach(wdev->wiphy, dhd);
 	if (unlikely(err < 0)) {
 		WL_ERR(("Couldn not attach vendor commands (%d)\n", err));
@@ -10987,6 +11014,52 @@ wl_bss_roaming_done(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	return err;
 }
 
+static bool
+wl_cfg80211_verify_bss(struct bcm_cfg80211 *cfg, struct net_device *ndev)
+{
+	struct cfg80211_bss *bss;
+	struct wiphy *wiphy;
+	struct wlc_ssid *ssid;
+	uint8 *curbssid;
+	int count = 0;
+	int ret = false;
+	u8 cur_ssid[DOT11_MAX_SSID_LEN + 1];
+
+	wiphy = bcmcfg_to_wiphy(cfg);
+	ssid = (struct wlc_ssid *)wl_read_prof(cfg, ndev, WL_PROF_SSID);
+	curbssid = wl_read_prof(cfg, ndev, WL_PROF_BSSID);
+	if (!ssid) {
+		WL_ERR(("No SSID found in the saved profile \n"));
+		return false;
+	}
+
+	do {
+		bss = CFG80211_GET_BSS(wiphy, NULL, curbssid,
+			ssid->SSID, ssid->SSID_len);
+		if (bss || (count > 5)) {
+			break;
+		}
+
+		count++;
+		msleep(100);
+	} while (bss == NULL);
+
+	WL_DBG(("cfg80211 bss_ptr:%p loop_cnt:%d\n", bss, count));
+	if (bss) {
+		/* Update the reference count after use */
+		CFG80211_PUT_BSS(wiphy, bss);
+		ret = true;
+	} else {
+		memset(cur_ssid, 0, DOT11_MAX_SSID_LEN);
+		strncpy(cur_ssid, ssid->SSID,
+			MIN(ssid->SSID_len, DOT11_MAX_SSID_LEN));
+		WL_ERR(("No bss entry for ssid:%s bssid:"MACDBG"\n",
+			cur_ssid, MAC2STRDBG(curbssid)));
+	}
+
+	return ret;
+}
+
 static s32
 wl_bss_connect_done(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	const wl_event_msg_t *e, void *data, bool completed)
@@ -11062,6 +11135,16 @@ wl_bss_connect_done(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 			}
 #endif /* CUSTOM_SET_CPUCORE */
 
+		}
+
+		if (completed && (wl_cfg80211_verify_bss(cfg, ndev) != true)) {
+			/* If bss entry is not available in the cfg80211 bss cache
+			 * the wireless stack will complain and won't populate
+			 * wdev->current_bss ptr
+			 */
+			WL_ERR(("BSS entry not found. Indicate assoc event failure\n"));
+			completed = false;
+			sec->auth_assoc_res_status = WLAN_STATUS_UNSPECIFIED_FAILURE;
 		}
 		cfg80211_connect_result(ndev,
 			curbssid,
@@ -13537,7 +13620,7 @@ static s32 wl_event_handler(void *data)
 
 	cfg = (struct bcm_cfg80211 *)tsk->parent;
 
-	WL_ERR(("tsk Enter, tsk = 0x%p\n", tsk));
+	WL_DBG(("tsk Enter, tsk = 0x%p\n", tsk));
 
 	while (down_interruptible (&tsk->sema) == 0) {
 		SMP_RD_BARRIER_DEPENDS();
@@ -14931,6 +15014,7 @@ s32 wl_cfg80211_get_p2p_dev_addr(struct net_device *net, struct ether_addr *p2pd
 	if (!p2p_is_on(cfg)) {
 		get_primary_mac(cfg, &primary_mac);
 		wl_cfgp2p_generate_bss_mac(cfg, &primary_mac);
+		memcpy((void *)&p2pdev_addr, (void *)&primary_mac, ETHER_ADDR_LEN);
 	} else {
 		memcpy(p2pdev_addr->octet, wl_to_p2p_bss_macaddr(cfg, P2PAPI_BSSCFG_DEVICE).octet,
 			ETHER_ADDR_LEN);

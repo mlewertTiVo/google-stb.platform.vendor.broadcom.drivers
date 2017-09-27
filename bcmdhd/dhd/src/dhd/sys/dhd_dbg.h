@@ -36,7 +36,7 @@
 #define USE_NET_RATELIMIT		1
 #endif
 
-#if defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(DHD_DEBUG)
 
 #define DHD_ERROR(args)		do {if ((dhd_msg_level & DHD_ERROR_VAL) && USE_NET_RATELIMIT) \
 								printf args;} while (0)
@@ -135,7 +135,7 @@
 #define DHD_DBGIF_ON()		0
 #define DHD_RTT_ON()		0
 #define DHD_DBG_BCNRX_ON()	0
-#endif 
+#endif /* defined(BCMDBG) || defined(DHD_DEBUG) */
 
 #define DHD_LOG(args)
 
