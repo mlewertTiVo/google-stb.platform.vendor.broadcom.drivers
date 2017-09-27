@@ -754,7 +754,7 @@ bcm_mdelay(uint ms)
 
 
 
-#if defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(DHD_DEBUG)
 /* pretty hex print a pkt buffer chain */
 void
 prpkt(const char *msg, osl_t *osh, void *p0)
@@ -767,7 +767,7 @@ prpkt(const char *msg, osl_t *osh, void *p0)
 	for (p = p0; p; p = PKTNEXT(osh, p))
 		prhex(NULL, PKTDATA(osh, p), PKTLEN(osh, p));
 }
-#endif	
+#endif	/* BCMDBG || DHD_DEBUG */
 
 /* Takes an Ethernet frame and sets out-of-bound PKTPRIO.
  * Also updates the inplace vlan tag if requested.
@@ -2044,8 +2044,8 @@ bcm_parse_ordered_tlvs(void *buf, int buflen, uint key)
 }
 #endif	/* !BCMROMOFFLOAD_EXCLUDE_BCMUTILS_FUNCS */
 
-#if defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || defined(WLMSG_ASSOC) || \
-	defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(WLMSG_PRHDRS) || defined(WLMSG_PRPKT) || \
+	defined(WLMSG_ASSOC) || defined(DHD_DEBUG)
 int
 bcm_format_field(const bcm_bit_desc_ex_t *bd, uint32 flags, char* buf, int len)
 {
@@ -2204,6 +2204,18 @@ bcm_crypto_algo_name(uint algo)
 	return (algo < ARRAYSIZE(crypto_algo_names)) ? crypto_algo_names[algo] : "ERR";
 }
 
+#ifdef BCMDBG
+void
+deadbeef(void *p, uint len)
+{
+	static uint8 meat[] = { 0xde, 0xad, 0xbe, 0xef };
+
+	while (len-- > 0) {
+		*(uint8*)p = meat[((uintptr)p) & 3];
+		p = (uint8*)p + 1;
+	}
+}
+#endif /* BCMDBG */
 
 char *
 bcm_chipname(uint chipid, char *buf, uint len)
@@ -2538,8 +2550,8 @@ bcm_find_vendor_ie(void *tlvs, int tlvs_len, const char *voui, uint8 *type, int 
 	return NULL;
 }
 
-#if defined(WLTINYDUMP) || defined(WLMSG_INFORM) || defined(WLMSG_ASSOC) || \
-	defined(WLMSG_PRPKT) || defined(WLMSG_WSEC)
+#if defined(WLTINYDUMP) || defined(BCMDBG) || defined(WLMSG_INFORM) || \
+	defined(WLMSG_ASSOC) || defined(WLMSG_PRPKT) || defined(WLMSG_WSEC)
 #define SSID_FMT_BUF_LEN	((4 * DOT11_MAX_SSID_LEN) + 1)
 
 int
@@ -2567,7 +2579,7 @@ bcm_format_ssid(char* buf, const uchar ssid[], uint ssid_len)
 
 	return (int)(p - buf);
 }
-#endif 
+#endif /* WLTINYDUMP || BCMDBG || WLMSG_INFORM || WLMSG_ASSOC || WLMSG_PRPKT */
 
 #endif /* BCMDRIVER || WL_UNITTEST */
 
@@ -3676,4 +3688,24 @@ dll_pool_free_tail(dll_pool_t * dll_pool_p, void * elem_p)
 	dll_pool_p->free_count += 1;
 }
 
+#ifdef BCMDBG
+void
+dll_pool_dump(dll_pool_t * dll_pool_p, dll_elem_dump elem_dump)
+{
+	dll_t * elem_p;
+	dll_t * next_p;
+	printf("dll_pool<%p> free_count<%u> elems_max<%u> elem_size<%u>\n",
+		dll_pool_p, dll_pool_p->free_count,
+		dll_pool_p->elems_max, dll_pool_p->elem_size);
+
+	for (elem_p = dll_head_p(&dll_pool_p->free_list);
+		 !dll_end(&dll_pool_p->free_list, elem_p); elem_p = next_p) {
+
+		next_p = dll_next_p(elem_p);
+		printf("\telem<%p>\n", elem_p);
+		if (elem_dump != NULL)
+			elem_dump((void *)elem_p);
+	}
+}
+#endif /* BCMDBG */
 #endif 

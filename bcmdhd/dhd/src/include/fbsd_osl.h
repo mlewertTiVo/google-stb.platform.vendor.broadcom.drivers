@@ -36,10 +36,17 @@
 #include <dev/usb/usbdi.h>
 #endif
 
+#ifdef BCMDBG
+#define OSL_ERR(args)         do {printf args;} while (0)
+#define OSL_TRACE(args)       do {printf args;} while (0)
+#define OSL_INFO(args)        do {printf args;} while (0)
+#define OSL_DBGLOCK(args)
+#else
 #define OSL_ERR(args)
 #define OSL_TRACE(args)
 #define OSL_INFO(args)
 #define OSL_DBGLOCK(args)
+#endif
 
 #if defined(__FreeBSD__)
 /* Normally... We would expect the following to come from <sys/mbuf.h> but it's not present

@@ -662,6 +662,10 @@ dhd_flowid_lookup(dhd_pub_t *dhdp, uint8 ifindex,
 		flow_ring_node->flow_info.ifindex = ifindex;
 		flow_ring_node->active = TRUE;
 		flow_ring_node->status = FLOW_RING_STATUS_PENDING;
+#ifdef BCMDBG
+		bzero(&flow_ring_node->flow_info.tx_status[0],
+			sizeof(uint32) * DHD_FLOWRING_MAXSTATUS_MSGS);
+#endif
 		DHD_FLOWRING_UNLOCK(flow_ring_node->lock, flags);
 
 		/* Create and inform device about the new flow */

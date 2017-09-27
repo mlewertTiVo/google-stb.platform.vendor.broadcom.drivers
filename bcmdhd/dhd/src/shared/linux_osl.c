@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.c 669433 2016-11-09 13:04:01Z $
+ * $Id: linux_osl.c 718060 2017-08-29 10:11:23Z $
  */
 
 #define LINUX_PORT
@@ -503,7 +503,6 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 	osl_sec_dma_init_consistent(osh);
 
 	osh->contig_base_alloc += CMA_DMA_DESC_MEMBLOCK;
-
 	osh->contig_base_alloc_va = osl_sec_dma_ioremap(osh,
 		phys_to_page((u32)osh->contig_base_alloc), CMA_DMA_DATA_MEMBLOCK, TRUE, FALSE);
 	if (osh->contig_base_alloc_va == NULL) {
@@ -1007,8 +1006,12 @@ osl_pktget(osl_t *osh, uint len)
 #else /* CTFPOOL */
 	if ((skb = osl_alloc_skb(osh, len))) {
 #endif /* CTFPOOL */
+#ifdef BCMDBG
+		skb_put(skb, len);
+#else
 		skb->tail += len;
 		skb->len  += len;
+#endif
 		skb->priority = 0;
 
 #ifdef BCMDBG_CTRACE
@@ -1362,6 +1365,11 @@ osl_pci_read_config(osl_t *osh, uint offset, uint size)
 			break;
 	} while (retry--);
 
+#ifdef BCMDBG
+	if (retry < PCI_CFG_RETRY)
+		printk("PCI CONFIG READ access to %d required %d retries\n", offset,
+		       (PCI_CFG_RETRY - retry));
+#endif /* BCMDBG */
 
 	return (val);
 }
@@ -1384,6 +1392,11 @@ osl_pci_write_config(osl_t *osh, uint offset, uint size, uint val)
 			break;
 	} while (retry--);
 
+#ifdef BCMDBG
+	if (retry < PCI_CFG_RETRY)
+		printk("PCI CONFIG WRITE access to %d required %d retries\n", offset,
+		       (PCI_CFG_RETRY - retry));
+#endif /* BCMDBG */
 }
 
 /* return bus # for the pci device pointed by osh->pdev */
@@ -2151,16 +2164,12 @@ osl_sec_dma_ioremap(osl_t *osh, struct page *page, size_t size, bool iscache, bo
 		}
 	}
 	else {
-
-#if defined(__ARM_ARCH_7A__)
 		addr = vmap(map, size >> PAGE_SHIFT, VM_MAP,
-			pgprot_noncached(__pgprot(PAGE_KERNEL)));
-#endif
+			(pgprot_noncached(__pgprot(PAGE_KERNEL)) | pgprot_writecombine(__pgprot(PAGE_KERNEL))));
 		if (isdecr) {
 			osh->contig_delta_va_pa = (phys_addr_t)(addr - page_to_phys(page));
 		}
 	}
-
 	kfree(map);
 	return (void *)addr;
 }
@@ -2252,7 +2261,6 @@ osl_sec_dma_alloc_mem_elem(osl_t *osh, void *va, uint size, int direction,
 			ptr_cma_info->sec_alloc_list_tail = sec_mem_elem;
 		}
 	}
-
 	return sec_mem_elem;
 }
 
@@ -2389,6 +2397,7 @@ osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 	uint buflen = 0;
 	dma_addr_t dma_handle = 0x0;
 	uint loffset;
+	struct pci_dev * pdev;
 #ifdef NOT_YET
 	int *fragva;
 	struct sk_buff *skb;
@@ -2396,6 +2405,7 @@ osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 #endif /* NOT_YET */
 
 	ASSERT((direction == DMA_RX) || (direction == DMA_TX));
+	pdev = osh->pdev;
 	sec_mem_elem = osl_sec_dma_alloc_mem_elem(osh, va, size, direction, ptr_cma_info, offset);
 
 	if(sec_mem_elem) {
@@ -2455,9 +2465,8 @@ osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 				dmah->origsize = buflen;
 			}
 		}
-			dma_handle = dma_map_page(OSH_NULL, pa_cma_page, loffset+offset, buflen,
-				(direction == DMA_TX ? DMA_TO_DEVICE:DMA_FROM_DEVICE));
-
+		dma_handle = dma_map_page(&pdev->dev, pa_cma_page, loffset+offset, buflen,
+			(direction == DMA_TX ? DMA_TO_DEVICE:DMA_FROM_DEVICE));
 		if (dmah) {
 			dmah->segs[0].addr = dma_handle;
 			dmah->segs[0].length = buflen;

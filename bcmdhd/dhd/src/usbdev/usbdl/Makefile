@@ -10,7 +10,7 @@
 # or duplicated in any form, in whole or in part, without the prior
 # written permission of Broadcom Corporation.
 #
-# $Id: Makefile 675078 2016-12-14 05:16:14Z $
+# $Id: Makefile 709251 2017-07-06 12:53:08Z $
 
 
 SRCBASE = ../..
@@ -130,8 +130,10 @@ ifeq ($(TARGETENV), linuxarm)
 	OBJECTS += $(OBJDIR)usb_linux.o
 	COMPILE = arm-linux-gcc
 	CLEAN = clean_linux
-	LDFLAGS += -L$(LIBUSB_PATH)/lib
-	LIBS := -L$(LIBUSB_PATH)/lib $(LIBUSB_PATH)/.libs/libusb.a
+# From the included makefile (Makerules) LDFLAGS is holding the only value "-static"
+# Since we want to dynamically link the libusb during run time we are overriding the LDFLAGS with no value
+	LDFLAGS =
+	LIBS := -L$(LIBUSB_PATH)/.libs -lusb
 	CFLAGS += -I$(LIBUSB_PATH)/
 endif
 
