@@ -397,12 +397,20 @@ extern uint si_pll_reset(si_t *sih);
 
 extern bool si_taclear(si_t *sih, bool details);
 
-#if defined(BCMDBG_PHYDUMP)
+#ifdef BCMDBG
+extern void si_view(si_t *sih, bool verbose);
+extern void si_viewall(si_t *sih, bool verbose);
+#if defined(BCM_BACKPLANE_TIMEOUT)
+extern void si_setup_backplanetimeout(osl_t *osh, si_t *sih, uint val);
+extern void si_setup_curmap(osl_t *osh, si_t *sih);
+#endif /* defined(BCM_BACKPLANE_TIMEOUT) */
+#endif /* BCMDBG */
+#if defined(BCMDBG) || defined(BCMDBG_PHYDUMP) || defined(WLTEST)
 struct bcmstrbuf;
 extern int si_dump_pcieinfo(si_t *sih, struct bcmstrbuf *b);
 #endif 
 
-#if defined(BCMDBG_PHYDUMP)
+#if defined(BCMDBG) || defined(BCMDBG_PHYDUMP)
 extern void si_dumpregs(si_t *sih, struct bcmstrbuf *b);
 #endif 
 

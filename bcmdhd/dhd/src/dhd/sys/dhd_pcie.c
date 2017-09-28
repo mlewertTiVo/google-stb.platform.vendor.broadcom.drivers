@@ -4557,8 +4557,21 @@ void dhd_bus_dump(dhd_pub_t *dhdp, struct bcmstrbuf *strbuf)
 			DHD_FLOW_QUEUE_FAILURES(&flow_ring_node->queue));
 		dhd_prot_print_flow_ring(dhdp, flow_ring_node->prot_info, strbuf,
 			"%4d %4d ");
+#ifdef BCMDBG
+		if (!dhdp->d2h_sync_mode) {
+			flow_info_t *flow_info = &flow_ring_node->flow_info;
+			bcm_bprintf(strbuf, "%5d %6d %5d\n",
+			flow_info->tx_status[WLFC_CTL_PKTFLAG_DISCARD],
+			flow_info->tx_status[WLFC_CTL_PKTFLAG_TOSSED_BYWLC],
+			flow_info->tx_status[WLFC_CTL_PKTFLAG_DISCARD_NOACK]);
+		} else {
+			bcm_bprintf(strbuf,
+				"%5s %6s %5s\n", "NA", "NA", "NA");
+		}
+#else
 		bcm_bprintf(strbuf,
 			"%5s %6s %5s\n", "NA", "NA", "NA");
+#endif
 	}
 	bcm_bprintf(strbuf, "D3 inform cnt %d\n", dhdp->bus->d3_inform_cnt);
 	bcm_bprintf(strbuf, "D0 inform cnt %d\n", dhdp->bus->d0_inform_cnt);
@@ -5868,3 +5881,23 @@ dhd_bus_oob_intr_set(dhd_pub_t *dhdp, bool enable)
 	dhdpcie_oob_intr_set(dhdp->bus, enable);
 }
 #endif /* BCMPCIE_OOB_HOST_WAKE */
+
+#ifdef BCMDBG
+void
+dhd_bus_flow_ring_cnt_update(dhd_bus_t *bus, uint16 flowid, uint32 txstatus)
+{
+	flow_ring_node_t *flow_ring_node;
+	/* If we have d2h sync enabled due to marker overloading, we cannot update this. */
+	if (bus->dhd->d2h_sync_mode)
+		return;
+	if (txstatus >= DHD_FLOWRING_MAXSTATUS_MSGS) {
+		DHD_ERROR(("%s Unknown txtstatus = %d \n",
+		    __FUNCTION__, txstatus));
+		return;
+	}
+	flow_ring_node = DHD_FLOW_RING(bus->dhd, flowid);
+	ASSERT(flow_ring_node->flowid == flowid);
+	flow_ring_node->flow_info.tx_status[txstatus]++;
+	return;
+}
+#endif /* BCMDBG */

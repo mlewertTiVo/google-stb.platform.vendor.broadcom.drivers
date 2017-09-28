@@ -32,7 +32,11 @@
 
 #define	SI_ERROR(args)
 
+#ifdef BCMDBG
+#define	SI_MSG(args)	printf args
+#else
 #define	SI_MSG(args)
+#endif	/* BCMDBG */
 
 #ifdef BCMDBG_SI
 #define	SI_VMSG(args)	printf args
@@ -213,7 +217,11 @@ extern uint32 sb_set_initiator_to(si_t *sih, uint32 to, uint idx);
 
 extern bool sb_taclear(si_t *sih, bool details);
 
-#if defined(BCMDBG_PHYDUMP)
+#ifdef BCMDBG
+extern void sb_view(si_t *sih, bool verbose);
+extern void sb_viewall(si_t *sih, bool verbose);
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_PHYDUMP)
 extern void sb_dumpregs(si_t *sih, struct bcmstrbuf *b);
 #endif 
 
@@ -262,7 +270,11 @@ extern uint ai_wrap_reg(si_t *sih, uint32 offset, uint32 mask, uint32 val);
 extern void ai_enable_backplane_timeouts(si_t *sih);
 extern void ai_clear_backplane_to(si_t *sih);
 
-#if defined(BCMDBG_PHYDUMP)
+#ifdef BCMDBG
+extern void ai_view(si_t *sih, bool verbose);
+extern void ai_viewall(si_t *sih, bool verbose);
+#endif
+#if defined(BCMDBG) || defined(BCMDBG_PHYDUMP)
 extern void ai_dumpregs(si_t *sih, struct bcmstrbuf *b);
 #endif 
 

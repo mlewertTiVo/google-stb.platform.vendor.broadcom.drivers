@@ -35,7 +35,7 @@
 #endif
 /* global msglevel for debug messages - bitvals come from sdiovar.h */
 
-#if defined(DHD_DEBUG)
+#if defined(BCMDBG) || defined(DHD_DEBUG)
 #define sd_err(x)	do { if (sd_msglevel & SDH_ERROR_VAL) printf x; } while (0)
 #define sd_trace(x)	do { if (sd_msglevel & SDH_TRACE_VAL) printf x; } while (0)
 #define sd_info(x)	do { if (sd_msglevel & SDH_INFO_VAL)  printf x; } while (0)

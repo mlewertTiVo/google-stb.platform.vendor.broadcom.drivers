@@ -93,6 +93,10 @@ typedef struct dbus_info {
 	dbus_irbq_t *rx_q;
 	dbus_irbq_t *tx_q;
 
+#ifdef BCMDBG
+	int         *txpend_q_hist;
+	int         *rxpend_q_hist;
+#endif /* BCMDBG */
 #ifdef EHCI_FASTPATH_RX
 	atomic_t    rx_outstanding;
 #endif
@@ -536,6 +540,15 @@ dbus_send_irb(dbus_pub_t *pub, uint8 *buf, int len, void *pkt, void *info)
 
 		len = ROUNDUP(len, sizeof(uint32));
 
+#ifdef BCMDBG
+		/* The packet length is already padded to not to be multiple of 512 bytes
+		 * in bcm_rpc_tp_buf_send_internal(), so it should not be 512*N bytes here.
+		 */
+		if (len % EHCI_BULK_PACKET_SIZE == 0) {
+			DBUSERR(("%s: len = %d (multiple of 512 bytes)\n", __FUNCTION__, len));
+			return DBUS_ERR_TXDROP;
+		}
+#endif /* BCMDBG */
 
 		optimize_qtd_fill_with_rpc(pub, 0, qtd, pkt, token, len);
 		err = optimize_submit_async(qtd, 0);
@@ -583,6 +596,9 @@ dbus_send_irb(dbus_pub_t *pub, uint8 *buf, int len, void *pkt, void *info)
 			} else {
 				dbus_tx_timer_start(dbus_info, DBUS_TX_TIMEOUT_INTERVAL);
 				txirb_pending = dbus_info->pub.ntxq - dbus_info->tx_q->cnt;
+#ifdef BCMDBG
+				dbus_info->txpend_q_hist[txirb_pending]++;
+#endif /* BCMDBG */
 				if (txirb_pending > (dbus_info->tx_low_watermark * 3)) {
 					dbus_flowctrl_tx(dbus_info, TRUE);
 				}
@@ -1021,6 +1037,9 @@ dbus_if_recv_irb_complete(void *handle, dbus_irb_rx_t *rxirb, int status)
 			}
 
 			rxirb_pending = dbus_info->pub.nrxq - dbus_info->rx_q->cnt - 1;
+#ifdef BCMDBG
+			dbus_info->rxpend_q_hist[rxirb_pending]++;
+#endif /* BCMDBG */
 			if ((rxirb_pending <= dbus_info->rx_low_watermark) &&
 				!dbus_info->rxoff) {
 				DBUSTRACE(("Low watermark so submit more %d <= %d \n",
@@ -1339,6 +1358,17 @@ dbus_attach(osl_t *osh, int rxsize, int nrxq, int ntxq, void *cbarg,
 			goto error;
 	}
 
+#ifdef BCMDBG
+	dbus_info->txpend_q_hist = MALLOC(osh, dbus_info->pub.ntxq * sizeof(int));
+	if (dbus_info->txpend_q_hist == NULL)
+		goto error;
+	bzero(dbus_info->txpend_q_hist, dbus_info->pub.ntxq * sizeof(int));
+
+	dbus_info->rxpend_q_hist = MALLOC(osh, dbus_info->pub.nrxq * sizeof(int));
+	if (dbus_info->rxpend_q_hist == NULL)
+		goto error;
+	bzero(dbus_info->rxpend_q_hist, dbus_info->pub.nrxq * sizeof(int));
+#endif /* BCMDBG */
 
 	dbus_info->bus_info = (void *)g_busintf->attach(&dbus_info->pub,
 		dbus_info, &dbus_intf_cbs);
@@ -1406,6 +1436,12 @@ dbus_detach(dbus_pub_t *pub)
 		dbus_info->rx_q = NULL;
 	}
 
+#ifdef BCMDBG
+	if (dbus_info->txpend_q_hist)
+		MFREE(osh, dbus_info->txpend_q_hist, dbus_info->pub.ntxq * sizeof(int));
+	if (dbus_info->rxpend_q_hist)
+		MFREE(osh, dbus_info->rxpend_q_hist, dbus_info->pub.nrxq * sizeof(int));
+#endif /* BCMDBG */
 
 	if (dbus_info->extdl.fw && (dbus_info->extdl.fwlen > 0)) {
 		MFREE(osh, dbus_info->extdl.fw, dbus_info->extdl.fwlen);
@@ -1864,6 +1900,42 @@ dbus_iovar_op(dbus_pub_t *pub, const char *name,
 	return err;
 }
 
+#ifdef BCMDBG
+void
+dbus_hist_dump(dbus_pub_t *pub, struct bcmstrbuf *b)
+{
+	int i = 0, j = 0;
+	dbus_info_t *dbus_info = (dbus_info_t *) pub;
+
+	bcm_bprintf(b, "\nDBUS histogram\n");
+	bcm_bprintf(b, "txq\n");
+	for (i = 0; i < dbus_info->pub.ntxq; i++) {
+		if (dbus_info->txpend_q_hist[i]) {
+			bcm_bprintf(b, "%d: %d ", i, dbus_info->txpend_q_hist[i]);
+			j++;
+			if (j % 10 == 0) {
+				bcm_bprintf(b, "\n");
+			}
+		}
+	}
+
+	j = 0;
+	bcm_bprintf(b, "\nrxq\n");
+	for (i = 0; i < dbus_info->pub.nrxq; i++) {
+		if (dbus_info->rxpend_q_hist[i]) {
+			bcm_bprintf(b, "%d: %d ", i, dbus_info->rxpend_q_hist[i]);
+			j++;
+			if (j % 10 == 0) {
+				bcm_bprintf(b, "\n");
+			}
+		}
+	}
+	bcm_bprintf(b, "\n");
+
+	if (dbus_info->drvintf && dbus_info->drvintf->dump)
+		dbus_info->drvintf->dump(dbus_info->bus_info, b);
+}
+#endif /* BCMDBG */
 
 void *
 dhd_dbus_txq(const dbus_pub_t *pub)
@@ -2168,6 +2240,9 @@ bcm_dbus_module_exit(void)
 EXPORT_SYMBOL(dbus_pnp_sleep);
 EXPORT_SYMBOL(dbus_register);
 EXPORT_SYMBOL(dbus_get_devinfo);
+#ifdef BCMDBG
+EXPORT_SYMBOL(dbus_hist_dump);
+#endif
 EXPORT_SYMBOL(dbus_detach);
 EXPORT_SYMBOL(dbus_get_attrib);
 EXPORT_SYMBOL(dbus_down);

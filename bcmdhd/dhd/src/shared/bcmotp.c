@@ -71,10 +71,19 @@
 #define OTP_DBG_VAL	0x0004
 uint32 otp_msg_level = OTP_ERR_VAL;
 
+#if defined(BCMDBG)
+#define OTP_ERR(args)	do {if (otp_msg_level & OTP_ERR_VAL) printf args;} while (0)
+#else
 #define OTP_ERR(args)
+#endif
 
+#ifdef BCMDBG
+#define OTP_MSG(args)	do {if (otp_msg_level & OTP_MSG_VAL) printf args;} while (0)
+#define OTP_DBG(args)	do {if (otp_msg_level & OTP_DBG_VAL) printf args;} while (0)
+#else
 #define OTP_MSG(args)
 #define OTP_DBG(args)
+#endif
 
 #define OTPP_TRIES		10000000	/* # of tries for OTPP */
 #define OTP_FUSES_PER_BIT	2
@@ -440,8 +449,114 @@ BCMNMIATTACHFN(ipxotp_read_bit)(void *oh, chipcregs_t *cc, uint off)
 	return (val16);
 }
 
+#if defined(WLTEST)
+static uint16
+BCMNMIATTACHFN(ipxotp_otprb16)(void *oh, otpregs_t *otpregs, uint wn)
+{
+	uint base, i;
+	uint16 val;
+	uint16 bit;
+
+	base = wn * 16;
+
+	val = 0;
+	for (i = 0; i < 16; i++) {
+		if ((bit = _ipxotp_read_bit(oh, otpregs, base + i)) == 0xffff)
+			break;
+		val = val | (bit << i);
+	}
+	if (i < 16)
+		val = 0xffff;
+
+	return val;
+}
+
+static uint16
+BCMNMIATTACHFN(ipxotp_otpr)(void *oh, otpregs_t *otpregs, uint wn)
+{
+	otpinfo_t *oi;
+	si_t *sih;
+	uint16 val;
+	si_info_t *sii;
 
 
+	oi = (otpinfo_t *)oh;
+
+	ASSERT(wn < oi->wsize);
+	ASSERT(otpregs != NULL);
+
+	sih = oi->sih;
+	sii = SI_INFO(sih);
+
+	sih = oi->sih;
+	ASSERT(sih != NULL);
+	/* If sprom is available use indirect access(as cc->sromotp maps to srom),
+	 * else use random-access.
+	 */
+	if (si_is_sprom_available(sih))
+		val = ipxotp_otprb16(oi, otpregs, wn);
+	else
+	{
+		if (BUSTYPE(sih->bustype) == PCI_BUS && AOB_ENAB(sih)) {
+			uint32 bar0win, otpaddr;
+
+			/* Save BAR0WIN */
+			bar0win = OSL_PCI_READ_CONFIG(sii->osh, PCI_BAR0_WIN, 4);
+			otpaddr = si_addrspace(sih, 0) + 0x1000;
+			OSL_PCI_WRITE_CONFIG(sii->osh, PCI_BAR0_WIN, 4, otpaddr);
+
+			val = R_REG(oi->osh, &oi->otpbase[wn]);
+
+			/* Restore BAR0WIN */
+			OSL_PCI_WRITE_CONFIG(sii->osh, PCI_BAR0_WIN, 4, bar0win);
+		} else
+			val = R_REG(oi->osh, &oi->otpbase[wn]);
+	}
+
+	return val;
+}
+#endif 
+
+
+#if defined(WLTEST)
+static int
+BCMNMIATTACHFN(ipxotp_dump)(void *oh, int arg, char *buf, uint size)
+{
+	otpinfo_t *oi = (otpinfo_t *)oh;
+	si_t *sih = oi->sih;
+	void *regs;
+	otpregs_t otpregs;
+	uint idx, i, count;
+	uint16 val;
+	struct bcmstrbuf b;
+
+	idx = si_coreidx(sih);
+	if (AOB_ENAB(sih)) {
+		regs = si_setcore(sih, GCI_CORE_ID, 0);
+	} else {
+		regs = si_setcoreidx(sih, SI_CC_IDX);
+	}
+	otp_initregs(sih, regs, &otpregs);
+
+	count = ipxotp_size(oh);
+
+	bcm_binit(&b, buf, size);
+	for (i = 0; i < count / 2; i++) {
+		if (!(i % 4))
+			bcm_bprintf(&b, "\n0x%04x:", 2 * i);
+		if (arg == 0)
+			val = ipxotp_otpr(oh, &otpregs, i);
+		else
+			val = ipxotp_otprb16(oi, &otpregs, i);
+		bcm_bprintf(&b, " 0x%04x", val);
+	}
+	bcm_bprintf(&b, "\n");
+
+	si_setcoreidx(oi->sih, idx);
+
+	return ((int)(b.buf - b.origbuf));
+}
+#endif	
 
 static otp_fn_t BCMNMIATTACHDATA(ipxotp_fn) = {
 	(otp_size_t)ipxotp_size,
@@ -586,6 +701,23 @@ BCMNMIATTACHFN(hndotp_size)(void *oh)
 	return ((int)(oi->size));
 }
 
+#if defined(WLTEST)
+static uint16
+BCMNMIATTACHFN(hndotp_otpr)(void *oh, chipcregs_t *cc, uint wn)
+{
+	otpinfo_t *oi = (otpinfo_t *)oh;
+	osl_t *osh;
+	volatile uint16 *ptr;
+
+	ASSERT(wn < ((oi->size / 2) + OTP_RC_LIM_OFF));
+	ASSERT(cc != NULL);
+
+	osh = si_osh(oi->sih);
+
+	ptr = (volatile uint16 *)((volatile char *)cc + CC_SROM_OTP);
+	return (R_REG(osh, &ptr[wn]));
+}
+#endif 
 
 
 static uint16
@@ -626,6 +758,80 @@ BCMNMIATTACHFN(hndotp_read_bit)(void *oh, chipcregs_t *cc, uint idx)
 }
 
 
+#if defined(WLTEST)
+static uint16
+BCMNMIATTACHFN(hndotp_otprb16)(void *oh, chipcregs_t *cc, uint wn)
+{
+	uint base, i;
+	uint16 val, bit;
+
+	base = (wn * 16) + (wn / 4);
+	val = 0;
+	for (i = 0; i < 16; i++) {
+		if ((bit = hndotp_read_bit(oh, cc, base + i)) == 0xffff)
+			break;
+		val = val | (bit << i);
+	}
+	if (i < 16)
+		val = 0xaaaa;
+	return val;
+}
+
+static int
+BCMNMIATTACHFN(hndotp_dump)(void *oh, int arg, char *buf, uint size)
+{
+	otpinfo_t *oi = (otpinfo_t *)oh;
+	chipcregs_t *cc;
+	uint idx, i, count, lil;
+	uint16 val;
+	struct bcmstrbuf b;
+
+	idx = si_coreidx(oi->sih);
+	cc = si_setcoreidx(oi->sih, SI_CC_IDX);
+	ASSERT(cc != NULL);
+
+	if (arg >= 16)
+		arg -= 16;
+
+	if (arg == 2) {
+		count = 66 * 4;
+		lil = 3;
+	} else {
+		count = (oi->size / 2) + OTP_RC_LIM_OFF;
+		lil = 7;
+	}
+
+	OTP_MSG(("%s: arg %d, size %d, words %d\n", __FUNCTION__, arg, size, count));
+	bcm_binit(&b, buf, size);
+	for (i = 0; i < count; i++) {
+		if ((i & lil) == 0)
+			bcm_bprintf(&b, "0x%04x:", 2 * i);
+
+		if (arg == 0)
+			val = hndotp_otpr(oh, cc, i);
+		else
+			val = hndotp_otprb16(oi, cc, i);
+		bcm_bprintf(&b, " 0x%04x", val);
+		if ((i & lil) == lil) {
+			if (arg == 2) {
+				bcm_bprintf(&b, " %d\n",
+				            hndotp_read_bit(oh, cc, ((i / 4) * 65) + 64) & 1);
+			} else {
+				bcm_bprintf(&b, "\n");
+			}
+		}
+	}
+	if ((i & lil) != lil)
+		bcm_bprintf(&b, "\n");
+
+	OTP_MSG(("%s: returning %d, left %d, wn %d\n",
+		__FUNCTION__, (int)(b.buf - b.origbuf), b.size, i));
+
+	si_setcoreidx(oi->sih, idx);
+
+	return ((int)(b.buf - b.origbuf));
+}
+#endif	
 
 static otp_fn_t hndotp_fn = {
 	(otp_size_t)hndotp_size,
@@ -713,12 +919,20 @@ BCMNMIATTACHFN(otp_init)(si_t *sih)
 
 #ifdef BCMIPXOTP
 	if (OTPTYPE_IPX(oi->ccrev)) {
+#if defined(WLTEST)
+		/* Dump function is excluded from ROM */
+		get_ipxotp_fn()->dump = ipxotp_dump;
+#endif
 		oi->fn = get_ipxotp_fn();
 	}
 #endif /* BCMIPXOTP */
 
 #ifdef BCMHNDOTP
 	if (OTPTYPE_HND(oi->ccrev)) {
+#if defined(WLTEST)
+		/* Dump function is excluded from ROM */
+		hndotp_fn.dump = hndotp_dump;
+#endif
 		oi->fn = &hndotp_fn;
 	}
 #endif /* BCMHNDOTP */

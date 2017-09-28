@@ -100,6 +100,9 @@ typedef struct {
 typedef struct {
 	uint32                  _prec_log;
 	pktq_counters_t*        _prec_cnt[PKTQ_MAX_PREC];     /**< Counters per queue  */
+#if defined(BCMDBG) && defined(PSPRETEND)
+	uint32 pps_time;        /**< time spent in ps pretend state */
+#endif
 } pktq_log_t;
 #endif /* PKTQ_LOG */
 
