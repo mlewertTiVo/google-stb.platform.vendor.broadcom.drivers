@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfgp2p.h 536426 2015-02-23 05:49:43Z $
+ * $Id: wl_cfgp2p.h 725485 2017-10-07 00:37:47Z $
  */
 #ifndef _wl_cfgp2p_h_
 #define _wl_cfgp2p_h_
@@ -402,6 +402,7 @@ wl_cfgp2p_is_p2p_specific_scan(struct cfg80211_scan_request *request);
 #define WL_P2P_WILDCARD_SSID_LEN 7
 #define WL_P2P_INTERFACE_PREFIX "p2p"
 #define WL_P2P_TEMP_CHAN 11
+#define WL_P2P_TEMP_CHAN_5G 36
 #define WL_P2P_AF_STATUS_OFFSET 9
 
 /* If the provision discovery is for JOIN operations,
