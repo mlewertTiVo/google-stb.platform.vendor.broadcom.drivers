@@ -5819,7 +5819,7 @@ dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
 	if (!state) {
 		/* Check wake reason */
 		memset(&wake, 0, sizeof(wake));
-		err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", (char *)&wake, sizeof(wake), NULL, 0, FALSE);
+		err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", NULL, 0, (char *)&wake, sizeof(wake), FALSE);
 		DHD_INFO(("%s: wowl_wakeind, result=%d pci=%d ucode=0x%x\n", __FUNCTION__,
 				err, wake.pci_wakeind, wake.ucode_wakeind));
 
@@ -5840,7 +5840,7 @@ dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
 		DHD_ERROR(("%s: error clearing wowl_wakeind, result=%d\n", __FUNCTION__, err));
 	}
 
-	err = dhd_iovar(bus->dhd, 0, "wowl_clear", (char *)&value, sizeof(value), NULL, 0, FALSE);
+	err = dhd_iovar(bus->dhd, 0, "wowl_clear", NULL, 0, (char *)&value, sizeof(value), FALSE);
 	if (err < 0) {
 		DHD_ERROR(("%s: error using wowl_clear, result=%d\n", __FUNCTION__, err));
 	}
@@ -5852,7 +5852,7 @@ dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
 	}
 
 	if (state) {
-		err = dhd_iovar(bus->dhd, 0, "wowl_activate", (char *)&value, sizeof(value), NULL, 0, FALSE);
+		err = dhd_iovar(bus->dhd, 0, "wowl_activate", NULL, 0, (char *)&value, sizeof(value), FALSE);
 		if (err < 0) {
 			DHD_ERROR(("%s: error in wowl_activate, result=%d\n", __FUNCTION__, err));
 		}
