@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_pcie.c 664644 2016-10-13 09:37:49Z $
+ * $Id: dhd_pcie.c 725485 2017-10-07 00:37:47Z $
  */
 
 
@@ -5819,13 +5819,13 @@ dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
 	if (!state) {
 		/* Check wake reason */
 		memset(&wake, 0, sizeof(wake));
-		err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", (char *)&wake, sizeof(wake), 0);
+		err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", NULL, 0, (char *)&wake, sizeof(wake), FALSE);
 		DHD_INFO(("%s: wowl_wakeind, result=%d pci=%d ucode=0x%x\n", __FUNCTION__,
 				err, wake.pci_wakeind, wake.ucode_wakeind));
 
 		/* Release a cached mDNS packet that woke us up, if any */
 		if (wake.ucode_wakeind & WL_WOWL_MDNS_SERVICE) {
-			err = dhd_iovar(bus->dhd, 0, "wowl_rls_wake_pkt", NULL, 0, 1);
+			err = dhd_iovar(bus->dhd, 0, "wowl_rls_wake_pkt", NULL, 0, NULL, 0, TRUE);
 			if (err < 0) {
 				DHD_ERROR(("%s: error using wowl_rls_wake_pkt, result=%d\n",
 						__FUNCTION__, err));
@@ -5835,24 +5835,24 @@ dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
 
 	memset(&wake, 0, sizeof(wake));
 	memcpy(&wake, "clear", strlen("clear"));
-	err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", (char *)&wake, sizeof(wake), 1);
+	err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", (char *)&wake, sizeof(wake), NULL, 0, TRUE);
 	if (err < 0) {
 		DHD_ERROR(("%s: error clearing wowl_wakeind, result=%d\n", __FUNCTION__, err));
 	}
 
-	err = dhd_iovar(bus->dhd, 0, "wowl_clear", (char *)&value, sizeof(value), 0);
+	err = dhd_iovar(bus->dhd, 0, "wowl_clear", NULL, 0, (char *)&value, sizeof(value), FALSE);
 	if (err < 0) {
 		DHD_ERROR(("%s: error using wowl_clear, result=%d\n", __FUNCTION__, err));
 	}
 
 	value = state ? (WL_WOWL_MAGIC | WL_WOWL_MDNS_SERVICE) : 0;
-	err = dhd_iovar(bus->dhd, 0, "wowl", (char *) &value, sizeof(value), 1);
+	err = dhd_iovar(bus->dhd, 0, "wowl", (char *) &value, sizeof(value), NULL, 0, TRUE);
 	if (err < 0) {
 		DHD_ERROR(("%s: error setting wowl, result=%d\n", __FUNCTION__, err));
 	}
 
 	if (state) {
-		err = dhd_iovar(bus->dhd, 0, "wowl_activate", (char *)&value, sizeof(value), 0);
+		err = dhd_iovar(bus->dhd, 0, "wowl_activate", NULL, 0, (char *)&value, sizeof(value), FALSE);
 		if (err < 0) {
 			DHD_ERROR(("%s: error in wowl_activate, result=%d\n", __FUNCTION__, err));
 		}
