@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmevent.c 572557 2015-07-20 07:12:29Z $
+ * $Id: bcmevent.c 726300 2017-10-12 05:28:33Z $
  */
 
 #include <typedefs.h>
@@ -160,7 +160,6 @@ static const bcmevent_name_str_t bcmevent_names[] = {
 #endif /* WLAIBSS */
 #ifdef GSCAN_SUPPORT
 	BCMEVENT_NAME(WLC_E_PFN_GSCAN_FULL_RESULT),
-	BCMEVENT_NAME(WLC_E_PFN_SWC),
 #endif /* GSCAN_SUPPORT */
 #ifdef WLBSSLOAD_REPORT
 	BCMEVENT_NAME(WLC_E_BSS_LOAD),
