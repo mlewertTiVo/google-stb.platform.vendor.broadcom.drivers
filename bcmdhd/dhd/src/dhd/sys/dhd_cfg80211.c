@@ -179,7 +179,7 @@ wl_dongle_up(struct net_device *ndev)
 	s32 err = 0;
 	u32 up = 0;
 
-	err = wldev_ioctl(ndev, WLC_UP, &up, sizeof(up), true);
+	err = wldev_ioctl_set(ndev, WLC_UP, &up, sizeof(up));
 	if (unlikely(err)) {
 		WL_ERR(("WLC_UP error (%d)\n", err));
 	}
@@ -192,7 +192,7 @@ wl_dongle_down(struct net_device *ndev)
 	s32 err = 0;
 	u32 down = 0;
 
-	err = wldev_ioctl(ndev, WLC_DOWN, &down, sizeof(down), true);
+	err = wldev_ioctl_set(ndev, WLC_DOWN, &down, sizeof(down));
 	if (unlikely(err)) {
 		WL_ERR(("WLC_DOWN error (%d)\n", err));
 	}
@@ -205,7 +205,7 @@ static s32 wl_dongle_power(struct net_device *ndev, u32 power_mode)
 	s32 err = 0;
 
 	WL_TRACE(("In\n"));
-	err = wldev_ioctl(ndev, WLC_SET_PM, &power_mode, sizeof(power_mode), true);
+	err = wldev_ioctl_set(ndev, WLC_SET_PM, &power_mode, sizeof(power_mode));
 	if (unlikely(err)) {
 		WL_ERR(("WLC_SET_PM error (%d)\n", err));
 	}
@@ -216,23 +216,18 @@ static s32 wl_dongle_power(struct net_device *ndev, u32 power_mode)
 static s32
 wl_dongle_roam(struct net_device *ndev, u32 roamvar, u32 bcn_timeout)
 {
-	s8 iovbuf[WL_EVENTING_MASK_LEN + 12];
-
 	s32 err = 0;
 
 	/* Setup timeout if Beacons are lost and roam is off to report link down */
 	if (roamvar) {
-		bcm_mkiovar("bcn_timeout", (char *)&bcn_timeout, 4, iovbuf,
-			sizeof(iovbuf));
-		err = wldev_ioctl(ndev, WLC_SET_VAR, iovbuf, sizeof(iovbuf), true);
+		err = wldev_iovar_setint(ndev, "bcn_timeout", bcn_timeout);
 		if (unlikely(err)) {
 			WL_ERR(("bcn_timeout error (%d)\n", err));
 			goto dongle_rom_out;
 		}
 	}
 	/* Enable/Disable built-in roaming to allow supplicant to take care of roaming */
-	bcm_mkiovar("roam_off", (char *)&roamvar, 4, iovbuf, sizeof(iovbuf));
-	err = wldev_ioctl(ndev, WLC_SET_VAR, iovbuf, sizeof(iovbuf), true);
+	err = wldev_iovar_setint(ndev, "roam_off", roamvar);
 	if (unlikely(err)) {
 		WL_ERR(("roam_off error (%d)\n", err));
 		goto dongle_rom_out;
@@ -247,8 +242,8 @@ wl_dongle_scantime(struct net_device *ndev, s32 scan_assoc_time,
 {
 	s32 err = 0;
 
-	err = wldev_ioctl(ndev, WLC_SET_SCAN_CHANNEL_TIME, &scan_assoc_time,
-		sizeof(scan_assoc_time), true);
+	err = wldev_ioctl_set(ndev, WLC_SET_SCAN_CHANNEL_TIME, &scan_assoc_time,
+		sizeof(scan_assoc_time));
 	if (err) {
 		if (err == -EOPNOTSUPP) {
 			WL_INFORM(("Scan assoc time is not supported\n"));
@@ -257,8 +252,8 @@ wl_dongle_scantime(struct net_device *ndev, s32 scan_assoc_time,
 		}
 		goto dongle_scantime_out;
 	}
-	err = wldev_ioctl(ndev, WLC_SET_SCAN_UNASSOC_TIME, &scan_unassoc_time,
-		sizeof(scan_unassoc_time), true);
+	err = wldev_ioctl_set(ndev, WLC_SET_SCAN_UNASSOC_TIME, &scan_unassoc_time,
+		sizeof(scan_unassoc_time));
 	if (err) {
 		if (err == -EOPNOTSUPP) {
 			WL_INFORM(("Scan unassoc time is not supported\n"));
@@ -275,14 +270,10 @@ dongle_scantime_out:
 static s32
 wl_dongle_offload(struct net_device *ndev, s32 arpoe, s32 arp_ol)
 {
-	/* Room for "event_msgs" + '\0' + bitvec */
-	s8 iovbuf[WL_EVENTING_MASK_LEN + 12];
-
 	s32 err = 0;
 
 	/* Set ARP offload */
-	bcm_mkiovar("arpoe", (char *)&arpoe, 4, iovbuf, sizeof(iovbuf));
-	err = wldev_ioctl(ndev, WLC_SET_VAR, iovbuf, sizeof(iovbuf), true);
+	err = wldev_iovar_setint(ndev, "arpoe", arpoe);
 	if (err) {
 		if (err == -EOPNOTSUPP)
 			WL_INFORM(("arpoe is not supported\n"));
@@ -291,8 +282,7 @@ wl_dongle_offload(struct net_device *ndev, s32 arpoe, s32 arp_ol)
 
 		goto dongle_offload_out;
 	}
-	bcm_mkiovar("arp_ol", (char *)&arp_ol, 4, iovbuf, sizeof(iovbuf));
-	err = wldev_ioctl(ndev, WLC_SET_VAR, iovbuf, sizeof(iovbuf), true);
+	err = wldev_iovar_setint(ndev, "arp_ol", arp_ol);
 	if (err) {
 		if (err == -EOPNOTSUPP)
 			WL_INFORM(("arp_ol is not supported\n"));
@@ -330,9 +320,6 @@ static s32 wl_pattern_atoh(s8 *src, s8 *dst)
 
 static s32 wl_dongle_filter(struct net_device *ndev, u32 filter_mode)
 {
-	/* Room for "event_msgs" + '\0' + bitvec */
-	s8 iovbuf[WL_EVENTING_MASK_LEN + 12];
-
 	const s8 *str;
 	struct wl_pkt_filter pkt_filter;
 	struct wl_pkt_filter *pkt_filterp;
@@ -391,7 +378,7 @@ static s32 wl_dongle_filter(struct net_device *ndev, u32 filter_mode)
 	memcpy((char *)pkt_filterp, &pkt_filter,
 		WL_PKT_FILTER_FIXED_LEN + WL_PKT_FILTER_PATTERN_FIXED_LEN);
 
-	err = wldev_ioctl(ndev, WLC_SET_VAR, buf, buf_len, true);
+	err = wldev_ioctl_set(ndev, WLC_SET_VAR, buf, buf_len);
 	if (err) {
 		if (err == -EOPNOTSUPP) {
 			WL_INFORM(("filter not supported\n"));
@@ -402,9 +389,7 @@ static s32 wl_dongle_filter(struct net_device *ndev, u32 filter_mode)
 	}
 
 	/* set mode to allow pattern */
-	bcm_mkiovar("pkt_filter_mode", (char *)&filter_mode, 4, iovbuf,
-		sizeof(iovbuf));
-	err = wldev_ioctl(ndev, WLC_SET_VAR, iovbuf, sizeof(iovbuf), true);
+	err = wldev_iovar_setint(ndev, "pkt_filter_mode", filter_mode);
 	if (err) {
 		if (err == -EOPNOTSUPP) {
 			WL_INFORM(("filter_mode not supported\n"));
