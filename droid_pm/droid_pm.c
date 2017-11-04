@@ -768,7 +768,8 @@ static int droid_pm_reboot_shutdown(struct notifier_block *notifier, unsigned lo
         mutex_unlock(&priv->pm_mutex);
 
         dev_dbg(dev, "%s: Waiting for acknowledgement from user-space...\n", __FUNCTION__);
-        rc = wait_for_completion_interruptible_timeout(&priv->pm_suspend_complete, timeout);
+        // Use uninterruptible wait to ignore SIGCHLD signals
+        rc = wait_for_completion_timeout(&priv->pm_suspend_complete, timeout);
 
         mutex_lock(&priv->pm_mutex);
         if (rc == 0) {
