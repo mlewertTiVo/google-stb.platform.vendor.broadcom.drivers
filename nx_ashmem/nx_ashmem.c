@@ -845,10 +845,7 @@ static void __exit nx_ashmem_module_exit(void)
    BVC5_UnregisterAlternateMemInterface(THIS_MODULE);
 #endif
 
-   ret = misc_deregister(&nx_ashmem_misc);
-   if (unlikely(ret))
-      pr_err("failed to unregister misc device!\n");
-
+   misc_deregister(&nx_ashmem_misc);
    kmem_cache_destroy(nx_ashmem_area_cachep);
 
    mutex_destroy(&(nx_ashmem_global->block_lock));
