@@ -85,7 +85,7 @@ LOCAL_C_INCLUDES += \
    $(LOCAL_PATH)/components/shared \
    $(LOCAL_PATH)/src/shared/bcmwifi/include \
    $(LOCAL_PATH)/src/wl/ppr/include \
-   $(LOCAL_PATH)/router/src/include
+   $(local_generated_sources_dir)
 LOCAL_C_INCLUDES := $(subst ${ANDROID}/,,$(LOCAL_C_INCLUDES))
 
 LOCAL_CFLAGS := -g -Wall -Wextra \
@@ -104,6 +104,17 @@ LOCAL_MODULE_TAGS := debug eng
 LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 
 include $(BUILD_EXECUTABLE)
+
+# Generate epivers.h
+GEN := $(local-generated-sources-dir)/epivers.h
+$(GEN): PRIVATE_PATH := $(LOCAL_PATH)/src/include
+$(GEN): PRIVATE_INPUT_FILE := $(PRIVATE_PATH)/epivers.h.in
+$(GEN): PRIVATE_TOOL := $(PRIVATE_PATH)/epivers.sh
+$(GEN): PRIVATE_CUSTOM_TOOL := cp $(PRIVATE_INPUT_FILE) $(PRIVATE_TOOL) $(local-generated-sources-dir); cd $(local-generated-sources-dir); bash epivers.sh
+$(GEN): $(PRIVATE_INPUT_FILE) $(PRIVATE_TOOL)
+	$(transform-generated-source)
+$(LOCAL_PATH)/src/wl/exe/wlu.c: $(GEN)
+LOCAL_GENERATED_SOURCES += $(GEN)
 
 endif
 endif
