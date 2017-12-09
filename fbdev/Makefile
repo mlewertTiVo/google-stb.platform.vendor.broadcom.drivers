@@ -50,7 +50,13 @@ PWD_BEFORE_PLATFORM_APP := $(PWD)
 include $(NEXUS_TOP)/platforms/$(NEXUS_PLATFORM)/build/platform_app.inc
 PWD := $(PWD_BEFORE_PLATFORM_APP)
 
-NEXUS_KO_SYMVERS := ${B_REFSW_OBJ_ROOT_1ST_ARCH}/nexus/core/linuxkernel.${B_REFSW_ARCH_1ST_ARCH}.driver/Module.symvers
+ifeq ($(LOCAL_ARM_AARCH64_COMPAT_32_BIT),y)
+# 32bit user, 64bit kernel mode override.
+B_REFSW_ARCH_1ST_ARCH_SYMS := aarch64-linux
+else
+B_REFSW_ARCH_1ST_ARCH_SYMS := ${B_REFSW_ARCH_1ST_ARCH}
+endif
+NEXUS_KO_SYMVERS := ${B_REFSW_OBJ_ROOT_1ST_ARCH}/nexus/core/linuxkernel.${B_REFSW_ARCH_1ST_ARCH_SYMS}.driver/Module.symvers
 
 ccflags-y += -I$(BSEAV_TOP)/linux/driver
 

@@ -27,7 +27,7 @@ fi
 
 export BRAND=linux-external-media
 export BUILDARG="$2"
-
+export SHORTER_PATH?=0
 
 ######################################################################
 # DO NOT MODIFY BELOW THIS LINE
@@ -93,6 +93,10 @@ fi
 
 make -C ./src/wl/linux ${BUILDCFG} FIRMWARE="${FIRMWARE}"  LINUXVER=${LINUXVER} ${BUILDARG}
 
-cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}
-cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}/${BUILDCFG}-wl.ko
-
+if [ "${SHORTER_PATH}" == "1" ]; then
+	cp  -v ./src/wl/linux/obj-${BCHP_VER}-${LINUXVER}/wl.ko ${TARGETDIR}
+	cp  -v ./src/wl/linux/obj-${BCHP_VER}-${LINUXVER}/wl.ko ${TARGETDIR}/${BUILDCFG}-wl.ko
+else
+	cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}
+	cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}/${BUILDCFG}-wl.ko
+fi
