@@ -556,6 +556,27 @@ out:
    return ret;
 }
 
+static int nx_ashmem_process_pidalloc(int pid, int *alloc)
+{
+   struct nx_ashmem_area *block = NULL;
+   int ret = 0;
+
+   *alloc = 0;
+
+   mutex_lock(&(nx_ashmem_global->block_lock));
+   if (!list_empty(&nx_ashmem_global->block_list)) {
+      list_for_each_entry(block, &nx_ashmem_global->block_list, block_list) {
+         if (block->block && (block->pid_alloc == pid)) {
+            *alloc += block->size;
+         }
+      }
+   }
+   mutex_unlock(&(nx_ashmem_global->block_lock));
+
+out:
+   return ret;
+}
+
 static void nx_ashmem_dump_all(void)
 {
    struct nx_ashmem_area *block = NULL;
@@ -594,6 +615,7 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
    NEXUS_MemoryStatus memStatus;
    struct nx_ashmem_ext_refcnt ext_refcnt;
    struct nx_ashmem_refcnt refcnt;
+   struct nx_ashmem_pidalloc pidalloc;
 
    switch (cmd) {
    case NX_ASHMEM_SET_SIZE:
@@ -735,6 +757,19 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
       }
       ret = nx_ashmem_process_refcnt(refcnt.hdl, refcnt.cnt, &refcnt.rel);
       if (copy_to_user((void *)arg, &refcnt, sizeof(struct nx_ashmem_refcnt)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   case NX_ASHMEM_ALLOC_PER_PID:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&pidalloc, (void *)arg, sizeof(struct nx_ashmem_pidalloc)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      ret = nx_ashmem_process_pidalloc(pidalloc.pid, &pidalloc.alloc);
+      if (copy_to_user((void *)arg, &pidalloc, sizeof(struct nx_ashmem_pidalloc)) != 0) {
          mutex_unlock(&nx_ashmem_mutex);
          return -EFAULT;
       }

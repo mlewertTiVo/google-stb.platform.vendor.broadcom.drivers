@@ -45,6 +45,11 @@ struct nx_ashmem_refcnt {
    __u32 rel;
 };
 
+struct nx_ashmem_pidalloc {
+   __u32 pid;
+   __u32 alloc;
+};
+
 #define NX_ASHMEM_SET_SIZE                _IOW(__NX_ASHMEMIOC, 1, struct nx_ashmem_alloc)
 #define NX_ASHMEM_GET_SIZE                _IOW(__NX_ASHMEMIOC, 2, struct nx_ashmem_alloc)
 #define NX_ASHMEM_GETMEM                  _IOW(__NX_ASHMEMIOC, 3, struct nx_ashmem_getmem)
@@ -55,5 +60,6 @@ struct nx_ashmem_refcnt {
 #define NX_ASHMEM_EXT_REFCNT              _IOW(__NX_ASHMEMIOC, 8, struct nx_ashmem_ext_refcnt)
 #define NX_ASHMEM_GET_BLK                 _IOW(__NX_ASHMEMIOC, 9, struct nx_ashmem_getmem)
 #define NX_ASHMEM_REFCNT                  _IOW(__NX_ASHMEMIOC, 10, struct nx_ashmem_refcnt)
+#define NX_ASHMEM_ALLOC_PER_PID           _IOW(__NX_ASHMEMIOC, 11, struct nx_ashmem_pidalloc)
 
 #endif /* _LINUX_NX_ASHMEM_H */
