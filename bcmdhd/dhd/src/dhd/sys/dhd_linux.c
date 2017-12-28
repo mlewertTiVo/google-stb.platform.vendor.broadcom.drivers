@@ -9963,11 +9963,6 @@ dhd_register_if(dhd_pub_t *dhdp, int ifidx, bool need_rtnl_lock)
 	printf("Register interface [%s]  MAC: "MACDBG"\n\n", net->name,
 		MAC2STRDBG(net->dev_addr));
 
-#if defined(OEM_ANDROID) && defined(SOFTAP) && defined(WL_WIRELESS_EXT) && \
-	!defined(WL_CFG80211)
-		wl_iw_iscan_set_scan_broadcast_prep(net, 1);
-#endif
-
 #if defined(OEM_ANDROID) && (defined(BCMPCIE) || (defined(BCMLXSDMMC) && \
 	(LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))))
 	if (ifidx == 0) {
