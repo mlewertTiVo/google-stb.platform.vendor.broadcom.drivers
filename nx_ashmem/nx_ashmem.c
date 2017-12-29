@@ -556,6 +556,27 @@ out:
    return ret;
 }
 
+static int nx_ashmem_process_pidalloc(int pid, int *alloc)
+{
+   struct nx_ashmem_area *block = NULL;
+   int ret = 0;
+
+   *alloc = 0;
+
+   mutex_lock(&(nx_ashmem_global->block_lock));
+   if (!list_empty(&nx_ashmem_global->block_list)) {
+      list_for_each_entry(block, &nx_ashmem_global->block_list, block_list) {
+         if (block->block && (block->pid_alloc == pid)) {
+            *alloc += block->size;
+         }
+      }
+   }
+   mutex_unlock(&(nx_ashmem_global->block_lock));
+
+out:
+   return ret;
+}
+
 static void nx_ashmem_dump_all(void)
 {
    struct nx_ashmem_area *block = NULL;
@@ -582,18 +603,16 @@ static void nx_ashmem_dump_all(void)
    mutex_unlock(&(nx_ashmem_global->block_lock));
 }
 
-static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+static long nx_ashmem_common_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
    struct nx_ashmem_area *asma = file->private_data;
    struct nx_ashmem_alloc alloc;
-   struct nx_ashmem_getmem getmem;
+   struct nx_ashmem_pidalloc pidalloc;
    NEXUS_Error rc;
    int alt_mem_index = -1;
    long ret = -ENOTTY;
    NEXUS_ClientConfiguration clientConfig;
    NEXUS_MemoryStatus memStatus;
-   struct nx_ashmem_ext_refcnt ext_refcnt;
-   struct nx_ashmem_refcnt refcnt;
 
    switch (cmd) {
    case NX_ASHMEM_SET_SIZE:
@@ -631,32 +650,9 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
       }
       mutex_unlock(&nx_ashmem_mutex);
       break;
-   case NX_ASHMEM_GETMEM:
-      mutex_lock(&nx_ashmem_mutex);
-      if (copy_from_user(&getmem, (void *)arg, sizeof(struct nx_ashmem_getmem)) != 0) {
-         mutex_unlock(&nx_ashmem_mutex);
-         return -EFAULT;
-      }
-      nx_ashmem_mmap(file, &getmem);
-      ret = 0;
-      if (copy_to_user((void *)arg, &getmem, sizeof(struct nx_ashmem_getmem)) != 0) {
-         mutex_unlock(&(nx_ashmem_mutex));
-         return -EFAULT;
-      }
-      mutex_unlock(&nx_ashmem_mutex);
-      break;
    case NX_ASHMEM_DUMP_ALL:
       nx_ashmem_dump_all();
       ret = 0;
-      break;
-   case NX_ASHMEM_EXT_REFCNT:
-      mutex_lock(&nx_ashmem_mutex);
-      if (copy_from_user(&ext_refcnt, (void *)arg, sizeof(struct nx_ashmem_ext_refcnt)) != 0) {
-         mutex_unlock(&nx_ashmem_mutex);
-         return -EFAULT;
-      }
-      ret = nx_ashmem_process_ext_refcnt(ext_refcnt.hdl, ext_refcnt.cnt);
-      mutex_unlock(&nx_ashmem_mutex);
       break;
    case NX_ASHMEM_MGR_CFG:
       mutex_lock(&nx_ashmem_mutex);
@@ -713,6 +709,48 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
          mutex_unlock(&(nx_ashmem_global->video_lock));
       }
       break;
+   case NX_ASHMEM_ALLOC_PER_PID:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&pidalloc, (void *)arg, sizeof(struct nx_ashmem_pidalloc)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      ret = nx_ashmem_process_pidalloc(pidalloc.pid, &pidalloc.alloc);
+      if (copy_to_user((void *)arg, &pidalloc, sizeof(struct nx_ashmem_pidalloc)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   }
+
+   return ret;
+}
+
+static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+   struct nx_ashmem_area *asma = file->private_data;
+   struct nx_ashmem_getmem getmem;
+   NEXUS_Error rc;
+   long ret = -ENOTTY;
+   struct nx_ashmem_ext_refcnt ext_refcnt;
+   struct nx_ashmem_refcnt refcnt;
+
+   switch (cmd) {
+   case NX_ASHMEM_GETMEM:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&getmem, (void *)arg, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      nx_ashmem_mmap(file, &getmem);
+      ret = 0;
+      if (copy_to_user((void *)arg, &getmem, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&(nx_ashmem_mutex));
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
    case NX_ASHMEM_GET_BLK:
       mutex_lock(&nx_ashmem_mutex);
       if (copy_from_user(&getmem, (void *)arg, sizeof(struct nx_ashmem_getmem)) != 0) {
@@ -740,6 +778,98 @@ static long nx_ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long a
       }
       mutex_unlock(&nx_ashmem_mutex);
       break;
+   case NX_ASHMEM_EXT_REFCNT:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&ext_refcnt, (void *)arg, sizeof(struct nx_ashmem_ext_refcnt)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      ret = nx_ashmem_process_ext_refcnt(ext_refcnt.hdl, ext_refcnt.cnt);
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   default:
+      ret = nx_ashmem_common_ioctl(file, cmd, arg);
+      break;
+   }
+
+   return ret;
+}
+
+static long nx_ashmem_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+   struct nx_ashmem_area *asma = file->private_data;
+   struct nx_ashmem_getmem getmem;
+   NEXUS_Error rc;
+   long ret = -ENOTTY;
+   struct nx_ashmem_ext_refcnt ext_refcnt;
+   struct nx_ashmem_refcnt refcnt;
+   NEXUS_BaseObjectId id;
+   void *object;
+
+   switch (cmd) {
+   case NX_ASHMEM_GETMEM:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&getmem, (void *)arg, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      nx_ashmem_mmap(file, &getmem);
+      NEXUS_Platform_GetIdFromObject((void *)getmem.hdl, &id);
+      getmem.hdl = id;
+      ret = 0;
+      if (copy_to_user((void *)arg, &getmem, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&(nx_ashmem_mutex));
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   case NX_ASHMEM_GET_BLK:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&getmem, (void *)arg, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      getmem.hdl = asma->block;
+      NEXUS_Platform_GetIdFromObject((void *)getmem.hdl, &id);
+      getmem.hdl = id;
+      ret = 0;
+      if (copy_to_user((void *)arg, &getmem, sizeof(struct nx_ashmem_getmem)) != 0) {
+         mutex_unlock(&(nx_ashmem_mutex));
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   case NX_ASHMEM_REFCNT:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&refcnt, (void *)arg, sizeof(struct nx_ashmem_refcnt)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      id = refcnt.hdl;
+      NEXUS_Platform_GetObjectFromId(refcnt.hdl, &object);
+      refcnt.hdl = object;
+      ret = nx_ashmem_process_refcnt(refcnt.hdl, refcnt.cnt, &refcnt.rel);
+      refcnt.hdl = id;
+      if (copy_to_user((void *)arg, &refcnt, sizeof(struct nx_ashmem_refcnt)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   case NX_ASHMEM_EXT_REFCNT:
+      mutex_lock(&nx_ashmem_mutex);
+      if (copy_from_user(&ext_refcnt, (void *)arg, sizeof(struct nx_ashmem_ext_refcnt)) != 0) {
+         mutex_unlock(&nx_ashmem_mutex);
+         return -EFAULT;
+      }
+      NEXUS_Platform_GetObjectFromId(ext_refcnt.hdl, &object);
+      ext_refcnt.hdl = object;
+      ret = nx_ashmem_process_ext_refcnt(ext_refcnt.hdl, ext_refcnt.cnt);
+      mutex_unlock(&nx_ashmem_mutex);
+      break;
+   default:
+      ret = nx_ashmem_common_ioctl(file, cmd, arg);
+      break;
    }
 
    return ret;
@@ -750,7 +880,7 @@ static const struct file_operations nx_ashmem_fops = {
    .open           = nx_ashmem_open,
    .release        = nx_ashmem_release,
    .unlocked_ioctl = nx_ashmem_ioctl,
-   .compat_ioctl   = nx_ashmem_ioctl,
+   .compat_ioctl   = nx_ashmem_compat_ioctl,
 };
 
 static struct miscdevice nx_ashmem_misc = {
@@ -845,10 +975,7 @@ static void __exit nx_ashmem_module_exit(void)
    BVC5_UnregisterAlternateMemInterface(THIS_MODULE);
 #endif
 
-   ret = misc_deregister(&nx_ashmem_misc);
-   if (unlikely(ret))
-      pr_err("failed to unregister misc device!\n");
-
+   misc_deregister(&nx_ashmem_misc);
    kmem_cache_destroy(nx_ashmem_area_cachep);
 
    mutex_destroy(&(nx_ashmem_global->block_lock));

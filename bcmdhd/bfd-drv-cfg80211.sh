@@ -49,6 +49,10 @@ elif [ "${TARGETARCH}" == arm ] ; then
 		echo "TARGETMACH==${TARGETMACH} undefined"
 		exit
 	fi
+elif [ "${TARGETARCH}" == aarch64 ] ; then
+	export BUILDCFG=${BUILDCFG_COMMON}-stb-armv8
+	export STBLINUX=1
+	export CROSS_COMPILE=aarch64-linux-
 else
 	echo "TARGETARCH==${TARGETARCH} undefined"
 	exit
@@ -89,7 +93,6 @@ cd ./dhd/src/include
 make
 cd -
 fi
-
 
 make -C ./dhd/src/dhd/linux ${BUILDCFG} WLTEST=${WLTEST} WLLXIW=${WLLXIW} LINUXVER=${LINUXVER} ${BUILDARG} CC=${CC} STRIP=${STRIP} V=${VERBOSE}
 
