@@ -1284,10 +1284,10 @@ typedef enum cust_gpio_modes {
 	WLAN_POWER_OFF
 } cust_gpio_modes_t;
 
-#if defined(OEM_ANDROID)
-extern int wl_iw_iscan_set_scan_broadcast_prep(struct net_device *dev, uint flag);
+#if defined(WL_WIRELESS_EXT)
 extern int wl_iw_send_priv_event(struct net_device *dev, char *flag);
-#endif /* defined(OEM_ANDROID) */
+#endif /* defined(WL_WIRELESS_EXT) */
+
 /*
  * Insmod parameters for debug/test
  */
