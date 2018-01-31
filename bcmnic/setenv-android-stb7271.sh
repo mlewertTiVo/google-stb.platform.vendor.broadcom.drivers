@@ -35,6 +35,7 @@ export USBSHIM=0
 ###################################################################
 export TARGETMACH=arm
 export TARGETARCH=arm
+export ARCH=arm
 export TARGETENV=linuxarm
 export CC=${KCC}gcc
 export STRIP=${KCC}strip
