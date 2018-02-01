@@ -117,9 +117,9 @@ int dhd_msg_level = DHD_ERROR_VAL;
 #else
 #endif /* WL_WLC_SHIM */
 
-#if defined(OEM_ANDROID)
+#if (defined PNO_SUPPORT) && (!defined WL_SCHED_SCAN)
 #include <wl_iw.h>
-#endif /* defined(OEM_ANDROID) */
+#endif /* (defined PNO_SUPPORT) && (!defined WL_SCHED_SCAN) */
 
 #ifdef DHD_ULP
 #include <dhd_ulp.h>
@@ -3504,7 +3504,8 @@ int dhd_keep_alive_onoff(dhd_pub_t *dhd)
 	return res;
 }
 #endif /* defined(KEEP_ALIVE) */
-#if defined(OEM_ANDROID)
+
+#if (defined PNO_SUPPORT) && (!defined WL_SCHED_SCAN)
 /* Android ComboSCAN support */
 
 /*
@@ -3616,7 +3617,7 @@ wl_iw_parse_ssid_list_tlv(char** list_str, wlc_ssid_ext_t* ssid, int max, int *b
 
 	if ((list_str == NULL) || (*list_str == NULL) || (*bytes_left < 0)) {
 		DHD_ERROR(("%s error paramters\n", __FUNCTION__));
-		return -1;
+		return BCME_BADARG;
 	}
 	str = *list_str;
 	while (*bytes_left > 0) {
@@ -3650,7 +3651,7 @@ wl_iw_parse_ssid_list_tlv(char** list_str, wlc_ssid_ext_t* ssid, int max, int *b
 			if (ssid[idx].SSID_len > *bytes_left) {
 				DHD_ERROR(("%s out of memory range len=%d but left=%d\n",
 				__FUNCTION__, ssid[idx].SSID_len, *bytes_left));
-				return -1;
+				return BCME_BADARG;
 			}
 
 			memcpy((char*)ssid[idx].SSID, str, ssid[idx].SSID_len);
@@ -3664,12 +3665,12 @@ wl_iw_parse_ssid_list_tlv(char** list_str, wlc_ssid_ext_t* ssid, int max, int *b
 		}
 		else {
 			DHD_ERROR(("### SSID size more that %d\n", str[0]));
-			return -1;
+			return BCME_BADARG;
 		}
 
-		if (idx++ >  max) {
+		if (++idx >= max) {
 			DHD_ERROR(("%s number of SSIDs more that %d\n", __FUNCTION__, idx));
-			return -1;
+			return BCME_BADARG;
 		}
 	}
 
@@ -3758,7 +3759,7 @@ wl_iw_parse_channel_list(char** list_str, uint16* channel_list, int channel_num)
 	return num;
 }
 
-#endif /* defined(OEM_ANDROID) */
+#endif /* (defined PNO_SUPPORT) && (!defined WL_SCHED_SCAN) */
 
 
 /* Given filename and download type,  returns a buffer pointer and length
