@@ -7,6 +7,7 @@ ifeq ($(HW_WIFI_NIC_SUPPORT), y)
 
 LOCAL_PATH := $(BROADCOM_NIC_SOURCE_PATH)
 LOCAL_PATH := $(subst ${ANDROID}/,,$(LOCAL_PATH))
+MY_LOCAL_PATH := $(LOCAL_PATH)
 # Build WL Utility
 LOCAL_SRC_FILES := \
    src/wl/exe/wlu.c \
@@ -104,19 +105,20 @@ LOCAL_SHARED_LIBRARIES :=
 LOCAL_MODULE_TAGS := debug eng
 LOCAL_MODULE_PATH := $(TARGET_OUT_OPTIONAL_EXECUTABLES)
 LOCAL_PROPRIETARY_MODULE := true
-include $(BUILD_EXECUTABLE)
+LOCAL_MODULE_CLASS := EXECUTABLES
 
 # Generate epivers.h
-GEN := $(local-generated-sources-dir)/epivers.h
-$(GEN): PRIVATE_PATH := $(LOCAL_PATH)/src/include
-$(GEN): PRIVATE_INPUT_FILE := $(PRIVATE_PATH)/epivers.h.in
-$(GEN): PRIVATE_TOOL := $(PRIVATE_PATH)/epivers.sh
-$(GEN): PRIVATE_CUSTOM_TOOL := cp $(PRIVATE_INPUT_FILE) $(PRIVATE_TOOL) $(local-generated-sources-dir); cd $(local-generated-sources-dir); bash epivers.sh
-$(GEN): $(PRIVATE_INPUT_FILE) $(PRIVATE_TOOL)
-	$(transform-generated-source)
-$(LOCAL_PATH)/src/wl/exe/wlu.c: $(GEN)
-LOCAL_GENERATED_SOURCES += $(GEN)
+intermediates := $(call local-generated-sources-dir)
+MY_INTERMEDIATES := $(intermediates)
+MY_GENERATED_SRC_FILES := epivers.h
+GENERATED_SRC_FILES := $(addprefix $(intermediates)/, $(MY_GENERATED_SRC_FILES))
+LOCAL_GENERATED_SOURCES := $(GENERATED_SRC_FILES)
+LOCAL_C_INCLUDES += $(intermediates)
 
+$(intermediates)/epivers.h:
+	cp $(MY_LOCAL_PATH)/src/include/epivers.h.in $(MY_LOCAL_PATH)/src/include/epivers.sh $(MY_INTERMEDIATES) && pushd $(MY_INTERMEDIATES) && bash epivers.sh && popd
+
+include $(BUILD_EXECUTABLE)
 endif
 endif
 

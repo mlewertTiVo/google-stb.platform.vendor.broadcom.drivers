@@ -96,7 +96,15 @@ make -C ./src/wl/linux ${BUILDCFG} FIRMWARE="${FIRMWARE}"  LINUXVER=${LINUXVER} 
 if [ "${SHORTER_PATH}" == "1" ]; then
 	cp  -v ./src/wl/linux/obj-${BCHP_VER}-${LINUXVER}/wl.ko ${TARGETDIR}
 	cp  -v ./src/wl/linux/obj-${BCHP_VER}-${LINUXVER}/wl.ko ${TARGETDIR}/${BUILDCFG}-wl.ko
+	if [ -e ./src/wlplat/obj-${BCHP_VER}-${LINUXVER}/wlplat.ko ]; then
+		cp  -v ./src/wlplat/obj-${BCHP_VER}-${LINUXVER}/wlplat.ko ${TARGETDIR}
+		cp  -v ./src/wlplat/obj-${BCHP_VER}-${LINUXVER}/wlplat.ko ${TARGETDIR}/${BUILDCFG}-wlplat.ko
+	fi
 else
 	cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}
 	cp  -v ./src/wl/linux/obj-${BUILDCFG}-${LINUXVER}/wl.ko ${TARGETDIR}/${BUILDCFG}-wl.ko
+	if [ -e ./src/wlplat/obj-${BCHP_VER}-${LINUXVER}/wlplat.ko ]; then
+		cp  -v ./src/wlplat/obj-${BUILDCFG}-${LINUXVER}/wlplat.ko ${TARGETDIR}
+		cp  -v ./src/wlplat/obj-${BUILDCFG}-${LINUXVER}/wlplat.ko ${TARGETDIR}/${BUILDCFG}-wlplat.ko
+	fi
 fi
