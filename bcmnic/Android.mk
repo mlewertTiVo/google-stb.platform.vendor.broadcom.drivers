@@ -7,7 +7,7 @@ ifeq ($(HW_WIFI_NIC_SUPPORT), y)
 
 LOCAL_PATH := $(BROADCOM_NIC_SOURCE_PATH)
 LOCAL_PATH := $(subst ${ANDROID}/,,$(LOCAL_PATH))
-BCM_MY_LOCAL_PATH := $(LOCAL_PATH)
+BCMNIC_LOCAL_PATH := $(LOCAL_PATH)
 # Build WL Utility
 LOCAL_SRC_FILES := \
    src/wl/exe/wlu.c \
@@ -116,7 +116,7 @@ LOCAL_GENERATED_SOURCES := $(GENERATED_SRC_FILES)
 LOCAL_C_INCLUDES += $(intermediates)
 
 $(intermediates)/epivers.h:
-	cp $(BCM_MY_LOCAL_PATH)/src/include/epivers.h.in $(BCM_MY_LOCAL_PATH)/src/include/epivers.sh $(MY_INTERMEDIATES) && pushd $(MY_INTERMEDIATES) && bash epivers.sh && popd
+	cp $(BCMNIC_LOCAL_PATH)/src/include/epivers.h.in $(BCMNIC_LOCAL_PATH)/src/include/epivers.sh $(MY_INTERMEDIATES) && pushd $(MY_INTERMEDIATES) && bash epivers.sh && popd
 
 include $(BUILD_EXECUTABLE)
 endif
