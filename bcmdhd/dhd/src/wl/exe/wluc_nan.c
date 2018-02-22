@@ -1280,7 +1280,7 @@ wl_nan_subcmd_scan(void *wl, const wl_nan_sub_cmd_t  *cmd, char **argv)
 			goto exit;
 	} else {
 		/* bcast mac: scan for all nan clusters */
-		bcopy(&ether_null, &cid, ETHER_ADDR_LEN);
+		memcpy(&cid, &ether_null, ETHER_ADDR_LEN);
 	}
 
 	buflen = NAN_IOC_BUFSZ;
