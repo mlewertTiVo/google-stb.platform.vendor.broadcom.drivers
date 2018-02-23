@@ -9364,6 +9364,9 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 		bcmstrtok(&ptr, "\n", 0);
 		/* Print fw version info */
 		DHD_ERROR(("Firmware version = %s\n", buf));
+		/* Store firmware info */
+		strncpy(info_string, buf, sizeof(info_string) - 1);
+	        info_string[sizeof(info_string)-1] = '\0';
 	}
 #endif /* defined(OEM_ANDROID) */
 
@@ -12266,8 +12269,13 @@ write_to_file(dhd_pub_t *dhd, uint8 *buf, int size)
 		goto exit;
 	}
 
-	/* Write buf to file */
-	fp->f_op->write(fp, buf, size, &pos);
+        if (fp && fp->f_op && fp->f_op->write) {
+		/* Write buf to file */
+		fp->f_op->write(fp, buf, size, &pos);
+		pos =1;
+	} else {
+		DHD_ERROR(("%s: Bad pointer in write\n", __FUNCTION__));
+	}
 
 exit:
 	/* close file before return */
@@ -13567,7 +13575,7 @@ int dhd_os_get_version(struct net_device *dev, bool dhd_ver, char **buf, uint32 
 	if (dhd_ver) {
 		strncpy(*buf, dhd_version, size - 1);
 	} else {
-		strncpy(*buf, strstr(info_string, "Firmware: "), size - 1);
+		strncpy(*buf, info_string, size - 1);
 	}
 	return BCME_OK;
 }

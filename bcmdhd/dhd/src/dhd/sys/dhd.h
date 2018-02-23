@@ -73,7 +73,7 @@ int get_scheduler_policy(struct task_struct *p);
 
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0) && LINUX_VERSION_CODE < \
-	KERNEL_VERSION(3, 18, 0) || defined(CONFIG_BCMDHD_VENDOR_EXT))
+	KERNEL_VERSION(3, 18, 0) || defined(CONFIG_BCMDHD_VENDOR_EXT) || defined(OEM_ANDROID))
 #define WL_VENDOR_EXT_SUPPORT
 #endif /* 3.14.0 <= LINUX_KERNEL_VERSION < 3.18.0 || CONFIG_BCMDHD_VENDOR_EXT */
 

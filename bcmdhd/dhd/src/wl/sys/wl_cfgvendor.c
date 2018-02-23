@@ -2111,7 +2111,7 @@ static int wl_cfgvendor_dbg_get_version(struct wiphy *wiphy,
 	int ret = BCME_OK, rem, type;
 	int buf_len = 1024;
 	bool dhd_ver = FALSE;
-	char *buf_ptr;
+	char *buf_ptr, *str_ptr;
 	const struct nlattr *iter;
 	gfp_t kflags;
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
@@ -2142,7 +2142,14 @@ static int wl_cfgvendor_dbg_get_version(struct wiphy *wiphy,
 		WL_ERR(("failed to get the version %d\n", ret));
 		goto exit;
 	}
-	ret = wl_cfgvendor_send_cmd_reply(wiphy, buf_ptr, strlen(buf_ptr));
+	str_ptr = buf_ptr;
+#ifdef OEM_ANDROID
+	/* Too long a string may cause issues, take first non-empty line */
+	if (strchr(str_ptr, '\n')) {
+		str_ptr = bcmstrtok(&str_ptr, "\n", NULL);
+	}
+#endif /* OEM_ANDROID */
+	ret = wl_cfgvendor_send_cmd_reply(wiphy, str_ptr, strlen(str_ptr));
 exit:
 	kfree(buf_ptr);
 	return ret;
