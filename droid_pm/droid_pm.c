@@ -43,6 +43,7 @@
 #include <linux/proc_fs.h>
 #include <linux/reboot.h>
 #include <linux/sched.h>
+#include <linux/signal.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
@@ -797,6 +798,7 @@ static int droid_pm_handle_shutdown(struct droid_pm_priv_data *priv)
     }
     else {
         dev_dbg(dev, "%s: Finished.\n", __FUNCTION__);
+        shutdown_in_progress = true;
     }
     mutex_unlock(&priv->pm_mutex);
     return ret;
