@@ -41,7 +41,7 @@ elif [ "${TARGETARCH}" == arm ] ; then
 		export STBLINUX=1
 		export CROSS_COMPILE=arm-linux- 
 	elif [ "${TARGETMACH}" == armle ] ; then
-		export BUILDCFG=${BUILDCFG_COMMON}-stb-armv7l
+		export BUILDCFG=${BUILDCFG_COMMON}-stb-armv7l-debug
 		export STBLINUX=1
 		export CROSS_COMPILE=arm-linux- 
 	else
