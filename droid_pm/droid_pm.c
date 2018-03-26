@@ -43,6 +43,7 @@
 #include <linux/proc_fs.h>
 #include <linux/reboot.h>
 #include <linux/sched.h>
+#include <linux/signal.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
@@ -797,6 +798,7 @@ static int droid_pm_handle_shutdown(struct droid_pm_priv_data *priv)
     }
     else {
         dev_dbg(dev, "%s: Finished.\n", __FUNCTION__);
+        shutdown_in_progress = true;
     }
     mutex_unlock(&priv->pm_mutex);
     return ret;
@@ -1049,12 +1051,19 @@ static ssize_t notify_store(struct device *dev,
     struct droid_pm_priv_data *priv = &droid_pm_priv_data;
     int ret;
 
-    if (strncmp(buf, "shutdown", strlen("shutdown")) == 0) {
+    /* Leading 0 indicates shutdown */
+    if (buf[0] == '0') {
+        dev_info(dev, "Shutdown initiated\n");
         droid_pm_handle_shutdown(priv);
         ret = n;
     }
+    /* Leading 1 indicates reboot */
+    else if (buf[0] == '1') {
+        dev_info(dev, "Reboot initiated\n");
+        ret = n;
+    }
     else {
-        dev_err(dev, "%s: invalid data\n", __FUNCTION__);
+        dev_err(dev, "%s: invalid notify data:%s\n", __FUNCTION__, buf);
         ret = -EINVAL;
     }
     return ret;
