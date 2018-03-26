@@ -4840,6 +4840,19 @@ exit:
 	return err;
 }
 
+#define WAIT_FOR_DISCONNECT_MAX 8 
+void wl_cfg80211_wait_for_disconnection(struct bcm_cfg80211 *cfg, struct net_device *dev)
+{
+	uint8 wait_cnt;
+	wait_cnt = WAIT_FOR_DISCONNECT_MAX;
+	while (wl_get_drv_status(cfg, DISCONNECTING, dev) && wait_cnt) {
+		WL_DBG(("Waiting for disconnection, wait_cnt: %d\n", wait_cnt));
+		wait_cnt--;
+		OSL_SLEEP(50);
+	}
+	return;
+}
+
 static s32
 wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 	u16 reason_code)
@@ -4885,6 +4898,7 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 			WL_ERR(("error (%d)\n", err));
 			return err;
 		}
+		wl_cfg80211_wait_for_disconnection(cfg, dev);
 	}
 #ifdef CUSTOM_SET_CPUCORE
 	/* set default cpucore */
