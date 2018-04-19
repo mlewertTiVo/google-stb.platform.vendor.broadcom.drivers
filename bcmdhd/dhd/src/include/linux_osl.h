@@ -1,7 +1,7 @@
 /*
  * Linux OS Independent Layer
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.h 718060 2017-08-29 10:11:23Z $
+ * $Id: linux_osl.h 731740 2017-11-14 10:06:27Z $
  */
 
 #ifndef _linux_osl_h_
@@ -203,7 +203,7 @@ extern void osl_dma_free_consistent(osl_t *osh, void *va, uint size, dmaaddr_t p
 	osl_dma_unmap((osh), (pa), (size), (direction))
 extern dmaaddr_t osl_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
 	hnddma_seg_map_t *txp_dmah);
-extern void osl_dma_unmap(osl_t *osh, uint pa, uint size, int direction);
+extern void osl_dma_unmap(osl_t *osh, dmaaddr_t pa, uint size, int direction);
 
 /* API for DMA addressing capability */
 #define OSL_DMADDRWIDTH(osh, addrwidth) ({BCM_REFERENCE(osh); BCM_REFERENCE(addrwidth);})
@@ -212,13 +212,13 @@ extern void osl_dma_unmap(osl_t *osh, uint pa, uint size, int direction);
 extern void osl_cpu_relax(void);
 #define OSL_CPU_RELAX() osl_cpu_relax()
 
-#if defined(__mips__) || (!defined(DHD_USE_COHERENT_MEM_FOR_RING) && \
-	defined(__ARM_ARCH_7A__)) || (defined(STBLINUX) && defined(__ARM_ARCH_7A__))
-	extern void osl_cache_flush(void *va, uint size);
-	extern void osl_cache_inv(void *va, uint size);
+#if defined(__mips__) || (defined(__ARM_ARCH_7A__) && \
+	!defined(DHD_USE_COHERENT_MEM_FOR_RING))
+	extern void osl_cache_flush(osl_t *osh, void *va, uint size);
+	extern void osl_cache_inv(osl_t *osh, void *va, uint size);
 	extern void osl_prefetch(const void *ptr);
-	#define OSL_CACHE_FLUSH(va, len)	osl_cache_flush((void *)(va), len)
-	#define OSL_CACHE_INV(va, len)		osl_cache_inv((void *)(va), len)
+	#define OSL_CACHE_FLUSH(osh, va, len)	osl_cache_flush(osh, (void *)(va), len)
+	#define OSL_CACHE_INV(osh, va, len)		osl_cache_inv(osh, (void *)(va), len)
 	#define OSL_PREFETCH(ptr)			osl_prefetch(ptr)
 #if defined(__ARM_ARCH_7A__)
 	extern int osl_arch_is_coherent(void);
@@ -230,8 +230,8 @@ extern void osl_cpu_relax(void);
 	#define OSL_ACP_WAR_ENAB()			NULL
 #endif /* !__ARM_ARCH_7A__ */
 #else  /* !__mips__ && !__ARM_ARCH_7A__ */
-	#define OSL_CACHE_FLUSH(va, len)	BCM_REFERENCE(va)
-	#define OSL_CACHE_INV(va, len)		BCM_REFERENCE(va)
+	#define OSL_CACHE_FLUSH(osh, va, len)	({BCM_REFERENCE(osh); BCM_REFERENCE(va);})
+	#define OSL_CACHE_INV(osh, va, len)	({BCM_REFERENCE(osh); BCM_REFERENCE(va);})
 	#define OSL_PREFETCH(ptr)		BCM_REFERENCE(ptr)
 
 	#define OSL_ARCH_IS_COHERENT()		NULL
@@ -1027,8 +1027,8 @@ extern void bzero(void *b, size_t len);
 
 #ifdef BCM_SECURE_DMA
 
-#define	SECURE_DMA_MAP(osh, va, size, direction, p, dmah, pcma, offset) \
-	osl_sec_dma_map((osh), (va), (size), (direction), (p), (dmah), (pcma), (offset))
+#define	SECURE_DMA_MAP(osh, va, size, direction, p, dmah, pcma, offset, buftype) \
+	osl_sec_dma_map((osh), (va), (size), (direction), (p), (dmah), (pcma), (offset), (buftype))
 #define	SECURE_DMA_DD_MAP(osh, va, size, direction, p, dmah) \
 	osl_sec_dma_dd_map((osh), (va), (size), (direction), (p), (dmah))
 #define	SECURE_DMA_MAP_TXMETA(osh, va, size, direction, p, dmah, pcma) \
@@ -1048,21 +1048,47 @@ typedef struct sec_cma_info {
 	struct sec_mem_elem *sec_alloc_list_tail;
 } sec_cma_info_t;
 
+/*
+ * Total SECDMA memory Reserved is 20M.
+ * This secdma memory will be used by both CMA_DMA_DATA_MEMBLOCK and CMA_DMA_DESC_MEMBLOCK
+ * CMA_DMA_DESC_MEMBLOCK size	= (0x6000 * 279) + 0x100000 = Apprximately 8M
+ * CMA_DMA_DATA_MEMBLOCK	= 20M - CMA_DMA_DESC_MEMBLOCK = 12M
+ * Total 4K buffers		= CMA_DMA_DATA_MEMBLOCK/CMA_BUFSIZE_4K = 3072.
+ *
+ * Now All Avaibale 4K buffers are divided in to 3 pools as below.
+ * RXBUF POST Pool		= CMA_RXCTRL_BUFNUM  4K Buffers = 512
+ * RXCTR_BUF_POST POST Pool	= RXCTR_BUF_POST  8K Buffers = 64
+ * TXBUF Pool (CMA_TXBUF_BUFNUM)= 3072 - (64*2) - 512 = 2432
+ */
+
+#define CMA_BUFSIZE_8K	8192
 #define CMA_BUFSIZE_4K	4096
 #define CMA_BUFSIZE_2K	2048
 #define CMA_BUFSIZE_512	512
 
-#define	CMA_BUFNUM		2048
-#define SEC_CMA_COHERENT_BLK 0x8000 /* 32768 */
+#define CMA_RXBUF_POST		0
+#define CMA_TXBUF_POST		1
+#define CMA_RXCTR_BUF_POST	2
+
+#define	CMA_RXCTRL_BUFNUM	64	/* 8K buffer count(pool) for RXCTRL Buffers */
+#define	CMA_RXBUF_BUFNUM	512	/* 4K buffer count(pool) RXBUF Post */
+
+#define	CMA_TXBUF_BUFNUM		2432 /* 4K buffer count(pool) for TXBUF_POST */
+#define SEC_CMA_COHERENT_BLK	0x6000 /* 24576 */
+
 #define SEC_CMA_COHERENT_MAX 278
 #define CMA_DMA_DESC_MEMBLOCK	(SEC_CMA_COHERENT_BLK * SEC_CMA_COHERENT_MAX)
-#define CMA_DMA_DATA_MEMBLOCK	(CMA_BUFSIZE_4K*CMA_BUFNUM)
-#define	CMA_MEMBLOCK		(CMA_DMA_DESC_MEMBLOCK + CMA_DMA_DATA_MEMBLOCK)
+#define CMA_DMA_DATA_MEMBLOCK	(CMA_BUFSIZE_4K*CMA_TXBUF_BUFNUM)
+#define CMA_DMA_RXCTRL_MEMBLOCK	(CMA_BUFSIZE_8K*CMA_RXCTRL_BUFNUM)
+#define CMA_DMA_RXBUF_POST_MEMBLOCK	(CMA_BUFSIZE_4K*CMA_RXBUF_BUFNUM)
+#define	CMA_MEMBLOCK	((CMA_DMA_DESC_MEMBLOCK + CMA_DMA_DATA_MEMBLOCK+CMA_DMA_RXCTRL_MEMBLOCK)\
+								+ (CMA_DMA_RXBUF_POST_MEMBLOCK))
 
 #define SEC_DMA_ALIGN	(1<<16)
 typedef struct sec_mem_elem {
 	size_t			size;
 	int				direction;
+	int				buftype;
 	phys_addr_t		pa_cma;     /**< physical  address */
 	void			*va;        /**< virtual address of driver pkt */
 	dma_addr_t		dma_handle; /**< bus address assign by linux */
@@ -1073,7 +1099,7 @@ typedef struct sec_mem_elem {
 
 extern bool osl_sec_dma_buffs_is_avail(osl_t *osh);
 extern dma_addr_t osl_sec_dma_map(osl_t *osh, void *va, uint size, int direction, void *p,
-	hnddma_seg_map_t *dmah, void *ptr_cma_info, uint offset);
+	hnddma_seg_map_t *dmah, void *ptr_cma_info, uint offset, uint buftype);
 extern dma_addr_t osl_sec_dma_dd_map(osl_t *osh, void *va, uint size, int direction, void *p,
 	hnddma_seg_map_t *dmah);
 extern dma_addr_t osl_sec_dma_map_txmeta(osl_t *osh, void *va, uint size,

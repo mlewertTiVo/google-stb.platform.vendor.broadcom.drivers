@@ -1,7 +1,7 @@
 /*
  * OS Abstraction Layer
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: osl.h 585315 2015-09-10 06:02:11Z $
+ * $Id: osl.h 731740 2017-11-14 10:06:27Z $
  */
 
 #ifndef _osl_h_
@@ -214,7 +214,7 @@ do { \
 #else
 
 #define SECURE_DMA_ENAB(osh) (0)
-#define	SECURE_DMA_MAP(osh, va, size, direction, p, dmah, pcma, offset) ((dmaaddr_t) {(0)})
+#define	SECURE_DMA_MAP(osh, va, size, direction, p, dmah, pcma, offset, buftype) ((dmaaddr_t) {(0)})
 #define	SECURE_DMA_DD_MAP(osh, va, size, direction, p, dmah) 0
 #define	SECURE_DMA_MAP_TXMETA(osh, va, size, direction, p, dmah, pcma) ((dmaaddr_t) {(0)})
 #define	SECURE_DMA_UNMAP(osh, pa, size, direction, p, dmah, pcma, offset)

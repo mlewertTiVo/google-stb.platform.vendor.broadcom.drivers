@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.c 726300 2017-10-12 05:28:33Z $
+ * $Id: wl_cfg80211.c 736094 2017-12-13 14:05:02Z $
  */
 /* */
 #include <typedefs.h>
@@ -425,6 +425,7 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
 #else
 static s32 wl_cfg80211_suspend(struct wiphy *wiphy);
 #endif
+static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy);
 static s32 wl_cfg80211_set_pmksa(struct wiphy *wiphy, struct net_device *dev,
 	struct cfg80211_pmksa *pmksa);
 static s32 wl_cfg80211_del_pmksa(struct wiphy *wiphy, struct net_device *dev,
@@ -771,6 +772,15 @@ static int bw2cap[] = { 0, 0, WLC_BW_CAP_20MHZ, WLC_BW_CAP_40MHZ, WLC_BW_CAP_80M
 	cfg80211_get_bss(wiphy, channel, bssid, ssid, ssid_len,	\
 			WLAN_CAPABILITY_ESS, WLAN_CAPABILITY_ESS);
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)) */
+
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0))
+#define CFG80211_DISCONNECTED(dev, reason, ie, len, loc_gen, gfp) \
+	cfg80211_disconnected(dev, reason, ie, len, loc_gen, gfp);
+#elif (LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0))
+#define CFG80211_DISCONNECTED(dev, reason, ie, len, loc_gen, gfp) \
+	cfg80211_disconnected(dev, reason, ie, len, gfp);
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)) */
 
 #ifdef RSSI_OFFSET
 static s32 wl_rssi_offset(s32 rssi)
@@ -2934,10 +2944,10 @@ __wl_cfg80211_scan(struct wiphy *wiphy, struct net_device *ndev,
 #ifdef WL11U
 				if ((interworking_ie = wl_cfg80211_find_interworking_ie(
 					(u8 *)request->ie, request->ie_len)) != NULL) {
-					if((err = wl_cfg80211_add_iw_ie(cfg, ndev, bssidx,
+					if ((err = wl_cfg80211_add_iw_ie(cfg, ndev, bssidx,
 						VNDR_IE_CUSTOM_FLAG, interworking_ie->id,
 						interworking_ie->data,
-						interworking_ie->len))!= BCME_OK) {
+						interworking_ie->len)) != BCME_OK) {
 
 						goto scan_out;
 					}
@@ -4911,7 +4921,7 @@ wl_cfg80211_disconnect(struct wiphy *wiphy, struct net_device *dev,
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0))
 	/* cfg80211 expects disconnect event from DHD to release wdev->current_bss */
-	cfg80211_disconnected(dev, reason_code, NULL, 0, GFP_KERNEL);
+	CFG80211_DISCONNECTED(dev, reason_code, NULL, 0, false, GFP_KERNEL);
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)) */
 
 	return err;
@@ -5607,7 +5617,7 @@ get_station_err:
 			/* Disconnect due to zero BSSID or error to get RSSI */
 			WL_ERR(("force cfg80211_disconnected: %d\n", err));
 			wl_clr_drv_status(cfg, CONNECTED, dev);
-			cfg80211_disconnected(dev, 0, NULL, 0, GFP_KERNEL);
+			CFG80211_DISCONNECTED(dev, 0, NULL, 0, false, GFP_KERNEL);
 			wl_link_down(cfg);
 		}
 	}
@@ -5706,6 +5716,7 @@ static __used u32 wl_find_msb(u16 bit16)
 	return ret;
 }
 
+
 static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 {
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
@@ -5715,7 +5726,6 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 	!defined(OEM_ANDROID)
 	int pkt_filter_id = WL_WOWLAN_PKT_FILTER_ID_FIRST;
 #endif /* (KERNEL_VERSION(2, 6, 39) || WL_COMPAT_WIRELES) && !OEM_ANDROID */
-
 	if (unlikely(!wl_get_drv_status(cfg, READY, ndev))) {
 		WL_INFORM(("device is not ready\n"));
 		return err;
@@ -5741,10 +5751,155 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 		pkt_filter_id++;
 	}
 #endif /* (KERNEL_VERSION(2, 6, 39) || WL_COMPAT_WIRELES) && !OEM_ANDROID */
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+	wl_cfg80211_update_wowl_wakeind(wiphy);
+#endif /* (KERNEL_VERSION(2, 6, 39) */
+	return err;
+}
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+static s32 wl_cfg80211_clear_wowl_wakeind(struct wiphy *wiphy)
+{
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	struct net_device *dev = bcmcfg_to_prmry_ndev(cfg);
+	s32 err = BCME_OK;
+	wl_wowl_wakeind_t wake_ind = {0};
+	memcpy(&wake_ind, "clear", strlen("clear"));
+	err = wldev_iovar_setbuf(dev, "wowl_wakeind", &wake_ind,
+			sizeof(wl_wowl_wakeind_t),
+			cfg->ioctl_buf, WLC_IOCTL_SMLEN, NULL);
+	return err;
+}
+static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy)
+{
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	struct net_device *dev = bcmcfg_to_prmry_ndev(cfg);
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0))
+/* wowlan wake reason report to cfg layed is supported only after 3.9 Kernel
+ */
+	struct cfg80211_wowlan_wakeup *wowlan_wakereport, wowlan_wakeind;
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)) */
+	u32 wakeup_reason = 0;
+	u32 wowl_trigger = 0;
+	s32 err = BCME_OK;
+	wl_wowl_wakeind_t wake_ind = {0};
+	if (!cfg->wowlan_trigger) {
+		WL_DBG(("Wowlan not enabled in cfg80211\n"));
+		return err;
+	}
+	/* get the wowl wake reason */
+	err = wldev_iovar_getbuf(dev, "wowl_wakeind", NULL,
+			0, cfg->ioctl_buf, WLC_IOCTL_SMLEN, &cfg->ioctl_buf_sync);
+	if (unlikely(err)) {
+		WL_DBG(("get wowl_wakeind error (%d)\n", err));
+		return err;
+	}
+
+	memcpy(&wake_ind, cfg->ioctl_buf, sizeof(wl_wowl_wakeind_t));
+	wakeup_reason = dtoh32(wake_ind.ucode_wakeind);
+/* wowlan wake reason report to cfg layed is supported only after 3.9 Kernel
+ */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0))
+	memset(&wowlan_wakeind, 0, sizeof(wowlan_wakeind));
+	wowlan_wakereport = NULL;
+	if (wakeup_reason) {
+		if ((wakeup_reason & WL_WOWL_MAGIC)  == WL_WOWL_MAGIC)
+			wowlan_wakeind.magic_pkt = true;
+		if (((wakeup_reason & WL_WOWL_DIS) == WL_WOWL_DIS) ||
+			((wakeup_reason & WL_WOWL_BCN) == WL_WOWL_BCN))
+			wowlan_wakeind.disconnect = true;
+		if (wakeup_reason & WL_WOWL_GTK_FAILURE)
+			wowlan_wakeind.gtk_rekey_failure = true;
+		if (wakeup_reason & WL_WOWL_EAPID)
+			wowlan_wakeind.eap_identity_req = true;
+		if (wakeup_reason & WL_WOWL_M1)
+			wowlan_wakeind.four_way_handshake = true;
+		wowlan_wakereport = &wowlan_wakeind;
+	}
+
+	if (wowlan_wakereport) {
+		WL_ERR(("wowl_wakeind=0x%x\n", wake_ind.ucode_wakeind));
+	}
+	cfg80211_report_wowlan_wakeup(cfg->wdev, wowlan_wakereport, GFP_KERNEL);
+	err = wldev_iovar_setint(dev, "wowl_clear", 1);
+	if (unlikely(err)) {
+		WL_ERR(("set wowl clear error (%d)\n", err));
+	}
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)) */
+	/* Reset the trigger initiated by cfg alone */
+	err = wldev_iovar_getint(dev, "wowl", &wowl_trigger);
+	if (unlikely(err)) {
+		WL_ERR(("error reading wowl (%d)\n", err));
+		return err;
+	}
+	wowl_trigger &= ~cfg->wowlan_trigger;
+	err = wldev_iovar_setint(dev, "wowl", wowl_trigger);
+	if (unlikely(err)) {
+		WL_ERR(("set wowl error (%d)\n", err));
+	}
 
 	return err;
 }
 
+static s32 wl_cfg80211_set_wowlan(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
+{
+	s32 err = BCME_OK;
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	struct net_device *dev = bcmcfg_to_prmry_ndev(cfg);
+	u32 wowl_trigger = 0, wowl_cfg_trigger = 0;
+	WL_DBG(("Enter\n"));
+
+	cfg->wowlan_trigger = 0;
+	if (wow == NULL) {
+		WL_DBG(("wow config is null\n"));
+		return err;
+	}
+	/* Use trigger set by wl utility also */
+	err = wldev_iovar_getint(dev, "wowl", &wowl_trigger);
+	if (unlikely(err)) {
+		WL_ERR(("error reading wowl (%d)\n", err));
+		return err;
+	}
+	if (wow->any == TRUE) {
+		wowl_cfg_trigger |= WL_CFG80211_WOWL_ANY;
+	} else {
+		if (wow->disconnect == TRUE) {
+			wowl_cfg_trigger |= WL_WOWL_DIS | WL_WOWL_BCN;
+		}
+		if (wow->magic_pkt == TRUE) {
+			wowl_cfg_trigger |= WL_WOWL_MAGIC;
+		}
+		if (wow->gtk_rekey_failure == TRUE) {
+			wowl_cfg_trigger |= WL_WOWL_GTK_FAILURE;
+		}
+	}
+	/* Wowl trigger by both wl utility trigger
+	 * And cfg initiated wowlan wakeup trigger
+	 */
+	wowl_trigger |= wowl_cfg_trigger;
+
+	WL_ERR(("Wowl Trigger (%08x)\n", wowl_trigger));
+	err = wldev_iovar_setint(dev, "wowl", wowl_trigger);
+	if (unlikely(err)) {
+		WL_ERR(("set wowl error (%d)\n", err));
+		return err;
+	}
+
+	if (wowl_cfg_trigger)
+		cfg->wowlan_trigger = wowl_cfg_trigger;
+
+	err = wl_cfg80211_clear_wowl_wakeind(wiphy);
+	if (unlikely(err)) {
+		WL_ERR(("clear wowl wake indication error (%d)\n", err));
+	}
+	/* Setting gtk key rotation in wowl ucode by deafult */
+	err = wldev_iovar_setint(dev, "wowl_keyrot", 1);
+	if (unlikely(err)) {
+		WL_ERR(("set wowl keyrot support error (%d)\n", err));
+		return err;
+	}
+	return err;
+}
+#endif /* (KERNEL_VERSION(2, 6, 39) */
 #if ((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || defined(WL_COMPAT_WIRELESS)) && \
 	!defined(OEM_ANDROID)
 static s32 wl_wowlan_config(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
@@ -5858,6 +6013,21 @@ exit:
 }
 #endif /* (KERNEL_VERSION(2, 6, 39) || WL_COMPAT_WIRELES) && !OEM_ANDROID */
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0))
+static inline void bcm_cfg80211_scan_done(struct cfg80211_scan_request *request, bool aborted)
+{
+	struct cfg80211_scan_info info = {
+		.aborted = aborted
+        };
+	cfg80211_scan_done(request, &info);
+}
+#elif (LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0))
+static inline void bcm_cfg80211_scan_done(struct cfg80211_scan_request *request, bool aborted)
+{
+	cfg80211_scan_done(request, aborted);
+}
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)) */
+
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || defined(WL_COMPAT_WIRELESS)
 static s32 wl_cfg80211_suspend(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
 #else
@@ -5882,7 +6052,7 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy)
 		}
 	spin_lock_irqsave(&cfg->cfgdrv_lock, flags);
 	if (cfg->scan_request) {
-		cfg80211_scan_done(cfg->scan_request, true);
+		bcm_cfg80211_scan_done(cfg->scan_request, true);
 		cfg->scan_request = NULL;
 	}
 	for_each_ndev(cfg, iter, next) {
@@ -5905,6 +6075,9 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy)
 	!defined(OEM_ANDROID)
 	err = wl_wowlan_config(wiphy, wow);
 #endif /* (KERNEL_VERSION(2, 6, 39) || WL_COMPAT_WIRELES) && !OEM_ANDROID */
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+	err = wl_cfg80211_set_wowlan(wiphy, wow);
+#endif /* (KERNEL_VERSION(2, 6, 39) */
 
 	return err;
 }
@@ -6876,7 +7049,7 @@ wl_cfg80211_mgmt_tx(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev,
 
 	WL_DBG(("Enter \n"));
 
-	if (len > ACTION_FRAME_SIZE) {
+	if (len > (ACTION_FRAME_SIZE + DOT11_MGMT_HDR_LEN)) {
 		WL_ERR(("bad length:%zu\n", len));
 		return BCME_BADLEN;
 	}
@@ -9638,7 +9811,7 @@ wl_cfg80211_reg_notifier(
 #ifdef CONFIG_PM
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0))
 static const struct wiphy_wowlan_support brcm_wowlan_support = {
-	.flags = WIPHY_WOWLAN_ANY,
+	.flags = WL_CFG80211_WOWL_SUPP_FLAG,
 	.n_patterns = WL_WOWLAN_MAX_PATTERNS,
 	.pattern_min_len = WL_WOWLAN_MIN_PATTERN_LEN,
 	.pattern_max_len = WL_WOWLAN_MAX_PATTERN_LEN,
@@ -9792,10 +9965,13 @@ static s32 wl_setup_wiphy(struct wireless_dev *wdev, struct device *sdiofunc_dev
 	 */
 	brcm_wowlan_config = kmalloc(sizeof(struct cfg80211_wowlan), GFP_KERNEL);
 	if (brcm_wowlan_config) {
-		brcm_wowlan_config->disconnect = true;
-		brcm_wowlan_config->gtk_rekey_failure = true;
-		brcm_wowlan_config->eap_identity_req = true;
-		brcm_wowlan_config->four_way_handshake = true;
+		brcm_wowlan_config->any = false;
+		brcm_wowlan_config->magic_pkt = false;
+		brcm_wowlan_config->disconnect = false;
+		brcm_wowlan_config->gtk_rekey_failure = false;
+		brcm_wowlan_config->eap_identity_req = false;
+		brcm_wowlan_config->four_way_handshake = false;
+		brcm_wowlan_config->rfkill_release = false;
 		brcm_wowlan_config->patterns = NULL;
 		brcm_wowlan_config->n_patterns = 0;
 		brcm_wowlan_config->tcp = NULL;
@@ -9808,7 +9984,7 @@ static s32 wl_setup_wiphy(struct wireless_dev *wdev, struct device *sdiofunc_dev
 	}
 	wdev->wiphy->wowlan_config = brcm_wowlan_config;
 #else
-	wdev->wiphy->wowlan.flags = WIPHY_WOWLAN_ANY;
+	wdev->wiphy->wowlan.flags = 0;
 	wdev->wiphy->wowlan.n_patterns = WL_WOWLAN_MAX_PATTERNS;
 	wdev->wiphy->wowlan.pattern_min_len = WL_WOWLAN_MIN_PATTERN_LEN;
 	wdev->wiphy->wowlan.pattern_max_len = WL_WOWLAN_MAX_PATTERN_LEN;
@@ -10500,7 +10676,7 @@ wl_notify_connect_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 						WL_ERR(("WLC_DISASSOC error %d\n", err));
 						err = 0;
 					}
-					cfg80211_disconnected(ndev, reason, NULL, 0, GFP_KERNEL);
+					CFG80211_DISCONNECTED(ndev, reason, NULL, 0, false, GFP_KERNEL);
 					wl_link_down(cfg);
 					wl_init_prof(cfg, ndev);
 					memset(&cfg->last_roamed_addr, 0, ETHER_ADDR_LEN);
@@ -11276,7 +11452,7 @@ wl_notify_pfn_status(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 #ifndef WL_SCHED_SCAN
 	mutex_lock(&cfg->usr_sync);
 	/* TODO: Use cfg80211_sched_scan_results(wiphy); */
-	cfg80211_disconnected(ndev, 0, NULL, 0, GFP_KERNEL);
+	CFG80211_DISCONNECTED(ndev, 0, NULL, 0, false, GFP_KERNEL);
 	mutex_unlock(&cfg->usr_sync);
 #else
 	/* If cfg80211 scheduled scan is supported, report the pno results via sched
@@ -11450,7 +11626,7 @@ scan_done_out:
 	del_timer_sync(&cfg->scan_timeout);
 	spin_lock_irqsave(&cfg->cfgdrv_lock, flags);
 	if (cfg->scan_request) {
-		cfg80211_scan_done(cfg->scan_request, false);
+		bcm_cfg80211_scan_done(cfg->scan_request, false);
 		cfg->scan_request = NULL;
 	}
 	spin_unlock_irqrestore(&cfg->cfgdrv_lock, flags);
@@ -12569,7 +12745,7 @@ static s32 wl_notify_escan_complete(struct bcm_cfg80211 *cfg,
 	}
 #endif /* WL_SCHED_SCAN */
 	if (likely(cfg->scan_request)) {
-		cfg80211_scan_done(cfg->scan_request, aborted);
+		bcm_cfg80211_scan_done(cfg->scan_request, aborted);
 		cfg->scan_request = NULL;
 #if defined(OEM_ANDROID)
 		DHD_OS_SCAN_WAKE_UNLOCK((dhd_pub_t *)(cfg->pub));
@@ -14416,13 +14592,18 @@ static s32 __wl_cfg80211_up(struct bcm_cfg80211 *cfg)
 			return err;
 		}
 	}
-
-	err = wl_create_event_handler(cfg);
-	if (err) {
-		WL_ERR(("wl_create_event_handler failed\n"));
-		return err;
+	/* Already created an wl_event_handler in cfg_attach.
+	 * Creation of wl_event-handler in cfg80211_up cause
+	 * duplicate process creation in Module type driver.
+	 */
+	if (!dhd_download_fw_on_driverload) {
+		err = wl_create_event_handler(cfg);
+		if (err) {
+			WL_ERR(("wl_create_event_handler failed\n"));
+			return err;
+		}
+		wl_init_event_handler(cfg);
 	}
-	wl_init_event_handler(cfg);
 
 	err = wl_init_scan(cfg);
 	if (err) {
@@ -14547,7 +14728,7 @@ _Pragma("GCC diagnostic pop")
 
 	spin_lock_irqsave(&cfg->cfgdrv_lock, flags);
 	if (cfg->scan_request) {
-		cfg80211_scan_done(cfg->scan_request, true);
+		bcm_cfg80211_scan_done(cfg->scan_request, true);
 		cfg->scan_request = NULL;
 	}
 	spin_unlock_irqrestore(&cfg->cfgdrv_lock, flags);
@@ -14562,7 +14743,7 @@ _Pragma("GCC diagnostic ignored \"-Wcast-qual\"")
 			continue;
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0))
 		if (wl_get_drv_status(cfg, CONNECTED, iter->ndev)) {
-			cfg80211_disconnected(iter->ndev, 0, NULL, 0, GFP_KERNEL);
+			CFG80211_DISCONNECTED(iter->ndev, 0, NULL, 0, false, GFP_KERNEL);
 		}
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)) */
 		wl_clr_drv_status(cfg, READY, iter->ndev);
@@ -14589,10 +14770,12 @@ _Pragma("GCC diagnostic pop")
 			dev_close(p2p_net);
 #endif /* WL_CFG80211 && (WL_ENABLE_P2P_IF || WL_NEWCFG_PRIVCMD_SUPPORT) */
 
-	/* Avoid deadlock from wl_cfg80211_down */
-	mutex_unlock(&cfg->usr_sync);
-	wl_destroy_event_handler(cfg);
-	mutex_lock(&cfg->usr_sync);
+	if (!dhd_download_fw_on_driverload) {
+		/* Avoid deadlock from wl_cfg80211_down */
+		mutex_unlock(&cfg->usr_sync);
+		wl_destroy_event_handler(cfg);
+		mutex_lock(&cfg->usr_sync);
+	}
 	wl_flush_eq(cfg);
 	wl_link_down(cfg);
 	if (cfg->p2p_supported) {
@@ -14745,7 +14928,7 @@ int wl_cfg80211_hang(struct net_device *dev, u16 reason)
 	} else
 #endif /* SOFTAP_SEND_HANGEVT */
 	{
-		cfg80211_disconnected(dev, reason, NULL, 0, GFP_KERNEL);
+		CFG80211_DISCONNECTED(dev, reason, NULL, 0, false, GFP_KERNEL);
 	}
 	if (cfg != NULL) {
 		wl_link_down(cfg);
@@ -14781,14 +14964,14 @@ int wl_cfg80211_cleanup(void)
 	ndev = bcmcfg_to_prmry_ndev(cfg);
 	spin_lock_irqsave(&cfg->cfgdrv_lock, flags);
 	if (cfg->scan_request) {
-		cfg80211_scan_done(cfg->scan_request, true);
+		bcm_cfg80211_scan_done(cfg->scan_request, true);
 		cfg->scan_request = NULL;
 	}
 	spin_unlock_irqrestore(&cfg->cfgdrv_lock, flags);
 
 	if (wl_get_drv_status(cfg, CONNECTED, ndev) ||
 		wl_get_drv_status(cfg, CONNECTING, ndev)) {
-		cfg80211_disconnected(ndev, 0, NULL, 0, GFP_KERNEL);
+		CFG80211_DISCONNECTED(ndev, 0, NULL, 0, false, GFP_KERNEL);
 	}
 
 	/* clear all flags */
@@ -17399,7 +17582,7 @@ int wl_cfg80211_scan_stop(bcm_struct_cfgdev *cfgdev)
 #else
 	if (cfg->scan_request && cfg->scan_request->dev == cfgdev) {
 #endif
-		cfg80211_scan_done(cfg->scan_request, true);
+		bcm_cfg80211_scan_done(cfg->scan_request, true);
 		cfg->scan_request = NULL;
 		clear_flag = 1;
 	}

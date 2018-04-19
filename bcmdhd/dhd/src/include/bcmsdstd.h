@@ -1,7 +1,7 @@
 /*
  *  'Standard' SDIO HOST CONTROLLER driver
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmsdstd.h 514727 2014-11-12 03:02:48Z $
+ * $Id: bcmsdstd.h 744088 2018-01-31 14:16:54Z $
  */
 #ifndef	_BCM_SD_STD_H
 #define	_BCM_SD_STD_H
@@ -166,10 +166,10 @@ struct sdioh_info {
 
 	/* adjustments needed to make the dma align properly */
 	void		*dma_start_buf;
-	ulong		dma_start_phys;
+	dmaaddr_t	dma_start_phys;
 	uint		alloced_dma_size;
 	void		*adma2_dscr_start_buf;
-	ulong		adma2_dscr_start_phys;
+	dmaaddr_t	adma2_dscr_start_phys;
 	uint		alloced_adma2_dscr_size;
 
 	int 		r_cnt;			/* rx count */

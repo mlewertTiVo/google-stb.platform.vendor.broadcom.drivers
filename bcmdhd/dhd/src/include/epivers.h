@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -35,21 +35,21 @@
 
 #define	EPI_RC_NUMBER		110
 
-#define	EPI_INCREMENTAL_NUMBER	77
+#define	EPI_INCREMENTAL_NUMBER	86
 
 #define EPI_BUILD_NUMBER	1
 
-#define	EPI_VERSION		1, 363, 110, 77
+#define	EPI_VERSION		1, 363, 110, 86
 
-#define	EPI_VERSION_NUM		0x0116b6e4
+#define	EPI_VERSION_NUM		0x0116b6e5
 
 #define EPI_VERSION_DEV		1.363.110
 
 /* Driver Version String, ASCII, 32 chars max */
 #ifdef WLTEST
-#define	EPI_VERSION_STR		"1.363.110.77 (r726772 WLTEST)"
+#define	EPI_VERSION_STR		"1.363.110.86 (r748950 WLTEST)"
 #else
-#define	EPI_VERSION_STR		"1.363.110.77 (r726772)"
+#define	EPI_VERSION_STR		"1.363.110.86 (r748950)"
 #endif
 
 #endif /* _epivers_h_ */

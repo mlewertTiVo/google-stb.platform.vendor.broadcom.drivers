@@ -1,7 +1,7 @@
 /* P2P Library OS abstraction layer (OSL) definitions common to all OSes.
  * Each OS-specific implementation must implement all functions declared here.
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

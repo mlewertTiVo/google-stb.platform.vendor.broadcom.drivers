@@ -1,7 +1,7 @@
 /*
  * Common code for wl routines
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_common.h 585140 2015-09-09 19:24:18Z $
+ * $Id: wlu_common.h 746219 2018-02-12 14:38:41Z $
  */
 #include <wlioctl.h>
 #include <bcmutils.h>
@@ -55,6 +55,10 @@ typedef struct wl_cmd_list {
 	wl_seq_cmd_pkt_t	*tail;
 } wl_cmd_list_t;
 
+typedef union wl_rateset_args_u {
+	wl_rateset_args_v1_t rsv1;
+	wl_rateset_args_v2_t rsv2;
+} wl_rateset_args_u_t;
 extern wl_cmd_list_t cmd_list;
 extern int cmd_pkt_list_num;
 extern bool cmd_batching_mode;

@@ -1,7 +1,7 @@
 /*
  * wl p2po command module
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -203,11 +203,12 @@ wl_p2po_listen(void *wl, cmd_t *cmd, char **argv)
 		return BCME_OK;
 	}
 
-	if (!argv[2])
+	if (!argv[2]) {
 		return BCME_USAGE_ERROR;
+	}
 
-		params.period = atoi(argv[1]);
-		params.interval = atoi(argv[2]);
+	params.period = atoi(argv[1]);
+	params.interval = atoi(argv[2]);
 
 	params_size = sizeof(wl_p2po_listen_t);
 

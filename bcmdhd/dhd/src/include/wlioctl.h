@@ -6,7 +6,7 @@
  *
  * Definitions subject to change without notice.
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -29,7 +29,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl.h 661080 2016-09-23 06:18:19Z $
+ * $Id: wlioctl.h 746219 2018-02-12 14:38:41Z $
  */
 
 #ifndef _wlioctl_h_
@@ -688,18 +688,35 @@ typedef struct wl_probe_params {
 	struct ether_addr mac;
 } wl_probe_params_t;
 
+#define WL_HE_CAP_MCS_MAP_NSS_MAX       8
+#define WL_VHT_CAP_MCS_MAP_NSS_MAX      8
 #define WL_MAXRATES_IN_SET		16	/**< max # of rates in a rateset */
 typedef struct wl_rateset {
 	uint32	count;			/**< # rates in this set */
 	uint8	rates[WL_MAXRATES_IN_SET];	/**< rates in 500kbps units w/hi bit set if basic */
 } wl_rateset_t;
 
-typedef struct wl_rateset_args {
+typedef struct {
 	uint32	count;			/**< # rates in this set */
 	uint8	rates[WL_MAXRATES_IN_SET];	/**< rates in 500kbps units w/hi bit set if basic */
 	uint8   mcs[MCSSET_LEN];        /* supported mcs index bit map */
 	uint16 vht_mcs[VHT_CAP_MCS_MAP_NSS_MAX]; /* supported mcs index bit map per nss */
 } wl_rateset_args_t;
+
+typedef  wl_rateset_args_t wl_rateset_args_v1_t;
+
+#define RATESET_ARGS_V1         (1)
+#define RATESET_ARGS_V2         (2)
+
+typedef struct wl_rateset_args_v2 {
+	uint16 version;         /**< version. */
+	uint16 len;             /**< length */
+	uint32  count;          /**< # rates in this set */
+	uint8   rates[WL_MAXRATES_IN_SET];      /**< rates in 500kbps units w/hi bit set if basic */
+	uint8   mcs[MCSSET_LEN];                /**< supported mcs index bit map */
+	uint16 vht_mcs[WL_VHT_CAP_MCS_MAP_NSS_MAX]; /**< supported mcs index bit map per nss */
+	uint16 he_mcs[WL_HE_CAP_MCS_MAP_NSS_MAX]; /**< supported he mcs index bit map per nss */
+} wl_rateset_args_v2_t;
 
 #define TXBF_RATE_MCS_ALL		4
 #define TXBF_RATE_VHT_ALL		4
@@ -1270,14 +1287,94 @@ typedef struct {
 
 	chanspec_t		chanspec;       /** chanspec this sta is on */
 	wl_rateset_args_t	rateset_adv;	/* rateset along with mcs index bitmap */
+	uint16                  wpauth;                 /* authentication type */
+	uint8                   algo;                   /* crypto algorithm */
 } sta_info_v5_t;
 
 typedef sta_info_v5_t sta_info_t;
 
+
+/* sta_info_t version 7
+ *         changes to wl_rateset_args_t is leading to update this struct version as well.
+ */
+typedef struct {
+	uint16                  ver;            /**< version of this struct */
+	uint16                  len;            /**< length in bytes of this structure */
+	uint16                  cap;            /**< sta's advertised capabilities */
+	uint16                  PAD0;
+	uint32                  flags;          /**< flags defined below */
+	uint32                  idle;           /**< time since data pkt rx'd from sta */
+	struct ether_addr       ea;             /**< Station address */
+	uint16                  PAD1;
+	wl_rateset_t    rateset;        /**< rateset in use */
+	uint32                  in;             /**< seconds elapsed since associated */
+	uint32                  listen_interval_inms; /**< Min Listen interval in ms for this STA */
+	uint32                  tx_pkts;        /**< # of user packets transmitted (unicast) */
+	uint32                  tx_failures;    /**< # of user packets failed */
+	uint32                  rx_ucast_pkts;  /**< # of unicast packets received */
+	uint32                  rx_mcast_pkts;  /**< # of multicast packets received */
+	uint32                  tx_rate;        /**< Rate used by last tx frame */
+	uint32                  rx_rate;        /**< Rate of last successful rx frame */
+	uint32                  rx_decrypt_succeeds;    /**< # of packet decrypted successfully */
+	uint32                  rx_decrypt_failures;    /**< # of packet decrypted unsuccessfully */
+	uint32                  tx_tot_pkts;    /**< # of user tx pkts (ucast + mcast) */
+	uint32                  rx_tot_pkts;    /**< # of data packets recvd (uni + mcast) */
+	uint32                  tx_mcast_pkts;  /**< # of mcast pkts txed */
+	uint64                  tx_tot_bytes;   /**< data bytes txed (ucast + mcast) */
+	uint64                  rx_tot_bytes;   /**< data bytes recvd (ucast + mcast) */
+	uint64                  tx_ucast_bytes; /**< data bytes txed (ucast) */
+	uint64                  tx_mcast_bytes; /**< # data bytes txed (mcast) */
+	uint64                  rx_ucast_bytes; /**< data bytes recvd (ucast) */
+	uint64                  rx_mcast_bytes; /**< data bytes recvd (mcast) */
+	int8                    rssi[WL_STA_ANT_MAX]; /**< average rssi per antenna
+						       * of data frames
+						       */
+	int8                    nf[WL_STA_ANT_MAX];     /**< per antenna noise floor */
+	uint16                  aid;                    /**< association ID */
+	uint16                  ht_capabilities;        /**< advertised ht caps */
+	uint16                  vht_flags;              /**< converted vht flags */
+	uint16                  PAD2;
+	uint32                  tx_pkts_retried;        /**< # of frames where a retry was
+							 * necessary
+							 */
+	uint32                  tx_pkts_retry_exhausted; /**< # of user frames where a retry
+							  * was exhausted
+							  */
+	int8                    rx_lastpkt_rssi[WL_STA_ANT_MAX]; /**< Per antenna RSSI of last
+								  * received data frame.
+								  */
+	/* TX WLAN retry/failure statistics:
+	 * Separated for host requested frames and WLAN locally generated frames.
+	 * Include unicast frame only where the retries/failures can be counted.
+	 */
+	uint32                  tx_pkts_total;          /**< # user frames sent successfully */
+	uint32                  tx_pkts_retries;        /**< # user frames retries */
+	uint32                  tx_pkts_fw_total;       /**< # FW generated sent successfully */
+	uint32                  tx_pkts_fw_retries;     /**< # retries for FW generated frames */
+	uint32                  tx_pkts_fw_retry_exhausted;     /**< # FW generated where a retry
+								 * was exhausted
+								 */
+	uint32                  rx_pkts_retried;        /**< # rx with retry bit set */
+	uint32                  tx_rate_fallback;       /**< lowest fallback TX rate */
+	/* Fields above this line are common to sta_info_t versions 4 and 5 */
+
+	uint32                  rx_dur_total;   /* total user RX duration (estimated) */
+
+	chanspec_t              chanspec;       /** chanspec this sta is on */
+	uint16                  PAD3;
+	wl_rateset_args_v2_t    rateset_adv;    /* rateset along with mcs index bitmap */
+	uint16                  wpauth;                 /* authentication type */
+	uint8                   algo;                   /* crypto algorithm */
+	uint32                  tx_rspec;       /* Rate of last successful tx frame */
+	uint32                  rx_rspec;       /* Rate of last successful rx frame */
+	uint32                  wnm_cap;              /* wnm capabilities */
+} sta_info_v7_t;
+
 #define WL_OLD_STAINFO_SIZE	OFFSETOF(sta_info_t, tx_tot_pkts)
 
-#define WL_STA_VER		5
-
+#define WL_STA_VER_V5	5
+#define WL_STA_VER_V7	7
+#define WL_STA_VER	WL_STA_VER_V7
 
 typedef struct {
 	uint32 auto_en;

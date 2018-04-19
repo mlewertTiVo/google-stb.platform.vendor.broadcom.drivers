@@ -1,7 +1,7 @@
 /*
  * Broadcom Dongle Host Driver (DHD), common DHD core.
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_common.c 726300 2017-10-12 05:28:33Z $
+ * $Id: dhd_common.c 734104 2017-12-01 06:57:08Z $
  */
 #include <typedefs.h>
 #include <osl.h>
@@ -170,10 +170,10 @@ bool ap_fw_loaded = FALSE;
 
 #if defined(BCMDBG)
 const char dhd_version[] = "\nDongle Host Driver, version " EPI_VERSION_STR "\nCompiled from "
-	__FILE__ "\nCompiled on " __DATE__ " at " __TIME__;
+	__FILE__;
 #elif defined(DHD_DEBUG)
 const char dhd_version[] = "Dongle Host Driver, version " EPI_VERSION_STR
-	DHD_COMPILED " on " __DATE__ " at " __TIME__;
+	DHD_COMPILED;
 #else
 const char dhd_version[] = "\nDongle Host Driver, version " EPI_VERSION_STR "\nCompiled from ";
 #endif /* BCMDBG */

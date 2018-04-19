@@ -1,7 +1,7 @@
 /*
  * wl phy command module
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -605,11 +605,12 @@ wl_phymsglevel(void *wl, cmd_t *cmd, char **argv)
 		}
 		/* not an integer if not all the string was parsed by strtoul */
 		if (*endptr != '\0') {
-			for (i = 0; (val = phy_msg[i].value); i++)
+			for (i = 0; (val = phy_msg[i].value); i++) {
 				if (stricmp(phy_msg[i].string, s) == 0)
 					break;
-				if (!val)
-					goto usage;
+			}
+			if (!val)
+				goto usage;
 		}
 		if (**argv == '-')
 			phymsglevel_del |= val;

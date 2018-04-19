@@ -1,7 +1,7 @@
 /*
  * wl ht command module
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -104,7 +104,7 @@ wluc_ht_module_init(void)
 /* Format a ratespec for "nrate" output
  * Will handle both current wl_ratespec and legacy (ioctl_version 1) nrate ratespec
  */
-static void
+void
 wl_nrate_print(uint32 rspec)
 {
 	const char * rspec_auto = "auto";

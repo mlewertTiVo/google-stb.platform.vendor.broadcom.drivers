@@ -3,7 +3,7 @@
  *
  * This file is necessary for implementing the WPS API for WPS enrollee code.
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

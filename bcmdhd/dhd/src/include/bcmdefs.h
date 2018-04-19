@@ -1,7 +1,7 @@
 /*
  * Misc system wide definitions
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmdefs.h 588205 2015-09-23 11:54:25Z $
+ * $Id: bcmdefs.h 743266 2018-01-25 13:07:54Z $
  */
 
 #ifndef	_bcmdefs_h_
@@ -171,6 +171,35 @@
 #define	DMADDRWIDTH_63  63 /* 64-bit addressing capability */
 #define	DMADDRWIDTH_64  64 /* 64-bit addressing capability */
 
+/* CONFIG_ARCH_DMA_ADDR_T_64BIT enbled by the kernel when 64bit DMA is supported by kernel */
+#if defined(CONFIG_ARCH_DMA_ADDR_T_64BIT)
+
+#define DMADDR_HIGHADDR_MASK	0xffffffff00000000ULL	/* Address mask for higher 4 bytes */
+#define DMADDR_LOWADDR_MASK	0xffffffff		/* Address mask for low 4 bytes */
+#define DMADDR_4BYTE_SHIFT	32			/* 4 byte shift bits */
+
+#define PHYSADDR64HI(_pa) (((_pa) >> DMADDR_4BYTE_SHIFT) & DMADDR_LOWADDR_MASK)
+#define PHYSADDR64HISET(_pa, _val) \
+	do { \
+		(_pa) = ((_pa) &  DMADDR_LOWADDR_MASK);		\
+		(_pa) = ((_pa) | ((_val) << DMADDR_4BYTE_SHIFT));	\
+	} while (0)
+
+#define PHYSADDR64LO(_pa) ((_pa) & DMADDR_LOWADDR_MASK)
+#define PHYSADDR64LOSET(_pa, _val) \
+	do { \
+		(_pa) = ((_pa) & DMADDR_HIGHADDR_MASK);		\
+		(_pa) = ((_pa) | ((_val) & (DMADDR_LOWADDR_MASK)));	\
+	} while (0)
+
+typedef u64 dmaaddr_t;
+#define PHYSADDRHI(_pa)			PHYSADDR64HI(_pa)
+#define PHYSADDRHISET(_pa, _val)	PHYSADDR64HISET(_pa, _val)
+#define PHYSADDRLO(_pa)			PHYSADDR64LO(_pa)
+#define PHYSADDRLOSET(_pa, _val)	PHYSADDR64LOSET(_pa, _val)
+
+#else
+
 typedef struct {
 	uint32 loaddr;
 	uint32 hiaddr;
@@ -187,14 +216,16 @@ typedef struct {
 		(_pa).loaddr = (_val);		\
 	} while (0)
 
-#ifdef BCMDMA64OSL
+#if defined(BCMDMA64OSL)	/* !BCMDMA64_LINUXOSL */
+
 typedef dma64addr_t dmaaddr_t;
 #define PHYSADDRHI(_pa) PHYSADDR64HI(_pa)
 #define PHYSADDRHISET(_pa, _val) PHYSADDR64HISET(_pa, _val)
 #define PHYSADDRLO(_pa)  PHYSADDR64LO(_pa)
 #define PHYSADDRLOSET(_pa, _val) PHYSADDR64LOSET(_pa, _val)
 
-#else
+#else /* !BCMDMA64_LINUXOSL && !BCMDMA64OSL */
+
 typedef unsigned long dmaaddr_t;
 #define PHYSADDRHI(_pa) (0)
 #define PHYSADDRHISET(_pa, _val)
@@ -203,7 +234,11 @@ typedef unsigned long dmaaddr_t;
 	do { \
 		(_pa) = (_val);			\
 	} while (0)
+
 #endif /* BCMDMA64OSL */
+#endif /* BCMDMA64_LINUXOSL */
+
+
 #define PHYSADDRISZERO(_pa) (PHYSADDRLO(_pa) == 0 && PHYSADDRHI(_pa) == 0)
 
 /* One physical DMA segment */
