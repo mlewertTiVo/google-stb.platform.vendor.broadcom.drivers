@@ -228,8 +228,7 @@
 #define HOST_c2l(c,l)	(l =(((unsigned long)(*((c)++)))<<24),		\
 			 l|=(((unsigned long)(*((c)++)))<<16),		\
 			 l|=(((unsigned long)(*((c)++)))<< 8),		\
-			 l|=(((unsigned long)(*((c)++)))    ),		\
-			 l)
+			 l|=(((unsigned long)(*((c)++)))    ))
 #endif
 #define HOST_p_c2l(c,l,n)	{					\
 			switch (n) {					\
@@ -258,8 +257,7 @@
 #define HOST_l2c(l,c)	(*((c)++)=(unsigned char)(((l)>>24)&0xff),	\
 			 *((c)++)=(unsigned char)(((l)>>16)&0xff),	\
 			 *((c)++)=(unsigned char)(((l)>> 8)&0xff),	\
-			 *((c)++)=(unsigned char)(((l)    )&0xff),	\
-			 l)
+			 *((c)++)=(unsigned char)(((l)    )&0xff))
 #endif
 
 #elif defined(DATA_ORDER_IS_LITTLE_ENDIAN)

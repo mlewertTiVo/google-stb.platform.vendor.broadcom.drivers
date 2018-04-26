@@ -4,7 +4,7 @@
  * BCM_BUZZZ Performance tracing tool for:
  *    ARM Cortex-R4 (HndRTE), ARM Cortex-M3 (BMOS) and ARM Cortex-A7 (ThreadX)
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you

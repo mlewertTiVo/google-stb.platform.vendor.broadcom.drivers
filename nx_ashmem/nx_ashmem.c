@@ -119,8 +119,7 @@ static BMMA_Block_Handle nx_ashmem_memif_alloc(BMMA_Heap_Handle context, size_t 
    }
 
    if (gfx_alloc_bin_dbg) {
-      pr_info("nx::alt-alloc:%s::%lx::sz:%u::al:%u\n",
-              nx_ashmem_global->gfx_heap_dyn ? "block-handle" : "address",
+      pr_info("nx::alt-alloc:block-handle::%lx::sz:%u::al:%u\n",
               (long)block, size, align);
    }
 
@@ -136,8 +135,7 @@ static void nx_ashmem_memif_free(BMMA_Block_Handle block)
    NEXUS_MemoryBlock_Free((NEXUS_MemoryBlockHandle)block);
 
    if (gfx_alloc_bin_dbg) {
-      pr_info("nx::alt-free:%s::%lx\n",
-              nx_ashmem_global->gfx_heap_dyn ? "block-handle" : "address",
+      pr_info("nx::alt-free:block-handle::%lx\n",
               (long)block);
    }
 }
@@ -148,12 +146,11 @@ static void nx_ashmem_memif_unlock(BMMA_Block_Handle block, BMMA_DeviceOffset of
    NEXUS_MemoryBlock_UnlockOffset((NEXUS_MemoryBlockHandle)block);
 }
 
-static void nx_ashmem_memif_lock(BMMA_Block_Handle block, BMMA_DeviceOffset *off, uint32_t *phys)
+static void nx_ashmem_memif_lock(BMMA_Block_Handle block, BMMA_DeviceOffset *off)
 {
    NEXUS_Addr addr;
    NEXUS_MemoryBlock_LockOffset((NEXUS_MemoryBlockHandle)block, &addr);
    *off = (BMMA_DeviceOffset)addr;
-   *phys = *off & 0xFFFFFFFF;
 }
 #endif
 
@@ -346,16 +343,14 @@ static int nx_ashmem_release(struct inode *ignored, struct file *file)
    if (asma->block) {
       if (asma->ext_refcnt > 0) {
          if (gfx_alloc_dbg) {
-            pr_err("nx::free-deferred:%s::%lx::%lx::%lx::sz:%u::al:%u:cnt:%d\n",
-                   (nx_ashmem_global->gfx_heap_dyn ? "block-handle" : "address"),
+            pr_err("nx::free-deferred:block-handle::%lx::%lx::%lx::sz:%u::al:%u:cnt:%d\n",
                    (long)asma, (long)asma->block, (long)asma->p_address, asma->size, asma->align, asma->ext_refcnt);
          }
          asma->defer_free = 1;
          mutex_unlock(&(nx_ashmem_global->block_lock));
       } else {
          if (gfx_alloc_dbg) {
-            pr_info("nx::free:%s::%lx::%lx::%lx::sz:%u::al:%u:cnt:%d\n",
-                    (nx_ashmem_global->gfx_heap_dyn ? "block-handle" : "address"),
+            pr_info("nx::free:block-handle::%lx::%lx::%lx::sz:%u::al:%u:cnt:%d\n",
                     (long)asma, (long)asma->block, (long)asma->p_address, asma->size, asma->align, asma->ext_refcnt);
          }
          nx_ashmem_asma_free_block(asma);
@@ -452,16 +447,10 @@ block_allocated:
    asma->block = block;
 
 asma_block_allocated:
-   if (nx_ashmem_global->gfx_heap_dyn) {
-      NEXUS_Platform_SetSharedHandle(asma->block, true);
-      getmem->hdl = asma->block;
-   } else {
-      getmem->hdl = asma->p_address;
-   }
-
+   NEXUS_Platform_SetSharedHandle(asma->block, true);
+   getmem->hdl = asma->block;
 out:
-   if (gfx_alloc_dbg) pr_info("nx::alloc:%s::%lx::%lx::%lx::sz:%u::al:%u\n",
-                              nx_ashmem_global->gfx_heap_dyn ? "block-handle" : "address",
+   if (gfx_alloc_dbg) pr_info("nx::alloc:block-handle::%lx::%lx::%lx::sz:%u::al:%u\n",
                               (long)asma, (long)asma->block, (long)asma->p_address, asma->size, asma->align);
    return 0;
 }
@@ -511,8 +500,7 @@ static int nx_ashmem_process_ext_refcnt(NEXUS_MemoryBlockHandle hdl, int cnt)
       ret = -ENOMEM;
    } else if (free_block != NULL) {
       if (gfx_alloc_dbg)
-         pr_info("nx::free-delay:%s::%lx::%lx::%lx::sz:%u::al:%u:cnt:%d\n",
-                 (nx_ashmem_global->gfx_heap_dyn ? "block-handle" : "address"),
+         pr_info("nx::free-delay:block-handle::%lx::%lx::%lx::sz:%u::al:%u:cnt:%d\n",
                  (long)free_block, (long)free_block->block, (long)free_block->p_address, free_block->size, free_block->align, free_block->ext_refcnt);
 
       mutex_lock(&(nx_ashmem_global->block_lock));
@@ -935,7 +923,7 @@ static int __init nx_ashmem_module_init(void)
    nx_ashmem_global->gfx_alt_heap[1] = NULL;
    if (nx_ashmem_global->gfx_heap == NULL) {
       /* no dynamic heap, fallback to default platform graphics one. */
-      pr_info("fallback on failure to associate d-cma heap!\n");
+      pr_info("no d-cma heap, use framebuffer static heap\n");
       nx_ashmem_global->gfx_heap = NEXUS_Platform_GetFramebufferHeap(NEXUS_OFFSCREEN_SURFACE);
    } else {
       nx_ashmem_global->gfx_heap_dyn = 1;

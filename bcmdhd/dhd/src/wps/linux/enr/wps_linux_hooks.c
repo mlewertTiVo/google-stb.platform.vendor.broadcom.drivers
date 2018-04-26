@@ -6,7 +6,7 @@
  * for WPS enrollee code. It is mainly the implementation of eap transport
  * but also add basic OS layer interface (should it be renamed like linux_osl ??)
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;

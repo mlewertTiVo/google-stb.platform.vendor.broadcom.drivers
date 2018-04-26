@@ -3,7 +3,7 @@
  * Provides type definitions and function prototypes used to link the
  * DHD OS, bus, and protocol modules.
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_msgbuf.c 705748 2017-06-19 09:44:33Z $
+ * $Id: dhd_msgbuf.c 743266 2018-01-25 13:07:54Z $
  */
 
 
@@ -658,7 +658,7 @@ dhd_prot_d2h_sync_seqnum(dhd_pub_t *dhd, msgbuf_ring_t *ring,
 		if (tries > prot->d2h_sync_wait_max)
 			prot->d2h_sync_wait_max = tries;
 
-		OSL_CACHE_INV(msg, msglen); /* invalidate and try again */
+		OSL_CACHE_INV(dhd->osh, msg, msglen); /* invalidate and try again */
 		OSL_CPU_RELAX(); /* CPU relax for msg_seqnum  value to update */
 
 	} /* for PCIE_D2H_SYNC_WAIT_TRIES */
@@ -703,7 +703,7 @@ dhd_prot_d2h_sync_xorcsum(dhd_pub_t *dhd, msgbuf_ring_t *ring,
 		if (tries > prot->d2h_sync_wait_max)
 			prot->d2h_sync_wait_max = tries;
 
-		OSL_CACHE_INV(msg, msglen); /* invalidate and try again */
+		OSL_CACHE_INV(dhd->osh, msg, msglen); /* invalidate and try again */
 		OSL_CPU_RELAX(); /* CPU relax for msg_seqnum  value to update */
 
 	} /* for PCIE_D2H_SYNC_WAIT_TRIES */
@@ -869,7 +869,7 @@ dhd_dma_buf_reset(dhd_pub_t *dhd, dhd_dma_buf_t *dma_buf)
 
 	/* Zero out the entire buffer and cache flush */
 	memset((void*)dma_buf->va, 0, dma_buf->len);
-	OSL_CACHE_FLUSH((void *)dma_buf->va, dma_buf->len);
+	OSL_CACHE_FLUSH(dhd->osh, (void *)dma_buf->va, dma_buf->len);
 }
 
 /**
@@ -1718,7 +1718,7 @@ dhd_pktid_map_alloc(dhd_pub_t *dhd, dhd_pktid_map_handle_t *handle, void *pkt,
 	/* Need to do the flush at buffer allocation time */
 	DHD_TRACE(("%s: flush buffer 0x%x len %d\n", __FUNCTION__,
 		PKTDATA(dhd->osh, pkt), PKTLEN(dhd->osh, pkt)));
-	OSL_CACHE_FLUSH(PKTDATA(dhd->osh, pkt), PKTLEN(dhd->osh, pkt));
+	OSL_CACHE_FLUSH(dhd->pub.osh, PKTDATA(dhd->osh, pkt), PKTLEN(dhd->osh, pkt));
 #endif
 	DHD_PKTID_UNLOCK(map->pktid_lock, flags);
 
@@ -1803,7 +1803,7 @@ dhd_pktid_map_free(dhd_pub_t *dhd, dhd_pktid_map_handle_t *handle, uint32 nkey,
 
 #ifdef CUSTOMER_HW_31_2
 	/* need to do to ensure all packet are flushed */
-	OSL_CACHE_INV(PKTDATA(dhd->osh, pkt), PKTLEN(dhd->osh, pkt));
+	OSL_CACHE_INV(dhd->osh, PKTDATA(dhd->osh, pkt), PKTLEN(dhd->osh, pkt));
 #endif
 
 	DHD_PKTID_UNLOCK(map->pktid_lock, flags);
@@ -2915,7 +2915,7 @@ dhd_prot_rxbuf_post(dhd_pub_t *dhd, uint16 count, bool use_rsv_pktid)
 		if (SECURE_DMA_ENAB(dhd->osh)) {
 			DHD_GENERAL_LOCK(dhd, flags);
 			pa = SECURE_DMA_MAP(dhd->osh, PKTDATA(dhd->osh, p), pktlen,
-				DMA_RX, p, 0, ring->dma_buf.secdma, 0);
+				DMA_RX, p, 0, ring->dma_buf.secdma, 0, CMA_RXBUF_POST);
 			DHD_GENERAL_UNLOCK(dhd, flags);
 		}
 #ifndef BCM_SECURE_DMA
@@ -3158,7 +3158,7 @@ dhd_prot_rxbufpost_ctrl(dhd_pub_t *dhd, bool event_buf)
 		if (SECURE_DMA_ENAB(dhd->osh)) {
 			DHD_GENERAL_LOCK(dhd, flags);
 			pa = SECURE_DMA_MAP(dhd->osh, PKTDATA(dhd->osh, p), pktlen,
-				DMA_RX, p, 0, ring->dma_buf.secdma, 0);
+				DMA_RX, p, 0, ring->dma_buf.secdma, 0, CMA_RXCTR_BUF_POST);
 			DHD_GENERAL_UNLOCK(dhd, flags);
 		}
 #ifndef BCM_SECURE_DMA
@@ -3183,7 +3183,7 @@ dhd_prot_rxbufpost_ctrl(dhd_pub_t *dhd, bool event_buf)
 	if (rxbuf_post == NULL) {
 		DHD_GENERAL_UNLOCK(dhd, flags);
 		DHD_ERROR(("%s:%d: Ctrl submit Msgbuf Not available to post buffer \n",
-			__FUNCTION__, __LINE__));
+		__FUNCTION__, __LINE__));
 
 #ifdef IOCTLRESP_USE_CONSTMEM
 		if (event_buf)
@@ -3739,7 +3739,7 @@ dhd_prot_txstatus_process(dhd_pub_t *dhd, void *msg)
 	unsigned long flags;
 	uint32 pktid;
 	void *pkt = NULL;
-	ulong pa;
+	dmaaddr_t pa;
 	uint32 len;
 	void *dmah;
 	void *secdma;
@@ -3834,7 +3834,7 @@ workq_ring_full:
 
 			if (dhd->prot->tx_metadata_offset)
 				offset = dhd->prot->tx_metadata_offset + ETHER_HDR_LEN;
-			SECURE_DMA_UNMAP(dhd->osh, (uint) pa,
+			SECURE_DMA_UNMAP(dhd->osh, pa,
 				(uint) dhd->prot->tx_metadata_offset, DMA_RX, 0, dmah,
 				secdma, offset);
 		} else {
@@ -4143,7 +4143,7 @@ dhd_prot_txdata(dhd_pub_t *dhd, void *PKTBUF, uint8 ifidx)
 		}
 
 		pa = SECURE_DMA_MAP(dhd->osh, PKTDATA(dhd->osh, PKTBUF), pktlen,
-			DMA_TX, PKTBUF, 0, ring->dma_buf.secdma, offset);
+			DMA_TX, PKTBUF, 0, ring->dma_buf.secdma, offset, CMA_TXBUF_POST);
 	}
 #ifndef BCM_SECURE_DMA
 	else
@@ -4282,6 +4282,7 @@ dhd_prot_txdata_write_flush(dhd_pub_t *dhd, uint16 flowid, bool in_lock)
 	flow_ring_table_t *flow_ring_table;
 	flow_ring_node_t *flow_ring_node;
 	msgbuf_ring_t *ring;
+
 
 	if (dhd->flow_ring_table == NULL) {
 		return;
@@ -4546,7 +4547,7 @@ int dmaxfer_prepare_dmaaddr(dhd_pub_t *dhd, uint len,
 	for (i = 0; i < dmaxfer->len; i++) {
 		((uint8*)dmaxfer->srcmem.va)[i] = i % 256;
 	}
-	OSL_CACHE_FLUSH(dmaxfer->srcmem.va, dmaxfer->len);
+	OSL_CACHE_FLUSH(dhd->osh, dmaxfer->srcmem.va, dmaxfer->len);
 
 	dmaxfer->srcdelay = srcdelay;
 	dmaxfer->destdelay = destdelay;
@@ -4559,7 +4560,7 @@ dhd_msgbuf_dmaxfer_process(dhd_pub_t *dhd, void *msg)
 {
 	dhd_prot_t *prot = dhd->prot;
 
-	OSL_CACHE_INV(prot->dmaxfer.dstmem.va, prot->dmaxfer.len);
+	OSL_CACHE_INV(dhd->osh, prot->dmaxfer.dstmem.va, prot->dmaxfer.len);
 	if (prot->dmaxfer.srcmem.va && prot->dmaxfer.dstmem.va) {
 		if (memcmp(prot->dmaxfer.srcmem.va,
 		        prot->dmaxfer.dstmem.va, prot->dmaxfer.len)) {
@@ -4987,7 +4988,7 @@ dhd_fillup_ioct_reqst(dhd_pub_t *dhd, uint16 len, uint cmd, void* buf, int ifidx
 		memcpy(ioct_buf, buf, len);
 	}
 
-	OSL_CACHE_FLUSH((void *) prot->ioctbuf.va, len);
+	OSL_CACHE_FLUSH(dhd->osh, (void *) prot->ioctbuf.va, len);
 
 	if (!ISALIGNED(ioct_buf, DMA_ALIGN_LEN)) {
 		DHD_ERROR(("host ioct address unaligned !!!!! \n"));
@@ -5515,7 +5516,7 @@ dhd_prot_ring_write_complete(dhd_pub_t *dhd, msgbuf_ring_t * ring, void* p,
 	dhd_prot_t *prot = dhd->prot;
 
 	/* cache flush */
-	OSL_CACHE_FLUSH(p, ring->item_len * nitems);
+	OSL_CACHE_FLUSH(dhd->osh, p, ring->item_len * nitems);
 
 	if (DMA_INDX_ENAB(dhd->dma_h2d_ring_upd_support)) {
 		dhd_prot_dma_indx_set(dhd, ring->wr,
@@ -5587,7 +5588,7 @@ dhd_prot_dma_indx_set(dhd_pub_t *dhd, uint16 new_index, uint8 type, uint16 ringi
 
 	*(uint16*)ptr = htol16(new_index);
 
-	OSL_CACHE_FLUSH((void *)ptr, prot->rw_index_sz);
+	OSL_CACHE_FLUSH(dhd->osh, (void *)ptr, prot->rw_index_sz);
 
 	DHD_TRACE(("%s: data %d type %d ringid %d ptr 0x%p offset %d\n",
 		__FUNCTION__, new_index, type, ringid, ptr, offset));
@@ -5639,7 +5640,7 @@ dhd_prot_dma_indx_get(dhd_pub_t *dhd, uint8 type, uint16 ringid)
 	ASSERT(prot->rw_index_sz != 0);
 	ptr += offset * prot->rw_index_sz;
 
-	OSL_CACHE_INV((void *)ptr, prot->rw_index_sz);
+	OSL_CACHE_INV(dhd->osh, (void *)ptr, prot->rw_index_sz);
 
 	data = LTOH16(*((uint16*)ptr));
 
@@ -5820,7 +5821,7 @@ dhd_prot_get_read_addr(dhd_pub_t *dhd, msgbuf_ring_t *ring, uint32 *available_le
 	/* cannot use this since the dma ring is allocated as uncached,
 	 * this will cause an assertation
 	 */
-	OSL_CACHE_INV(read_addr, *available_len);
+	OSL_CACHE_INV(dhd->osh, read_addr, *available_len);
 #endif
 	/* return read address */
 	return read_addr;
@@ -6188,7 +6189,7 @@ dhd_prot_ringupd_dump(dhd_pub_t *dhd, struct bcmstrbuf *b)
 	uint32 i;
 	uint32 max_h2d_queues = dhd_bus_max_h2d_queues(dhd->bus);
 
-	OSL_CACHE_INV((void *)dhd->prot->d2h_dma_indx_wr_buf.va,
+	OSL_CACHE_INV(dhd->osh, (void *)dhd->prot->d2h_dma_indx_wr_buf.va,
 		dhd->prot->d2h_dma_indx_wr_buf.len);
 
 	ptr = (uint32 *)(dhd->prot->d2h_dma_indx_wr_buf.va);
@@ -6210,7 +6211,7 @@ dhd_prot_ringupd_dump(dhd_pub_t *dhd, struct bcmstrbuf *b)
 		ptr++;
 	}
 
-	OSL_CACHE_INV((void *)dhd->prot->h2d_dma_indx_rd_buf.va,
+	OSL_CACHE_INV(dhd->osh, (void *)dhd->prot->h2d_dma_indx_rd_buf.va,
 		dhd->prot->h2d_dma_indx_rd_buf.len);
 
 	ptr = (uint32 *)(dhd->prot->h2d_dma_indx_rd_buf.va);

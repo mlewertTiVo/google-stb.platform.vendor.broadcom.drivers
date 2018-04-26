@@ -1,7 +1,7 @@
 
 # GNU Makefile for Broadcom Dongle Host Driver
 #
-# Copyright (C) 1999-2017, Broadcom Corporation
+# Copyright (C) 1999-2018, Broadcom Corporation
 # 
 #      Unless you and Broadcom execute a separate written software license
 # agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
 #
 # <<Broadcom-WL-IPTag/Open:>>
 #
-# $Id: Makefile 718975 2017-09-01 14:20:50Z $
+# $Id: Makefile 743266 2018-01-25 13:07:54Z $
 #
 # **********  LINUX KERNEL FOR panda  ***************
 # Standard preamble work.
@@ -161,6 +161,11 @@ ifneq ($(findstring stb,$(TARGET)),)
 	DFLAGS += -DSTBLINUX=1
 	DFLAGS += -DSTB
 endif
+# Default enabling this flag makes Descriptors memory comes from Global CMA pool using
+# dma_alloc_coherent() call for non-secdma drivers.
+# This will also ensures getting corret address when PCIe address are mapped beyond 4GB
+# range like 7278 devices.
+	DFLAGS += -DDHD_USE_COHERENT_MEM_FOR_RING
 
 ifeq ($(WLSYNC),1)
         DFLAGS += -DUPDATE_LINK_STATE
@@ -1018,6 +1023,10 @@ endif # modules
 
 endif # Makefile
 
+# Check for GCC version 6.3.0 and ignore date-time error
+ifneq ($(findstring 6.3.0,$(shell bash -c '$(CC) -dumpversion')),)
+CFLAGS += -Wno-date-time
+endif
 
 # DFLAGS will be used in Makefile_hwx file
 ifneq ($(findstring -Makefile,-$(TARGET)-),)

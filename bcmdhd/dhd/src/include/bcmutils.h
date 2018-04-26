@@ -1,7 +1,7 @@
 /*
  * Misc useful os-independent macros and functions.
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmutils.h 569587 2015-07-08 16:41:50Z $
+ * $Id: bcmutils.h 746219 2018-02-12 14:38:41Z $
  */
 
 #ifndef	_bcmutils_h_
@@ -558,6 +558,11 @@ extern int bcm_format_ssid(char* buf, const uchar ssid[], uint ssid_len);
 #endif /* __ARMCC_VERSION */
 #endif /* OFFSETOF */
 
+/* substruct size up to and including a member of the struct */
+#ifndef STRUCT_SIZE_THROUGH
+#define STRUCT_SIZE_THROUGH(sptr, fname) \
+	 (((uint8*)&((sptr)->fname) - (uint8*)(sptr)) + sizeof((sptr)->fname))
+#endif
 #ifndef ARRAYSIZE
 #define ARRAYSIZE(a)		(sizeof(a) / sizeof(a[0]))
 #endif

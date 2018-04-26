@@ -1,7 +1,7 @@
 /*
  * DHD Bus Module for PCIE
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_pcie.c 725485 2017-10-07 00:37:47Z $
+ * $Id: dhd_pcie.c 735563 2017-12-11 10:16:18Z $
  */
 
 
@@ -124,8 +124,8 @@ static void dhdpcie_send_mb_data(dhd_bus_t *bus, uint32 h2d_mb_data);
 static void dhd_fillup_ring_sharedptr_info(dhd_bus_t *bus, ring_info_t *ring_info);
 #ifdef OEM_ANDROID
 extern void dhd_dpc_kill(dhd_pub_t *dhdp);
-static void dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state);
 #endif /* OEM_ANDROID */
+static void dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state);
 #ifdef CUSTOMER_HW_31_2
 #include <nvram_zae.h>
 #endif /* CUSTOMER_HW_31_2 */
@@ -571,6 +571,13 @@ dhdpcie_dongle_attach(dhd_bus_t *bus)
 		goto fail;
 	}
 
+	/*
+	 * Issue CC watchdog to reset all the cores on the chip - similar to rmmod dhd
+	 * This is required to avoid spurious interrupts to the Host and bring back
+	 * dongle to a sane state (on host soft-reboot / watchdog-reboot).
+	 */
+	si_corereg(bus->sih, SI_CC_IDX, OFFSETOF(chipcregs_t, watchdog), ~0, 4);
+	OSL_DELAY(100000);
 
 	si_setcore(bus->sih, PCIE2_CORE_ID, 0);
 	sbpcieregs = (sbpcieregs_t*)(bus->regs);
@@ -2229,7 +2236,7 @@ dhd_bus_schedule_queue(struct dhd_bus  *bus, uint16 flow_id, bool txs)
 			}
 #endif /* DHDTCPACK_SUPPRESS */
 #ifdef DHD_LOSSLESS_ROAMING
-			pktdata = (uint8 *)PKTDATA(OSH_NULL, txp);
+			pktdata = (uint8 *)PKTDATA(bus->dhd->osh, txp);
 			eh = (struct ether_header *) pktdata;
 			if (eh->ether_type == hton16(ETHER_TYPE_802_1X)) {
 				uint8 prio = (uint8)PKTPRIO(txp);
@@ -3872,9 +3879,7 @@ dhdpcie_bus_suspend(struct dhd_bus *bus, bool state)
 		int idle_retry = 0;
 		int active;
 
-#ifdef OEM_ANDROID
 		dhdpcie_bus_set_wowl(bus, state);
-#endif
 		/* Suspend */
 		DHD_ERROR(("%s: Entering suspend state\n", __FUNCTION__));
 		bus->wait_for_d3_ack = 0;
@@ -3987,9 +3992,6 @@ dhdpcie_bus_suspend(struct dhd_bus *bus, bool state)
 		bus->dhd->busstate = DHD_BUS_DATA;
 		DHD_GENERAL_UNLOCK(bus->dhd, flags);
 		dhdpcie_bus_intr_enable(bus);
-#ifdef OEM_ANDROID
-		dhdpcie_bus_set_wowl(bus, state);
-#endif
 	}
 	return rc;
 }
@@ -5805,62 +5807,35 @@ dhd_bus_release_dongle(struct dhd_bus *bus)
 
 	return 0;
 }
+#endif /* OEM_ANDROID */
 
 /* Enable or disable Wake-on-wireless LAN */
 static void
 dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
 {
 	int err = 0;
-	wl_wowl_wakeind_t wake = {0, 0};
 	int value;
-
 	DHD_OS_WAKE_LOCK_WAIVE(bus->dhd);
-
-	if (!state) {
-		/* Check wake reason */
-		memset(&wake, 0, sizeof(wake));
-		err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", NULL, 0, (char *)&wake, sizeof(wake), FALSE);
-		DHD_INFO(("%s: wowl_wakeind, result=%d pci=%d ucode=0x%x\n", __FUNCTION__,
-				err, wake.pci_wakeind, wake.ucode_wakeind));
-
-		/* Release a cached mDNS packet that woke us up, if any */
-		if (wake.ucode_wakeind & WL_WOWL_MDNS_SERVICE) {
-			err = dhd_iovar(bus->dhd, 0, "wowl_rls_wake_pkt", NULL, 0, NULL, 0, TRUE);
-			if (err < 0) {
-				DHD_ERROR(("%s: error using wowl_rls_wake_pkt, result=%d\n",
-						__FUNCTION__, err));
-			}
-		}
-	}
-
-	memset(&wake, 0, sizeof(wake));
-	memcpy(&wake, "clear", strlen("clear"));
-	err = dhd_iovar(bus->dhd, 0, "wowl_wakeind", (char *)&wake, sizeof(wake), NULL, 0, TRUE);
-	if (err < 0) {
-		DHD_ERROR(("%s: error clearing wowl_wakeind, result=%d\n", __FUNCTION__, err));
-	}
-
-	err = dhd_iovar(bus->dhd, 0, "wowl_clear", NULL, 0, (char *)&value, sizeof(value), FALSE);
-	if (err < 0) {
-		DHD_ERROR(("%s: error using wowl_clear, result=%d\n", __FUNCTION__, err));
-	}
-
-	value = state ? (WL_WOWL_MAGIC | WL_WOWL_MDNS_SERVICE) : 0;
-	err = dhd_iovar(bus->dhd, 0, "wowl", (char *) &value, sizeof(value), NULL, 0, TRUE);
-	if (err < 0) {
-		DHD_ERROR(("%s: error setting wowl, result=%d\n", __FUNCTION__, err));
-	}
-
+	 /* Set the wowlan trigger by either wl utility or wpa_supplicant
+	 * And activate the wowl here
+	 */
 	if (state) {
-		err = dhd_iovar(bus->dhd, 0, "wowl_activate", NULL, 0, (char *)&value, sizeof(value), FALSE);
+		err = dhd_iovar(bus->dhd, 0, "wowl", NULL, 0, (char *)&value, sizeof(value), FALSE);
 		if (err < 0) {
-			DHD_ERROR(("%s: error in wowl_activate, result=%d\n", __FUNCTION__, err));
+			DHD_ERROR(("%s: error in get wowl_enable, result=%d\n", __FUNCTION__, err));
+		}
+		if (value) {
+			value = 0;
+			err = dhd_iovar(bus->dhd, 0, "wowl_activate", NULL, 0,
+					(char *)&value, sizeof(value), FALSE);
+			if (err < 0) {
+				DHD_ERROR(("%s: error wowl_activate, err=%d\n", __FUNCTION__, err));
+			}
 		}
 	}
 
 	DHD_OS_WAKE_LOCK_RESTORE(bus->dhd);
 }
-#endif /* OEM_ANDROID */
 
 #ifdef BCMPCIE_OOB_HOST_WAKE
 int

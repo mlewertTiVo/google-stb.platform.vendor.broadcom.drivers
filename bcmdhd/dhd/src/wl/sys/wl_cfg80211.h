@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.h 718975 2017-09-01 14:20:50Z $
+ * $Id: wl_cfg80211.h 736094 2017-12-13 14:05:02Z $
  */
 
 /**
@@ -212,6 +212,14 @@ do {									\
 #define AIBSS_BCN_FLOOD_DUR		5000
 #define AIBSS_PEER_FREE			3
 #endif /* WLAIBSS */
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0))
+#define IEEE80211_BAND_2GHZ NL80211_BAND_2GHZ
+#define IEEE80211_BAND_5GHZ NL80211_BAND_5GHZ
+#define IEEE80211_BAND_60GHZ NL80211_BAND_60GHZ
+#define IEEE80211_NUM_BANDS NUM_NL80211_BANDS
+#define ieee80211_band nl80211_band
+#endif
 
 /* driver status */
 enum wl_status {
@@ -732,6 +740,7 @@ struct bcm_cfg80211 {
 	struct timer_list roam_timeout;   /* Timer for catch roam timeout */
 #endif
 	bool rcc_enabled;	/* flag for Roam channel cache feature */
+	uint8 wowlan_trigger; /* Trigger set by cfg80211 */
 };
 
 #if defined(STRICT_GCC_WARNINGS) && defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == \
@@ -1504,5 +1513,14 @@ do {                                    \
 #ifdef QOS_MAP_SET
 extern uint8 *wl_get_up_table(void);
 #endif /* QOS_MAP_SET */
-
+/* Driver Supported Wowl Flags */
+#define WL_CFG80211_WOWL_SUPP_FLAG WIPHY_WOWLAN_ANY | WIPHY_WOWLAN_MAGIC_PKT | \
+		WIPHY_WOWLAN_DISCONNECT | WIPHY_WOWLAN_SUPPORTS_GTK_REKEY | \
+		WIPHY_WOWLAN_GTK_REKEY_FAILURE
+#define WL_CFG80211_WOWL_ANY WL_WOWL_MAGIC | WL_WOWL_NET | WL_WOWL_DIS | \
+		WL_WOWL_RETR | WL_WOWL_BCN | WL_WOWL_GTK_FAILURE
 #endif /* _wl_cfg80211_h_ */
+#define WL_CFG80211_WOWL_ENAB(wowlan) ((wowlan->any) || (wowlan->magic_pkt) || \
+		(wowlan->disconnect) || (wowlan->gtk_rekey_failure) || \
+		(wowlan->eap_identity_req) || (wowlan->four_way_handshake) || \
+		(wowlan->rfkill_release) || (wowlan->patterns))

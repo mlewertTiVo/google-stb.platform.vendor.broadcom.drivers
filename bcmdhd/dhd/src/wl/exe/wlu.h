@@ -1,7 +1,7 @@
 /*
  * Common code for wl command line utility
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -18,7 +18,7 @@
  * duplicated in any form, in whole or in part, without the prior written
  * permission of Broadcom Corporation.
  *
- * $Id: wlu.h 628510 2016-03-31 08:14:32Z $
+ * $Id: wlu.h 746219 2018-02-12 14:38:41Z $
  */
 
 #ifndef _wlu_h_
@@ -106,6 +106,8 @@ extern int wlu_var_getbuf_med(void *wl, const char *iovar,
 	void *param, int param_len, void **bufptr);
 extern int wlu_var_setbuf_sm(void *wl, const char *iovar,
 		void *param, int param_len);
+extern void wl_nrate_print(uint32 rspec);
+extern void wl_wnm_print(uint32 wnm_cap);
 
 extern cmd_func_t wl_void;
 extern cmd_func_t wl_var_void;

@@ -2,7 +2,7 @@
  * Misc utility routines for accessing chip-specific features
  * of the SiliconBackplane-based Broadcom chips.
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: siutils.c 572557 2015-07-20 07:12:29Z $
+ * $Id: siutils.c 735989 2017-12-13 06:43:42Z $
  */
 
 #include <bcm_cfg.h>
@@ -477,11 +477,13 @@ BCMATTACHFN(si_doattach)(si_info_t *sii, uint devid, osl_t *osh, void *regs,
 	}
 
 	sih->bustype = bustype;
+#ifdef BCMBUSTYPE
 	if (bustype != BUSTYPE(bustype)) {
 		SI_ERROR(("si_doattach: bus type %d does not match configured bus type %d\n",
 			bustype, BUSTYPE(bustype)));
 		return NULL;
 	}
+#endif /* BCMBUSTYPE */
 
 	/* bus/core/clk setup for register access */
 	if (!si_buscore_prep(sii, bustype, devid, sdh)) {

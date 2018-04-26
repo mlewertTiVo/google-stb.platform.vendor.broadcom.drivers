@@ -1,7 +1,7 @@
 /*
  * Common code for wl command-line swiss-army-knife utility
  *
- * Copyright (C) 2017, Broadcom Corporation
+ * Copyright (C) 2018, Broadcom Corporation
  * All Rights Reserved.
  * 
  * This is UNPUBLISHED PROPRIETARY SOURCE CODE of Broadcom Corporation;
@@ -12,9 +12,8 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu.c 661718 2016-09-27 06:16:16Z $
+ * $Id: wlu.c 746219 2018-02-12 14:38:41Z $
  */
-
 
 
 #include <wlioctl.h>
@@ -247,6 +246,7 @@ void wl_txpwr_ppr_print_row(const char* label, int8 chains, int8 bw, bool vb,
 void wl_txpwr_ppr_get_rateset(ppr_t* pprptr, ppr_rate_type_t type,
 	clm_rate_group_id_t gid, wl_tx_bw_t bw, int8* rateset);
 static int wl_array_check_val(int8 *pwr, uint count, int8 val);
+static void wl_print_hemcsset(uint16 *mcsset);
 static void wl_dump_wpa_rsn_ies(uint8* cp, uint len);
 static void wl_rsn_ie_dump(bcm_tlv_t *ie);
 static int wlu_bcmp(const void *b1, const void *b2, int len);
@@ -6577,11 +6577,12 @@ wl_msglevel(void *wl, cmd_t *cmd, char **argv)
 			}
 			/* not an integer if not all the string was parsed by strtoul */
 			if (*endptr != '\0') {
-				for (i = 0; (val = dbg_msg[i].value); i++)
+				for (i = 0; (val = dbg_msg[i].value); i++) {
 					if (stricmp(dbg_msg[i].string, s) == 0)
 						break;
-					if (!val)
-						goto usage;
+				}
+				if (!val)
+					goto usage;
 			}
 			if (**argv == '-')
 				msglevel_del |= val;
@@ -15310,6 +15311,7 @@ wl_radar_status(void *wl, cmd_t *cmd, char **argv)
 	};
 
 	char radar_type_str[24];
+	ra.ch = 0;
 	ra.ch = wl_chspec_from_driver(ra.ch);
 
 	UNUSED_PARAMETER(argv);
@@ -16133,11 +16135,20 @@ int
 wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 {
 	sta_info_t *sta;
+	sta_info_v7_t *sta_v7;
 	struct ether_addr ea;
 	char *param;
 	int buflen, err;
 	int i;
-
+	char buf_chanspec[20];
+	bool have_rateset_adv = FALSE;
+	wl_rateset_args_u_t *rateset_adv;
+	uint32 rxdur_total = 0;
+	bool have_rxdurtotal = FALSE;
+	chanspec_t chanspec;
+	bool have_chanspec = FALSE;
+	uint16 wpauth;
+	uint8 algo;
 	strcpy(buf, *argv);
 
 	/* convert the ea string into an ea struct */
@@ -16162,6 +16173,22 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 		printf(" ERROR: unknown driver station info version %d\n", sta->ver);
 		return BCME_ERROR;
 	}
+	else if (sta->ver == WL_STA_VER_V7) {
+		sta_v7 = (sta_info_v7_t *)buf;
+
+		rxdur_total = dtoh32(sta_v7->rx_dur_total);
+		have_rxdurtotal = TRUE;
+
+		chanspec = dtoh16(sta_v7->chanspec);
+		wf_chspec_ntoa(chanspec, buf_chanspec);
+		have_chanspec = TRUE;
+
+		wpauth = dtoh16(sta_v7->wpauth);
+		algo = sta_v7->algo;
+
+		rateset_adv = (wl_rateset_args_u_t *)&sta_v7->rateset_adv;
+		have_rateset_adv = TRUE;
+	}
 
 	sta->len = dtoh16(sta->len);
 	sta->cap = dtoh16(sta->cap);
@@ -16175,6 +16202,9 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 	sta->vht_flags = dtoh16(sta->vht_flags);
 
 	printf("[VER %d] STA %s:\n", sta->ver, *argv);
+	if (have_chanspec) {
+		printf("\t chanspec %s (0x%x)\n", buf_chanspec, chanspec);
+	}
 	printf("\t aid:%d ", WL_STA_AID(sta->aid));
 	printf("\n\t rateset ");
 	dump_rateset(sta->rateset.rates, sta->rateset.count);
@@ -16185,6 +16215,47 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 	       (sta->flags & WL_STA_ASSOC) ? " ASSOCIATED" : "",
 	       (sta->flags & WL_STA_AUTHO) ? " AUTHORIZED" : "");
 
+	if (sta->ver == WL_STA_VER_V5) {
+		wpauth = dtoh16(sta->wpauth);
+		algo = sta->algo;
+	}
+	if (sta->len >= STRUCT_SIZE_THROUGH(sta, algo)) {
+
+		printf("\t connection:%s\n",
+			(wpauth > 0x01) ? " SECURED" : "OPEN");
+
+		if (wpauth == 0x00)
+			printf("\t auth: %s",  "AUTH-DISABLED");	/* Legacy (i.e., non-WPA) */
+		else if (wpauth == 0x1)
+			printf("\t auth: %s",  "AUTH-NONE");		/* none (IBSS) */
+		else if (wpauth == 0x2)
+			printf("\t auth: %s",  "AUTH-UNSPECIFIED");	/* over 802.1x */
+		else if (wpauth == 0x4)
+			printf("\t auth: %s",  "WPA-PSK");		/* Pre-shared key */
+		else if (wpauth == 0x40)
+			printf("\t auth: %s",  "WPA-PSK");		/* over 802.1x */
+		else if (wpauth == 0x80)
+			printf("\t auth: %s",  "WPA2-PSK");		/* Pre-shared key */
+		else if (wpauth == 0x84)
+			printf("\t auth: %s",  "WPA-PSK + WPA2-PSK");	/* Pre-shared key */
+		else if (wpauth == 0x100)
+			printf("\t auth: %s",  "BRCM_AUTH_PSK");	/* BRCM specific PSK */
+		else if (wpauth == 0x200)
+			printf("\t auth: %s",  "BRCM_AUTH_DPT");  /* DPT PSK without group keys */
+		else if (wpauth == 0x1000)
+			printf("\t auth: %s",  "WPA2_AUTH_MFP");  /* MFP (11w) in contrast to CCX */
+		else if (wpauth == 0x2000)
+			printf("\t auth: %s",  "WPA2_AUTH_TPK");	/* TDLS Peer Key */
+		else if (wpauth == 0x4000)
+			printf("\t auth: %s",  "WPA2_AUTH_FT");		/* Fast Transition */
+		else if (wpauth == 0x4080)
+			printf("\t auth: %s",  "WPA2-PSK+FT");		/* Fast Transition */
+		else if (wpauth == 0x4084)
+			printf("\t auth: %s",  "WPA-PSK + WPA2-PSK + FT");  /* Fast Transition */
+		else
+			printf("\t auth: %s",  "UNKNOWN AUTH");		/* Unidentified */
+		printf("\n\t crypto: %s\n",   bcm_crypto_algo_name(algo));
+	}
 	printf("\t flags 0x%x:%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 	       sta->flags,
 	       (sta->flags & WL_STA_BRCM) ? " BRCM" : "",
@@ -16242,6 +16313,9 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 		printf("\t tx failures: %d\n", dtoh32(sta->tx_failures));
 		printf("\t rx data pkts: %d\n", dtoh32(sta->rx_tot_pkts));
 		printf("\t rx data bytes: %llu\n", dtoh64(sta->rx_tot_bytes));
+		if (have_rxdurtotal) {
+			printf("\t rx data dur: %u\n", rxdur_total);
+		}
 		printf("\t rx ucast pkts: %d\n", dtoh32(sta->rx_ucast_pkts));
 		printf("\t rx ucast bytes: %llu\n", dtoh64(sta->rx_ucast_bytes));
 		printf("\t rx mcast/bcast pkts: %d\n", dtoh32(sta->rx_mcast_pkts));
@@ -16290,10 +16364,26 @@ wl_sta_info(void *wl, cmd_t *cmd, char **argv)
 		return 0;
 	}
 
-	if (sta->ver >= 5) {
+	if (have_rateset_adv) {
+		wl_print_mcsset((char*)rateset_adv->rsv2.mcs);
+		wl_print_vhtmcsset((uint16*)rateset_adv->rsv2.vht_mcs);
+		wl_print_hemcsset((uint16 *)rateset_adv->rsv2.he_mcs);
+	}
+
+	if (sta->ver >= WL_STA_VER_V7) {
+		printf("tx nrate\n");
+		wl_nrate_print(sta_v7->tx_rspec);
+		printf("rx nrate\n");
+		wl_nrate_print(sta_v7->rx_rspec);
+		printf("wnm\n");
+		wl_wnm_print(sta_v7->wnm_cap);
+	}
+
+	if (sta->ver == 5) {
 		wl_print_mcsset((char *)sta->rateset_adv.mcs);
 		wl_print_vhtmcsset((uint16 *)sta->rateset_adv.vht_mcs);
 	}
+
 	printf("\n");
 
 	return (0);
@@ -20761,6 +20851,33 @@ wl_print_vhtmcsset(uint16 *mcsset)
 }
 
 static void
+wl_print_hemcsset(uint16 *mcsset)
+{
+	int i, j;
+	static const char zero[sizeof(uint16) * WL_HE_CAP_MCS_MAP_NSS_MAX] = { 0 };
+
+	if (mcsset == NULL ||
+			memcmp(mcsset, zero, sizeof(uint16) * WL_HE_CAP_MCS_MAP_NSS_MAX)) {
+		return;
+	}
+	for (i = 0; i < WL_HE_CAP_MCS_MAP_NSS_MAX; i++) {
+		if (mcsset[i]) {
+			if (i == 0)
+				printf("HE SET  : ");
+			else
+				printf("        : ");
+			/* std MCS 10-11 */
+			for (j = 0; j <= 11; j++)
+				if (isbitset(mcsset[i], j))
+					printf("%dx%d ", j, i + 1);
+			printf("\n");
+		} else {
+			break;
+		}
+	}
+}
+
+static void
 wl_print_txbf_mcsset(char *mcsset, char *prefix)
 {
 	int i;
@@ -21966,11 +22083,12 @@ wl_monitor_promisc_level(void *wl, cmd_t *cmd, char **argv)
 		}
 		/* not an integer if not all the string was parsed by strtoul */
 		if (*endptr != '\0') {
-			for (i = 0; (val = wl_monpromisc_level_msgs[i].value); i++)
+			for (i = 0; (val = wl_monpromisc_level_msgs[i].value); i++) {
 				if (stricmp(wl_monpromisc_level_msgs[i].string, s) == 0)
 					break;
-				if (!val)
-					goto usage;
+			}
+			if (!val)
+				goto usage;
 		}
 		if (**argv == '-')
 			promiscbitmap_del |= val;
