@@ -60,6 +60,7 @@ struct nx_ashmem_state {
 
    struct nx_ashmem_mgr_cfg mgr_cfg;
    int gfx_heap_dyn;
+   int gfx_heap_dyn_ng;
 
    struct mutex video_lock;
    int video_in_use;
@@ -105,7 +106,9 @@ static BMMA_Block_Handle nx_ashmem_memif_alloc(BMMA_Heap_Handle context, size_t 
    (void)context;
 
    block = NEXUS_MemoryBlock_Allocate(nx_ashmem_global->gfx_heap, allocation, align, NULL);
-   if (nx_ashmem_global->gfx_heap_dyn && (block == NULL)) {
+   if (nx_ashmem_global->gfx_heap_dyn &&
+       !nx_ashmem_global->gfx_heap_dyn_ng &&
+       (block == NULL)) {
       int rc;
       size_t dyn_heap_grow_adjust = (size_t)gfx_heap_grow_size;
       if ((allocation > (size_t)gfx_heap_grow_size) &&
@@ -417,7 +420,10 @@ static long nx_ashmem_mmap(struct file *file, struct nx_ashmem_getmem *getmem)
    asma->heap_alloc = heap_allocator;
 
    block = NEXUS_MemoryBlock_Allocate(heap_allocator, allocation, asma->align, NULL);
-   if (nx_ashmem_global->gfx_heap_dyn && (heap_allocator == nx_ashmem_global->gfx_heap) && (block == NULL)) {
+   if (nx_ashmem_global->gfx_heap_dyn &&
+       !nx_ashmem_global->gfx_heap_dyn_ng &&
+       (heap_allocator == nx_ashmem_global->gfx_heap) &&
+       (block == NULL)) {
       int rc;
       size_t dyn_heap_grow_adjust = (size_t)gfx_heap_grow_size;
       if ((allocation > (size_t)gfx_heap_grow_size) &&
@@ -879,9 +885,6 @@ static struct miscdevice nx_ashmem_misc = {
 
 static int __init nx_ashmem_module_init(void)
 {
-   NEXUS_ClientConfiguration clientConfig;
-   NEXUS_MemoryStatus memStatus;
-   int i;
    int ret;
    BERR_Code err;
 
@@ -908,15 +911,34 @@ static int __init nx_ashmem_module_init(void)
    mutex_init(&nx_ashmem_global->video_lock);
    INIT_LIST_HEAD(&nx_ashmem_global->block_list);
 
-   NEXUS_Platform_GetClientConfiguration(&clientConfig);
    nx_ashmem_global->gfx_heap = NULL;
-   for (i = 0; i < NEXUS_MAX_HEAPS; i++) {
-      NEXUS_Heap_GetStatus(clientConfig.heap[i], &memStatus);
-      if ((memStatus.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED|NEXUS_MEMORY_TYPE_DYNAMIC)) &&
-          (memStatus.heapType & NX_ASHMEM_NEXUS_DCMA_MARKER)) {
-         nx_ashmem_global->gfx_heap = clientConfig.heap[i];
-         pr_info("selected d-cma heap %d (%p)\n", i, nx_ashmem_global->gfx_heap);
-         break;
+   {
+      NEXUS_HeapHandle heap;
+      NEXUS_Error rc;
+      NEXUS_InterfaceName interfaceName;
+      NEXUS_PlatformObjectInstance objects[32];
+      size_t num, i;
+      NEXUS_Platform_GetDefaultInterfaceName(&interfaceName);
+      strcpy(interfaceName.name, "NEXUS_Heap");
+      rc = NEXUS_Platform_GetObjects(&interfaceName, objects, 32, &num);
+      for (i=0;i<num;i++) {
+         NEXUS_MemoryStatus status;
+         heap = objects[i].object;
+         NEXUS_Heap_GetStatus(heap, &status);
+         if ((status.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED|NEXUS_MEMORY_TYPE_DYNAMIC)) &&
+                (status.heapType & NX_ASHMEM_NEXUS_DCMA_MARKER)) {
+            nx_ashmem_global->gfx_heap = heap;
+            pr_info("selected d-cma heap (%p)\n", nx_ashmem_global->gfx_heap);
+            break;
+         }
+         if ((status.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED)) &&
+             (status.heapType & NEXUS_HEAP_TYPE_DTU) &&
+             !(status.heapType & NEXUS_HEAP_TYPE_PICTURE_BUFFERS)) {
+            nx_ashmem_global->gfx_heap = heap;
+            nx_ashmem_global->gfx_heap_dyn_ng = 1;
+            pr_info("selected dtu heap (%p)\n", nx_ashmem_global->gfx_heap);
+            break;
+         }
       }
    }
    nx_ashmem_global->gfx_alt_heap[0] = NULL;
