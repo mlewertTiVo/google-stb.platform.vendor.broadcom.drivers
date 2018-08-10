@@ -1035,6 +1035,7 @@ static const struct file_operations droid_pm_fops = {
     .open           = droid_pm_open,
     .release        = droid_pm_close,
     .unlocked_ioctl = droid_pm_ioctl,
+    .compat_ioctl   = droid_pm_ioctl,
 };
 
 static ssize_t map_mem_to_s2_show(struct device *dev,
