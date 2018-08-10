@@ -29,7 +29,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl.h 746219 2018-02-12 14:38:41Z $
+ * $Id: wlioctl.h 763092 2018-05-17 07:36:37Z $
  */
 
 #ifndef _wlioctl_h_
@@ -2394,6 +2394,8 @@ typedef struct {
 	uint32  txlost;         /**< Number of lost packets reported in txs */
 	uint32	txdatamcast;	/**< Number of TX multicast data packets */
 	uint32	txdatabcast;	/**< Number of TX broadcast data packets */
+	uint32  psmxwds;	/* Number of PSMx watchdogs */
+	uint32  txchain_shutdown; /* Number of Txchain shutdowns due to over temperature */
 } wl_cnt_wlc_t;
 
 /* MACXSTAT counters for ucodex (corerev >= 64) */

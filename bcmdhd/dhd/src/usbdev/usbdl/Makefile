@@ -10,7 +10,7 @@
 # or duplicated in any form, in whole or in part, without the prior
 # written permission of Broadcom Corporation.
 #
-# $Id: Makefile 723832 2017-09-27 08:35:37Z $
+# $Id: Makefile 763300 2018-05-18 03:48:32Z $
 
 
 SRCBASE = ../..
@@ -186,7 +186,7 @@ endif
 # Have to make sure the TARGETARCH is set when TARGETENV is "linuxarm"
 # Whether TARGETARCH or TARGETENV is the main macro doesn't really matter
 # What matter is we need uniformity
-ifeq ($(TARGETARCH), arm)
+ifeq ($(TARGETARCH), armv7l)
 	ObjPfx := $(TARGETARCH)/
 	OBJECTS := $(SRCS:%.c=$(ObjPfx)%.o)
 	OBJECTS += $(ObjPfx)usb_linux.o

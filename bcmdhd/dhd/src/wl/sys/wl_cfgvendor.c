@@ -83,7 +83,7 @@
 #include <dhd_wlfc.h>
 #endif
 #include <brcm_nl80211.h>
-
+#include <dhd_linux.h>
 #if defined(WL_VENDOR_EXT_SUPPORT)
 /*
  * This API is to be used for asynchronous vendor events. This
@@ -245,6 +245,193 @@ wl_cfgvendor_set_nodfs_flag(struct wiphy *wiphy,
 	return err;
 }
 #endif /* CUSTOM_FORCE_NODFS_FLAG */
+
+static inline bool
+is_dfs_channel(uint16 channel)
+{
+	if (channel >= 52 && channel <= 64)			/* class 2 */
+		return TRUE;
+	else if (channel >= 100 && channel <= 140)	/* class 4 */
+		return TRUE;
+	else
+		return FALSE;
+}
+
+static int
+_dhd_vendor_get_channels(dhd_pub_t *dhd, uint16 *d_chan_list,
+	int *nchan, uint8 band, bool skip_dfs)
+{
+	int err = BCME_OK;
+	int i, j;
+	uint32 chan_buf[WL_NUMCHANNELS + 1];
+	wl_uint32_list_t *list;
+	if (*nchan) {
+		WL_ERR(("d_chan_list is NULL"));
+	}
+	list = (wl_uint32_list_t *) (void *)chan_buf;
+	list->count = htod32(WL_NUMCHANNELS);
+	err = dhd_wl_ioctl_cmd(dhd, WLC_GET_VALID_CHANNELS, chan_buf, sizeof(chan_buf), FALSE, 0);
+	if (err < 0) {
+		WL_ERR(("failed to get channel list (err: %d)\n", err));
+		goto exit;
+	}
+	for (i = 0, j = 0; i < dtoh32(list->count) && i < *nchan; i++) {
+		if (band == WLC_BAND_2G) {
+			if (dtoh32(list->element[i]) > CHANNEL_2G_MAX)
+				continue;
+		} else if (band == WLC_BAND_5G) {
+			if (dtoh32(list->element[i]) <= CHANNEL_2G_MAX)
+				continue;
+			if (skip_dfs && is_dfs_channel(dtoh32(list->element[i])))
+				continue;
+
+		} else if (band == WLC_BAND_AUTO) {
+			if (skip_dfs || !is_dfs_channel(dtoh32(list->element[i])))
+				continue;
+
+		} else { /* All channels */
+			if (skip_dfs && is_dfs_channel(dtoh32(list->element[i])))
+				continue;
+		}
+		if (dtoh32(list->element[i]) <= CHANNEL_5G_MAX) {
+			d_chan_list[j++] = (uint16) dtoh32(list->element[i]);
+		} else {
+			err = BCME_BADCHAN;
+			goto exit;
+		}
+	}
+	*nchan = j;
+exit:
+	return err;
+}
+
+void *
+dhd_vendor_get_gscan(dhd_pub_t *dhd, dhd_vendor_cmd_cfg_t type,
+         void *info, uint32 *len)
+{
+	void *ret = NULL;
+	if (!dhd) {
+		WL_ERR(("NULL POINTER : %s\n", __FUNCTION__));
+		return NULL;
+	}
+	if (!len) {
+		WL_ERR(("%s: len is NULL\n", __FUNCTION__));
+		return NULL;
+	}
+	switch (type) {
+		case DHD_VENDOR_GET_CHANNEL_LIST:
+			if (info) {
+				uint16 ch_list[WL_NUMCHANNELS];
+				uint32 *ptr, mem_needed, i;
+				int32 err, nchan = WL_NUMCHANNELS;
+				uint32 *gscan_band = (uint32 *) info;
+				uint8 band = 0;
+
+				/* No band specified?, nothing to do */
+				if ((*gscan_band & GSCAN_BAND_MASK) == 0) {
+					WL_ERR(("No band specified\n"));
+					*len = 0;
+					break;
+				}
+
+				/* HAL and DHD use different bits for 2.4G and
+				 * 5G in bitmap. Hence translating it here...
+				 */
+				if (*gscan_band & GSCAN_BG_BAND_MASK) {
+					band |= WLC_BAND_2G;
+				}
+				if (*gscan_band & GSCAN_A_BAND_MASK) {
+					band |= WLC_BAND_5G;
+				}
+
+				err = _dhd_vendor_get_channels(dhd, ch_list, &nchan,
+				                          (band & GSCAN_ABG_BAND_MASK),
+				                          !(*gscan_band & GSCAN_DFS_MASK));
+
+				if (err < 0) {
+					WL_ERR(("%s: failed to get valid channel list\n",
+						__FUNCTION__));
+					*len = 0;
+				} else {
+					mem_needed = sizeof(uint32) * nchan;
+					ptr = (uint32 *) kmalloc(mem_needed, GFP_KERNEL);
+					if (!ptr) {
+						WL_ERR(("%s: Unable to malloc %d bytes\n",
+							__FUNCTION__, mem_needed));
+						break;
+					}
+					for (i = 0; i < nchan; i++) {
+						ptr[i] = wf_channel2mhz(ch_list[i],
+							(ch_list[i] <= CH_MAX_2G_CHANNEL?
+							WF_CHAN_FACTOR_2_4_G : WF_CHAN_FACTOR_5_G));
+					}
+					ret = ptr;
+					*len = mem_needed;
+				}
+			} else {
+				*len = 0;
+				WL_ERR(("%s: info buffer is NULL\n", __FUNCTION__));
+			}
+			break;
+		default:
+			WL_ERR(("%s: Unrecognized cmd type - %d\n", __FUNCTION__, type));
+			break;
+	}
+
+	return ret;
+
+}
+
+static int
+wl_cfgvendor_get_channel_list(struct wiphy *wiphy,
+	struct wireless_dev *wdev, const void  *data, int len)
+{
+	int err = 0, type, band;
+	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	uint16 *reply = NULL;
+	uint32 reply_len = 0, num_channels, mem_needed;
+	struct sk_buff *skb;
+	dhd_pub_t *dhd_pub = cfg->pub;
+
+	type = nla_type(data);
+
+	if (type == GSCAN_ATTRIBUTE_BAND) {
+		band = nla_get_u32(data);
+	} else {
+		return -EINVAL;
+	}
+
+	reply = dhd_vendor_get_gscan(dhd_pub,
+	                 DHD_VENDOR_GET_CHANNEL_LIST, &band, &reply_len);
+
+	if (!reply) {
+		WL_ERR(("Could not get channel list\n"));
+		err = -EINVAL;
+		return err;
+	}
+	num_channels =  reply_len/ sizeof(uint32);
+	mem_needed = reply_len + VENDOR_REPLY_OVERHEAD + (ATTRIBUTE_U32_LEN * 2);
+
+	/* Alloc the SKB for vendor_event */
+	skb = cfg80211_vendor_cmd_alloc_reply_skb(wiphy, mem_needed);
+	if (unlikely(!skb)) {
+		WL_ERR(("skb alloc failed"));
+		err = -ENOMEM;
+		goto exit;
+	}
+
+	nla_put_u32(skb, GSCAN_ATTRIBUTE_NUM_CHANNELS, num_channels);
+	nla_put(skb, GSCAN_ATTRIBUTE_CHANNEL_LIST, reply_len, reply);
+
+	err =  cfg80211_vendor_cmd_reply(skb);
+
+	if (unlikely(err)) {
+		WL_ERR(("Vendor Command reply failed ret:%d \n", err));
+	}
+exit:
+	kfree(reply);
+	return err;
+}
 
 #ifdef GSCAN_SUPPORT
 int
@@ -2389,15 +2576,19 @@ static const struct wiphy_vendor_command wl_vendor_cmds [] = {
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV | WIPHY_VENDOR_CMD_NEED_NETDEV,
 		.doit = wl_cfgvendor_gscan_get_batch_results
 	},
+#endif /* GSCAN_SUPPORT */
 	{
 		{
 			.vendor_id = OUI_GOOGLE,
 			.subcmd = GSCAN_SUBCMD_GET_CHANNEL_LIST
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV | WIPHY_VENDOR_CMD_NEED_NETDEV,
+#ifdef GSCAN_SUPPORT
 		.doit = wl_cfgvendor_gscan_get_channel_list
+#else
+		.doit = wl_cfgvendor_get_channel_list
+#endif
 	},
-#endif /* GSCAN_SUPPORT */
 #ifdef RTT_SUPPORT
 	{
 		{

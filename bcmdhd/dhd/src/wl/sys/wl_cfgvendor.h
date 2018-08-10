@@ -44,6 +44,15 @@ enum brcm_vendor_attr {
 	BRCM_ATTR_DRIVER_MAX
 };
 
+#define CHANNEL_2G_MAX 14
+#define CHANNEL_5G_MAX 165
+
+#define GSCAN_BG_BAND_MASK             (1 << 0)
+#define GSCAN_A_BAND_MASK              (1 << 1)
+#define GSCAN_DFS_MASK                 (1 << 2)
+#define GSCAN_ABG_BAND_MASK            (GSCAN_A_BAND_MASK | GSCAN_BG_BAND_MASK)
+#define GSCAN_BAND_MASK                (GSCAN_ABG_BAND_MASK | GSCAN_DFS_MASK)
+
 #define SCAN_RESULTS_COMPLETE_FLAG_LEN       ATTRIBUTE_U32_LEN
 #define SCAN_INDEX_HDR_LEN                   (NLA_HDRLEN)
 #define SCAN_ID_HDR_LEN                      ATTRIBUTE_U32_LEN
@@ -385,6 +394,13 @@ typedef enum gscan_complete_event {
 	WIFI_SCAN_BUFFER_FULL,
 	WIFI_SCAN_COMPLETE
 } gscan_complete_event_t;
+
+typedef enum dhd_vendor_cmd_cfg {
+	DHD_VENDOR_GET_CHANNEL_LIST = 0
+} dhd_vendor_cmd_cfg_t;
+
+void * dhd_vendor_get_gscan(dhd_pub_t *dhd, dhd_vendor_cmd_cfg_t type,
+   void *info, uint32 *len);
 
 /* Capture the BRCM_VENDOR_SUBCMD_PRIV_STRINGS* here */
 #define BRCM_VENDOR_SCMD_CAPA	"cap"

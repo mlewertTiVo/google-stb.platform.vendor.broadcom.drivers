@@ -27,7 +27,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd.h 734104 2017-12-01 06:57:08Z $
+ * $Id: dhd.h 764905 2018-06-08 11:36:27Z $
  */
 
 /****************
@@ -72,8 +72,8 @@ int get_scheduler_policy(struct task_struct *p);
 #endif /* (BCMWDF)  */
 
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0) && LINUX_VERSION_CODE < \
-	KERNEL_VERSION(3, 18, 0) || defined(CONFIG_BCMDHD_VENDOR_EXT) || defined(OEM_ANDROID))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0) || \
+	defined(CONFIG_BCMDHD_VENDOR_EXT))
 #define WL_VENDOR_EXT_SUPPORT
 #endif /* 3.14.0 <= LINUX_KERNEL_VERSION < 3.18.0 || CONFIG_BCMDHD_VENDOR_EXT */
 

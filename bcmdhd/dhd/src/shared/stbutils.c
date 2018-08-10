@@ -205,7 +205,7 @@ initparams_file(osl_t *osh, char **params_p, int *params_len)
 	int nv_len = 0, ret = 0, i = 0, len = 0;
 
 #if (defined(OEM_ANDROID) && defined(STBLINUX))
-	params_fp = (void*)osl_os_open_image("/data/nexus/secdma/stbpriv.txt");
+	params_fp = (void*)osl_os_open_image("/data/vendor/nexus/secdma/stbpriv.txt");
 #else
 	params_fp = (void*)osl_os_open_image("stbpriv.txt");
 #endif

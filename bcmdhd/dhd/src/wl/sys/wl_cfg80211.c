@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.c 736094 2017-12-13 14:05:02Z $
+ * $Id: wl_cfg80211.c 760733 2018-05-03 07:28:11Z $
  */
 /* */
 #include <typedefs.h>
@@ -4850,7 +4850,7 @@ exit:
 	return err;
 }
 
-#define WAIT_FOR_DISCONNECT_MAX 8 
+#define WAIT_FOR_DISCONNECT_MAX 10
 void wl_cfg80211_wait_for_disconnection(struct bcm_cfg80211 *cfg, struct net_device *dev)
 {
 	uint8 wait_cnt;
@@ -5731,6 +5731,8 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 		return err;
 	}
 
+        WL_ERR(("Cfg80211 resume Enter"));
+        wl_cfg80211_wait_for_power_change();
 #if ((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || defined(WL_COMPAT_WIRELESS)) && \
 	!defined(OEM_ANDROID)
 	while (pkt_filter_id <= WL_WOWLAN_PKT_FILTER_ID_LAST) {
@@ -5754,6 +5756,9 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
 	wl_cfg80211_update_wowl_wakeind(wiphy);
 #endif /* (KERNEL_VERSION(2, 6, 39) */
+
+	WL_ERR(("Cfg80211 resume Done"));
+
 	return err;
 }
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
@@ -5782,10 +5787,7 @@ static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy)
 	u32 wowl_trigger = 0;
 	s32 err = BCME_OK;
 	wl_wowl_wakeind_t wake_ind = {0};
-	if (!cfg->wowlan_trigger) {
-		WL_DBG(("Wowlan not enabled in cfg80211\n"));
-		return err;
-	}
+
 	/* get the wowl wake reason */
 	err = wldev_iovar_getbuf(dev, "wowl_wakeind", NULL,
 			0, cfg->ioctl_buf, WLC_IOCTL_SMLEN, &cfg->ioctl_buf_sync);
@@ -5818,8 +5820,9 @@ static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy)
 
 	if (wowlan_wakereport) {
 		WL_ERR(("wowl_wakeind=0x%x\n", wake_ind.ucode_wakeind));
+		if(cfg->wowlan_trigger)
+			cfg80211_report_wowlan_wakeup(cfg->wdev, wowlan_wakereport, GFP_KERNEL);
 	}
-	cfg80211_report_wowlan_wakeup(cfg->wdev, wowlan_wakereport, GFP_KERNEL);
 	err = wldev_iovar_setint(dev, "wowl_clear", 1);
 	if (unlikely(err)) {
 		WL_ERR(("set wowl clear error (%d)\n", err));
@@ -5876,6 +5879,13 @@ static s32 wl_cfg80211_set_wowlan(struct wiphy *wiphy, struct cfg80211_wowlan *w
 	 * And cfg initiated wowlan wakeup trigger
 	 */
 	wowl_trigger |= wowl_cfg_trigger;
+#if defined (OEM_ANDROID)
+	/* Enable WL_WOWL_MAGIC and WL_WOWL_MDNS_SERVICE
+	 * by default For Android target */
+	if (!wowl_trigger)
+		wowl_trigger |= WL_WOWL_MAGIC;
+	wowl_trigger |= WL_WOWL_MDNS_SERVICE;
+#endif /* OEM_ANDROID */
 
 	WL_ERR(("Wowl Trigger (%08x)\n", wowl_trigger));
 	err = wldev_iovar_setint(dev, "wowl", wowl_trigger);
@@ -6071,6 +6081,8 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy)
 	}
 #endif /* DHD_CLEAR_ON_SUSPEND */
 
+        WL_ERR(("Cfg80211 suspend Enter"));
+
 #if ((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || defined(WL_COMPAT_WIRELESS)) && \
 	!defined(OEM_ANDROID)
 	err = wl_wowlan_config(wiphy, wow);
@@ -6078,6 +6090,8 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy)
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
 	err = wl_cfg80211_set_wowlan(wiphy, wow);
 #endif /* (KERNEL_VERSION(2, 6, 39) */
+	wl_cfg80211_power_state_change_done();
+	WL_ERR(("Cfg80211 suspend Done"));
 
 	return err;
 }
@@ -13546,6 +13560,7 @@ static s32 wl_init_priv(struct bcm_cfg80211 *cfg)
 	init_waitqueue_head(&cfg->netif_change_event);
 	init_completion(&cfg->send_af_done);
 	init_completion(&cfg->iface_disable);
+	init_completion(&cfg->power_state_change);
 	wl_init_eq(cfg);
 	err = wl_init_priv_mem(cfg);
 	if (err)
@@ -13556,6 +13571,7 @@ static s32 wl_init_priv(struct bcm_cfg80211 *cfg)
 	mutex_init(&cfg->usr_sync);
 	mutex_init(&cfg->event_sync);
 	mutex_init(&cfg->scan_complete);
+
 	err = wl_init_scan(cfg);
 	if (err)
 		return err;
@@ -14957,6 +14973,21 @@ s32 wl_cfg80211_down(void *para)
 	mutex_unlock(&cfg->usr_sync);
 
 	return err;
+}
+
+void wl_cfg80211_wait_for_power_change(void)
+{
+	struct bcm_cfg80211 *cfg;
+	cfg = g_bcm_cfg;
+        wait_for_completion_timeout(&cfg->power_state_change,
+                        msecs_to_jiffies(500));
+}
+
+void wl_cfg80211_power_state_change_done(void)
+{
+	struct bcm_cfg80211 *cfg;
+	cfg = g_bcm_cfg;
+	complete(&cfg->power_state_change);
 }
 
 #if (defined(STBLINUX) && defined(WL_CFG80211))
