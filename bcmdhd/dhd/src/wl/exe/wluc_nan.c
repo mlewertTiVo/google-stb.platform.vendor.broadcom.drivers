@@ -40,6 +40,7 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <linux/if_packet.h>
+#include <strings.h>
 
 #include <miniopt.h>
 

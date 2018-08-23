@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.c 743266 2018-01-25 13:07:54Z $
+ * $Id: linux_osl.c 764813 2018-06-05 05:45:36Z $
  */
 
 #define LINUX_PORT
@@ -73,6 +73,9 @@
 #if defined(__ARM_ARCH_7A__)
 #include <arch/arm/include/asm/tlbflush.h>
 #endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+#include <linux/dma-contiguous.h>
+#endif /* KERNEL_VERSION(4, 9, 89) */
 #endif /* BCM_SECURE_DMA */
 
 #include <linux/fs.h>
@@ -231,6 +234,15 @@ struct osl_info {
 	void *contig_base_alloc_rxbufctl_va;
 	void *contig_base_alloc_rxbuf_va;
 	phys_addr_t contig_delta_va_pa;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	struct page *contig_base_alloc_coherent_page;
+	struct page *contig_base_alloc_page;
+	struct page *contig_base_alloc_txbuf_page;
+	struct page *contig_base_alloc_rxbufctl_page;
+	struct page *contig_base_alloc_rxbuf_page;
+#endif /* KERNEL_VERSION(4, 9, 89) */
+
 	struct {
 		phys_addr_t pa;
 		void *va;
@@ -299,6 +311,9 @@ module_param(secdma_size, int, 0);
 module_param(secdma_addr2, ulong, 0);
 module_param(secdma_size2, int, 0);
 static int secdma_found = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+static int global_cma = 0;
+#endif /* KERNEL_VERSION(4, 9, 89) */
 #endif /* BCM_SECURE_DMA */
 
 static int16 linuxbcmerrormap[] =
@@ -395,7 +410,12 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 
 #ifdef BCM_SECURE_DMA
 	u32 secdma_memsize;
-#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	struct page *cma_page;
+	struct pci_dev * pcidev;
+	pcidev = pdev;
+#endif /* KERNEL_VERSION(4, 9, 89) */
+#endif /* BCM_SECURE_DMA */
 
 	flags = CAN_SLEEP() ? GFP_KERNEL: GFP_ATOMIC;
 	if (!(osh = kmalloc(sizeof(osl_t), flags)))
@@ -483,9 +503,15 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 		osh->stb_ext_params = SECDMA_EXT_FILE;
 	}
 	else {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+		printk("linux_osl.c: SECDMA supports Global CMA,"
+			"Please give 'cma=64M coherent_mem=32M' to kernel command line args.\n");
+		global_cma++;
+#else
 		printk("linux_osl.c: secDMA no longer supports internal buffer allocation.\n");
 		kfree(osh);
 		return NULL;
+#endif /* KERNEL_VERSION(4, 9, 89) */
 	}
 
 	secdma_found++;
@@ -494,6 +520,21 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 		phys_to_page((u32)osh->contig_base_alloc),
 		CMA_DMA_DESC_MEMBLOCK, TRUE, TRUE);
 #else
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	if (global_cma > 0) {
+		cma_page = dma_alloc_from_contiguous(&pcidev->dev,
+			(CMA_DMA_DESC_MEMBLOCK >> PAGE_SHIFT), PAGE_SIZE);
+		if (!cma_page) {
+			printk("linux_osl.c: osl_attach - dma_alloc_from_contiguous() allocation "
+				"failed with no memory \n");
+			return NULL;
+		}
+		osh->contig_base_alloc_coherent_page = cma_page;
+		osh->contig_base_alloc = page_to_phys(cma_page);
+	}
+#endif /* KERNEL_VERSION(4, 9, 89) */
+
 	osh->contig_base_alloc_coherent_va = osl_sec_dma_ioremap(osh,
 		phys_to_page((u32)osh->contig_base_alloc),
 		CMA_DMA_DESC_MEMBLOCK, FALSE, TRUE);
@@ -509,7 +550,23 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 	osh->contig_base_alloc_coherent = osh->contig_base_alloc;
 	osl_sec_dma_init_consistent(osh);
 
-	osh->contig_base_alloc += CMA_DMA_DESC_MEMBLOCK;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	if (global_cma > 0) {
+		cma_page = dma_alloc_from_contiguous(&pcidev->dev,
+			(CMA_DMA_DATA_MEMBLOCK >> PAGE_SHIFT), PAGE_SIZE);
+		if (!cma_page) {
+			printk("linux_osl.c: osl_attach - dma_alloc_from_contiguous() allocation "
+				"failed with no memory \n");
+			return NULL;
+		}
+
+		osh->contig_base_alloc_txbuf_page = cma_page;
+		osh->contig_base_alloc = page_to_phys(cma_page);
+	}
+	else
+#endif /* KERNEL_VERSION(4, 9, 89) */
+		osh->contig_base_alloc += CMA_DMA_DESC_MEMBLOCK;
+
 	osh->contig_base_alloc_va = osl_sec_dma_ioremap(osh,
 		phys_to_page((u32)osh->contig_base_alloc), CMA_DMA_DATA_MEMBLOCK, TRUE, FALSE);
 	if (osh->contig_base_alloc_va == NULL) {
@@ -529,6 +586,22 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 		CMA_BUFSIZE_4K, CMA_TXBUF_BUFNUM, &osh->sec_list_txbuf);
 	osh->sec_list_base_txbuf = osh->sec_list_txbuf;
 
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	if (global_cma > 0) {
+		cma_page = dma_alloc_from_contiguous(&pcidev->dev,
+			(CMA_DMA_RXCTRL_MEMBLOCK >> PAGE_SHIFT), PAGE_SIZE);
+		if (!cma_page) {
+			printk("linux_osl.c: osl_attach - dma_alloc_from_contiguous() allocation "
+				"failed with no memory \n");
+			return NULL;
+		}
+
+		osh->contig_base_alloc_rxbufctl_page = cma_page;
+		osh->contig_base_alloc = page_to_phys(cma_page);
+	}
+#endif /* KERNEL_VERSION(4, 9, 89) */
+
 	osh->contig_base_alloc_va = osl_sec_dma_ioremap(osh,
 		phys_to_page((u32)osh->contig_base_alloc), CMA_DMA_RXCTRL_MEMBLOCK, TRUE, FALSE);
 	if (osh->contig_base_alloc_va == NULL) {
@@ -546,6 +619,20 @@ osl_attach(void *pdev, uint bustype, bool pkttag)
 		CMA_BUFSIZE_8K, CMA_RXCTRL_BUFNUM, &osh->sec_list_rxbufctl);
 	osh->sec_list_base_rxbufctl = osh->sec_list_rxbufctl;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	if (global_cma > 0) {
+		cma_page = dma_alloc_from_contiguous(&pcidev->dev,
+			(CMA_DMA_RXBUF_POST_MEMBLOCK >> PAGE_SHIFT), PAGE_SIZE);
+		if (!cma_page) {
+			printk("linux_osl.c: osl_attach - dma_alloc_from_contiguous() allocation "
+				"failed with no memory \n");
+			return NULL;
+		}
+
+		osh->contig_base_alloc_rxbuf_page = cma_page;
+		osh->contig_base_alloc = page_to_phys(cma_page);
+	}
+#endif /* KERNEL_VERSION(4, 9, 89) */
 	osh->contig_base_alloc_va = osl_sec_dma_ioremap(osh,
 		phys_to_page((u32)osh->contig_base_alloc),
 		CMA_DMA_RXBUF_POST_MEMBLOCK, TRUE, FALSE);
@@ -662,6 +749,14 @@ void* osl_get_bus_handle(osl_t *osh)
 void
 osl_detach(osl_t *osh)
 {
+
+#ifdef BCM_SECURE_DMA
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	struct pci_dev * pcidev;
+	pcidev = osh->pdev;
+#endif /* KERNEL_VERSION(4, 9, 89) */
+#endif /* BCM_SECURE_DMA */
+
 	if (osh == NULL)
 		return;
 
@@ -680,6 +775,34 @@ osl_detach(osl_t *osh)
 	osl_sec_dma_iounmap(osh, osh->contig_base_alloc_rxbufctl_va, CMA_DMA_RXCTRL_MEMBLOCK);
 	osl_sec_dma_iounmap(osh, osh->contig_base_alloc_rxbuf_va, CMA_DMA_RXBUF_POST_MEMBLOCK);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 89)
+	if (global_cma > 0) {
+		if (!dma_release_from_contiguous(&pcidev->dev, osh->contig_base_alloc_coherent_page,
+			(CMA_DMA_DESC_MEMBLOCK / PAGE_SIZE))) {
+				dev_err(&pcidev->dev, "contig_base_alloc_coherent_page "
+					"dma release failed!\n");
+		}
+
+		if (!dma_release_from_contiguous(&pcidev->dev, osh->contig_base_alloc_txbuf_page,
+			(CMA_DMA_DATA_MEMBLOCK / PAGE_SIZE))) {
+				dev_err(&pcidev->dev, "contig_base_alloc_txbuf_page "
+					"dma release failed!\n");
+		}
+
+		if (!dma_release_from_contiguous(&pcidev->dev, osh->contig_base_alloc_rxbufctl_page,
+			(CMA_DMA_RXCTRL_MEMBLOCK / PAGE_SIZE))) {
+				dev_err(&pcidev->dev, "contig_base_alloc_rxbufctl_page "
+					"dma release failed!\n");
+		}
+
+		if (!dma_release_from_contiguous(&pcidev->dev, osh->contig_base_alloc_rxbuf_page,
+			(CMA_DMA_RXBUF_POST_MEMBLOCK / PAGE_SIZE))) {
+				dev_err(&pcidev->dev, "contig_base_alloc_rxbuf_page "
+					"dma release failed!\n");
+		}
+	global_cma--;
+	}
+#endif /* KERNEL_VERSION(4, 9, 89) */
 	secdma_found--;
 #endif /* BCM_SECURE_DMA */
 
@@ -709,9 +832,6 @@ static struct sk_buff *osl_alloc_skb(osl_t *osh, unsigned int len)
 	struct sk_buff *skb;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25)
 	gfp_t flags = (in_atomic() || irqs_disabled()) ? GFP_ATOMIC : GFP_KERNEL;
-#if defined(CONFIG_SPARSEMEM) && defined(CONFIG_ZONE_DMA)
-	flags |= GFP_ATOMIC;
-#endif
 	skb = __dev_alloc_skb(len, flags);
 #else
 	skb = dev_alloc_skb(len);
@@ -1846,7 +1966,8 @@ osl_cache_flush(osl_t *osh, void *va, uint size)
 		dma_sync_single_for_device(&pdev->dev, page_to_phys(vmalloc_to_page(va)),
 			size, DMA_TX);
 #else
-		dma_sync_single_for_device(&(pdev->dev),dma_map_single(&(pdev->dev), va, size,  DMA_TX), size, DMA_TX);
+		dma_sync_single_for_device(&(pdev->dev),
+			dma_map_single(&(pdev->dev), va, size,  DMA_TX), size, DMA_TX);
 #endif
 }
 
@@ -1863,11 +1984,11 @@ osl_cache_inv(osl_t *osh, void *va, uint size)
 #endif /* BCM47XX_CA9 */
 
 #ifdef BCM_SECURE_DMA
-	dma_sync_single_for_cpu(&pdev->dev, page_to_phys(vmalloc_to_page(va)),size, DMA_RX);
+	dma_sync_single_for_cpu(&pdev->dev, page_to_phys(vmalloc_to_page(va)), size, DMA_RX);
 #else
 	dma_handle = dma_map_single(&(pdev->dev), va, size,  DMA_RX);
-	dma_sync_single_for_cpu(&(pdev->dev),dma_handle, size, DMA_RX);
-	dma_unmap_single(&(pdev->dev),dma_handle, size, DMA_RX);
+	dma_sync_single_for_cpu(&(pdev->dev), dma_handle, size, DMA_RX);
+	dma_unmap_single(&(pdev->dev), dma_handle, size, DMA_RX);
 #endif
 }
 

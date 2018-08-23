@@ -54,9 +54,7 @@
 #include "wlu_common.h"
 #include "wlu.h"
 #include <bcmcdc.h>
-#ifndef TARGETENV_android
 #include <unistd.h>
-#endif
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -65,6 +63,7 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <linux/if_packet.h>
+#include <strings.h>
 
 #if defined(WLBSSLOAD_REPORT)
 #include <sys/time.h>

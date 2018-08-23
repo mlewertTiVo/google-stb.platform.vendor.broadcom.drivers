@@ -35,11 +35,11 @@
 
 #define	EPI_RC_NUMBER		110
 
-#define	EPI_INCREMENTAL_NUMBER	86
+#define	EPI_INCREMENTAL_NUMBER	95
 
 #define EPI_BUILD_NUMBER	1
 
-#define	EPI_VERSION		1, 363, 110, 86
+#define	EPI_VERSION		1, 363, 110, 95
 
 #define	EPI_VERSION_NUM		0x0116b6e5
 
@@ -47,9 +47,9 @@
 
 /* Driver Version String, ASCII, 32 chars max */
 #ifdef WLTEST
-#define	EPI_VERSION_STR		"1.363.110.86 (r748950 WLTEST)"
+#define	EPI_VERSION_STR		"1.363.110.95 (r765272 WLTEST)"
 #else
-#define	EPI_VERSION_STR		"1.363.110.86 (r748950)"
+#define	EPI_VERSION_STR		"1.363.110.95 (r765272)"
 #endif
 
 #endif /* _epivers_h_ */

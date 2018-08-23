@@ -32,6 +32,7 @@
 #include <trxhdr.h>
 #include <bcmendian.h>
 #include <wlu_common.h>
+#include <strings.h>
 
 #define DEVPRESENT_DELAY  10000	/* in microsecs */
 #define DEVPRESENT_RETRIES   100

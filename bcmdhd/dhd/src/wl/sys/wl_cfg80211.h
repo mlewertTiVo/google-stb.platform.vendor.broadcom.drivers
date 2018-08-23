@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.h 736094 2017-12-13 14:05:02Z $
+ * $Id: wl_cfg80211.h 760733 2018-05-03 07:28:11Z $
  */
 
 /**
@@ -595,6 +595,7 @@ struct bcm_cfg80211 {
 	spinlock_t cfgdrv_lock;	/* to protect scan status (and others if needed) */
 	struct completion act_frm_scan;
 	struct completion iface_disable;
+	struct completion power_state_change;
 	struct completion wait_next_af;
 	struct mutex usr_sync;	/* maily for up/down synchronization */
 	struct mutex scan_complete;	/* serialize scan_complete call */
@@ -1375,6 +1376,8 @@ extern void get_primary_mac(struct bcm_cfg80211 *cfg, struct ether_addr *mac);
 extern void wl_cfg80211_update_power_mode(struct net_device *dev);
 extern void wl_cfg80211_set_passive_scan(struct net_device *dev, char *command);
 extern void wl_terminate_event_handler(void);
+extern void  wl_cfg80211_wait_for_power_change(void);
+extern void  wl_cfg80211_power_state_change_done(void);
 #define SCAN_BUF_CNT	2
 #define SCAN_BUF_NEXT	1
 #define WL_SCANTYPE_LEGACY	0x1

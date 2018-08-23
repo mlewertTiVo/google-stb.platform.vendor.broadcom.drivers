@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlu_linux.c 524113 2015-01-06 01:31:14Z $
+ * $Id: wlu_linux.c 763300 2018-05-18 03:48:32Z $
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -346,7 +346,7 @@ int wl_ir_init_rwl(void **irh)
 		struct ifreq *ifr;
 		ifr = malloc(sizeof(struct ifreq));
 		if (ifr) {
-			memset(ifr, 0, sizeof(ifr));
+			memset(ifr, 0, sizeof(struct ifreq));
 			wl_find(ifr);
 		}
 		*irh = ifr;

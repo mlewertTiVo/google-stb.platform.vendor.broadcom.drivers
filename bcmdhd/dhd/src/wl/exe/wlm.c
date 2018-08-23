@@ -12,7 +12,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary:>>
  *
- * $Id: wlm.c 564317 2015-06-17 06:49:56Z $
+ * $Id: wlm.c 763300 2018-05-18 03:48:32Z $
  */
 
 #include <stdio.h>
@@ -335,7 +335,7 @@ int wlmVersionGet(char *buf, int len)
 		return FALSE;
 	}
 
-	memset(buf, 0, sizeof(buf));
+	memset(buf, 0, len);
 
 	n += sprintf(buf, "wlm: ");
 	n += sprintf(buf + n, "%s",
@@ -1774,7 +1774,6 @@ int wlmSecuritySet(WLM_AUTH_TYPE authType, WLM_AUTH_MODE authMode,
 {
 	int length = 0;
 	int wpa_auth;
-	int sup_wpa;
 	int primary_key = 0;
 	wl_wsec_key_t wepKey[4];
 	wsec_pmk_t psk;
@@ -1793,7 +1792,6 @@ int wlmSecuritySet(WLM_AUTH_TYPE authType, WLM_AUTH_MODE authMode,
 
 	case WLM_ENCRYPT_NONE:
 		wpa_auth = WPA_AUTH_DISABLED;
-		sup_wpa = 0;
 		break;
 
 	case WLM_ENCRYPT_WEP: {
@@ -1801,7 +1799,6 @@ int wlmSecuritySet(WLM_AUTH_TYPE authType, WLM_AUTH_MODE authMode,
 		int len = length / 4;
 
 		wpa_auth = WPA_AUTH_DISABLED;
-		sup_wpa = 0;
 
 		if (!(length == 40 || length == 104 || length == 128 || length == 256)) {
 			printf("wlmSecuritySet: invalid WEP key length %d"
@@ -1865,7 +1862,6 @@ int wlmSecuritySet(WLM_AUTH_TYPE authType, WLM_AUTH_MODE authMode,
 		}
 
 		wpa_auth = authMode;
-		sup_wpa = 1;
 
 		if (length < WSEC_MIN_PSK_LEN || length > WSEC_MAX_PSK_LEN) {
 			printf("wlmSecuritySet: passphrase must be between %d and %d characters\n",
@@ -1896,14 +1892,6 @@ int wlmSecuritySet(WLM_AUTH_TYPE authType, WLM_AUTH_MODE authMode,
 		printf("wlmSecuritySet: %s\n", wlmLastError());
 		return FALSE;
 	}
-
-	/* Fix me: need firmware support for sup_wpa */
-	/*
-	if (wlu_iovar_setint(irh, "sup_wpa", sup_wpa)) {
-		printf("wlmSecuritySet: %s\n", wlmLastError());
-		return FALSE;
-	}
-	*/
 
 	if (encryption == WLM_ENCRYPT_WEP) {
 		int i;
@@ -5641,10 +5629,10 @@ wlmConfigGet(const char *iovar, char *status_str, uint32 *val)
 	cfg->config = dtoh32(cfg->config);
 	cfg->status = dtoh32(cfg->status);
 	*val = cfg->status;
-	status_str = "";
+	*status_str = 0;
 	while (config_iovar->params[i].name) {
 		if (config_iovar->params[i].value == cfg->status) {
-			status_str = config_iovar->params[i].name;
+			strcpy(status_str, config_iovar->params[i].name);
 			break;
 		}
 		i++;
