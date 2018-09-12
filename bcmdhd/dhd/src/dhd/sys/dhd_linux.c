@@ -3075,6 +3075,18 @@ dhd_dbus_state_change(void *handle, int state)
 			DHD_ERROR(("%s: firmware request cannot be handled\n", __FUNCTION__));
 #endif 
 			dhd->pub.busstate = DHD_BUS_DATA;
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+#if defined(WL_CFG80211)
+			dhd_bus_wowl_set(dhd, FALSE);
+#endif /* WL_CFG80211 */
+#endif /* KERNEL_VERSION(2, 6, 39) */
+			break;
+		case DBUS_STATE_SLEEP:
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+#if defined(WL_CFG80211)
+			dhd_bus_wowl_set(dhd, TRUE);
+#endif /* WL_CFG80211 */
+#endif /* KERNEL_VERSION(2, 6, 39) */
 			break;
 		default:
 			break;
@@ -14265,4 +14277,61 @@ dhd_linux_get_primary_netdev(dhd_pub_t *dhdp)
 		return dhd->iflist[0]->net;
 	else
 		return NULL;
+}
+/* Enable or disable Wake-on-wireless LAN  for all bus*/
+static void
+dhd_wowl_set(dhd_pub_t *dhdp, int state)
+{
+	int err = 0;
+	int value = 0;
+	int wowl_trigger = 0;
+#if defined(WL_CFG80211)
+        struct net_device *ndev = dhd_linux_get_primary_netdev(dhdp);
+#endif /* WL_CFG80211 */
+	DHD_OS_WAKE_LOCK_WAIVE(dhdp);
+
+	 /* Set the wowlan trigger by either wl utility or wpa_supplicant
+	 * And activate the wowl here
+	 */
+	if (state) {
+                err = dhd_iovar(dhdp, 0, "wowl", NULL, 0, (char *)&wowl_trigger, sizeof(value), FALSE);
+                if (err < 0) {
+                        DHD_ERROR(("%s: error in get wowl_enable, result=%d\n", __FUNCTION__, err));
+                }
+
+#if defined(WL_CFG80211)
+		err = wl_cfg80211_wowlan_activate(ndev, &wowl_trigger);
+		if(err < 0) {
+			DHD_ERROR(("%s: error in get wowl_cfg_set, result=%d\n", __FUNCTION__, wowl_trigger));
+		}
+#endif /* WL_CFG80211 */
+		if (wowl_trigger > 0) {
+			value = 0;
+			err = dhd_iovar(dhdp, 0, "wowl_activate", NULL, 0,
+					(char *)&value, sizeof(value), FALSE);
+			if (err < 0) {
+				DHD_ERROR(("%s: error wowl_activate, err=%d\n", __FUNCTION__, err));
+			}
+		}
+	} else {
+#if defined(WL_CFG80211)
+		wl_cfg80211_update_wowl_wakeind(ndev);
+#endif /* WL_CFG80211 */
+                err = dhd_iovar(dhdp, 0, "wowl_clear", NULL, 0,
+                        (char *)&value, sizeof(value), FALSE);
+                if (err < 0) {
+                        DHD_ERROR(("%s: error using wowl_clear, result=%d\n", __FUNCTION__, err));
+                }
+	}
+
+	DHD_OS_WAKE_LOCK_RESTORE(dhdp);
+}
+
+void dhd_bus_wowl_set(void *drvinfo,int state)
+{
+	dhd_pub_t *dhdp;
+	if (drvinfo) {
+		dhdp = &((dhd_info_t *)drvinfo)->pub;
+		dhd_wowl_set(dhdp, state);
+	}
 }
