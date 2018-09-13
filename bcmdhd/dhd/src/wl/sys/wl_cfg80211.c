@@ -425,7 +425,11 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
 #else
 static s32 wl_cfg80211_suspend(struct wiphy *wiphy);
 #endif
-static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy);
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+static s32 wl_cfg80211_clear_wowl_wakeind(struct bcm_cfg80211 *cfg);
+static s32 wl_cfg80211_report_wowlan_wakeup(struct bcm_cfg80211 *cfg);
+static s32 wl_cfg80211_reset_wowl_trigger(struct net_device *dev);
+#endif /*  (KERNEL_VERSION(2, 6, 39) */
 static s32 wl_cfg80211_set_pmksa(struct wiphy *wiphy, struct net_device *dev,
 	struct cfg80211_pmksa *pmksa);
 static s32 wl_cfg80211_del_pmksa(struct wiphy *wiphy, struct net_device *dev,
@@ -5731,8 +5735,7 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 		return err;
 	}
 
-        WL_ERR(("Cfg80211 resume Enter"));
-        wl_cfg80211_wait_for_power_change();
+	WL_ERR(("%s Enter", __FUNCTION__));
 #if ((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || defined(WL_COMPAT_WIRELESS)) && \
 	!defined(OEM_ANDROID)
 	while (pkt_filter_id <= WL_WOWLAN_PKT_FILTER_ID_LAST) {
@@ -5754,7 +5757,8 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 	}
 #endif /* (KERNEL_VERSION(2, 6, 39) || WL_COMPAT_WIRELES) && !OEM_ANDROID */
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
-	wl_cfg80211_update_wowl_wakeind(wiphy);
+	wl_cfg80211_report_wowlan_wakeup(cfg);
+	cfg->wowlan_info.cfg_state = WL_CFG80211_RESUME_DONE;
 #endif /* (KERNEL_VERSION(2, 6, 39) */
 
 	WL_ERR(("Cfg80211 resume Done"));
@@ -5762,9 +5766,8 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy)
 	return err;
 }
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
-static s32 wl_cfg80211_clear_wowl_wakeind(struct wiphy *wiphy)
+static s32 wl_cfg80211_clear_wowl_wakeind(struct bcm_cfg80211 *cfg)
 {
-	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
 	struct net_device *dev = bcmcfg_to_prmry_ndev(cfg);
 	s32 err = BCME_OK;
 	wl_wowl_wakeind_t wake_ind = {0};
@@ -5774,17 +5777,11 @@ static s32 wl_cfg80211_clear_wowl_wakeind(struct wiphy *wiphy)
 			cfg->ioctl_buf, WLC_IOCTL_SMLEN, NULL);
 	return err;
 }
-static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy)
+s32 wl_cfg80211_update_wowl_wakeind(struct net_device *dev)
 {
-	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
-	struct net_device *dev = bcmcfg_to_prmry_ndev(cfg);
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0))
-/* wowlan wake reason report to cfg layed is supported only after 3.9 Kernel
- */
-	struct cfg80211_wowlan_wakeup *wowlan_wakereport, wowlan_wakeind;
-#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)) */
+	struct wireless_dev *wdev = dev->ieee80211_ptr;
+	struct bcm_cfg80211 *cfg = wiphy_priv(wdev->wiphy);
 	u32 wakeup_reason = 0;
-	u32 wowl_trigger = 0;
 	s32 err = BCME_OK;
 	wl_wowl_wakeind_t wake_ind = {0};
 
@@ -5798,11 +5795,52 @@ static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy)
 
 	memcpy(&wake_ind, cfg->ioctl_buf, sizeof(wl_wowl_wakeind_t));
 	wakeup_reason = dtoh32(wake_ind.ucode_wakeind);
-/* wowlan wake reason report to cfg layed is supported only after 3.9 Kernel
- */
+	WL_ERR(("wowl_wakeind=0x%x\n", wakeup_reason));
+	cfg->wowlan_info.wowlan_wakeup_report = wakeup_reason;
+	if (!wakeup_reason)
+		goto done;
+	/* wowl report to cfg80211 should be after cfg80211 resume done, And
+	 * It should be only after the bus ready-to get the latest wowl reason-.
+	 * If cfg80211_resume done before bus ready, send the report from here
+	 */
+	if (cfg->wowlan_info.cfg_state == WL_CFG80211_RESUME_DONE) {
+		wl_cfg80211_report_wowlan_wakeup(cfg);
+	}
+#if defined (OEM_ANDROID)
+	/* Release a cached mDNS packet that woke us up, if any */
+	if (wakeup_reason & WL_WOWL_MDNS_SERVICE) {
+		/* MDNS Support is an optional feature in dongle
+		 */
+		if (wldev_iovar_setint(dev, "wowl_rls_wake_pkt", 0) < 0) {
+			WL_INFORM(("%s: error using wowl_rls_wake_pkt, result=%d\n",
+					__FUNCTION__, err));
+		}
+	}
+#endif /* OEM_ANDROID */
+done:
+	wl_cfg80211_reset_wowl_trigger(dev);
+	return err;
+}
+static s32 wl_cfg80211_reset_wowl_trigger(struct net_device *dev)
+{
+	int wowl_trigger = 0, err;
+	/* Reset the wowl trigger */
+	err = wldev_iovar_setint(dev, "wowl", wowl_trigger);
+	if (unlikely(err)) {
+		WL_ERR(("set wowl error (%d)\n", err));
+	}
+	return err;
+}
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0))
+/* wowlan wake reason report to cfg layer is supported only after 3.9 Kernel
+ */
+static s32 wl_cfg80211_report_wowlan_wakeup(struct bcm_cfg80211 *cfg)
+{
+	struct cfg80211_wowlan_wakeup *wowlan_wakereport, wowlan_wakeind;
+	u32 wakeup_reason = 0;
 	memset(&wowlan_wakeind, 0, sizeof(wowlan_wakeind));
 	wowlan_wakereport = NULL;
+	wakeup_reason = cfg->wowlan_info.wowlan_wakeup_report;
 	if (wakeup_reason) {
 		if ((wakeup_reason & WL_WOWL_MAGIC)  == WL_WOWL_MAGIC)
 			wowlan_wakeind.magic_pkt = true;
@@ -5818,74 +5856,78 @@ static s32 wl_cfg80211_update_wowl_wakeind(struct wiphy *wiphy)
 		wowlan_wakereport = &wowlan_wakeind;
 	}
 
-	if (wowlan_wakereport) {
-		WL_ERR(("wowl_wakeind=0x%x\n", wake_ind.ucode_wakeind));
-		if(cfg->wowlan_trigger)
-			cfg80211_report_wowlan_wakeup(cfg->wdev, wowlan_wakereport, GFP_KERNEL);
+	if (wowlan_wakereport && cfg->wowlan_info.wowlan_trigger) {
+		cfg80211_report_wowlan_wakeup(cfg->wdev, wowlan_wakereport, GFP_KERNEL);
 	}
-	err = wldev_iovar_setint(dev, "wowl_clear", 1);
-	if (unlikely(err)) {
-		WL_ERR(("set wowl clear error (%d)\n", err));
-	}
-#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)) */
-	/* Reset the trigger initiated by cfg alone */
-	err = wldev_iovar_getint(dev, "wowl", &wowl_trigger);
-	if (unlikely(err)) {
-		WL_ERR(("error reading wowl (%d)\n", err));
-		return err;
-	}
-	wowl_trigger &= ~cfg->wowlan_trigger;
-	err = wldev_iovar_setint(dev, "wowl", wowl_trigger);
-	if (unlikely(err)) {
-		WL_ERR(("set wowl error (%d)\n", err));
-	}
-
-	return err;
+	return BCME_OK;
 }
-
+#endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 9, 0)) */
 static s32 wl_cfg80211_set_wowlan(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
 {
 	s32 err = BCME_OK;
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
-	struct net_device *dev = bcmcfg_to_prmry_ndev(cfg);
-	u32 wowl_trigger = 0, wowl_cfg_trigger = 0;
-	WL_DBG(("Enter\n"));
-
-	cfg->wowlan_trigger = 0;
+	u32 wowl_cfg_trigger = 0;
 	if (wow == NULL) {
 		WL_DBG(("wow config is null\n"));
 		return err;
 	}
+	/* Reset wowlan_wakeup_report on suspend */
+	cfg->wowlan_info.wowlan_wakeup_report = 0;
 	/* Use trigger set by wl utility also */
-	err = wldev_iovar_getint(dev, "wowl", &wowl_trigger);
-	if (unlikely(err)) {
-		WL_ERR(("error reading wowl (%d)\n", err));
-		return err;
-	}
 	if (wow->any == TRUE) {
 		wowl_cfg_trigger |= WL_CFG80211_WOWL_ANY;
 	} else {
 		if (wow->disconnect == TRUE) {
 			wowl_cfg_trigger |= WL_WOWL_DIS | WL_WOWL_BCN;
 		}
-		if (wow->magic_pkt == TRUE) {
+		if (wow->magic_pkt == TRUE)  {
 			wowl_cfg_trigger |= WL_WOWL_MAGIC;
 		}
 		if (wow->gtk_rekey_failure == TRUE) {
 			wowl_cfg_trigger |= WL_WOWL_GTK_FAILURE;
 		}
 	}
+
+	if (wowl_cfg_trigger)
+		cfg->wowlan_info.wowlan_trigger = wowl_cfg_trigger;
+
+	return err;
+}
+
+/* Activate the wowl on suspend time */
+s32 wl_cfg80211_wowlan_activate(struct net_device *dev, s32 *wowlan_trigger)
+{
+	s32 err = BCME_OK;
+	struct wireless_dev *wdev = dev->ieee80211_ptr;
+	struct bcm_cfg80211 *cfg = wiphy_priv(wdev->wiphy);
+
+	u32 wowl_trigger = 0, wowl_cfg_trigger = 0;
+#if defined (OEM_ANDROID)
+	u32 wowl_cap = 0;
+#endif /* OEM_ANDROID */
+	WL_DBG(("Enter\n"));
+	/* Get the wowl trigger from cfg80211 */
+	if (wdev->wiphy)
+		err = wl_cfg80211_set_wowlan(wdev->wiphy, wdev->wiphy->wowlan_config);
+
+	wowl_cfg_trigger = cfg->wowlan_info.wowlan_trigger;
+	wowl_trigger = *wowlan_trigger;
 	/* Wowl trigger by both wl utility trigger
 	 * And cfg initiated wowlan wakeup trigger
 	 */
 	wowl_trigger |= wowl_cfg_trigger;
-#if defined (OEM_ANDROID)
+#if defined (OEM_ANDROID) && defined (WL_CFG80211)
 	/* Enable WL_WOWL_MAGIC and WL_WOWL_MDNS_SERVICE
-	 * by default For Android target */
+	 * by default For Android target
+	 */
 	if (!wowl_trigger)
 		wowl_trigger |= WL_WOWL_MAGIC;
-	wowl_trigger |= WL_WOWL_MDNS_SERVICE;
-#endif /* OEM_ANDROID */
+	if (wldev_iovar_getint(dev, "wowl_cap", &wowl_cap) == BCME_OK) {
+		if (wowl_cap && WL_WOWL_MDNS_SERVICE)
+			wowl_trigger |= WL_WOWL_MDNS_SERVICE;
+	}
+#endif /* OEM_ANDROID && WL_CFG80211 */
+
 
 	WL_ERR(("Wowl Trigger (%08x)\n", wowl_trigger));
 	err = wldev_iovar_setint(dev, "wowl", wowl_trigger);
@@ -5894,10 +5936,7 @@ static s32 wl_cfg80211_set_wowlan(struct wiphy *wiphy, struct cfg80211_wowlan *w
 		return err;
 	}
 
-	if (wowl_cfg_trigger)
-		cfg->wowlan_trigger = wowl_cfg_trigger;
-
-	err = wl_cfg80211_clear_wowl_wakeind(wiphy);
+	err = wl_cfg80211_clear_wowl_wakeind(cfg);
 	if (unlikely(err)) {
 		WL_ERR(("clear wowl wake indication error (%d)\n", err));
 	}
@@ -5907,6 +5946,8 @@ static s32 wl_cfg80211_set_wowlan(struct wiphy *wiphy, struct cfg80211_wowlan *w
 		WL_ERR(("set wowl keyrot support error (%d)\n", err));
 		return err;
 	}
+	*wowlan_trigger = wowl_trigger;
+
 	return err;
 }
 #endif /* (KERNEL_VERSION(2, 6, 39) */
@@ -6045,8 +6086,8 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy)
 #endif
 {
 	s32 err = BCME_OK;
-#ifdef DHD_CLEAR_ON_SUSPEND
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+#ifdef DHD_CLEAR_ON_SUSPEND
 	struct net_info *iter, *next;
 	struct net_device *ndev = bcmcfg_to_prmry_ndev(cfg);
 	unsigned long flags;
@@ -6080,17 +6121,18 @@ static s32 wl_cfg80211_suspend(struct wiphy *wiphy)
 		}
 	}
 #endif /* DHD_CLEAR_ON_SUSPEND */
+	WL_ERR(("%s Enter", __FUNCTION__));
+	BCM_REFERENCE(cfg);
 
-        WL_ERR(("Cfg80211 suspend Enter"));
 
 #if ((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || defined(WL_COMPAT_WIRELESS)) && \
 	!defined(OEM_ANDROID)
 	err = wl_wowlan_config(wiphy, wow);
 #endif /* (KERNEL_VERSION(2, 6, 39) || WL_COMPAT_WIRELES) && !OEM_ANDROID */
+
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
-	err = wl_cfg80211_set_wowlan(wiphy, wow);
+	cfg->wowlan_info.cfg_state = WL_CFG80211_SUSPEND_DONE;
 #endif /* (KERNEL_VERSION(2, 6, 39) */
-	wl_cfg80211_power_state_change_done();
 	WL_ERR(("Cfg80211 suspend Done"));
 
 	return err;
@@ -13560,7 +13602,6 @@ static s32 wl_init_priv(struct bcm_cfg80211 *cfg)
 	init_waitqueue_head(&cfg->netif_change_event);
 	init_completion(&cfg->send_af_done);
 	init_completion(&cfg->iface_disable);
-	init_completion(&cfg->power_state_change);
 	wl_init_eq(cfg);
 	err = wl_init_priv_mem(cfg);
 	if (err)
@@ -14973,21 +15014,6 @@ s32 wl_cfg80211_down(void *para)
 	mutex_unlock(&cfg->usr_sync);
 
 	return err;
-}
-
-void wl_cfg80211_wait_for_power_change(void)
-{
-	struct bcm_cfg80211 *cfg;
-	cfg = g_bcm_cfg;
-        wait_for_completion_timeout(&cfg->power_state_change,
-                        msecs_to_jiffies(500));
-}
-
-void wl_cfg80211_power_state_change_done(void)
-{
-	struct bcm_cfg80211 *cfg;
-	cfg = g_bcm_cfg;
-	complete(&cfg->power_state_change);
 }
 
 #if (defined(STBLINUX) && defined(WL_CFG80211))

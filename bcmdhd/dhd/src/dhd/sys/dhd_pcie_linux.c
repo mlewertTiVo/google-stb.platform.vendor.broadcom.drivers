@@ -64,10 +64,9 @@
 #include <wl_cfg80211.h>
 #endif
 
-
-#define PCI_CFG_RETRY		10
-#define OS_HANDLE_MAGIC		0x1234abcd	/* Magic # to recognize osh */
-#define BCM_MEM_FILENAME_LEN	24		/* Mem. filename length */
+#define PCI_CFG_RETRY          10      /* PR15065: retry count for pci cfg accesses */
+#define OS_HANDLE_MAGIC                0x1234abcd      /* Magic # to recognize osh */
+#define BCM_MEM_FILENAME_LEN   24              /* Mem. filename length */
 
 #define OSL_PKTTAG_CLEAR(p) \
 do { \
@@ -207,29 +206,20 @@ static int dhdpcie_pci_suspend(struct pci_dev * pdev, pm_message_t state)
 {
 	int ret = 0;
 	BCM_REFERENCE(state);
-#ifdef WL_CFG80211
 	DHD_ERROR(("dhdpcie suspend Enter \n"));
-	wl_cfg80211_wait_for_power_change();
-#endif
-	ret = dhdpcie_set_suspend_resume(pdev, TRUE);
-#ifdef WL_CFG80211
 
-	DHD_ERROR(("dhdpcie suspend Done \n"));
-#endif
+	ret = dhdpcie_set_suspend_resume(pdev, TRUE);
+
 	return ret;
 }
 
 static int dhdpcie_pci_resume(struct pci_dev *pdev)
 {
 	int ret = 0;
-#ifdef WL_CFG80211
 	DHD_ERROR(("dhdpcie resume Enter \n"));
-#endif
+
 	ret = dhdpcie_set_suspend_resume(pdev, FALSE);
-#ifdef WL_CFG80211
-	wl_cfg80211_power_state_change_done();
-	DHD_ERROR(("dhdpcie resume Done \n"));
-#endif
+
 	return ret;
 }
 

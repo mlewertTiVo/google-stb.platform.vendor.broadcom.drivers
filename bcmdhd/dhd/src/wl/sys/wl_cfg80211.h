@@ -196,7 +196,6 @@ do {									\
 #define WL_SCAN_SUPPRESS_RETRY 3000
 
 #define WL_PM_ENABLE_TIMEOUT 10000
-
 /* cfg80211 wowlan definitions */
 #define WL_WOWLAN_MAX_PATTERNS			8
 #define WL_WOWLAN_MIN_PATTERN_LEN		1
@@ -485,6 +484,16 @@ typedef struct {
 } removal_element_t;
 #endif /* ESCAN_BUF_OVERFLOW_MGMT */
 
+enum wl_cfg80211_power_state {
+    WL_CFG80211_SUSPEND_DONE,
+    WL_CFG80211_RESUME_DONE,
+};
+struct wowlan_info {
+	uint8 wowlan_trigger; /* Trigger set by cfg80211 */
+	uint8 wowlan_wakeup_report; /* wowlan report to cfg80211 */
+	enum wl_cfg80211_power_state cfg_state; /* Cfg powersave state */
+};
+
 struct afx_hdl {
 	wl_af_params_t *pending_tx_act_frm;
 	struct ether_addr	tx_dst_addr;
@@ -595,7 +604,6 @@ struct bcm_cfg80211 {
 	spinlock_t cfgdrv_lock;	/* to protect scan status (and others if needed) */
 	struct completion act_frm_scan;
 	struct completion iface_disable;
-	struct completion power_state_change;
 	struct completion wait_next_af;
 	struct mutex usr_sync;	/* maily for up/down synchronization */
 	struct mutex scan_complete;	/* serialize scan_complete call */
@@ -741,7 +749,9 @@ struct bcm_cfg80211 {
 	struct timer_list roam_timeout;   /* Timer for catch roam timeout */
 #endif
 	bool rcc_enabled;	/* flag for Roam channel cache feature */
-	uint8 wowlan_trigger; /* Trigger set by cfg80211 */
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+	struct wowlan_info wowlan_info;   /* Wowlan information */
+#endif
 };
 
 #if defined(STRICT_GCC_WARNINGS) && defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == \
@@ -1376,8 +1386,6 @@ extern void get_primary_mac(struct bcm_cfg80211 *cfg, struct ether_addr *mac);
 extern void wl_cfg80211_update_power_mode(struct net_device *dev);
 extern void wl_cfg80211_set_passive_scan(struct net_device *dev, char *command);
 extern void wl_terminate_event_handler(void);
-extern void  wl_cfg80211_wait_for_power_change(void);
-extern void  wl_cfg80211_power_state_change_done(void);
 #define SCAN_BUF_CNT	2
 #define SCAN_BUF_NEXT	1
 #define WL_SCANTYPE_LEGACY	0x1
@@ -1479,6 +1487,8 @@ extern s32 wl_cfg80211_get_chanspecs_2g(struct net_device *ndev,
 		void *buf, s32 buflen);
 extern s32 wl_cfg80211_get_chanspecs_5g(struct net_device *ndev,
 		void *buf, s32 buflen);
+extern s32 wl_cfg80211_update_wowl_wakeind(struct net_device *dev);
+extern s32 wl_cfg80211_wowlan_activate(struct net_device *dev, s32 *wowlan_trigger);
 #if defined(WL_VIRTUAL_APSTA)
 extern int wl_cfg80211_interface_create(struct net_device *dev, char *name);
 extern int wl_cfg80211_interface_delete(struct net_device *dev, char *name);

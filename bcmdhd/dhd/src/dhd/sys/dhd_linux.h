@@ -131,4 +131,5 @@ int dhd_set_wmf_psta_disable(dhd_pub_t *dhdp, uint32 idx, int val);
 void dhd_update_psta_interface_for_sta(dhd_pub_t *dhdp, char* ifname,
 		void* mac_addr, void* event_data);
 #endif /* DHD_WMF */
+void dhd_bus_wowl_set(void *dhdp, int state);
 #endif /* __DHD_LINUX_H__ */

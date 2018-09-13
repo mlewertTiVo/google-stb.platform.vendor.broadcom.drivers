@@ -125,6 +125,7 @@ static void dhd_fillup_ring_sharedptr_info(dhd_bus_t *bus, ring_info_t *ring_inf
 #ifdef OEM_ANDROID
 extern void dhd_dpc_kill(dhd_pub_t *dhdp);
 #endif /* OEM_ANDROID */
+extern void dhd_bus_wowl_set(void *drvinfo, int state);
 static void dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state);
 #ifdef CUSTOMER_HW_31_2
 #include <nvram_zae.h>
@@ -3992,6 +3993,7 @@ dhdpcie_bus_suspend(struct dhd_bus *bus, bool state)
 		bus->dhd->busstate = DHD_BUS_DATA;
 		DHD_GENERAL_UNLOCK(bus->dhd, flags);
 		dhdpcie_bus_intr_enable(bus);
+		dhdpcie_bus_set_wowl(bus, state);
 	}
 	return rc;
 }
@@ -5808,33 +5810,11 @@ dhd_bus_release_dongle(struct dhd_bus *bus)
 	return 0;
 }
 #endif /* OEM_ANDROID */
-
 /* Enable or disable Wake-on-wireless LAN */
-static void
-dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
+static void dhdpcie_bus_set_wowl(struct dhd_bus *bus, int state)
 {
-	int err = 0;
-	int value;
-	DHD_OS_WAKE_LOCK_WAIVE(bus->dhd);
-	 /* Set the wowlan trigger by either wl utility or wpa_supplicant
-	 * And activate the wowl here
-	 */
-	if (state) {
-		err = dhd_iovar(bus->dhd, 0, "wowl", NULL, 0, (char *)&value, sizeof(value), FALSE);
-		if (err < 0) {
-			DHD_ERROR(("%s: error in get wowl_enable, result=%d\n", __FUNCTION__, err));
-		}
-		if (value) {
-			value = 0;
-			err = dhd_iovar(bus->dhd, 0, "wowl_activate", NULL, 0,
-					(char *)&value, sizeof(value), FALSE);
-			if (err < 0) {
-				DHD_ERROR(("%s: error wowl_activate, err=%d\n", __FUNCTION__, err));
-			}
-		}
-	}
-
-	DHD_OS_WAKE_LOCK_RESTORE(bus->dhd);
+       	dhd_pub_t *dhdp = bus->dhd;
+	dhd_bus_wowl_set((void *)dhdp->info, state);
 }
 
 #ifdef BCMPCIE_OOB_HOST_WAKE
