@@ -16,6 +16,7 @@
 #define NX_ASHMEM_HEAP_DCMA               0xABCD0002
 
 #define NX_ASHMEM_NEXUS_DCMA_MARKER       0x100000
+#define NX_ASHMEM_NEXUS_SML_MARKER        0x200000
 
 struct nx_ashmem_alloc {
    __u32 size;

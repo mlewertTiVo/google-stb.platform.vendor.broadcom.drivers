@@ -41,6 +41,7 @@ static char nx_devname[16]="/dev/nx_ashmem";
 module_param_string(devname, nx_devname, sizeof(nx_devname), 0);
 
 #define GFX_UHD_FB (4096*4096*4)
+#define GFX_SML_ALLOC (4096)
 static char gfx_heap_grow[16] ="4k";
 static unsigned long gfx_heap_grow_size = 0;
 module_param_string(heap_grow, gfx_heap_grow, sizeof(gfx_heap_grow), 0);
@@ -55,6 +56,7 @@ struct nx_ashmem_state {
    struct list_head block_list;
 
    NEXUS_HeapHandle gfx_heap;
+   NEXUS_HeapHandle gfx_sml_heap;
    NEXUS_HeapHandle gfx_fb_heap;
    NEXUS_HeapHandle gfx_alt_heap[2];
 
@@ -416,6 +418,14 @@ static long nx_ashmem_mmap(struct file *file, struct nx_ashmem_getmem *getmem)
    allocation = (asma->size + (asma->align-1)) & ~(asma->align-1);
    if (asma->heap_wanted == NX_ASHMEM_HEAP_FB) {
       heap_allocator = nx_ashmem_global->gfx_fb_heap;
+      if (gfx_alloc_dbg) pr_info("nx::alloc:using fb-heap per request (%lx::sz=%u)\n",
+         (long)asma, asma->size);
+   }
+   if (nx_ashmem_global->gfx_sml_heap &&
+       (allocation <= GFX_SML_ALLOC)) {
+      heap_allocator = nx_ashmem_global->gfx_sml_heap;
+      if (gfx_alloc_dbg) pr_info("nx::alloc:using small heap per request (%lx::sz=%u)\n",
+         (long)asma, asma->size);
    }
    asma->heap_alloc = heap_allocator;
 
@@ -433,6 +443,9 @@ static long nx_ashmem_mmap(struct file *file, struct nx_ashmem_getmem *getmem)
       rc = NEXUS_Platform_GrowHeap(heap_allocator, dyn_heap_grow_adjust);
       if (rc == 0) {
          block = NEXUS_MemoryBlock_Allocate(heap_allocator, allocation, asma->align, NULL);
+      } else {
+         if (gfx_alloc_dbg) pr_info("nx::failed to grow d-cma heap (%lx::sz=%u): %u\n",
+            (long)asma, asma->size, dyn_heap_grow_adjust);
       }
    }
 
@@ -912,6 +925,7 @@ static int __init nx_ashmem_module_init(void)
    INIT_LIST_HEAD(&nx_ashmem_global->block_list);
 
    nx_ashmem_global->gfx_heap = NULL;
+   nx_ashmem_global->gfx_sml_heap = NULL;
    {
       NEXUS_HeapHandle heap;
       NEXUS_Error rc;
@@ -925,19 +939,24 @@ static int __init nx_ashmem_module_init(void)
          NEXUS_MemoryStatus status;
          heap = objects[i].object;
          NEXUS_Heap_GetStatus(heap, &status);
-         if ((status.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED|NEXUS_MEMORY_TYPE_DYNAMIC)) &&
-                (status.heapType & NX_ASHMEM_NEXUS_DCMA_MARKER)) {
+         if (!nx_ashmem_global->gfx_heap &&
+             ((status.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED|NEXUS_MEMORY_TYPE_DYNAMIC)) &&
+              (status.heapType & NX_ASHMEM_NEXUS_DCMA_MARKER))) {
             nx_ashmem_global->gfx_heap = heap;
             pr_info("selected d-cma heap (%p)\n", nx_ashmem_global->gfx_heap);
-            break;
          }
-         if ((status.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED)) &&
+         if (!nx_ashmem_global->gfx_heap &&
+             ((status.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED)) &&
              (status.heapType & NEXUS_HEAP_TYPE_DTU) &&
-             !(status.heapType & NEXUS_HEAP_TYPE_PICTURE_BUFFERS)) {
+             !(status.heapType & NEXUS_HEAP_TYPE_PICTURE_BUFFERS))) {
             nx_ashmem_global->gfx_heap = heap;
             nx_ashmem_global->gfx_heap_dyn_ng = 1;
             pr_info("selected dtu heap (%p)\n", nx_ashmem_global->gfx_heap);
-            break;
+         }
+         if (!nx_ashmem_global->gfx_sml_heap &&
+             (status.heapType & NX_ASHMEM_NEXUS_SML_MARKER)) {
+            nx_ashmem_global->gfx_sml_heap = heap;
+            pr_info("selected sml heap (%p)\n", nx_ashmem_global->gfx_sml_heap);
          }
       }
    }
