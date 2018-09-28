@@ -946,9 +946,9 @@ static int __init nx_ashmem_module_init(void)
             pr_info("selected d-cma heap (%p)\n", nx_ashmem_global->gfx_heap);
          }
          if (!nx_ashmem_global->gfx_heap &&
-             ((status.memoryType & (NEXUS_MEMORY_TYPE_MANAGED|NEXUS_MEMORY_TYPE_ONDEMAND_MAPPED)) &&
-             (status.heapType & NEXUS_HEAP_TYPE_DTU) &&
-             !(status.heapType & NEXUS_HEAP_TYPE_PICTURE_BUFFERS))) {
+             ((status.memoryType & NEXUS_MEMORY_TYPE_MANAGED) &&
+              (status.heapType & NEXUS_HEAP_TYPE_DTU) &&
+              !(status.heapType & NEXUS_HEAP_TYPE_PICTURE_BUFFERS))) {
             nx_ashmem_global->gfx_heap = heap;
             nx_ashmem_global->gfx_heap_dyn_ng = 1;
             pr_info("selected dtu heap (%p)\n", nx_ashmem_global->gfx_heap);
