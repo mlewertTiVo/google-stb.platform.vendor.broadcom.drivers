@@ -50,7 +50,7 @@ elif [ "${TARGETARCH}" == arm ] ; then
 		exit
 	fi
 elif [ "${TARGETARCH}" == aarch64 ] ; then
-	export BUILDCFG=${BUILDCFG_COMMON}-stb-armv8
+	export BUILDCFG=${BUILDCFG_COMMON}-stb-armv8-debug
 	export STBLINUX=1
 	export CROSS_COMPILE=aarch64-linux-
 else
