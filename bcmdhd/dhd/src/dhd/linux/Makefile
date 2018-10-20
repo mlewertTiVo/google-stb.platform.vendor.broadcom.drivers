@@ -160,6 +160,9 @@ endif
 ifneq ($(findstring stb,$(TARGET)),)
 	DFLAGS += -DSTBLINUX=1
 	DFLAGS += -DSTB
+	ifneq ($(findstring 7211war,$(TARGET)),)
+		DFLAGS += -DWAR_7211_64BIT
+	endif
 endif
 # Default enabling this flag makes Descriptors memory comes from Global CMA pool using
 # dma_alloc_coherent() call for non-secdma drivers.
@@ -1257,6 +1260,7 @@ ARMV7L_TGT=$(foreach tgt, $(TARGETS), $(tgt)-armv7l)
 ARMV8_TGT=$(foreach tgt, $(TARGETS), $(tgt)-armv8)
 STBARMV7L_TGT=$(foreach tgt, $(TARGETS), $(tgt)-stb-armv7l)
 STBARMV8_TGT=$(foreach tgt, $(TARGETS), $(tgt)-stb-armv8)
+STBARMV8_7211_TGT=$(foreach tgt, $(TARGETS), $(tgt)-stb-7211war-armv8)
 STBMIPS_TGT=$(foreach tgt, $(TARGETS), $(tgt)-stb-mips)
 
 
@@ -1266,8 +1270,8 @@ HUDI_TGT=$(foreach tgt, $(TARGETS), $(tgt)-hudi)
 DHD_BUZZZ_TGT=$(foreach tgt, $(TARGETS), $(tgt)-dhd_buzzz)
 BUZZZ_TGT=$(foreach tgt, $(TARGETS), $(tgt)-buzzz)
 
-TARGETS += $(MIPS_TGT) $(ARMV7L_TGT) $(ARMV8_TGT) $(STBARMV7L_TGT) $(STBARMV8_TGT) $(STBMIPS_TGT) $(CUSTOMER4_TGT) $(ULP_TGT) $(HUDI_TGT) $(DHD_BUZZZ_TGT) $(BUZZZ_TGT)
-
+TARGETS += $(MIPS_TGT) $(ARMV7L_TGT) $(ARMV8_TGT) $(STBARMV7L_TGT) $(STBARMV8_TGT) $(STBARMV8_7211_TGT) \
+	$(STBMIPS_TGT) $(CUSTOMER4_TGT) $(ULP_TGT) $(HUDI_TGT) $(DHD_BUZZZ_TGT) $(BUZZZ_TGT)
 
 TARGETS += $(foreach tgt, $(TARGETS), $(tgt)-debug)
 
