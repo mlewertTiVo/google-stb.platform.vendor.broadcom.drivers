@@ -174,6 +174,7 @@ enum {
 	IOV_SLEEP_ALLOWED,
 	IOV_PCIE_DMAXFER,
 	IOV_PCIE_SUSPEND,
+#ifdef DHD_PCIE_REG_ACCESS
 	IOV_PCIEREG,
 	IOV_PCIECFGREG,
 	IOV_PCIECOREREG,
@@ -181,6 +182,7 @@ enum {
 	IOV_PCIEASPM,
 	IOV_BAR0_SECWIN_REG,
 	IOV_SBREG,
+#endif /* DHD_PCIE_REG_ACCESS */
 	IOV_DONGLEISOLATION,
 	IOV_LTRSLEEPON_UNLOOAD,
 	IOV_METADATA_DBG,
@@ -213,12 +215,14 @@ const bcm_iovar_t dhdpcie_iovars[] = {
 	{"cc_nvmshadow", IOV_CC_NVMSHADOW, 0, IOVT_BUFFER, 0 },
 	{"ramsize",	IOV_RAMSIZE,	0,	IOVT_UINT32,	0 },
 	{"ramstart",	IOV_RAMSTART,	0,	IOVT_UINT32,	0 },
+#ifdef DHD_PCIE_REG_ACCESS
 	{"pciereg",	IOV_PCIEREG,	0,	IOVT_BUFFER,	2 * sizeof(int32) },
 	{"pciecfgreg",	IOV_PCIECFGREG,	0,	IOVT_BUFFER,	2 * sizeof(int32) },
 	{"pciecorereg",	IOV_PCIECOREREG,	0,	IOVT_BUFFER,	2 * sizeof(int32) },
 	{"pcieserdesreg",	IOV_PCIESERDESREG,	0,	IOVT_BUFFER,	3 * sizeof(int32) },
 	{"bar0secwinreg",	IOV_BAR0_SECWIN_REG,	0,	IOVT_BUFFER,	sizeof(sdreg_t) },
 	{"sbreg",	IOV_SBREG,	0,	IOVT_BUFFER,	sizeof(sdreg_t) },
+#endif /* DHD_PCIE_REG_ACCESS */
 	{"pcie_dmaxfer",	IOV_PCIE_DMAXFER,	0,	IOVT_BUFFER,	3 * sizeof(int32) },
 	{"pcie_suspend", IOV_PCIE_SUSPEND,	0,	IOVT_UINT32,	0 },
 #ifdef PCIE_OOB
@@ -239,7 +243,9 @@ const bcm_iovar_t dhdpcie_iovars[] = {
 	{"flow_prio_map", IOV_FLOW_PRIO_MAP,	0,	IOVT_UINT32,	0 },
 	{"rxbound",     IOV_RXBOUND,    0,      IOVT_UINT32,    0 },
 	{"txbound",     IOV_TXBOUND,    0,      IOVT_UINT32,    0 },
+#ifdef DHD_PCIE_REG_ACCESS
 	{"aspm", IOV_PCIEASPM, 0, IOVT_INT32, 0 },
+#endif /* DHD_PCIE_REG_ACCESS */
 	{"fw_hang_report", IOV_HANGREPORT,	0,	IOVT_BOOL,	0 },
 	{NULL, 0, 0, 0, 0 }
 };
@@ -2447,7 +2453,12 @@ dhdpcie_bus_wtcm16(dhd_bus_t *bus, ulong offset, uint16 data)
 void
 dhdpcie_bus_wtcm64(dhd_bus_t *bus, ulong offset, uint64 data)
 {
+#ifndef WAR_7211_64BIT
 	*(volatile uint64 *)(bus->tcm + offset) = (uint64)data;
+#else
+	writel(((uint32) (data)), (bus->tcm + offset));
+	writel(((uint32) (data >> 32)), (bus->tcm + offset + 4));
+#endif
 }
 
 uint16
@@ -2475,7 +2486,11 @@ dhdpcie_bus_rtcm64(dhd_bus_t *bus, ulong offset)
 {
 	volatile uint64 data;
 
-		data = *(volatile uint64 *)(bus->tcm + offset);
+#ifndef WAR_7211_64BIT
+	data = *(volatile uint64 *)(bus->tcm + offset);
+#else
+	data = readl(bus->tcm + offset) | (((uint64) readl(bus->tcm + offset + 4)) << 32LL);
+#endif
 
 	return data;
 }
@@ -2999,7 +3014,7 @@ done:
 
 #define PCIE_GEN2(sih) ((BUSTYPE((sih)->bustype) == PCI_BUS) &&	\
 	((sih)->buscoretype == PCIE2_CORE_ID))
-
+#ifdef DHD_PCIE_REG_ACCESS
 static bool
 pcie2_mdiosetblock(dhd_bus_t *bus, uint blk)
 {
@@ -3031,7 +3046,7 @@ pcie2_mdiosetblock(dhd_bus_t *bus, uint blk)
 
 	return TRUE;
 }
-
+#endif /* DHD_PCIE_REG_ACCESS */
 
 int
 dhd_bus_devreset(dhd_pub_t *dhdp, uint8 flag)
@@ -3264,7 +3279,7 @@ done:
 
 	return bcmerror;
 }
-
+#ifdef DHD_PCIE_REG_ACCESS
 static int
 pcie2_mdioop(dhd_bus_t *bus, uint physmedia, uint regaddr, bool write, uint *val,
 	bool slave_bypass)
@@ -3309,7 +3324,7 @@ pcie2_mdioop(dhd_bus_t *bus, uint physmedia, uint regaddr, bool write, uint *val
 	}
 	return -1;
 }
-
+#endif /* DHD_PCIE_REG_ACCESS */
 static int
 dhdpcie_bus_doiovar(dhd_bus_t *bus, const bcm_iovar_t *vi, uint32 actionid, const char *name,
                 void *params, int plen, void *arg, int len, int val_size)
@@ -3350,7 +3365,7 @@ dhdpcie_bus_doiovar(dhd_bus_t *bus, const bcm_iovar_t *vi, uint32 actionid, cons
 	case IOV_SVAL(IOV_VARS):
 		bcmerror = dhdpcie_downloadvars(bus, arg, len);
 		break;
-
+#ifdef DHD_PCIE_REG_ACCESS
 	case IOV_SVAL(IOV_PCIEREG):
 		si_corereg(bus->sih, bus->sih->buscoreidx, OFFSETOF(sbpcieregs_t, configaddr), ~0,
 			int_val);
@@ -3481,7 +3496,7 @@ dhdpcie_bus_doiovar(dhd_bus_t *bus, const bcm_iovar_t *vi, uint32 actionid, cons
 		int_val = OSL_PCI_READ_CONFIG(bus->osh, int_val, 4);
 		bcopy(&int_val, arg, sizeof(int_val));
 		break;
-
+#endif /* DHD_PCIE_REG_ACCESS */
 	case IOV_SVAL(IOV_PCIE_LPBK):
 		bcmerror = dhdpcie_bus_lpback_req(bus, int_val);
 		break;
@@ -3774,7 +3789,7 @@ dhdpcie_bus_doiovar(dhd_bus_t *bus, const bcm_iovar_t *vi, uint32 actionid, cons
 	case IOV_SVAL(IOV_RXBOUND):
 		dhd_rxbound = (uint)int_val;
 		break;
-
+#ifdef DHD_PCIE_REG_ACCESS
 	case IOV_GVAL(IOV_PCIEASPM): {
 		uint8 clkreq = 0;
 		uint32 aspm = 0;
@@ -3803,7 +3818,7 @@ dhdpcie_bus_doiovar(dhd_bus_t *bus, const bcm_iovar_t *vi, uint32 actionid, cons
 		dhdpcie_clkreq(bus->dhd->osh, 1, ((int_val & 0x100) >> 8));
 		break;
 	}
-
+#endif /* DHD_PCIE_REG_ACCESS */
 	case IOV_SVAL(IOV_HANGREPORT):
 		bus->dhd->hang_report = bool_val;
 		DHD_ERROR(("%s: Set hang_report as %d\n",
