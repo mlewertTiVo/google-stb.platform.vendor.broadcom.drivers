@@ -2291,7 +2291,7 @@ static int wl_cfgvendor_dbg_reset_logging(struct wiphy *wiphy,
 	return ret;
 }
 
-#ifdef DHD_FW_COREDUMP
+#if defined(DHD_FW_COREDUMP) || defined(OEM_ANDROID)
 static int wl_cfgvendor_dbg_get_version(struct wiphy *wiphy,
 	struct wireless_dev *wdev, const void *data, int len)
 {
@@ -2341,7 +2341,7 @@ exit:
 	kfree(buf_ptr);
 	return ret;
 }
-#endif /* DHD_FW_COREDUMP */
+#endif /* defined(DHD_FW_COREDUMP) || defined(OEM_ANDROID) */
 
 static int wl_cfgvendor_dbg_get_ring_status(struct wiphy *wiphy,
 	struct wireless_dev *wdev, const void  *data, int len)
@@ -2757,7 +2757,7 @@ static const struct wiphy_vendor_command wl_vendor_cmds [] = {
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV | WIPHY_VENDOR_CMD_NEED_NETDEV,
 		.doit = wl_cfgvendor_dbg_reset_logging
 	},
-#ifdef DHD_FW_COREDUMP
+#if defined(DHD_FW_COREDUMP) || defined(OEM_ANDROID)
 	{
 		{
 			.vendor_id = OUI_GOOGLE,
@@ -2766,7 +2766,7 @@ static const struct wiphy_vendor_command wl_vendor_cmds [] = {
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV | WIPHY_VENDOR_CMD_NEED_NETDEV,
 		.doit = wl_cfgvendor_dbg_get_version
 	},
-#endif /* DHD_FW_COREDUMP */
+#endif /* defined(DHD_FW_COREDUMP) || defined(OEM_ANDROID) */
 	{
 		{
 			.vendor_id = OUI_GOOGLE,
