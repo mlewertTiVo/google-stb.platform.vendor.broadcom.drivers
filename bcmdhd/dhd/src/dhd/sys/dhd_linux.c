@@ -13578,20 +13578,6 @@ int dhd_os_get_socram_dump(struct net_device *dev, char **buf, uint32 *size)
 	return ret;
 }
 
-int dhd_os_get_version(struct net_device *dev, bool dhd_ver, char **buf, uint32 size)
-{
-	if (size == 0)
-		return BCME_BADARG;
-
-	memset(*buf, 0, size);
-	if (dhd_ver) {
-		strncpy(*buf, dhd_version, size - 1);
-	} else {
-		strncpy(*buf, info_string, size - 1);
-	}
-	return BCME_OK;
-}
-
 static void
 dhd_mem_dump(void *handle, void *event_info, u8 event)
 {
@@ -13618,6 +13604,22 @@ dhd_mem_dump(void *handle, void *event_info, u8 event)
 	MFREE(dhd->pub.osh, dump, sizeof(dhd_dump_t));
 }
 #endif /* DHD_FW_COREDUMP */
+
+#if defined(DHD_FW_COREDUMP) || defined(OEM_ANDROID)
+int dhd_os_get_version(struct net_device *dev, bool dhd_ver, char **buf, uint32 size)
+{
+	if (size == 0)
+		return BCME_BADARG;
+
+	memset(*buf, 0, size);
+	if (dhd_ver) {
+		strncpy(*buf, dhd_version, size - 1);
+	} else {
+		strncpy(*buf, info_string, size - 1);
+	}
+	return BCME_OK;
+}
+#endif /* defined(DHD_FW_COREDUMP) || defined(OEM_ANDROID) */
 
 #ifdef DHD_WMF
 /* Returns interface specific WMF configuration */
