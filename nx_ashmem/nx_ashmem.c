@@ -65,8 +65,8 @@ struct nx_ashmem_state {
    int gfx_heap_dyn_ng;
 
    struct mutex video_lock;
-   int video_in_use;
-   int video_secure_in_use;
+   __u32 video_in_use;
+   __u32 video_secure_in_use;
 
 #if !defined(V3D_VARIANT_v3d)
    BVC5_BinPoolBlock_MemInterface memIf;
@@ -90,7 +90,7 @@ struct nx_ashmem_area {
    int pid_alloc;
    size_t movable;
    NEXUS_HeapHandle heap_alloc;
-   size_t marker;
+   __u32 marker;
    int ext_refcnt;
    int defer_free;
    int heap_wanted;
@@ -209,7 +209,7 @@ move_alt1:
 }
 static DECLARE_WORK(nx_move_block_work, nx_ashmem_move_block_worker);
 
-static void nx_ashmem_process_marker(size_t marker, bool add)
+static void nx_ashmem_process_marker(__u32 marker, bool add)
 {
    bool heap_move = false;
 
@@ -342,7 +342,7 @@ static void nx_ashmem_asma_free_block(struct nx_ashmem_area *asma)
 static int nx_ashmem_release(struct inode *ignored, struct file *file)
 {
    struct nx_ashmem_area *asma = file->private_data;
-   int marker = asma->marker;
+   __u32 marker = asma->marker;
 
    mutex_lock(&(nx_ashmem_global->block_lock));
    if (asma->block) {
@@ -636,7 +636,8 @@ static long nx_ashmem_common_ioctl(struct file *file, unsigned int cmd, unsigned
          asma->marker = alloc.marker;
          asma->heap_wanted = alloc.heap;
          mutex_unlock(&nx_ashmem_mutex);
-         nx_ashmem_process_marker(alloc.marker, true);
+         if (alloc.marker)
+            nx_ashmem_process_marker(alloc.marker, true);
       } else {
          ret = -EINVAL;
          mutex_unlock(&nx_ashmem_mutex);
@@ -982,6 +983,9 @@ static int __init nx_ashmem_module_init(void)
    nx_ashmem_global->memIf.BinPoolBlock_Unlock = nx_ashmem_memif_unlock;
    err = BVC5_RegisterAlternateMemInterface(THIS_MODULE, &nx_ashmem_global->memIf);
 #endif
+
+   nx_ashmem_global->video_secure_in_use = 0;
+   nx_ashmem_global->video_in_use = 0;
 
    pr_info("nx::%p::%s:%p::gs:%lu:(x%d)::mm:%s::if:%s::fb:%p\n",
            nx_ashmem_global, nx_ashmem_global->gfx_heap_dyn ? "dynamic" : "static",
